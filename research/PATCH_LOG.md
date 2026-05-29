@@ -9771,3 +9771,31 @@ The current-OI baseline is captured only after stop verification, intentionally 
 ## P446 - direct targeted aggTrades to LTF cache
 
 Status: PROPOSED. Replace the rolling discovery targeted fetch path that materialized 1s cache first with direct aggTrades-to-target-LTF materialization for the official 30s LTF profiles. This preserves true trade-count/quote-volume provenance while removing the intermediate 1s parquet bottleneck, reuses already trusted direct/1s-derived target LTF cache windows, merges targeted windows up to one hour, and changes progress ETA formatting to `Hh MMm SSs`. No future labels, PnL, exits, or post-entry candles are used to decide fetch coverage.
+
+## P447 - align live2 with rolling C/A/S runner portfolio
+
+Status: PROPOSED. Prepare live2 for the same rolling runner category contract as the rolling discovery backtest: 30s decision buckets, rolling 5m/30s and 3m/30s HTF windows, fixed C -> A -> S priority, closed-candle-only baseline/dormancy/pregrowth context, risk-based sizing, total open-risk cap, and symbol cooldown equal to the selected rolling HTF width.
+
+Changes:
+
+```text
+- Live2 signal evaluation no longer uses the legacy 5s/1m category contract for entries.
+- Live2 evaluates rolling 5m/30s and 3m/30s profiles from closed 30s candles.
+- C/A/S category selection uses only pre-entry features and returns data_dependency_not_ready when required closed 1m/30s context is missing.
+- Live2 defaults to 30s decision buckets, 24h closed-1m startup baseline, and larger in-memory candle history.
+- Execution sizes orders from account USDT balance, signal stop distance, and risk_per_trade_pct=2%.
+- Execution rejects entries when total protected open risk would exceed 8% of account balance.
+- Symbol cooldown is applied after a protected position is removed; the cooldown width is the selected rolling HTF window.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+The live signal contract is now closer to rolling backtest mechanics, but exact parity still depends on the 45d rolling backtest passing after P446 and on live having enough closed 1m baseline history. Missing history blocks entries explicitly instead of falling back to legacy categories.
+```

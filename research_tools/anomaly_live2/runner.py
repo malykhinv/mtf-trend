@@ -102,6 +102,8 @@ class AnomalyLive2Runner:
             exchange_client=exchange_client,
             config=Live2ExecutionConfig(
                 order_notional_usdt=config.execution_order_notional_usdt,
+                risk_per_trade_pct=config.execution_risk_per_trade_pct,
+                max_total_open_risk_pct=config.execution_max_total_open_risk_pct,
                 max_open_positions=config.execution_max_open_positions,
                 max_position_amount_slippage_ratio=config.execution_max_position_amount_slippage_ratio,
                 stop_visibility_attempts=config.execution_stop_visibility_attempts,

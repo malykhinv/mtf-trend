@@ -56,17 +56,17 @@ class AnomalyLive2Config:
     startup_warmup_max_pages_per_symbol: int = 1
     startup_warmup_request_sleep_seconds: float = 0.03
     startup_warmup_error_limit: int = 20
-    startup_htf_baseline_lookback_minutes: int = 75
+    startup_htf_baseline_lookback_minutes: int = 1440
     startup_htf_baseline_request_sleep_seconds: float = 0.02
     startup_htf_baseline_error_limit: int = 20
-    max_closed_candles_per_timeframe: int = 360
+    max_closed_candles_per_timeframe: int = 3000
     universe_max_symbols: int = 600
     universe_min_quote_volume_24h: float = 30_000.0
     universe_min_trade_count_24h: int = 0
     universe_min_auto_symbols: int = 300
-    decision_timeframe_ms: int = 5_000
-    decision_deadline_ms: int = 750
-    decision_backlog_expire_ms: int = 5_000
+    decision_timeframe_ms: int = 30_000
+    decision_deadline_ms: int = 1_500
+    decision_backlog_expire_ms: int = 10_000
     actionable_min_quote_volume: float = 2_500.0
     actionable_min_trade_count: int = 20
     actionable_min_abs_return_pct: float = 0.003
@@ -75,6 +75,8 @@ class AnomalyLive2Config:
     entry_guard_min_rr_to_tp1: float = 0.70
     artifact_writer_queue_max_size: int = 8192
     execution_order_notional_usdt: float = 12.0
+    execution_risk_per_trade_pct: float = 0.02
+    execution_max_total_open_risk_pct: float = 0.08
     execution_max_open_positions: int = 0
     execution_stop_visibility_attempts: int = 5
     execution_stop_visibility_sleep_seconds: float = 0.5
@@ -216,6 +218,10 @@ class AnomalyLive2Config:
             raise ValueError("artifact_writer_queue_max_size must be > 0")
         if self.execution_order_notional_usdt <= 0:
             raise ValueError("execution_order_notional_usdt must be > 0")
+        if self.execution_risk_per_trade_pct <= 0.0:
+            raise ValueError("execution_risk_per_trade_pct must be > 0")
+        if self.execution_max_total_open_risk_pct < self.execution_risk_per_trade_pct:
+            raise ValueError("execution_max_total_open_risk_pct must be >= execution_risk_per_trade_pct")
         if self.execution_max_open_positions < 0:
             raise ValueError("execution_max_open_positions must be >= 0; 0 means unlimited")
         if self.execution_stop_visibility_attempts <= 0:

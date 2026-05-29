@@ -75,6 +75,10 @@ class Live2ExecutionExchange(Protocol):
         """Cancel a conditional stop order by exchange order id."""
         ...
 
+    def fetch_usdt_free_balance(self) -> float:
+        """Return current free USDT balance for risk-based position sizing."""
+        ...
+
 
 @runtime_checkable
 class Live2CurrentOpenInterestExchange(Protocol):
@@ -91,6 +95,8 @@ class Live2ExecutionConfig:
 
     max_existing_position_abs_amount: float = 0.0
     order_notional_usdt: float = 12.0
+    risk_per_trade_pct: float = 0.02
+    max_total_open_risk_pct: float = 0.08
     max_open_positions: int = 0
     max_position_amount_slippage_ratio: float = 0.05
     stop_visibility_attempts: int = 5
@@ -101,6 +107,10 @@ class Live2ExecutionConfig:
             raise ValueError("max_existing_position_abs_amount must be >= 0")
         if self.order_notional_usdt <= 0:
             raise ValueError("order_notional_usdt must be > 0")
+        if self.risk_per_trade_pct <= 0.0:
+            raise ValueError("risk_per_trade_pct must be > 0")
+        if self.max_total_open_risk_pct < self.risk_per_trade_pct:
+            raise ValueError("max_total_open_risk_pct must be >= risk_per_trade_pct")
         if self.max_open_positions < 0:
             raise ValueError("max_open_positions must be >= 0; 0 means unlimited")
         if self.max_position_amount_slippage_ratio < 0:
@@ -185,6 +195,7 @@ class Live2ProtectedPosition:
     source_flow_trades_per_second: float | None = None
     source_flow_quote_ratio: float | None = None
     source_flow_trade_ratio: float | None = None
+    selected_rolling_htf_timeframe_ms: int | None = None
     tp1_close_fraction: float = 1.0
     tp1_closed_amount: float = 0.0
     tp1_fill_price: float | None = None
@@ -244,6 +255,7 @@ class Live2ProtectedPosition:
             "source_flow_trades_per_second": self.source_flow_trades_per_second,
             "source_flow_quote_ratio": self.source_flow_quote_ratio,
             "source_flow_trade_ratio": self.source_flow_trade_ratio,
+            "selected_rolling_htf_timeframe_ms": self.selected_rolling_htf_timeframe_ms,
             "tp1_close_fraction": self.tp1_close_fraction,
             "tp1_closed_amount": self.tp1_closed_amount,
             "tp1_fill_price": self.tp1_fill_price,
@@ -331,6 +343,7 @@ class Live2ExecutionEngine:
             checked_at_ms=0,
         )
         self._protected_positions: dict[str, Live2ProtectedPosition] = {}
+        self._symbol_cooldown_until_ms: dict[str, int] = {}
         self._trading_halted_reason = ""
         self._total_execute_calls = 0
         self._total_rejected_existing_position = 0
@@ -431,9 +444,22 @@ class Live2ExecutionEngine:
             return self._finish_result(
                 Live2ExecutionResult(
                 verdict="rejected_symbol_already_has_live2_position",
-                reason="symbol_already_in_live2_protected_position_registry",
+                reason="symbol_already_has_open_live2_position",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="ready",
+                ),
+                timing=timing,
+            )
+        cooldown_until_ms = int(self._symbol_cooldown_until_ms.get(state.symbol, 0) or 0)
+        if cooldown_until_ms > checked_at_ms:
+            self._total_rejected_capacity += 1
+            return self._finish_result(
+                Live2ExecutionResult(
+                verdict="rejected_symbol_cooldown_active",
+                reason="symbol_cooldown_until_rolling_htf_window_expires",
+                checked_at_ms=checked_at_ms,
+                exchange_boundary_status="ready",
+                details={"cooldown_until_ms": cooldown_until_ms, "cooldown_remaining_ms": cooldown_until_ms - checked_at_ms},
                 ),
                 timing=timing,
             )
@@ -474,16 +500,87 @@ class Live2ExecutionEngine:
                 ),
                 timing=timing,
             )
-        amount = self.config.order_notional_usdt / float(live_price)
+        planned_initial_risk_pct = (float(live_price) - float(stop_price)) / float(live_price) if live_price else 0.0
+        if not isfinite(planned_initial_risk_pct) or planned_initial_risk_pct <= 0.0:
+            return self._finish_result(
+                Live2ExecutionResult(
+                verdict="rejected_execution_invalid_planned_risk",
+                reason="planned_stop_is_not_below_live_entry_price",
+                checked_at_ms=checked_at_ms,
+                pre_position_amount=pre_position_amount,
+                exchange_boundary_status="ready",
+                details={"live_price": live_price, "stop_price": stop_price},
+                ),
+                timing=timing,
+            )
+        balance_started_at_ms = utc_now_ms()
+        timing["balance_fetch_started_at_ms"] = balance_started_at_ms
+        try:
+            account_balance_usdt = float(self.exchange_client.fetch_usdt_free_balance())
+        except Exception as exc:
+            self._total_exchange_errors += 1
+            balance_finished_at_ms = utc_now_ms()
+            timing["balance_fetch_finished_at_ms"] = balance_finished_at_ms
+            timing["balance_fetch_duration_ms"] = max(0, balance_finished_at_ms - balance_started_at_ms)
+            return self._finish_result(
+                Live2ExecutionResult(
+                verdict="rejected_execution_balance_fetch_failed",
+                reason=f"fetch_usdt_free_balance_failed:{type(exc).__name__}:{exc}",
+                checked_at_ms=checked_at_ms,
+                pre_position_amount=pre_position_amount,
+                exchange_boundary_status="ready",
+                ),
+                timing=timing,
+            )
+        balance_finished_at_ms = utc_now_ms()
+        timing["balance_fetch_finished_at_ms"] = balance_finished_at_ms
+        timing["balance_fetch_duration_ms"] = max(0, balance_finished_at_ms - balance_started_at_ms)
+        if not isfinite(account_balance_usdt) or account_balance_usdt <= 0.0:
+            return self._finish_result(
+                Live2ExecutionResult(
+                verdict="rejected_execution_invalid_account_balance",
+                reason="free_usdt_balance_is_not_positive_finite",
+                checked_at_ms=checked_at_ms,
+                pre_position_amount=pre_position_amount,
+                exchange_boundary_status="ready",
+                details={"account_balance_usdt": account_balance_usdt},
+                ),
+                timing=timing,
+            )
+        current_open_risk_usdt = self._open_risk_usdt()
+        max_total_open_risk_usdt = account_balance_usdt * self.config.max_total_open_risk_pct
+        planned_risk_usdt = account_balance_usdt * self.config.risk_per_trade_pct
+        if current_open_risk_usdt + planned_risk_usdt > max_total_open_risk_usdt + 1e-9:
+            self._total_rejected_capacity += 1
+            return self._finish_result(
+                Live2ExecutionResult(
+                verdict="rejected_execution_risk_capacity_full",
+                reason="live2_max_total_open_risk_reached",
+                checked_at_ms=checked_at_ms,
+                pre_position_amount=pre_position_amount,
+                exchange_boundary_status="ready",
+                details={
+                    "account_balance_usdt": account_balance_usdt,
+                    "risk_per_trade_pct": self.config.risk_per_trade_pct,
+                    "max_total_open_risk_pct": self.config.max_total_open_risk_pct,
+                    "current_open_risk_usdt": current_open_risk_usdt,
+                    "planned_risk_usdt": planned_risk_usdt,
+                    "max_total_open_risk_usdt": max_total_open_risk_usdt,
+                },
+                ),
+                timing=timing,
+            )
+        order_notional_usdt = max(self.config.order_notional_usdt, planned_risk_usdt / planned_initial_risk_pct)
+        amount = order_notional_usdt / float(live_price)
         if not _positive_finite(amount):
             return self._finish_result(
                 Live2ExecutionResult(
                 verdict="rejected_execution_invalid_order_amount",
-                reason="computed_order_amount_is_not_positive_finite",
+                reason="computed_risk_based_order_amount_is_not_positive_finite",
                 checked_at_ms=checked_at_ms,
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
-                details={"order_notional_usdt": self.config.order_notional_usdt, "live_price": live_price},
+                details={"order_notional_usdt": order_notional_usdt, "live_price": live_price},
                 ),
                 timing=timing,
             )
@@ -693,6 +790,7 @@ class Live2ExecutionEngine:
             source_flow_trades_per_second=_finite_float_or_none(signal_decision.features.get("selected_source_flow_trades_per_second")),
             source_flow_quote_ratio=_finite_float_or_none(signal_decision.features.get("selected_source_flow_quote_ratio")),
             source_flow_trade_ratio=_finite_float_or_none(signal_decision.features.get("selected_source_flow_trade_ratio")),
+            selected_rolling_htf_timeframe_ms=_int_or_none(signal_decision.features.get("rolling_runner_htf_timeframe_ms")),
         )
         self._protected_positions[state.symbol] = protected_position
         self._total_positions_protected += 1
@@ -716,7 +814,13 @@ class Live2ExecutionEngine:
             stop_price=float(stop_price),
             position_id=position_id,
             details={
-                "order_notional_usdt": self.config.order_notional_usdt,
+                "order_notional_usdt": order_notional_usdt,
+                "account_balance_usdt": account_balance_usdt,
+                "risk_per_trade_pct": self.config.risk_per_trade_pct,
+                "max_total_open_risk_pct": self.config.max_total_open_risk_pct,
+                "planned_risk_usdt": planned_risk_usdt,
+                "planned_initial_risk_pct": planned_initial_risk_pct,
+                "current_open_risk_usdt_before_entry": current_open_risk_usdt,
                 "entry_current_open_interest": {
                     "symbol": entry_current_oi.symbol,
                     "exchange_symbol": entry_current_oi.exchange_symbol,
@@ -771,7 +875,19 @@ class Live2ExecutionEngine:
         self._protected_positions[position.symbol] = position
 
     def remove_protected_position(self, symbol: str) -> Live2ProtectedPosition | None:
-        return self._protected_positions.pop(symbol, None)
+        removed = self._protected_positions.pop(symbol, None)
+        if removed is not None and removed.selected_rolling_htf_timeframe_ms is not None:
+            self._symbol_cooldown_until_ms[symbol] = utc_now_ms() + max(0, int(removed.selected_rolling_htf_timeframe_ms))
+        return removed
+
+    def _open_risk_usdt(self) -> float:
+        total = 0.0
+        for position in self._protected_positions.values():
+            notional = float(position.entry_fill_price) * max(0.0, float(position.remaining_amount))
+            risk = notional * max(0.0, float(position.initial_risk_pct))
+            if isfinite(risk):
+                total += risk
+        return total
 
     def halt_due_to_position_integrity(self, reason: str) -> None:
         self._total_integrity_errors += 1
@@ -967,6 +1083,8 @@ class Live2ExecutionEngine:
             "max_open_positions_unlimited": self.config.max_open_positions == 0,
             "open_protected_positions": len(self._protected_positions),
             "protected_positions": [position.as_dict() for position in self._protected_positions.values()],
+            "open_risk_usdt": self._open_risk_usdt(),
+            "symbol_cooldowns": dict(self._symbol_cooldown_until_ms),
             "total_execute_calls": self._total_execute_calls,
             "total_rejected_existing_position": self._total_rejected_existing_position,
             "total_rejected_capacity": self._total_rejected_capacity,

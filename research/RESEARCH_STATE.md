@@ -3412,3 +3412,11 @@ Current commit: UNKNOWN.
 Status: P446 PROPOSED after P445 did not reduce the `targeted 1s aggTrades` bottleneck. The issue is not that 1s trades are a trading feature; for 30s rolling decisions, 1s is only an intermediate materialization source. P446 keeps true aggTrade flow but writes trusted 30s target-LTF cache directly, avoiding duplicate 1s parquet work and reducing targeted window churn by merging windows up to one hour.
 
 Next: apply P446, restart the 45d rolling discovery, and confirm the progress line says `targeted aggTrades→30s` rather than `targeted 1s aggTrades`.
+
+## 2026-05-29 - P447 live2 rolling C/A/S preparation
+
+Current commit: UNKNOWN.
+
+Status: P447 PROPOSED. Live2 is prepared to trade the same rolling runner categories being tested in discovery: rolling 5m/30s and 3m/30s, first fixed C/A/S category trigger, 30s decision buckets, risk-per-trade sizing, total open-risk cap, and symbol cooldown equal to rolling HTF width. This intentionally removes the legacy 5s/1m live signal path from entry selection rather than keeping it as a fallback.
+
+Next: apply P447 only after P446 is applied, run compileall, then first run live2 in minimal-notional/limited-risk observation and compare live `deadline_decision` artifacts against rolling discovery fields before increasing size.

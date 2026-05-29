@@ -936,3 +936,25 @@ For live2 managed positions, current open interest is not inferred from candles 
 
 During supervision, OI-down early-exit logic compares fresh current-OI snapshots from the live OI poller against that protected entry current-OI baseline. Historical 5m OI remains useful context for setup/anomaly state and artifacts, but it is not the baseline for the current-OI-down exit trigger. Missing current-OI status must stay explicit in artifacts; it must not be silently replaced by 5m historical OI.
 
+
+## Live rolling runner category contract
+
+Live entries are based on the same family as the rolling runner discovery backtest:
+
+```text
+closed 30s candle
+-> rolling HTF seed from closed 30s candles, 5m/30s or 3m/30s
+-> baseline/dormancy/pregrowth from closed 1m candles fully before the rolling HTF window
+-> first closed 30s confirmation window that matches fixed C/A/S priority
+-> live entry guard
+-> actual exchange fill
+-> verified stop
+```
+
+The active category priority is fixed before outcomes are known:
+
+```text
+C_balanced_flow_acceptance -> A_resonance_prior_spike -> S_7d_5m30_strict
+```
+
+Missing baseline/rolling context is a hard `data_dependency_not_ready` state, not a fallback to another signal model. Live position sizing uses account balance and stop distance so that planned risk is 2% per trade, with total protected open risk capped at 8% unless changed deliberately.
