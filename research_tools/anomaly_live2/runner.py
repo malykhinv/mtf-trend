@@ -193,6 +193,7 @@ class AnomalyLive2Runner:
             live_decision_watermark_ms=self._live_decision_watermark_ms,
         )
         self._shutdown_requested = False
+        self._shutdown_reason = ""
         self._decision_latency_degraded_windows = 0
         self._decision_latency_clean_windows = 0
         self._market_data_degraded_windows = 0
@@ -779,13 +780,46 @@ class AnomalyLive2Runner:
             if self.aggtrade_source is not None:
                 self.aggtrade_source.close()
             self.ticker_source.close()
+            self._flush_top_growth_audit_on_shutdown(writer, reason=self._shutdown_reason or "runner_finally")
             self.telegram.close()
             writer.close()
         return 0
 
     def shutdown(self, *, reason: str) -> None:
         self._shutdown_requested = True
+        self._shutdown_reason = reason
 
+    def _flush_top_growth_audit_on_shutdown(self, writer: Live2ArtifactWriter, *, reason: str) -> None:
+        worker = self._top_growth_audit_worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=max(1.0, self.config.top_growth_max_cycle_seconds + 1.0))
+        if worker is not None and worker.is_alive():
+            writer.write_event(
+                Live2Event(
+                    event_type="live2_top_growth_audit_partial_unavailable",
+                    component=Live2Component.RUNNER,
+                    severity=Live2Severity.WARNING,
+                    symbol="__top_growth__",
+                    message="top_growth_worker_still_running_on_shutdown",
+                    data={"reason": reason},
+                )
+            )
+            return
+        with self._top_growth_audit_lock:
+            stats = self.top_growth_audit.flush_partial(reason=reason)
+            if stats is None:
+                return
+            self._last_top_growth_audit_stats = stats
+        writer.write_event(
+            Live2Event(
+                event_type="live2_top_growth_audit_partial",
+                component=Live2Component.RUNNER,
+                severity=Live2Severity.WARNING,
+                symbol="__top_growth__",
+                message=str(stats.reason),
+                data=stats.as_dict(),
+            )
+        )
 
     def _set_startup_status(self, stage: str, message: str) -> None:
         self.status_logger.status(

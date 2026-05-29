@@ -9860,3 +9860,25 @@ Risk:
 ```text
 This changes the backtest exit model, so old discovery PnL is not comparable to new discovery PnL. Live still has actual-fill/exchange-boundary differences by design; this patch only aligns position-management policy.
 ```
+
+## 2026-05-29 - P454 live2 product audit backpressure hardening
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes live2 audit loss caused by high-volume routine deadline rows being treated as raw warning events. Routine `data_not_ready` / `data_dependency_not_ready` decisions are now info-level audit data and are aggregated into `live2_deadline_summary.csv`; raw event CSV remains bounded. Deadline rows that reached selected/entry-guard/execution/position-integrity stages remain protected from budget drops by typed verdict/data fields, not by broad severity.
+
+Near-miss audit now has a durable aggregate layer: every near-miss updates `live2_near_miss_summary.csv`, and bounded top examples are kept in `live2_near_miss_examples.csv` even after raw `live2_near_misses.csv` reaches budget. Top-growth audit writes partial closed-hour artifacts on graceful shutdown when a chunked scan was interrupted, and the index records `completion_status` plus `remaining_count`.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Note: `launcher.py` is not present in this zip, so the requested launcher compile target could not be checked here.
+
+Risk:
+
+```text
+Raw routine decision CSV is intentionally bounded and incomplete after budget. Strategy analysis should use the new summary/example artifacts for full-run funnels and raw CSV only for detailed examples. This patch does not change trading logic, fills, stops, or data-source fallbacks.
+```

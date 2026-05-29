@@ -106,9 +106,11 @@ class Live2DecisionRecord:
     def as_event(self) -> Live2Event:
         if self.verdict == "position_integrity_error" or self.execution_integrity_error:
             severity = Live2Severity.ERROR
-        elif self.verdict in {"deadline_missed", "deadline_expired_backlog", "data_not_ready", "data_dependency_not_ready"}:
+        elif self.verdict in {"deadline_missed", "deadline_expired_backlog"}:
             severity = Live2Severity.WARNING
         else:
+            # Routine readiness/dependency decisions are high-volume audit data, not operator warnings.
+            # The artifact writer preserves them in summary CSVs and only keeps raw rows within budget.
             severity = Live2Severity.INFO
         return Live2Event(
             event_type="deadline_decision",

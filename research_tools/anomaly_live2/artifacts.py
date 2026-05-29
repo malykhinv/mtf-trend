@@ -41,6 +41,9 @@ class Live2ArtifactWriterStatus:
     dropped_count: int
     dropped_by_kind: dict[str, int]
     dropped_events_by_type: dict[str, int]
+    deadline_summary_groups: int
+    near_miss_summary_groups: int
+    near_miss_example_rows: int
     output_file_budget: dict[str, dict[str, int | bool]]
     backpressure_active: bool
 
@@ -58,6 +61,9 @@ class Live2ArtifactWriterStatus:
             "dropped_count": self.dropped_count,
             "dropped_by_kind": dict(self.dropped_by_kind),
             "dropped_events_by_type": dict(self.dropped_events_by_type),
+            "deadline_summary_groups": self.deadline_summary_groups,
+            "near_miss_summary_groups": self.near_miss_summary_groups,
+            "near_miss_example_rows": self.near_miss_example_rows,
             "output_file_budget": self.output_file_budget,
             "backpressure_active": self.backpressure_active,
         }
@@ -65,6 +71,14 @@ class Live2ArtifactWriterStatus:
 
 def _dict_or_else(value: Any, fallback: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else fallback
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return result if result == result and abs(result) != float("inf") else 0.0
 
 
 class Live2ArtifactWriter:
@@ -239,6 +253,35 @@ class Live2ArtifactWriter:
         "event_data_json",
     )
 
+    _DEADLINE_SUMMARY_FIELDS = (
+        "first_timestamp_utc",
+        "last_timestamp_utc",
+        "event_type",
+        "verdict",
+        "reason",
+        "entry_guard_verdict",
+        "entry_guard_reason",
+        "execution_verdict",
+        "execution_reason",
+        "symbol_count",
+        "decision_count",
+        "examples_json",
+    )
+    _NEAR_MISS_SUMMARY_FIELDS = (
+        "first_timestamp_utc",
+        "last_timestamp_utc",
+        "near_miss_stage",
+        "verdict",
+        "reason",
+        "unique_blocker_count",
+        "prior_context_status",
+        "live_setup_status",
+        "post_htf_acceptance_status",
+        "symbol_count",
+        "row_count",
+        "examples_json",
+    )
+
     def __init__(
         self,
         output_dir: Path,
@@ -265,6 +308,9 @@ class Live2ArtifactWriter:
         self.status_path = output_dir / "live2_status.json"
         self.symbol_state_path = output_dir / "live2_symbol_state.csv"
         self.diagnostics_summary_path = output_dir / "live2_diagnostics_summary.json"
+        self.deadline_summary_path = output_dir / "live2_deadline_summary.csv"
+        self.near_miss_summary_path = output_dir / "live2_near_miss_summary.csv"
+        self.near_miss_examples_path = output_dir / "live2_near_miss_examples.csv"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self._queue: queue.Queue[_ArtifactJob] = queue.Queue(maxsize=queue_max_size)
@@ -285,6 +331,9 @@ class Live2ArtifactWriter:
         self._dropped_count = 0
         self._dropped_by_kind: dict[str, int] = {}
         self._dropped_events_by_type: dict[str, int] = {}
+        self._deadline_summary: dict[tuple[str, ...], dict[str, Any]] = {}
+        self._near_miss_summary: dict[tuple[str, ...], dict[str, Any]] = {}
+        self._near_miss_examples: dict[tuple[str, ...], list[tuple[float, dict[str, Any]]]] = {}
         self._events_file = self.events_path.open("w", encoding="utf-8-sig", newline="")
         self._events_writer = csv.DictWriter(self._events_file, fieldnames=self._EVENT_FIELDS)
         self._events_writer.writeheader()
@@ -305,6 +354,7 @@ class Live2ArtifactWriter:
         self._worker.start()
 
     def write_event(self, event: Live2Event) -> None:
+        self._record_event_summary(event)
         row = {
             "timestamp_utc": event.timestamp_utc,
             "timestamp_ms": event.timestamp_ms,
@@ -323,6 +373,7 @@ class Live2ArtifactWriter:
 
     def write_near_miss(self, row: dict[str, Any]) -> None:
         payload = {field: row.get(field, "") for field in self._NEAR_MISS_FIELDS}
+        self._record_near_miss_summary(payload)
         if self._should_drop_append_row(kind="near_miss", row=payload):
             return
         self._enqueue(_ArtifactJob(kind="near_miss", payload=payload))
@@ -464,6 +515,9 @@ class Live2ArtifactWriter:
                 dropped_count=self._dropped_count,
                 dropped_by_kind=dict(self._dropped_by_kind),
                 dropped_events_by_type=dict(self._dropped_events_by_type),
+                deadline_summary_groups=len(self._deadline_summary),
+                near_miss_summary_groups=len(self._near_miss_summary),
+                near_miss_example_rows=sum(len(rows) for rows in self._near_miss_examples.values()),
                 output_file_budget=output_file_budget,
                 backpressure_active=self._rejected_count > 0 or self._dropped_count > 0,
             )
@@ -479,6 +533,7 @@ class Live2ArtifactWriter:
             self._mark_error("artifact writer close timed out because queue is full")
         self._worker.join(timeout=10.0)
         try:
+            self._write_audit_summary_snapshots()
             self._events_file.flush()
             self._near_misses_file.flush()
             self._events_file.close()
@@ -538,6 +593,7 @@ class Live2ArtifactWriter:
                 json.dumps(job.payload, ensure_ascii=False, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
+            self._write_audit_summary_snapshots()
             return
         if job.kind == "diagnostics_summary":
             self._atomic_write_text(
@@ -567,6 +623,164 @@ class Live2ArtifactWriter:
             os.fsync(file_obj.fileno())
         tmp_path.replace(path)
 
+
+    def _record_event_summary(self, event: Live2Event) -> None:
+        if event.event_type != "deadline_decision":
+            return
+        data = event.data if isinstance(event.data, dict) else {}
+        key = (
+            event.event_type,
+            str(data.get("verdict") or event.message or ""),
+            str(data.get("reason") or ""),
+            str(data.get("entry_guard_verdict") or ""),
+            str(data.get("entry_guard_reason") or ""),
+            str(data.get("execution_verdict") or ""),
+            str(data.get("execution_reason") or ""),
+        )
+        with self._lock:
+            item = self._deadline_summary.get(key)
+            if item is None:
+                item = {
+                    "first_timestamp_utc": event.timestamp_utc,
+                    "last_timestamp_utc": event.timestamp_utc,
+                    "event_type": event.event_type,
+                    "verdict": key[1],
+                    "reason": key[2],
+                    "entry_guard_verdict": key[3],
+                    "entry_guard_reason": key[4],
+                    "execution_verdict": key[5],
+                    "execution_reason": key[6],
+                    "decision_count": 0,
+                    "symbols": set(),
+                    "examples": [],
+                }
+                self._deadline_summary[key] = item
+            item["last_timestamp_utc"] = event.timestamp_utc
+            item["decision_count"] = int(item.get("decision_count") or 0) + 1
+            if event.symbol:
+                item["symbols"].add(event.symbol)
+                examples = item["examples"]
+                if isinstance(examples, list) and len(examples) < 8 and event.symbol not in examples:
+                    examples.append(event.symbol)
+
+    def _record_near_miss_summary(self, row: dict[str, Any]) -> None:
+        key = (
+            str(row.get("near_miss_stage") or ""),
+            str(row.get("verdict") or ""),
+            str(row.get("reason") or ""),
+            str(row.get("unique_blocker_count") or ""),
+            str(row.get("prior_context_status") or ""),
+            str(row.get("live_setup_status") or ""),
+            str(row.get("post_htf_acceptance_status") or ""),
+        )
+        timestamp_utc = str(row.get("timestamp_utc") or "")
+        symbol = str(row.get("symbol") or "")
+        with self._lock:
+            item = self._near_miss_summary.get(key)
+            if item is None:
+                item = {
+                    "first_timestamp_utc": timestamp_utc,
+                    "last_timestamp_utc": timestamp_utc,
+                    "near_miss_stage": key[0],
+                    "verdict": key[1],
+                    "reason": key[2],
+                    "unique_blocker_count": key[3],
+                    "prior_context_status": key[4],
+                    "live_setup_status": key[5],
+                    "post_htf_acceptance_status": key[6],
+                    "row_count": 0,
+                    "symbols": set(),
+                    "examples": [],
+                }
+                self._near_miss_summary[key] = item
+            item["last_timestamp_utc"] = timestamp_utc
+            item["row_count"] = int(item.get("row_count") or 0) + 1
+            if symbol:
+                item["symbols"].add(symbol)
+                examples = item["examples"]
+                if isinstance(examples, list) and len(examples) < 8 and symbol not in examples:
+                    examples.append(symbol)
+            priority = self._near_miss_priority(row)
+            examples_by_group = self._near_miss_examples.setdefault(key, [])
+            examples_by_group.append((priority, dict(row)))
+            examples_by_group.sort(key=lambda pair: pair[0], reverse=True)
+            del examples_by_group[5:]
+
+    def _write_audit_summary_snapshots(self) -> None:
+        deadline_rows: list[dict[str, Any]] = []
+        near_miss_rows: list[dict[str, Any]] = []
+        near_miss_examples: list[dict[str, Any]] = []
+        with self._lock:
+            for item in self._deadline_summary.values():
+                symbols = item.get("symbols") if isinstance(item.get("symbols"), set) else set()
+                deadline_rows.append(
+                    {
+                        "first_timestamp_utc": item.get("first_timestamp_utc", ""),
+                        "last_timestamp_utc": item.get("last_timestamp_utc", ""),
+                        "event_type": item.get("event_type", ""),
+                        "verdict": item.get("verdict", ""),
+                        "reason": item.get("reason", ""),
+                        "entry_guard_verdict": item.get("entry_guard_verdict", ""),
+                        "entry_guard_reason": item.get("entry_guard_reason", ""),
+                        "execution_verdict": item.get("execution_verdict", ""),
+                        "execution_reason": item.get("execution_reason", ""),
+                        "symbol_count": len(symbols),
+                        "decision_count": item.get("decision_count", 0),
+                        "examples_json": json.dumps(item.get("examples", []), ensure_ascii=False),
+                    }
+                )
+            for item in self._near_miss_summary.values():
+                symbols = item.get("symbols") if isinstance(item.get("symbols"), set) else set()
+                near_miss_rows.append(
+                    {
+                        "first_timestamp_utc": item.get("first_timestamp_utc", ""),
+                        "last_timestamp_utc": item.get("last_timestamp_utc", ""),
+                        "near_miss_stage": item.get("near_miss_stage", ""),
+                        "verdict": item.get("verdict", ""),
+                        "reason": item.get("reason", ""),
+                        "unique_blocker_count": item.get("unique_blocker_count", ""),
+                        "prior_context_status": item.get("prior_context_status", ""),
+                        "live_setup_status": item.get("live_setup_status", ""),
+                        "post_htf_acceptance_status": item.get("post_htf_acceptance_status", ""),
+                        "symbol_count": len(symbols),
+                        "row_count": item.get("row_count", 0),
+                        "examples_json": json.dumps(item.get("examples", []), ensure_ascii=False),
+                    }
+                )
+            for rows in self._near_miss_examples.values():
+                near_miss_examples.extend(dict(row) for _, row in rows)
+        deadline_rows.sort(key=lambda row: int(row.get("decision_count") or 0), reverse=True)
+        near_miss_rows.sort(key=lambda row: int(row.get("row_count") or 0), reverse=True)
+        near_miss_examples.sort(key=self._near_miss_priority, reverse=True)
+        self._atomic_write_csv(self.deadline_summary_path, self._DEADLINE_SUMMARY_FIELDS, deadline_rows)
+        self._atomic_write_csv(self.near_miss_summary_path, self._NEAR_MISS_SUMMARY_FIELDS, near_miss_rows)
+        self._atomic_write_csv(self.near_miss_examples_path, self._NEAR_MISS_FIELDS, near_miss_examples)
+
+    def _atomic_write_csv(self, path: Path, fieldnames: tuple[str, ...], rows: list[dict[str, Any]]) -> None:
+        tmp_path = self._tmp_path_for(path)
+        with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        tmp_path.replace(path)
+
+    def _near_miss_priority(self, row: dict[str, Any]) -> float:
+        return_pct = _float_or_zero(row.get("return_pct"))
+        quote_volume = _float_or_zero(row.get("quote_volume"))
+        number_of_trades = _float_or_zero(row.get("number_of_trades"))
+        return abs(return_pct) * max(1.0, quote_volume) + number_of_trades
+
+    def _event_payload_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        raw = row.get("data_json")
+        if not isinstance(raw, str) or not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def _should_drop_append_row(self, *, kind: str, row: dict[str, Any]) -> bool:
         if kind == "event":
@@ -616,9 +830,9 @@ class Live2ArtifactWriter:
 
     def _is_critical_event_row(self, row: dict[str, Any]) -> bool:
         severity = str(row.get("severity") or "").lower()
-        if severity in {"warning", "error", "critical"}:
-            return True
         event_type = str(row.get("event_type") or "").lower()
+        if severity in {"error", "critical"}:
+            return True
         critical_tokens = (
             "selected",
             "execution",
@@ -634,7 +848,27 @@ class Live2ArtifactWriter:
             "telegram",
             "preflight",
         )
-        return any(token in event_type for token in critical_tokens)
+        if any(token in event_type for token in critical_tokens):
+            return True
+        if event_type != "deadline_decision":
+            return False
+        data = self._event_payload_from_row(row)
+        verdict = str(data.get("verdict") or "")
+        entry_guard_verdict = str(data.get("entry_guard_verdict") or "")
+        execution_verdict = str(data.get("execution_verdict") or "")
+        has_signal_prices = any(
+            data.get(field) not in (None, "")
+            for field in ("signal_entry_price", "initial_stop_at_decision", "tp1_at_decision")
+        )
+        if verdict == "selected" or verdict == "position_integrity_error":
+            return True
+        if verdict.startswith("rejected_entry_guard") or verdict.startswith("rejected_execution"):
+            return True
+        if verdict in {"rejected_runtime_gates_not_ready", "rejected_existing_exchange_position"}:
+            return True
+        if entry_guard_verdict or execution_verdict or has_signal_prices:
+            return True
+        return False
 
     def _maybe_flush_append_file(self, *, kind: str, force: bool = False) -> None:
         now = time.monotonic()

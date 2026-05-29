@@ -68,6 +68,8 @@ TOP_GROWTH_INDEX_COLUMNS = (
     "period_end_ms",
     "symbols_total",
     "processed_count",
+    "remaining_count",
+    "completion_status",
     "top_count",
     "ok_count",
     "below_threshold_count",
@@ -251,7 +253,7 @@ class Live2TopGrowthAudit:
             return self._last_stats
 
         top_rows = _rank_candidates(task.candidates, limit=self.config.limit)
-        top_path, status_path = self._write_snapshot(task=task, top_rows=top_rows)
+        top_path, status_path = self._write_snapshot(task=task, top_rows=top_rows, completion_status="completed")
         self._completed_periods.add(task.period_start_ms)
         self._task = None
         self._last_stats = Live2TopGrowthAuditStats(
@@ -273,11 +275,33 @@ class Live2TopGrowthAudit:
     def status(self) -> dict[str, object]:
         return self._last_stats.as_dict()
 
+    def flush_partial(self, *, reason: str = "interrupted_shutdown") -> Live2TopGrowthAuditStats | None:
+        task = self._task
+        if task is None or not task.status_rows:
+            return None
+        top_rows = _rank_candidates(task.candidates, limit=self.config.limit)
+        top_path, status_path = self._write_snapshot(task=task, top_rows=top_rows, completion_status="partial")
+        self._last_stats = Live2TopGrowthAuditStats(
+            enabled=True,
+            status="partial",
+            reason=reason,
+            period_start_ms=task.period_start_ms,
+            period_end_ms=task.period_end_ms,
+            processed_count=task.cursor,
+            remaining_count=max(0, len(task.symbols) - task.cursor),
+            symbols_total=len(task.symbols),
+            top_count=len(top_rows),
+            top_file=str(top_path.relative_to(self.output_dir)),
+            status_file=str(status_path.relative_to(self.output_dir)),
+        )
+        return self._last_stats
+
     def _write_snapshot(
         self,
         *,
         task: Live2TopGrowthAuditTask,
         top_rows: list[dict[str, object]],
+        completion_status: str,
     ) -> tuple[Path, Path]:
         stamp = datetime.fromtimestamp(task.period_start_ms / 1000, UTC).strftime("%Y%m%d_%H0000_UTC")
         top_path = self.top_growth_dir / f"top_growth_{stamp}.csv"
@@ -316,6 +340,8 @@ class Live2TopGrowthAudit:
                 "period_end_ms": task.period_end_ms,
                 "symbols_total": len(task.symbols),
                 "processed_count": len(task.status_rows),
+                "remaining_count": max(0, len(task.symbols) - len(task.status_rows)),
+                "completion_status": completion_status,
                 "top_count": len(top_rows),
                 "ok_count": ok_count,
                 "below_threshold_count": below_count,

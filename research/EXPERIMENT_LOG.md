@@ -4577,3 +4577,9 @@ Protocol after P451: in live artifacts, separate selected trades by `confirm_30s
 Hypothesis: quiet periods should be represented by exchange-reported 1m zero-volume klines, not by missing in-memory candles. P452 should reduce false `rolling_1m_history_not_ready` during live rolling C/A/S without allowing decisions on stale or incomplete context.
 
 Protocol: after applying P452, run live2 in minimal-risk/scouting mode and inspect `live_events.csv` / deadline decisions for `rolling_1m_context_rest_repair_ready`, `rolling_1m_context_rest_repair_incomplete`, selected C/A/S signals, and 30s gap tolerance fields. Selected signals must still have no future/outcome-derived fields and must pass entry guard from current live price.
+
+## 2026-05-29 - P454 live2 audit backpressure validation protocol
+
+Hypothesis: live2 can keep product-grade strategic audit even when high-volume raw deadline/near-miss rows exceed bounded CSV budgets.
+
+Protocol after P454: run live2 for at least one closed hour. Check that `live2_deadline_summary.csv` contains full-run counts for routine data readiness/dependency blockers, `live2_near_miss_summary.csv` and `live2_near_miss_examples.csv` keep updating after raw `live2_near_misses.csv` reaches budget, and `live2_events.csv` still contains every selected/entry_guard/execution/integrity decision. Stop during a top-growth scan once and verify `top_growth_index.csv` records `completion_status=partial`, `processed_count`, `remaining_count`, `top_file`, and `status_file`.
