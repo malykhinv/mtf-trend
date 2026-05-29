@@ -3437,6 +3437,13 @@ Current commit: UNKNOWN.
 Status: P450 PROPOSED. Live2 rolling C/A/S has no detected trading-signal lookahead after P449, but startup 1m HTF baseline warmup had a data-quality hole: a single 48h kline request could be truncated by exchange/API limits and still mark the symbol as warmed. P450 makes the warmup paginated and requires recent contiguous 1m history before a symbol is counted as warmed. Zero-volume Binance 1m candles are kept so real dormancy does not become artificial gaps.
 
 P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or rolling HTF candles contain aggTrade-id gaps, so incomplete websocket/rest trade candles become data dependencies instead of tradable signals.
+
+
+## 2026-05-29 - P451 live2 rolling data-quality tolerance
+
+Current commit: UNKNOWN.
+
+Status: P451 PROPOSED after P450 feedback. Live2 rolling C/A/S should not fail permanently on tiny aggTrade delivery holes, but it also must not trade blindly on large missing-flow gaps. The contract is now explicit tolerance + artifact visibility: small 30s aggTrade-id gaps are marked tolerated, large gaps remain data-dependency blocks. Startup 48h 1m history remains a REST warmup, not waiting in real time. Runtime decisions still require enough currently contiguous 1m history for the rolling context; missing 1m data causes not-ready until sufficient fresh contiguous history exists, not silent fallback.
 ## 2026-05-29 - P448 live2 rolling context parity audit
 
 Current commit: UNKNOWN.

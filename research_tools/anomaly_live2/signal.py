@@ -88,6 +88,10 @@ LIVE2_ROLLING_STRUCTURAL_STOP_BUFFER_PCT = 0.0005
 LIVE2_ROLLING_TP1_R = 0.75
 LIVE2_ROLLING_MAX_ENTRY_DRIFT_PCT = 0.004
 LIVE2_ROLLING_MAX_INITIAL_RISK_PCT = 0.05
+LIVE2_ROLLING_MAX_MISSING_AGGTRADE_IDS_PER_30S = 5
+LIVE2_ROLLING_MAX_MISSING_AGGTRADE_ID_RATIO_30S = 0.05
+LIVE2_ROLLING_MAX_GAPPY_CONFIRM_CANDLES = 1
+LIVE2_ROLLING_MAX_GAPPY_HTF_CANDLES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -1553,13 +1557,23 @@ def _evaluate_rolling_profile(
         confirm = _closed_30s_confirm_segment(closed_30s, decision_candle=decision_candle, confirm_count=confirm_count)
         if confirm is None:
             continue
-        if _candles_have_aggtrade_gaps(confirm):
-            return {**profile_common, "status": "not_ready", "reason": "confirm_30s_aggtrade_gap"}
+        confirm_quality = _aggtrade_gap_quality(
+            candles=confirm,
+            label="confirm_30s",
+            max_gappy_candles=LIVE2_ROLLING_MAX_GAPPY_CONFIRM_CANDLES,
+        )
+        if confirm_quality["status"] == "rejected":
+            return {**profile_common, **confirm_quality, "status": "not_ready", "reason": "confirm_30s_aggtrade_gap_above_tolerance"}
         htf = _closed_segment_before(candles=closed_30s, end_open_ms=confirm[0].open_time_ms, count=htf_candles, timeframe_ms=30_000)
         if htf is None:
             continue
-        if _candles_have_aggtrade_gaps(htf):
-            return {**profile_common, "status": "not_ready", "reason": "rolling_htf_30s_aggtrade_gap"}
+        htf_quality = _aggtrade_gap_quality(
+            candles=htf,
+            label="rolling_htf_30s",
+            max_gappy_candles=LIVE2_ROLLING_MAX_GAPPY_HTF_CANDLES,
+        )
+        if htf_quality["status"] == "rejected":
+            return {**profile_common, **htf_quality, "status": "not_ready", "reason": "rolling_htf_30s_aggtrade_gap_above_tolerance"}
         htf_open_ms = int(htf[0].open_time_ms)
         history = _aggregate_1m_history_to_htf(closed_1m=closed_1m, htf_timeframe_ms=htf_timeframe_ms, before_ms=htf_open_ms)
         required_history = max(
@@ -1625,6 +1639,8 @@ def _evaluate_rolling_profile(
             "decision_available_timestamp_ms": int(decision_candle.close_time_ms),
             "rolling_htf_open_ms": htf_open_ms,
             "rolling_htf_close_ms": int(htf[-1].close_time_ms),
+            **_quality_artifact_fields(confirm_quality),
+            **_quality_artifact_fields(htf_quality),
             "htf_quote_ratio": htf_quote_ratio,
             "htf_trade_ratio": htf_trade_ratio,
             "htf_return_pct": htf_return,
@@ -1705,13 +1721,80 @@ def _aggregate_1m_history_to_htf(*, closed_1m: tuple[Live2Candle, ...], htf_time
     return tuple(reversed(groups_reversed))
 
 
-def _candles_have_aggtrade_gaps(candles: tuple[Live2Candle, ...]) -> bool:
-    return any(
-        int(getattr(item, "missing_agg_trade_id_count", 0) or 0) > 0
-        or int(getattr(item, "agg_trade_id_gap_count", 0) or 0) > 0
-        or int(getattr(item, "max_agg_trade_id_gap", 0) or 0) > 0
-        for item in candles
-    )
+def _aggtrade_gap_quality(
+    *,
+    candles: tuple[Live2Candle, ...],
+    label: str,
+    max_gappy_candles: int,
+) -> dict[str, object]:
+    """Classify 30s aggTrade-id gaps for live C/A/S decisions.
+
+    Small aggTrade-id holes are tolerated because live WebSocket delivery cannot
+    be perfect all the time.  The tolerance is explicit and exported with the
+    selected signal so later research can decide whether tolerated-gap trades
+    should be trusted, separated, or disabled.  Large holes remain a hard data
+    dependency failure; we never silently fill or rewrite flow.
+    """
+
+    total_missing = 0
+    max_missing = 0
+    max_gap = 0
+    gappy_candles = 0
+    rejected_candles = 0
+    total_trades = 0
+    tolerances: list[int] = []
+    for candle in candles:
+        trades = max(0, int(getattr(candle, "number_of_trades", 0) or 0))
+        missing = max(0, int(getattr(candle, "missing_agg_trade_id_count", 0) or 0))
+        gap_count = max(0, int(getattr(candle, "agg_trade_id_gap_count", 0) or 0))
+        gap_size = max(0, int(getattr(candle, "max_agg_trade_id_gap", 0) or 0))
+        tolerance = max(
+            LIVE2_ROLLING_MAX_MISSING_AGGTRADE_IDS_PER_30S,
+            int(trades * LIVE2_ROLLING_MAX_MISSING_AGGTRADE_ID_RATIO_30S),
+        )
+        total_trades += trades
+        total_missing += missing
+        max_missing = max(max_missing, missing)
+        max_gap = max(max_gap, gap_size)
+        tolerances.append(tolerance)
+        has_gap = missing > 0 or gap_count > 0 or gap_size > 0
+        if has_gap:
+            gappy_candles += 1
+        if missing > tolerance:
+            rejected_candles += 1
+    total_tolerance = sum(tolerances)
+    tolerated = gappy_candles > 0 and rejected_candles == 0 and gappy_candles <= max_gappy_candles
+    rejected = rejected_candles > 0 or gappy_candles > max_gappy_candles
+    if rejected:
+        status = "rejected"
+        reason = f"{label}_aggtrade_gap_above_tolerance"
+    elif tolerated:
+        status = "tolerated"
+        reason = f"{label}_aggtrade_gap_tolerated"
+    else:
+        status = "ok"
+        reason = f"{label}_aggtrade_gap_ok"
+    return {
+        f"{label}_aggtrade_gap_quality": status,
+        f"{label}_aggtrade_gap_reason": reason,
+        f"{label}_aggtrade_gap_tolerated": tolerated,
+        f"{label}_aggtrade_gap_rejected": rejected,
+        f"{label}_aggtrade_gappy_candles": gappy_candles,
+        f"{label}_aggtrade_rejected_candles": rejected_candles,
+        f"{label}_missing_aggtrade_ids": total_missing,
+        f"{label}_max_missing_aggtrade_ids_per_candle": max_missing,
+        f"{label}_max_aggtrade_id_gap": max_gap,
+        f"{label}_missing_aggtrade_id_tolerance_total": total_tolerance,
+        f"{label}_max_gappy_candles_tolerance": max_gappy_candles,
+        f"{label}_total_trades": total_trades,
+        "status": status,
+        "reason": reason,
+    }
+
+
+
+def _quality_artifact_fields(quality: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in quality.items() if key not in {"status", "reason"}}
 
 
 def _rolling_ltf_confirmation_features(

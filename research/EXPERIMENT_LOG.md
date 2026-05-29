@@ -4566,3 +4566,8 @@ Current commit: UNKNOWN.
 Result: live2 rolling signal path still avoids future/outcome fields, but incomplete startup 1m history could corrupt or suppress C/A/S context. P450 turns this into an explicit data dependency: paginated 48h 1m warmup, zero-volume candle continuity, and recent-contiguous-history validation before marking a symbol warmed. Next live smoke must inspect startup_htf_baseline_warmup_completed errors for incomplete_1m_htf_baseline and confirm rolling_1m_history_not_ready disappears only for symbols with complete enough history.
 
 P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or rolling HTF candles contain aggTrade-id gaps, so incomplete websocket/rest trade candles become data dependencies instead of tradable signals.
+
+
+## 2026-05-29 - P451 live rolling tolerance audit
+
+Protocol after P451: in live artifacts, separate selected trades by `confirm_30s_aggtrade_gap_quality` and `rolling_htf_30s_aggtrade_gap_quality`. Do not mix tolerated-gap trades with clean trades when evaluating live edge. Watch counts of `*_aggtrade_gap_above_tolerance` reasons; frequent rejects mean the stream quality is insufficient for real-flow trading, not that the entry filter is bad.

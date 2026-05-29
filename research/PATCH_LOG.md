@@ -9824,6 +9824,11 @@ Status: PROPOSED. Current commit: UNKNOWN.
 Fixes a live2 data-quality bug after P449: startup rolling HTF baseline warmup requested 48h of 1m Binance klines in one call and accepted partial results as warmed. P450 paginates the 1m kline warmup, keeps zero-volume 1m candles for continuity, and counts a symbol as warmed only when the recent contiguous 1m baseline is long enough for rolling C/A/S context. Incomplete symbols remain loaded for audit but become data-dependency-not-ready instead of silently producing decisions on partial baseline.
 
 P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or rolling HTF candles contain aggTrade-id gaps, so incomplete websocket/rest trade candles become data dependencies instead of tradable signals.
+
+
+## 2026-05-29 - P451 live2 rolling gap tolerance
+
+Status: PROPOSED. P450 hardened live2 data completeness but treated any selected 30s aggTrade-id gap as a hard dependency failure. P451 keeps hard rejection for large holes but allows small explicit tolerance for confirmation/rolling-HTF 30s candles, exporting quality fields into signal artifacts so tolerated-gap trades can be audited separately. It does not synthesize missing flow and does not use future/outcome data.
 ## P448 - fix live2 rolling context parity
 
 Status: PROPOSED. Fix live2 rolling C/A/S context so the signal engine has enough closed 1m history for 24h prior-spike features plus the pre-spike baseline, and align live HTF context aggregation with the rolling discovery backtest. The traded HTF seed remains rolling, but baseline/dormancy/pregrowth/prior-spike context uses calendar HTF candles fully closed before the rolling window start. No fallback signal path is added.
