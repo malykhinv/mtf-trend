@@ -1,3 +1,11 @@
+## 2026-05-29 - P441 category trigger audit fix
+
+Current commit: UNKNOWN.
+
+Status: P441 PROPOSED after rechecking P439/P440. Rolling seed baseline is fixed, but first-entry selection still used the old generic LTF-confirm first and only assigned C/A/S categories after trade simulation. P441 moves fixed C/A/S priority into the signal loop: entry is now the first category-qualified closed-LTF signal after a rolling HTF seed, not a later post-trade filter.
+
+Next: rerun 45d rolling discovery and verify `htf_ltf_runner_signals.csv` contains `signal_model=first_category_qualified_ltf_signal_after_rolling_htf_seed` and non-empty `runner_candidate_category`.
+
 ## 2026-05-29 - P440 rolling seed baseline fix proposed
 
 Current commit: UNKNOWN.

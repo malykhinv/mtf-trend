@@ -1,3 +1,9 @@
+## 2026-05-29 - P441 rolling C/A/S trigger audit
+
+Hypothesis: rolling discovery should enter on the first closed-LTF signal that also matches one of the frozen C/A/S candidate natures. Generic LTF-confirm without a category is only a near-miss, not a trade.
+
+Protocol: rerun 45d after P441 and compare counts, category mix, daily stability, top dependency, and blocked risk-cap/cooldown events. Do not compare PnL directly with pre-P441 calendar runs.
+
 ## 2026-05-29 - P440 rolling discovery correction check
 
 Scope:

@@ -1,3 +1,16 @@
+## P441 - first category-qualified rolling signal
+
+Status: PROPOSED.
+
+Reason: P439/P440 compiled and fixed rolling seed discovery, but C/A/S category assignment still happened after generic signal simulation. That was not the intended live-like contract.
+
+Changes:
+- require C/A/S fixed-priority match inside `_build_first_ltf_signal` before returning a selected signal;
+- persist matched category fields on the signal/trade;
+- keep `_with_runner_candidate_categories` idempotent so it preserves signal-time categories instead of silently re-mining them later.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+
 ## 2026-05-29 - P440 proposed - fix rolling seed baseline and safe-superset restriction
 
 Files:

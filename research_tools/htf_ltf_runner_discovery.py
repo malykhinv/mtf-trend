@@ -1301,10 +1301,17 @@ def _build_first_ltf_signal(
             continue
         if initial_risk_pct > config.max_initial_risk_pct:
             continue
+        candidate_categories = _runner_candidate_matches({**candidate, **signal_features})
+        if not candidate_categories:
+            continue
         oi_at_signal = _oi_asof(oi, decision_available_ts)
         return {
             **candidate,
             "signal_status": "selected",
+            "signal_model": "first_category_qualified_ltf_signal_after_rolling_htf_seed",
+            "runner_candidate_matched_categories": "|".join(candidate_categories),
+            "runner_candidate_category": candidate_categories[0],
+            "runner_candidate_priority_rank": float(1 + ["C_balanced_flow_acceptance", "A_resonance_prior_spike", "S_7d_5m30_strict"].index(candidate_categories[0])),
             "decision_timestamp_ms": decision_ts,
             "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
             "decision_available_timestamp_ms": decision_available_ts,
@@ -2967,11 +2974,18 @@ def _with_runner_candidate_categories(trades: pd.DataFrame) -> pd.DataFrame:
     matched_values: list[str] = []
     selected_values: list[str] = []
     priority_values: list[float] = []
+    priority = ["C_balanced_flow_acceptance", "A_resonance_prior_spike", "S_7d_5m30_strict"]
     for row in frame.to_dict("records"):
-        matches = _runner_candidate_matches(row)
+        existing_category = str(row.get("runner_candidate_category", "") or "")
+        existing_matches = str(row.get("runner_candidate_matched_categories", "") or "")
+        if existing_category:
+            matches = [item for item in existing_matches.split("|") if item] or [existing_category]
+        else:
+            matches = _runner_candidate_matches(row)
         matched_values.append("|".join(matches))
-        selected_values.append(matches[0] if matches else "")
-        priority_values.append(float(1 + ["C_balanced_flow_acceptance", "A_resonance_prior_spike", "S_7d_5m30_strict"].index(matches[0])) if matches else float("nan"))
+        selected = matches[0] if matches else ""
+        selected_values.append(selected)
+        priority_values.append(float(1 + priority.index(selected)) if selected in priority else float("nan"))
     frame["runner_candidate_matched_categories"] = matched_values
     frame["runner_candidate_category"] = selected_values
     frame["runner_candidate_priority_rank"] = priority_values
