@@ -9815,6 +9815,15 @@ Risk:
 ```text
 This deliberately prioritizes true rolling live mechanics over calendar-backtest parity. The next rolling discovery analysis should treat live-context parity separately and not assume old calendar-context feature distributions transfer unchanged.
 ```
+
+
+## P450 - live2 rolling baseline warmup completeness guard
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes a live2 data-quality bug after P449: startup rolling HTF baseline warmup requested 48h of 1m Binance klines in one call and accepted partial results as warmed. P450 paginates the 1m kline warmup, keeps zero-volume 1m candles for continuity, and counts a symbol as warmed only when the recent contiguous 1m baseline is long enough for rolling C/A/S context. Incomplete symbols remain loaded for audit but become data-dependency-not-ready instead of silently producing decisions on partial baseline.
+
+P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or rolling HTF candles contain aggTrade-id gaps, so incomplete websocket/rest trade candles become data dependencies instead of tradable signals.
 ## P448 - fix live2 rolling context parity
 
 Status: PROPOSED. Fix live2 rolling C/A/S context so the signal engine has enough closed 1m history for 24h prior-spike features plus the pre-spike baseline, and align live HTF context aggregation with the rolling discovery backtest. The traded HTF seed remains rolling, but baseline/dormancy/pregrowth/prior-spike context uses calendar HTF candles fully closed before the rolling window start. No fallback signal path is added.

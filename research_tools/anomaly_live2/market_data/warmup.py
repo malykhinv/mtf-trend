@@ -22,6 +22,10 @@ from .candles import Live2AggTradeEvent, Live2Candle
 from .common import optional_float, optional_int, symbol_to_market_id
 
 
+BINANCE_KLINE_PAGE_LIMIT = 1500
+LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES = 1800
+
+
 @runtime_checkable
 class Live2StartupAggTradeExchange(Protocol):
     """Typed startup-only boundary for Binance aggTrades warm-up."""
@@ -439,12 +443,11 @@ class Live2StartupHtfBaselineWarmup:
         errors: list[str] = []
         for symbol in limited_symbols:
             try:
-                rows = self.exchange_client.fetch_binance_klines(
+                rows = self._fetch_paginated_1m_klines(
                     symbol=symbol,
-                    timeframe=Timeframe.M1,
                     start_timestamp_ms=context_start_ms,
                     end_timestamp_ms=context_end_ms,
-                    limit=max(1, self.config.lookback_minutes + 2),
+                    timeframe_ms=timeframe_ms,
                 )
             except Exception as exc:  # pragma: no cover - exchange boundary
                 errors.append(f"{symbol}:{type(exc).__name__}:{str(exc)[:160]}")
@@ -454,14 +457,29 @@ class Live2StartupHtfBaselineWarmup:
                     time.sleep(self.config.request_sleep_seconds)
                 continue
             candles = tuple(
-                candle
-                for row in rows
-                if (candle := _parse_binance_kline_1m(row)) is not None
+                sorted(
+                    (candle for row in rows if (candle := _parse_binance_kline_1m(row)) is not None),
+                    key=lambda item: item.open_time_ms,
+                )
+            )
+            recent_contiguous_count = _recent_contiguous_1m_count(
+                candles=candles,
+                context_end_ms=context_end_ms,
+                timeframe_ms=timeframe_ms,
             )
             if candles:
                 self.state_store.append_closed_candles(symbol=symbol, candles=candles)
                 candles_loaded += len(candles)
+            if recent_contiguous_count >= LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES:
                 symbols_warmed += 1
+            else:
+                errors.append(
+                    f"{symbol}:incomplete_1m_htf_baseline:"
+                    f"recent_contiguous={recent_contiguous_count}/"
+                    f"{LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES}:loaded={len(candles)}"
+                )
+                if len(errors) >= self.config.error_limit:
+                    break
             if self.config.request_sleep_seconds > 0:
                 time.sleep(self.config.request_sleep_seconds)
         symbols_failed = len(errors)
@@ -487,6 +505,50 @@ class Live2StartupHtfBaselineWarmup:
             errors=tuple(errors[: self.config.error_limit]),
         )
 
+    def _fetch_paginated_1m_klines(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        timeframe_ms: int,
+    ) -> tuple[list[object], ...]:
+        if self.exchange_client is None:
+            return ()
+        rows_by_open_time: dict[int, list[object]] = {}
+        cursor_ms = int(start_timestamp_ms)
+        end_ms = int(end_timestamp_ms)
+        while cursor_ms <= end_ms:
+            remaining_candles = max(1, ((end_ms - cursor_ms) // int(timeframe_ms)) + 1)
+            limit = min(BINANCE_KLINE_PAGE_LIMIT, remaining_candles)
+            page = self.exchange_client.fetch_binance_klines(
+                symbol=symbol,
+                timeframe=Timeframe.M1,
+                start_timestamp_ms=cursor_ms,
+                end_timestamp_ms=end_ms,
+                limit=limit,
+            )
+            if not page:
+                break
+            page_open_times: list[int] = []
+            for row in page:
+                if not isinstance(row, list):
+                    continue
+                open_time_ms = optional_int(row[0]) if row else None
+                if open_time_ms is None:
+                    continue
+                if int(open_time_ms) < int(start_timestamp_ms) or int(open_time_ms) > end_ms:
+                    continue
+                rows_by_open_time[int(open_time_ms)] = row
+                page_open_times.append(int(open_time_ms))
+            if not page_open_times:
+                break
+            next_cursor_ms = max(page_open_times) + int(timeframe_ms)
+            if next_cursor_ms <= cursor_ms:
+                break
+            cursor_ms = next_cursor_ms
+        return tuple(rows_by_open_time[key] for key in sorted(rows_by_open_time))
+
 
 def _parse_binance_kline_1m(row: list[object]) -> Live2Candle | None:
     if len(row) < 11:
@@ -511,7 +573,16 @@ def _parse_binance_kline_1m(row: list[object]) -> Live2Candle | None:
         or number_of_trades is None
     ):
         return None
-    if open_price <= 0 or high <= 0 or low <= 0 or close <= 0 or quote_volume <= 0 or number_of_trades <= 0:
+    if (
+        open_price <= 0
+        or high <= 0
+        or low <= 0
+        or close <= 0
+        or base_volume < 0
+        or quote_volume < 0
+        or number_of_trades < 0
+        or (taker_buy_quote_volume is not None and taker_buy_quote_volume < 0)
+    ):
         return None
     timeframe_ms = int(Timeframe.M1.to_milliseconds())
     return Live2Candle(
@@ -531,6 +602,19 @@ def _parse_binance_kline_1m(row: list[object]) -> Live2Candle | None:
         first_source="binance_futures_klines_startup_rest_1m_htf_baseline",
         last_source="binance_futures_klines_startup_rest_1m_htf_baseline",
     )
+
+
+def _recent_contiguous_1m_count(*, candles: tuple[Live2Candle, ...], context_end_ms: int, timeframe_ms: int) -> int:
+    if not candles:
+        return 0
+    available = {int(item.open_time_ms) for item in candles if int(item.timeframe_ms) == int(timeframe_ms)}
+    expected_open_ms = (int(context_end_ms) // int(timeframe_ms)) * int(timeframe_ms)
+    count = 0
+    cursor_ms = expected_open_ms
+    while cursor_ms in available:
+        count += 1
+        cursor_ms -= int(timeframe_ms)
+    return count
 
 
 def _parse_aggtrade_row(*, symbol: str, row: CcxtAggTradePayload) -> Live2AggTradeEvent | None:

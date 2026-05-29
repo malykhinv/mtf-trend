@@ -4557,3 +4557,12 @@ Next best experiment: run a focused validation on another period using only vali
 Hypothesis: rolling discovery for `3m/30s` and `5m/30s` does not need a stored 1s intermediate cache. True aggTrades can be fetched for targeted windows and aggregated directly to trusted 30s cache without changing signal timing or feature availability.
 
 Protocol: after P446, rerun 45d and inspect `htf_ltf_runner_targeted_ltf_fetch.csv`/materialize artifacts for `data_source=binance_futures_aggTrades_direct_to_target_ltf`, `intermediate_1s_cache=False`, and selected trades with `entry_timestamp_ms >= decision_available_timestamp_ms`.
+
+
+## 2026-05-29 - P450 live2 data completeness audit
+
+Current commit: UNKNOWN.
+
+Result: live2 rolling signal path still avoids future/outcome fields, but incomplete startup 1m history could corrupt or suppress C/A/S context. P450 turns this into an explicit data dependency: paginated 48h 1m warmup, zero-volume candle continuity, and recent-contiguous-history validation before marking a symbol warmed. Next live smoke must inspect startup_htf_baseline_warmup_completed errors for incomplete_1m_htf_baseline and confirm rolling_1m_history_not_ready disappears only for symbols with complete enough history.
+
+P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or rolling HTF candles contain aggTrade-id gaps, so incomplete websocket/rest trade candles become data dependencies instead of tradable signals.

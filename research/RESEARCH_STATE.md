@@ -3428,6 +3428,15 @@ Current commit: UNKNOWN.
 Status: P449 PROPOSED after review of P448. P448 fixed insufficient warmup and prior-spike baseline availability but incorrectly pushed live context back toward wall-clock calendar HTF buckets. P449 restores event-rolling context for live: rolling seed remains 30s-based; context uses the latest fully closed 1m candles before the rolling HTF start and walks backward in HTF-width chunks. Startup baseline lookback is limited to the latest 48h, not full history.
 
 Next: apply P449 over P448, run compileall, then verify live artifacts show rolling context and no `rolling_1m_history_not_ready` after startup.
+
+
+## 2026-05-29 - P450 live2 rolling warmup completeness guard
+
+Current commit: UNKNOWN.
+
+Status: P450 PROPOSED. Live2 rolling C/A/S has no detected trading-signal lookahead after P449, but startup 1m HTF baseline warmup had a data-quality hole: a single 48h kline request could be truncated by exchange/API limits and still mark the symbol as warmed. P450 makes the warmup paginated and requires recent contiguous 1m history before a symbol is counted as warmed. Zero-volume Binance 1m candles are kept so real dormancy does not become artificial gaps.
+
+P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or rolling HTF candles contain aggTrade-id gaps, so incomplete websocket/rest trade candles become data dependencies instead of tradable signals.
 ## 2026-05-29 - P448 live2 rolling context parity audit
 
 Current commit: UNKNOWN.
