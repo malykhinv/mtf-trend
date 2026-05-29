@@ -1,3 +1,11 @@
+## 2026-05-29 - P440 rolling seed baseline fix proposed
+
+Current commit: UNKNOWN.
+
+Status: P440 PROPOSED as a correction after P439. P439 compiled but built exact rolling seed baselines from the short two-HTF-candle LTF slice, so the second-stage exact rolling scan could produce zero/near-zero candidates even when a valid rolling seed existed. P440 keeps the cheap two-HTF safe-superset download, but computes exact rolling current candles from that LTF slice while computing baseline/dormancy/pregrowth/prior-spike context from already-available calendar HTF history before the rolling window. Final discovery also restricts rolling candidates to the safe-superset pairs so full post-entry LTF windows cannot create extra unplanned signals.
+
+Next: apply P440 after P439, run `python -m compileall -q data/exchanges research_tools cli constants.py main.py`, then run the 45d discovery and inspect `htf_ltf_runner_targeted_ltf_plan.csv`: post-entry exact rolling seed rows should be nonzero when pre-entry pairs contain real rolling seeds.
+
 ## 2026-05-29 - P439 rolling HTF discovery contract proposed
 
 Current commit: UNKNOWN.

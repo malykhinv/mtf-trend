@@ -19,7 +19,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -202,6 +202,7 @@ def run_htf_ltf_runner_discovery(
     targeted_ltf_plan = pd.DataFrame()
     targeted_ltf_fetch = pd.DataFrame()
     targeted_ltf_materialize = pd.DataFrame()
+    pre_entry_seed_timestamps_by_symbol: dict[str, set[int]] = {}
     if _targeted_ltf_backfill_required(config):
         targeted_phase_frames: list[tuple[str, pd.DataFrame, pd.DataFrame, pd.DataFrame]] = []
         pre_entry_plan, pre_entry_windows_by_symbol = _build_targeted_ltf_backfill_plan(
@@ -278,6 +279,7 @@ def run_htf_ltf_runner_discovery(
                 ltf=ltf,
                 oi=oi,
                 config=config,
+                allowed_timestamps_ms=pre_entry_seed_timestamps_by_symbol.get(symbol) if _targeted_ltf_backfill_required(config) else None,
             )
             for candidate in local_candidate_rows:
                 windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
@@ -741,6 +743,7 @@ def _build_targeted_ltf_post_entry_backfill_plan(
             ltf=ltf,
             oi=oi,
             config=config,
+            allowed_timestamps_ms=symbol_seed_timestamps,
         )
         broad_candidate_count = int(len(candidate_rows))
         skipped_broad_candidates += 0
@@ -956,16 +959,6 @@ def _ensure_targeted_ltf_backfill(
     )
 
 
-def _rolling_scan_config(config: HtfLtfRunnerDiscoveryConfig, *, htf_ms: int, ltf_ms: int) -> HtfLtfRunnerDiscoveryConfig:
-    factor = max(1, int(round(float(htf_ms) / max(1.0, float(ltf_ms)))))
-    return replace(
-        config,
-        baseline_candles=max(1, int(config.baseline_candles) * factor),
-        dormancy_candles=max(1, int(config.dormancy_candles) * factor),
-        pregrowth_candles=max(1, int(config.pregrowth_candles) * factor),
-    )
-
-
 def _rolling_htf_from_ltf(ltf: pd.DataFrame, *, htf_ms: int, ltf_ms: int) -> pd.DataFrame:
     if ltf.empty or "timestamp" not in ltf.columns:
         return pd.DataFrame()
@@ -1029,70 +1022,68 @@ def _collect_symbol_candidates(
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     horizon_ms = int(config.runner_horizon_minutes) * 60_000
     rows: list[dict[str, object]] = []
-    prepared = _rolling_htf_from_ltf(ltf, htf_ms=htf_ms, ltf_ms=ltf_ms)
-    if prepared.empty:
-        return [], 0
-    config = _rolling_scan_config(config, htf_ms=htf_ms, ltf_ms=ltf_ms)
-    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
-    if "quote_volume" not in prepared.columns or "number_of_trades" not in prepared.columns:
-        return [], 0
-    quote_series = _numeric_column(prepared, "quote_volume")
-    trade_series = _numeric_column(prepared, "number_of_trades")
-    prepared["_quote_volume"] = quote_series
-    prepared["_number_of_trades"] = trade_series
 
-    min_index = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles) + 1
-    timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    max_timestamp = int(timestamps.max()) if not timestamps.empty else 0
-    row_numbers = pd.Series(np.arange(len(prepared)), index=prepared.index)
-    positive_quote = prepared["_quote_volume"].where(prepared["_quote_volume"] > 0)
-    positive_trades = prepared["_number_of_trades"].where(prepared["_number_of_trades"] > 0)
-    baseline_quote_fast = positive_quote.shift(1).rolling(config.baseline_candles, min_periods=1).median()
-    baseline_trades_fast = positive_trades.shift(1).rolling(config.baseline_candles, min_periods=1).median()
-    htf_return_fast = (pd.to_numeric(prepared["close"], errors="coerce") - pd.to_numeric(prepared["open"], errors="coerce")) / pd.to_numeric(
-        prepared["open"],
-        errors="coerce",
-    )
-    scanned_mask = (row_numbers >= min_index) & ((timestamps + htf_ms + horizon_ms) <= (max_timestamp + htf_ms))
-    anomaly_gate_fast = (
-        scanned_mask
-        & (_numeric_column(prepared, "_quote_volume") / baseline_quote_fast).ge(config.min_htf_quote_ratio)
-        & (_numeric_column(prepared, "_number_of_trades") / baseline_trades_fast).ge(config.min_htf_trade_ratio)
-        & htf_return_fast.ge(config.min_htf_return_pct)
-    )
+    calendar = htf.copy()
+    calendar["timestamp"] = pd.to_numeric(calendar["timestamp"], errors="coerce")
+    calendar = calendar.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp").reset_index(drop=True)
+    if calendar.empty or "quote_volume" not in calendar.columns or "number_of_trades" not in calendar.columns:
+        return [], 0
+    for column in ("open", "high", "low", "close", "quote_volume", "number_of_trades"):
+        calendar[column] = pd.to_numeric(calendar[column], errors="coerce")
+    calendar = calendar.dropna(subset=["timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"]).reset_index(drop=True)
+    if calendar.empty:
+        return [], 0
+    calendar["_quote_volume"] = _numeric_column(calendar, "quote_volume")
+    calendar["_number_of_trades"] = _numeric_column(calendar, "number_of_trades")
+
+    rolling = _rolling_htf_from_ltf(ltf, htf_ms=htf_ms, ltf_ms=ltf_ms)
+    if rolling.empty:
+        return [], 0
+    rolling["timestamp"] = pd.to_numeric(rolling["timestamp"], errors="coerce")
+    rolling = rolling.dropna(subset=["timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"]).sort_values("timestamp").reset_index(drop=True)
+    if rolling.empty:
+        return [], 0
+
     if allowed_timestamps_ms is not None:
-        allowed_timestamps = {int(value) for value in allowed_timestamps_ms}
-        if not allowed_timestamps:
-            return [], int(scanned_mask.sum())
-        anomaly_gate_fast &= timestamps.astype("int64").isin(allowed_timestamps)
-    quote_ratio_fast = (_numeric_column(prepared, "_quote_volume") / baseline_quote_fast).replace([np.inf, -np.inf], np.nan)
-    trade_ratio_fast = (_numeric_column(prepared, "_number_of_trades") / baseline_trades_fast).replace([np.inf, -np.inf], np.nan)
-    prior_spike_context = _prepare_prior_spike_context(
-        prepared,
-        timestamps=timestamps,
-        quote_ratio=quote_ratio_fast,
-        trade_ratio=trade_ratio_fast,
-        htf_return=htf_return_fast,
-    )
-    scanned_rows = int(scanned_mask.sum())
+        pair_starts = sorted(int(value) for value in allowed_timestamps_ms)
+        if not pair_starts:
+            return [], 0
+        allowed_mask = pd.Series(False, index=rolling.index)
+        rolling_ts = pd.to_numeric(rolling["timestamp"], errors="coerce")
+        for pair_start in pair_starts:
+            allowed_mask |= rolling_ts.between(int(pair_start), int(pair_start) + int(htf_ms), inclusive="both")
+        rolling = rolling.loc[allowed_mask].reset_index(drop=True)
+        if rolling.empty:
+            return [], 0
 
-    for idx in np.flatnonzero(anomaly_gate_fast.to_numpy(dtype=bool, na_value=False)):
-        row = prepared.iloc[idx]
-        ts = int(row["timestamp"])
+    calendar_timestamps = pd.to_numeric(calendar["timestamp"], errors="coerce").astype("int64").to_numpy()
+    max_ltf_timestamp = int(pd.to_numeric(ltf.get("timestamp", pd.Series(dtype=float)), errors="coerce").max()) if not ltf.empty and "timestamp" in ltf.columns else 0
+    scanned_rows = 0
+    min_history = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles)
+
+    for _, rolling_row in rolling.iterrows():
+        ts = int(rolling_row["timestamp"])
         close_ts = ts + htf_ms
-        baseline = prepared.iloc[idx - config.baseline_candles : idx]
-        dormancy = prepared.iloc[idx - config.dormancy_candles : idx]
-        pregrowth = prepared.iloc[idx - config.pregrowth_candles : idx]
+        if close_ts + horizon_ms > max_ltf_timestamp + ltf_ms:
+            # The seed may still be valid, but this cache slice cannot honestly label/replay it yet.
+            # The post-entry planner will fetch the full window after the exact seed is found.
+            pass
+        history_end = int(np.searchsorted(calendar_timestamps, ts, side="left"))
+        if history_end < min_history:
+            continue
+        baseline = calendar.iloc[history_end - config.baseline_candles : history_end]
+        dormancy = calendar.iloc[history_end - config.dormancy_candles : history_end]
+        pregrowth = calendar.iloc[history_end - config.pregrowth_candles : history_end]
         if baseline.empty or dormancy.empty or pregrowth.empty:
             continue
+        scanned_rows += 1
 
-        anomaly_open = float(row["open"])
-        anomaly_high = float(row["high"])
-        anomaly_low = float(row["low"])
-        anomaly_close = float(row["close"])
-        anomaly_quote = float(row["_quote_volume"])
-        anomaly_trades = float(row["_number_of_trades"]) if np.isfinite(float(row["_number_of_trades"])) else float("nan")
+        anomaly_open = float(rolling_row["open"])
+        anomaly_high = float(rolling_row["high"])
+        anomaly_low = float(rolling_row["low"])
+        anomaly_close = float(rolling_row["close"])
+        anomaly_quote = float(rolling_row["quote_volume"])
+        anomaly_trades = float(rolling_row["number_of_trades"])
         baseline_quote = _positive_median(baseline["_quote_volume"])
         baseline_trades = _positive_median(baseline["_number_of_trades"])
         dormancy_quote = _positive_median(dormancy["_quote_volume"])
@@ -1105,17 +1096,19 @@ def _collect_symbol_candidates(
         htf_range_pct = _safe_divide(anomaly_high - anomaly_low, anomaly_open)
         dormancy_range_pct_median = _positive_median((dormancy["high"].astype(float) - dormancy["low"].astype(float)) / dormancy["open"].astype(float))
 
+        anomaly_gate = (
+            quote_ratio >= config.min_htf_quote_ratio
+            and trade_ratio >= config.min_htf_trade_ratio
+            and htf_return >= config.min_htf_return_pct
+        )
+        if not anomaly_gate:
+            continue
+
         pregrowth_features = _pregrowth_features(pregrowth)
         oi_features = _oi_pregrowth_features(
             oi,
             start_ms=int(pregrowth.iloc[0]["timestamp"]),
             decision_ms=close_ts,
-        )
-
-        anomaly_gate = (
-            quote_ratio >= config.min_htf_quote_ratio
-            and trade_ratio >= config.min_htf_trade_ratio
-            and htf_return >= config.min_htf_return_pct
         )
         dormancy_ok = (
             dormancy_quote_ratio >= config.min_dormancy_to_anomaly_quote_ratio
@@ -1133,8 +1126,42 @@ def _collect_symbol_candidates(
         )
         if not config.require_pregrowth_oi and oi_features["pregrowth_oi_status"] != "ok":
             oi_ok = True
-        if not anomaly_gate:
-            continue
+
+        current_context_row = {
+            "timestamp": ts,
+            "open": anomaly_open,
+            "high": anomaly_high,
+            "low": anomaly_low,
+            "close": anomaly_close,
+            "quote_volume": anomaly_quote,
+            "number_of_trades": anomaly_trades,
+            "_quote_volume": anomaly_quote,
+            "_number_of_trades": anomaly_trades,
+        }
+        prior_context_frame = pd.concat([calendar.iloc[:history_end], pd.DataFrame([current_context_row])], ignore_index=True, sort=False)
+        positive_quote = prior_context_frame["_quote_volume"].where(prior_context_frame["_quote_volume"] > 0)
+        positive_trades = prior_context_frame["_number_of_trades"].where(prior_context_frame["_number_of_trades"] > 0)
+        baseline_quote_fast = positive_quote.shift(1).rolling(config.baseline_candles, min_periods=1).median()
+        baseline_trades_fast = positive_trades.shift(1).rolling(config.baseline_candles, min_periods=1).median()
+        htf_return_fast = (pd.to_numeric(prior_context_frame["close"], errors="coerce") - pd.to_numeric(prior_context_frame["open"], errors="coerce")) / pd.to_numeric(
+            prior_context_frame["open"],
+            errors="coerce",
+        )
+        quote_ratio_fast = (_numeric_column(prior_context_frame, "_quote_volume") / baseline_quote_fast).replace([np.inf, -np.inf], np.nan)
+        trade_ratio_fast = (_numeric_column(prior_context_frame, "_number_of_trades") / baseline_trades_fast).replace([np.inf, -np.inf], np.nan)
+        prior_spike_context = _prepare_prior_spike_context(
+            prior_context_frame,
+            timestamps=pd.to_numeric(prior_context_frame["timestamp"], errors="coerce"),
+            quote_ratio=quote_ratio_fast,
+            trade_ratio=trade_ratio_fast,
+            htf_return=htf_return_fast,
+        )
+        prior_spike_features = _prior_spike_features_for_index(
+            prior_spike_context,
+            idx=len(prior_context_frame) - 1,
+            current_timestamp_ms=ts,
+        )
+
         label = _future_runner_label(
             ltf,
             start_ms=close_ts,
@@ -1152,8 +1179,6 @@ def _collect_symbol_candidates(
             htf_close=anomaly_close,
             expected_step_ms=ltf_ms,
         )
-        prior_spike_features = _prior_spike_features_for_index(prior_spike_context, idx=idx, current_timestamp_ms=ts)
-        status = "ok"
         setup_nature = _setup_nature(
             anomaly_gate=anomaly_gate,
             dormancy_ok=dormancy_ok,
@@ -1165,7 +1190,7 @@ def _collect_symbol_candidates(
         rows.append(
             {
                 "symbol": symbol,
-                "status": status,
+                "status": "ok",
                 "setup_nature": setup_nature,
                 "timestamp_ms": ts,
                 "timestamp_utc": _timestamp_to_utc(ts),
@@ -1176,6 +1201,7 @@ def _collect_symbol_candidates(
                 "rolling_htf_window_end_ms": close_ts,
                 "rolling_htf_window_end_utc": _timestamp_to_utc(close_ts),
                 "rolling_htf_step_ms": ltf_ms,
+                "rolling_baseline_model": "calendar_htf_history_before_rolling_window",
                 "htf_timeframe": config.htf_timeframe,
                 "ltf_timeframe": config.ltf_timeframe,
                 "future_label_available_at_entry": False,

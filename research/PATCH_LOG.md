@@ -1,3 +1,30 @@
+## 2026-05-29 - P440 proposed - fix rolling seed baseline and safe-superset restriction
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/EXPERIMENT_LOG.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Correct P439 without adding fallback or optional modes. Exact rolling seed detection must work after the cheap two-HTF-pair LTF fetch, while still keeping calendar HTF only as historical context / safe-superset planning, not as the trading seed.
+```
+
+Fix:
+
+```text
+Rolling current OHLCV is built from the LTF pair. Baseline, dormancy, pregrowth and prior-spike context are taken from calendar HTF rows strictly before the rolling window start. The final discovery pass is restricted to pre-entry pair timestamps so post-entry/full replay cache cannot introduce signals outside the planned safe-superset.
+```
+
+Status: PROPOSED after P439 / commit UNKNOWN.
+
+Validation: synthetic pair-only rolling seed smoke; `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+
 ## 2026-05-29 - P439 proposed - rolling HTF runner discovery with C/A/S portfolio constraints
 
 Files:

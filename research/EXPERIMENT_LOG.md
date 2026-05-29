@@ -1,3 +1,26 @@
+## 2026-05-29 - P440 rolling discovery correction check
+
+Scope:
+
+```text
+Apply after P439 before trusting any 45d rolling discovery result.
+```
+
+Why:
+
+```text
+P439's exact rolling scan accidentally required baseline/dormancy history inside the short two-HTF LTF slice. That can hide valid rolling seeds. P440 changes exact seed detection to use rolling LTF only for the current candidate window and calendar HTF history for already-known historical context.
+```
+
+Checks after run:
+
+```text
+- pre-entry planned pairs > 0 when HTF upper-bound sees possible rolling seeds;
+- post-entry exact_rolling_seed_candidates is not always zero;
+- candidates have rolling_baseline_model=calendar_htf_history_before_rolling_window;
+- portfolio_events contains selected/blocked reasons, not silent drops.
+```
+
 ## 2026-05-29 - P439 rolling 45d discovery validation
 
 Command:
