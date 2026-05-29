@@ -1,3 +1,11 @@
+## 2026-05-29 - P445 rolling fetch cost guard
+
+Current commit: UNKNOWN.
+
+Status: P445 PROPOSED after the first P444 run projected multi-day targeted 1s fetch time. The cause is not execution simulation but pre-entry data loading: P444 made the 2xHTF pair gate broad enough that many pairs were sent to aggTrades. P445 keeps the rolling model honest while reducing impossible work: first, reuse already trusted target LTF materialized cache before fetching 1s; second, the pair planner may reject a pair only when pair upper bounds and already-closed calendar context prove that no frozen C/A/S family could ever match inside it. This is still data-loading only and does not use future labels, PnL, exits, or LTF pace.
+
+Next: rerun 45d. Inspect `htf_ltf_runner_targeted_ltf_plan.csv` for `rejected_impossible_runner_category_family`, and `htf_ltf_runner_targeted_ltf_fetch.csv` for `target_ltf_exists_covered_requested_windows`. If ETA remains extreme, stop and examine planned pair counts before loosening/tightening anything.
+
 ## 2026-05-29 - P444 rolling pair safe-superset widening
 
 Current commit: UNKNOWN.

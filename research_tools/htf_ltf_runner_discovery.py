@@ -87,6 +87,7 @@ class HtfLtfRunnerDiscoveryConfig:
     targeted_backfill_max_events_per_symbol: int = 0
     risk_per_trade_pct: float = 0.02
     max_total_open_risk_pct: float = 0.08
+    targeted_pair_gate_use_category_necessary_bounds: bool = True
 
     def __post_init__(self) -> None:
         if self.htf_timeframe == self.ltf_timeframe:
@@ -537,6 +538,7 @@ def _build_targeted_ltf_backfill_plan(
         "seed_gate": _targeted_ltf_seed_gate_description(config),
         "pair_gate_model": "fetch_pair_unless_exact_rolling_seed_is_mathematically_impossible",
         "pair_gate_uses_only_upper_bounds": True,
+        "pair_gate_uses_category_necessary_bounds": bool(config.targeted_pair_gate_use_category_necessary_bounds),
         "pair_gate_trading_signal": False,
         "pair_gate_min_htf_quote_ratio": float(config.min_htf_quote_ratio),
         "pair_gate_min_htf_trade_ratio": float(config.min_htf_trade_ratio),
@@ -556,6 +558,136 @@ def _build_targeted_ltf_backfill_plan(
     else:
         plan = pd.concat([pd.DataFrame([summary]), plan], ignore_index=True, sort=False)
     return plan, windows_by_symbol
+
+
+
+def _calendar_prior_spike_mask(prepared: pd.DataFrame, *, baseline_candles: int) -> np.ndarray:
+    if prepared.empty:
+        return np.zeros(0, dtype=bool)
+    quote = _numeric_column(prepared, "_quote_volume")
+    trades = _numeric_column(prepared, "_number_of_trades")
+    positive_quote = quote.where(quote > 0)
+    positive_trades = trades.where(trades > 0)
+    baseline_quote = positive_quote.shift(1).rolling(int(baseline_candles), min_periods=1).median()
+    baseline_trades = positive_trades.shift(1).rolling(int(baseline_candles), min_periods=1).median()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        quote_ratio = quote / baseline_quote
+        trade_ratio = trades / baseline_trades
+        htf_return = (
+            pd.to_numeric(prepared["close"], errors="coerce")
+            - pd.to_numeric(prepared["open"], errors="coerce")
+        ) / pd.to_numeric(prepared["open"], errors="coerce")
+    return (
+        quote_ratio.ge(3.0).fillna(False).to_numpy(dtype=bool)
+        & trade_ratio.ge(3.0).fillna(False).to_numpy(dtype=bool)
+        & htf_return.ge(0.0).fillna(False).to_numpy(dtype=bool)
+        & np.isfinite(quote.to_numpy(dtype=float))
+        & (quote.to_numpy(dtype=float) > 0.0)
+    )
+
+
+def _max_prior_spike_quote_before(
+    prepared: pd.DataFrame,
+    *,
+    spike_mask: np.ndarray,
+    history_end: int,
+    current_timestamp_ms: int,
+) -> float:
+    if history_end <= 0 or len(spike_mask) == 0:
+        return float("nan")
+    timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce").to_numpy(dtype=float)
+    quote = _numeric_column(prepared, "_quote_volume").to_numpy(dtype=float)
+    lookback_start = int(current_timestamp_ms) - 24 * 60 * 60 * 1000
+    index = np.arange(len(prepared))
+    mask = (
+        (index < int(history_end))
+        & spike_mask
+        & np.isfinite(timestamps)
+        & (timestamps >= lookback_start)
+        & np.isfinite(quote)
+        & (quote > 0.0)
+    )
+    if not bool(np.any(mask)):
+        return float("nan")
+    return float(np.nanmax(quote[mask]))
+
+
+def _pregrowth_max_single_return_before(prepared: pd.DataFrame, *, history_end: int, pregrowth_candles: int) -> float:
+    if history_end <= 0:
+        return float("nan")
+    start = max(0, int(history_end) - int(pregrowth_candles))
+    window = prepared.iloc[start:int(history_end)]
+    if window.empty:
+        return float("nan")
+    opens = pd.to_numeric(window["open"], errors="coerce")
+    closes = pd.to_numeric(window["close"], errors="coerce")
+    returns = (closes - opens) / opens.replace(0.0, np.nan)
+    return _finite_max_or_nan(returns.to_numpy(dtype=float))
+
+
+def _pair_can_match_runner_category_bounds(
+    *,
+    tf_set: str,
+    pair_quote: float,
+    max_possible_trade_ratio: float,
+    prepared: pd.DataFrame,
+    possible_history_ends: Iterable[int],
+    spike_mask: np.ndarray,
+    current_timestamp_ms: int,
+    config: HtfLtfRunnerDiscoveryConfig,
+) -> tuple[bool, dict[str, object]]:
+    """Whether a pair can still match at least one frozen C/A/S family.
+
+    This is data-loading only. It rejects a pair only when already-closed
+    calendar context and pair upper bounds prove all frozen categories impossible.
+    It never uses LTF pace, future labels, PnL, exits, or post-entry candles.
+    """
+
+    history_ends = [int(value) for value in possible_history_ends]
+    prior_max_values: list[float] = []
+    pregrowth_values: list[float] = []
+    for history_end in history_ends:
+        prior_max_values.append(
+            _max_prior_spike_quote_before(
+                prepared,
+                spike_mask=spike_mask,
+                history_end=history_end,
+                current_timestamp_ms=int(current_timestamp_ms),
+            )
+        )
+        pregrowth_values.append(
+            _pregrowth_max_single_return_before(
+                prepared,
+                history_end=history_end,
+                pregrowth_candles=int(config.pregrowth_candles),
+            )
+        )
+    current_vs_prior_values = [
+        _safe_divide(float(pair_quote), float(prior_max))
+        for prior_max in prior_max_values
+        if np.isfinite(prior_max) and float(prior_max) > 0.0
+    ]
+    current_vs_prior_upper = max((value for value in current_vs_prior_values if np.isfinite(value)), default=float("nan"))
+    pregrowth_max_single_upper = max((value for value in pregrowth_values if np.isfinite(value)), default=float("nan"))
+
+    c_possible = (
+        np.isfinite(current_vs_prior_upper)
+        and current_vs_prior_upper > 0.45
+        and np.isfinite(pregrowth_max_single_upper)
+        and pregrowth_max_single_upper > 0.005
+    )
+    a_possible = np.isfinite(current_vs_prior_upper) and current_vs_prior_upper > 0.6
+    s_possible = tf_set == "5m_30s" and np.isfinite(max_possible_trade_ratio) and float(max_possible_trade_ratio) >= 11.7
+    possible = bool(c_possible or a_possible or s_possible)
+    return possible, {
+        "pair_category_gate_model": "safe_necessary_bounds_for_frozen_C_A_S_data_loading_only",
+        "pair_category_gate_trading_signal": False,
+        "pair_category_C_possible": bool(c_possible),
+        "pair_category_A_possible": bool(a_possible),
+        "pair_category_S_possible": bool(s_possible),
+        "pair_current_vs_prior_spike_max_quote_upper_bound": float(current_vs_prior_upper),
+        "pair_pregrowth_max_single_return_upper_bound": float(pregrowth_max_single_upper),
+    }
 
 
 def _targeted_ltf_backfill_seeds_for_symbol(
@@ -594,6 +726,8 @@ def _targeted_ltf_backfill_seeds_for_symbol(
     baseline_quote_median = prepared["_quote_volume"].where(prepared["_quote_volume"] > 0).rolling(config.baseline_candles, min_periods=1).median().to_numpy()
     baseline_trade_median = prepared["_number_of_trades"].where(prepared["_number_of_trades"] > 0).rolling(config.baseline_candles, min_periods=1).median().to_numpy()
     min_history = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles)
+    tf_set = f"{config.htf_timeframe}_{config.ltf_timeframe}"
+    prior_spike_mask = _calendar_prior_spike_mask(prepared, baseline_candles=int(config.baseline_candles))
 
     rows: list[dict[str, object]] = []
     windows: list[tuple[int, int]] = []
@@ -605,6 +739,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
         "impossible_return": 0,
         "impossible_quote_ratio": 0,
         "impossible_trade_ratio": 0,
+        "impossible_runner_category_family": 0,
     }
     total_pairs = max(0, len(prepared) - 1)
 
@@ -661,6 +796,26 @@ def _targeted_ltf_backfill_seeds_for_symbol(
             rejection_counts["impossible_trade_ratio"] += 1
             continue
 
+        category_possible = True
+        category_bounds: dict[str, object] = {
+            "pair_category_gate_model": "disabled",
+            "pair_category_gate_trading_signal": False,
+        }
+        if bool(config.targeted_pair_gate_use_category_necessary_bounds):
+            category_possible, category_bounds = _pair_can_match_runner_category_bounds(
+                tf_set=tf_set,
+                pair_quote=float(pair_quote),
+                max_possible_trade_ratio=float(max_possible_trade_ratio),
+                prepared=prepared,
+                possible_history_ends=possible_history_ends,
+                spike_mask=prior_spike_mask,
+                current_timestamp_ms=int(first_ts),
+                config=config,
+            )
+            if not category_possible:
+                rejection_counts["impossible_runner_category_family"] += 1
+                continue
+
         score = (
             float(max_possible_return) * 100.0
             + float(max_possible_range if np.isfinite(max_possible_range) else 0.0) * 25.0
@@ -682,6 +837,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                     "max_possible_quote_ratio": float(max_possible_quote_ratio),
                     "max_possible_trade_ratio": float(max_possible_trade_ratio),
                     "possible_history_ends": "|".join(str(value) for value in possible_history_ends),
+                    **category_bounds,
                 },
             )
         )
@@ -747,7 +903,14 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "pair_possible_history_ends": bounds["possible_history_ends"],
                 "pair_gate_used_only_as_safe_superset": True,
                 "pair_gate_trading_signal": False,
-                "pair_gate_fetch_reason": "exact_rolling_seed_not_mathematically_impossible",
+                "pair_gate_fetch_reason": "exact_rolling_seed_and_runner_category_family_not_mathematically_impossible",
+                "pair_category_gate_model": bounds.get("pair_category_gate_model", ""),
+                "pair_category_gate_trading_signal": bool(bounds.get("pair_category_gate_trading_signal", False)),
+                "pair_category_C_possible": bool(bounds.get("pair_category_C_possible", False)),
+                "pair_category_A_possible": bool(bounds.get("pair_category_A_possible", False)),
+                "pair_category_S_possible": bool(bounds.get("pair_category_S_possible", False)),
+                "pair_current_vs_prior_spike_max_quote_upper_bound": bounds.get("pair_current_vs_prior_spike_max_quote_upper_bound", float("nan")),
+                "pair_pregrowth_max_single_return_upper_bound": bounds.get("pair_pregrowth_max_single_return_upper_bound", float("nan")),
             }
         )
 

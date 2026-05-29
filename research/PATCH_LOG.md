@@ -1,3 +1,15 @@
+## P445 - speed rolling targeted fetch with C/A/S impossibility gate
+
+Status: PROPOSED.
+
+Files: `research_tools/htf_ltf_runner_discovery.py`, `research_tools/anomaly_strategy_backtest.py`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/EXPERIMENT_LOG.md`.
+
+Purpose: reduce the P444 multi-day pre-entry 1s aggTrades fetch without adding fallback or hiding data-quality problems. The pair gate stays a data-loading proof: fetch only when the official rolling seed and at least one frozen C/A/S family are not mathematically impossible. Also skip network fetches when the requested target LTF cache already honestly covers the same windows.
+
+Honesty: no future labels, no PnL, no exits, no MFE/MAE, and no post-entry data are used. The C/A/S pair guard uses only necessary conditions that can prove impossibility; exact category and entry still require closed LTF candles.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; `git apply --check` on source+P439-P444.
+
 ## P444 - widen rolling pair gate to safe-superset
 
 Status: PROPOSED.

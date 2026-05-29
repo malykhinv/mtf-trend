@@ -2196,12 +2196,62 @@ def ensure_targeted_aggtrade_subminute_cache(
     if not normalized_windows:
         return pd.DataFrame(plan_rows), pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}])
 
+    fully_materialized_symbols: set[str] = set()
+    for symbol, windows in normalized_windows.items():
+        if all(
+            _trusted_materialized_entry_cache_covers_windows(
+                cache_dir,
+                symbol,
+                target_timeframe=target_timeframe,
+                windows=windows,
+            )
+            for target_timeframe in target_timeframes_tuple
+        ):
+            fully_materialized_symbols.add(symbol)
+    if fully_materialized_symbols:
+        plan_rows.append(
+            {
+                "symbol": "__all__",
+                "status": "target_ltf_cache_reuse_plan",
+                "target_timeframes": ",".join(target_timeframes_tuple),
+                "symbols_skipping_1s_fetch_due_to_existing_target_ltf": int(len(fully_materialized_symbols)),
+                "data_source": "trusted_materialized_target_ltf_cache_reused_before_1s_fetch",
+            }
+        )
+
     fetch_rows: list[dict[str, object]] = []
     total_windows = max(1, merged_windows_total)
     done_windows = 0
     started_at = time.monotonic()
     next_progress_pct = 0
     for symbol in sorted(normalized_windows):
+        if symbol in fully_materialized_symbols:
+            for window_start, window_end in normalized_windows[symbol]:
+                fetch_rows.append(
+                    {
+                        "symbol": symbol,
+                        "status": "target_ltf_exists_covered_requested_windows",
+                        "error": "",
+                        "start_timestamp_ms": int(window_start),
+                        "end_timestamp_ms": int(window_end),
+                        "start_timestamp_utc": _timestamp_to_utc(int(window_start)),
+                        "end_timestamp_utc": _timestamp_to_utc(int(window_end)),
+                        "rows_before": 0,
+                        "rows_after": 0,
+                        "rows_delta": 0,
+                        "aggregation_version": AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION,
+                    }
+                )
+                done_windows += 1
+                if progress_label is not None and total_windows:
+                    next_progress_pct = _emit_progress_1pct(
+                        label=f"{progress_label}: targeted 1s aggTrades",
+                        done=done_windows,
+                        total=total_windows,
+                        started_at=started_at,
+                        next_progress_pct=next_progress_pct,
+                    )
+            continue
         for window_start, window_end in normalized_windows[symbol]:
             status = "ok"
             error = ""

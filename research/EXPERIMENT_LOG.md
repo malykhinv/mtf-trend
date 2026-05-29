@@ -1,3 +1,9 @@
+## 2026-05-29 - P445 rolling fetch cost audit
+
+Hypothesis: P444's coverage-safe pair gate is too expensive because it fetches many pairs that can pass the broad seed upper bounds but cannot possibly match the frozen C/A/S entry families. P445 should reduce fetch count by rejecting only mathematically impossible C/A/S pairs and by reusing already trusted target LTF caches before 1s aggTrade download.
+
+Protocol after P445: restart 45d rolling discovery and compare planned/fetched pairs. Accept the speed patch only if `rejected_impossible_runner_category_family` is nonzero and selected signals still satisfy `entry_timestamp_ms >= decision_available_timestamp_ms`, non-empty `runner_candidate_category`, and combined portfolio artifacts are written.
+
 ## 2026-05-29 - P444 rolling pair coverage audit
 
 Hypothesis: a rolling backtest can avoid full continuous subminute cache if the 2xHTF fetch planner is a broad safe-superset rather than an optimizer. The planner should skip only pairs where upper bounds prove the official rolling seed is impossible; everything else must be fetched and checked exactly on LTF.
