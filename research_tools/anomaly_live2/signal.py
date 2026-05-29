@@ -1674,37 +1674,31 @@ def _closed_segment_before(
 
 
 def _aggregate_1m_history_to_htf(*, closed_1m: tuple[Live2Candle, ...], htf_timeframe_ms: int, before_ms: int) -> tuple[Live2Candle, ...]:
-    """Build calendar-aligned HTF context candles fully closed before rolling HTF.
+    """Build event-rolling HTF context fully closed before rolling HTF.
 
-    This intentionally mirrors the rolling discovery backtest: the traded HTF
-    seed is rolling, but baseline/dormancy/pregrowth/prior-spike context comes
-    from calendar HTF candles whose close is <= rolling_window_start.  The
-    function must not create backward chunks ending exactly at ``before_ms``
-    because that would change the feature distribution versus the backtest.
+    Live must not anchor baseline/dormancy/pregrowth/prior-spike context to
+    wall-clock HTF buckets.  It uses the latest closed 1m candle before the
+    rolling HTF seed starts, then walks backward in non-overlapping HTF-width
+    chunks.  This keeps the context rolling and still guarantees that no 1m
+    candle overlapping the current rolling HTF window enters the baseline.
     """
 
     group_size = htf_timeframe_ms // 60_000
     if group_size <= 0:
         return ()
-    buckets: dict[int, list[Live2Candle]] = {}
-    for item in closed_1m:
-        if item.close_time_ms > before_ms:
-            continue
-        bucket_open_ms = (int(item.open_time_ms) // htf_timeframe_ms) * htf_timeframe_ms
-        bucket_close_ms = bucket_open_ms + htf_timeframe_ms
-        if bucket_close_ms > before_ms:
-            continue
-        buckets.setdefault(bucket_open_ms, []).append(item)
-    groups: list[Live2Candle] = []
-    for bucket_open_ms in sorted(buckets):
-        chunk = tuple(sorted(buckets[bucket_open_ms], key=lambda item: item.open_time_ms))
-        if len(chunk) != group_size:
-            continue
-        expected = tuple(bucket_open_ms + offset * 60_000 for offset in range(group_size))
-        if tuple(item.open_time_ms for item in chunk) != expected:
-            continue
-        groups.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
-    return tuple(groups)
+    ordered = tuple(sorted((item for item in closed_1m if item.close_time_ms <= before_ms), key=lambda item: item.open_time_ms))
+    if len(ordered) < group_size:
+        return ()
+    groups_reversed: list[Live2Candle] = []
+    end = len(ordered)
+    while end >= group_size:
+        chunk = tuple(ordered[end - group_size:end])
+        expected = tuple(int(chunk[0].open_time_ms) + offset * 60_000 for offset in range(group_size))
+        if tuple(int(item.open_time_ms) for item in chunk) != expected:
+            break
+        groups_reversed.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
+        end -= group_size
+    return tuple(reversed(groups_reversed))
 
 
 def _rolling_ltf_confirmation_features(

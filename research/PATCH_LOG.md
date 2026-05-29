@@ -9799,6 +9799,22 @@ Risk:
 ```text
 The live signal contract is now closer to rolling backtest mechanics, but exact parity still depends on the 45d rolling backtest passing after P446 and on live having enough closed 1m baseline history. Missing history blocks entries explicitly instead of falling back to legacy categories.
 ```
+
+## P449 - restore true rolling live context
+
+Status: PROPOSED. Replace the P448 calendar-aligned live HTF context with event-rolling context. Live now builds baseline/dormancy/pregrowth/prior-spike history from non-overlapping HTF-width chunks ending at the latest closed 1m candle before the rolling HTF seed starts, rather than from wall-clock calendar HTF buckets. Startup 1m baseline warmup is capped to the latest 48h so live has enough prior-spike/baseline history without pretending to need full history.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+This deliberately prioritizes true rolling live mechanics over calendar-backtest parity. The next rolling discovery analysis should treat live-context parity separately and not assume old calendar-context feature distributions transfer unchanged.
+```
 ## P448 - fix live2 rolling context parity
 
 Status: PROPOSED. Fix live2 rolling C/A/S context so the signal engine has enough closed 1m history for 24h prior-spike features plus the pre-spike baseline, and align live HTF context aggregation with the rolling discovery backtest. The traded HTF seed remains rolling, but baseline/dormancy/pregrowth/prior-spike context uses calendar HTF candles fully closed before the rolling window start. No fallback signal path is added.

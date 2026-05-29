@@ -56,7 +56,7 @@ class AnomalyLive2Config:
     startup_warmup_max_pages_per_symbol: int = 1
     startup_warmup_request_sleep_seconds: float = 0.03
     startup_warmup_error_limit: int = 20
-    startup_htf_baseline_lookback_minutes: int = 1800
+    startup_htf_baseline_lookback_minutes: int = 2880
     startup_htf_baseline_request_sleep_seconds: float = 0.02
     startup_htf_baseline_error_limit: int = 20
     max_closed_candles_per_timeframe: int = 3000

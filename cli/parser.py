@@ -300,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--startup-warmup-lookback-minutes", type=_positive_int_for("--startup-warmup-lookback-minutes"), default=15)
     anomaly_live2.add_argument("--startup-warmup-max-trades-per-symbol", type=_positive_int_for("--startup-warmup-max-trades-per-symbol"), default=1000)
     anomaly_live2.add_argument("--startup-warmup-max-pages-per-symbol", type=_positive_int_for("--startup-warmup-max-pages-per-symbol"), default=1)
-    anomaly_live2.add_argument("--startup-htf-baseline-lookback-minutes", type=_positive_int_for("--startup-htf-baseline-lookback-minutes"), default=1440)
+    anomaly_live2.add_argument("--startup-htf-baseline-lookback-minutes", type=_positive_int_for("--startup-htf-baseline-lookback-minutes"), default=2880)
     anomaly_live2.add_argument("--ws-connection-max-age-seconds", type=float, default=84_600.0)
     anomaly_live2.add_argument("--user-data-stream-startup-wait-seconds", type=float, default=10.0)
     anomaly_live2.add_argument("--user-data-stream-keepalive-interval-seconds", type=float, default=1_800.0)

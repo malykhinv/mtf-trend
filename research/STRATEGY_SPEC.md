@@ -944,7 +944,7 @@ Live entries are based on the same family as the rolling runner discovery backte
 ```text
 closed 30s candle
 -> rolling HTF seed from closed 30s candles, 5m/30s or 3m/30s
--> baseline/dormancy/pregrowth from closed 1m candles fully before the rolling HTF window
+-> baseline/dormancy/pregrowth from event-rolling HTF-width chunks built from closed 1m candles fully before the rolling HTF window
 -> first closed 30s confirmation window that matches fixed C/A/S priority
 -> live entry guard
 -> actual exchange fill
