@@ -1,3 +1,11 @@
+## 2026-05-29 - P442 combined rolling portfolio guard
+
+Current commit: UNKNOWN.
+
+Status: P442 PROPOSED after rechecking P441. P441 fixed signal selection, but profile execution still let unvalidated TF sets (`5m_1m`, `1m_15s`) run through discovery and applied risk-cap/cooldown inside each profile instead of at the combined strategy level. P442 restricts C/A/S to `3m_30s`/`5m_30s`, runs only those profiles by default, and writes combined portfolio artifacts at the root run directory.
+
+Next: apply P442, rerun 45d rolling discovery, and treat root `htf_ltf_runner_combined_*` files as the strategy-level truth; profile-level files remain diagnostics.
+
 ## 2026-05-29 - P441 category trigger audit fix
 
 Current commit: UNKNOWN.

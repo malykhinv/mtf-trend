@@ -1749,31 +1749,16 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
     def _run() -> int:
         from research_tools.htf_ltf_runner_discovery import (
             HtfLtfRunnerDiscoveryConfig,
+            _apply_runner_candidate_portfolio,
+            _daily_summary,
+            _summarize_trades,
+            _top_dependency,
             run_htf_ltf_runner_discovery as run_discovery,
         )
 
         days = int(getattr(args, "days", 30))
         output_root = config.backtest.results_dir / f"htf_ltf_runner_discovery_{days}d"
         profiles = [
-            {
-                "name": "5m_1m",
-                "htf_timeframe": "5m",
-                "ltf_timeframe": "1m",
-                "ltf_min_confirm_candles": 1,
-                "ltf_max_confirm_candles": 4,
-                "trail_lookback_candles": 6,
-                "max_hold_candles": 60,
-                "seed_min_htf_quote_ratio": 20.0,
-                "seed_min_htf_trade_ratio": 20.0,
-                "seed_min_htf_return_pct": 0.0300,
-                "seed_min_htf_range_pct": 0.040,
-                "seed_min_dormancy_to_anomaly_quote_ratio": 14.0,
-                "seed_min_dormancy_to_anomaly_trade_ratio": 12.0,
-                "seed_max_dormancy_range_pct_median": 0.006,
-                "seed_min_abs_quote_volume": 50_000.0,
-                "seed_min_abs_number_of_trades": 150.0,
-                "seed_max_events_per_symbol": 0,
-            },
             {
                 "name": "5m_30s",
                 "htf_timeframe": "5m",
@@ -1812,27 +1797,10 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 "seed_min_abs_number_of_trades": 120.0,
                 "seed_max_events_per_symbol": 0,
             },
-            {
-                "name": "1m_15s",
-                "htf_timeframe": "1m",
-                "ltf_timeframe": "15s",
-                "ltf_min_confirm_candles": 4,
-                "ltf_max_confirm_candles": 8,
-                "trail_lookback_candles": 8,
-                "max_hold_candles": 240,
-                "seed_min_htf_quote_ratio": 32.0,
-                "seed_min_htf_trade_ratio": 32.0,
-                "seed_min_htf_return_pct": 0.0180,
-                "seed_min_htf_range_pct": 0.030,
-                "seed_min_dormancy_to_anomaly_quote_ratio": 20.0,
-                "seed_min_dormancy_to_anomaly_trade_ratio": 18.0,
-                "seed_max_dormancy_range_pct_median": 0.0045,
-                "seed_min_abs_quote_volume": 20_000.0,
-                "seed_min_abs_number_of_trades": 80.0,
-                "seed_max_events_per_symbol": 0,
-            },
         ]
         index_rows: list[dict[str, object]] = []
+        combined_trade_frames: list[pd.DataFrame] = []
+        combined_portfolio_config: HtfLtfRunnerDiscoveryConfig | None = None
         for profile in profiles:
             profile_output_dir = output_root / str(profile["name"])
             discovery_config = HtfLtfRunnerDiscoveryConfig(
@@ -1895,6 +1863,13 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 ),
             )
             result_dir = run_discovery(discovery_config, progress_label=f"runner discovery {profile['name']}")
+            combined_portfolio_config = discovery_config
+            raw_trades_path = result_dir / "htf_ltf_runner_trades_raw.csv"
+            if raw_trades_path.exists():
+                raw_trades = pd.read_csv(raw_trades_path)
+                if not raw_trades.empty:
+                    raw_trades.insert(0, "profile", str(profile["name"]))
+                    combined_trade_frames.append(raw_trades)
             index_rows.append(
                 {
                     "profile": profile["name"],
@@ -1920,6 +1895,18 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 }
             )
         output_root.mkdir(parents=True, exist_ok=True)
+        if combined_trade_frames and combined_portfolio_config is not None:
+            combined_raw = pd.concat(combined_trade_frames, ignore_index=True, sort=False)
+            combined_live_filtered, combined_events = _apply_runner_candidate_portfolio(
+                combined_raw,
+                config=combined_portfolio_config,
+            )
+            combined_raw.to_csv(output_root / "htf_ltf_runner_combined_trades_raw.csv", index=False, encoding="utf-8-sig")
+            combined_live_filtered.to_csv(output_root / "htf_ltf_runner_combined_trades_live_filtered.csv", index=False, encoding="utf-8-sig")
+            combined_events.to_csv(output_root / "htf_ltf_runner_combined_portfolio_events.csv", index=False, encoding="utf-8-sig")
+            _daily_summary(combined_live_filtered).to_csv(output_root / "htf_ltf_runner_combined_by_day_live_filtered.csv", index=False, encoding="utf-8-sig")
+            _summarize_trades(combined_live_filtered).to_csv(output_root / "htf_ltf_runner_combined_profitability_summary_live_filtered.csv", index=False, encoding="utf-8-sig")
+            _top_dependency(combined_live_filtered).to_csv(output_root / "htf_ltf_runner_combined_top_dependency_live_filtered.csv", index=False, encoding="utf-8-sig")
         pd.DataFrame(index_rows).to_csv(output_root / "htf_ltf_runner_discovery_index.csv", index=False, encoding="utf-8-sig")
         return 0
 

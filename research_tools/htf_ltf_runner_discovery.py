@@ -2921,7 +2921,7 @@ def _as_float(value: object) -> float:
 
 def _runner_candidate_matches(row: Mapping[str, object]) -> list[str]:
     tf_set = _tf_set_from_row(row)
-    if tf_set == "1m_15s":
+    if tf_set not in {"3m_30s", "5m_30s"}:
         return []
     htf_trade_ratio = _as_float(row.get("htf_trade_ratio"))
     htf_quote_ratio = _as_float(row.get("htf_quote_ratio"))
@@ -3012,7 +3012,7 @@ def _apply_runner_candidate_portfolio(
     events: list[dict[str, object]] = []
     risk_per_trade = float(config.risk_per_trade_pct)
     max_total_risk = float(config.max_total_open_risk_pct)
-    cooldown_ms = int(_timeframe_ms(config.htf_timeframe))
+    default_cooldown_ms = int(_timeframe_ms(config.htf_timeframe))
 
     for idx, row in frame.iterrows():
         entry_ts_value = row.get("entry_timestamp_ms")
@@ -3022,6 +3022,11 @@ def _apply_runner_candidate_portfolio(
         symbol = str(row.get("symbol", ""))
         active = [position for position in active if int(position.get("exit_ts", 0)) > entry_ts]
         category = str(row.get("runner_candidate_category", ""))
+        row_htf_timeframe = str(row.get("htf_timeframe", "") or "")
+        try:
+            cooldown_ms = int(_timeframe_ms(row_htf_timeframe)) if row_htf_timeframe else default_cooldown_ms
+        except Exception:
+            cooldown_ms = default_cooldown_ms
         base_event = {
             "event_timestamp_ms": entry_ts,
             "event_timestamp_utc": _timestamp_to_utc(entry_ts),

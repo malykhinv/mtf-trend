@@ -1,3 +1,17 @@
+## P442 - restrict rolling discovery to validated TFs and add combined portfolio
+
+Status: PROPOSED.
+
+Reason: P441 made entries category-qualified, but the command still ran unvalidated profiles (`5m_1m`, `1m_15s`) and applied risk-cap/cooldown separately per TF profile. That can overstate live-like capacity when the real bot scans multiple TF sets at once.
+
+Changes:
+- run runner discovery only on the currently validated `5m_30s` and `3m_30s` profiles;
+- prevent C/A/S categories from matching any other TF set;
+- make symbol cooldown use each trade row's own HTF width;
+- write combined root-level raw/live-filtered trades and combined portfolio events across TF profiles.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+
 ## P441 - first category-qualified rolling signal
 
 Status: PROPOSED.

@@ -1,3 +1,9 @@
+## 2026-05-29 - P442 rolling combined portfolio audit
+
+Hypothesis: C/A/S was mined and validated only on `3m_30s` and `5m_30s` after excluding weak/missing TF sets. The 45d rolling replay must therefore test the combined strategy on those two profiles only, with one global risk-cap/cooldown pass across both.
+
+Protocol: after P442, use root-level `htf_ltf_runner_combined_trades_live_filtered.csv`, `htf_ltf_runner_combined_portfolio_events.csv`, daily summary, top-dependency, and profitability summary as the primary readout. Per-profile artifacts are diagnostic only.
+
 ## 2026-05-29 - P441 rolling C/A/S trigger audit
 
 Hypothesis: rolling discovery should enter on the first closed-LTF signal that also matches one of the frozen C/A/S candidate natures. Generic LTF-confirm without a category is only a near-miss, not a trade.
