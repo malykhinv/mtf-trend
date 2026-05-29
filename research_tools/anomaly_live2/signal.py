@@ -1,14 +1,16 @@
 """Pure stream-only signal adapter for anomaly live2.
 
-The adapter is deliberately hot-path safe: it evaluates already-built in-memory
-aggTrade candles and SymbolState fields only. It performs no REST/cache/file IO
-and does not guess unavailable derivative context.
+The adapter evaluates closed in-memory candles and SymbolState fields.  When the
+rolling 1m context is stale/missing it may call a bounded REST repair hook that
+loads official 1m klines, then rechecks the same data-dependency contract.  It
+never invents candles and never uses future/outcome data.
 """
 
 from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -136,11 +138,13 @@ class Live2SignalEngine:
         mark_stale_ms: int | None = None,
         oi_stale_ms: int | None = None,
         prior_context_stale_ms: int | None = None,
+        rolling_context_repair: Callable[[str, int], dict[str, object]] | None = None,
     ) -> None:
         self.category_ids = tuple(category_ids)
         self.mark_stale_ms = None if mark_stale_ms is None else int(mark_stale_ms)
         self.oi_stale_ms = None if oi_stale_ms is None else int(oi_stale_ms)
         self.prior_context_stale_ms = None if prior_context_stale_ms is None else int(prior_context_stale_ms)
+        self.rolling_context_repair = rolling_context_repair
         self._total_evaluations = 0
         self._total_selected = 0
         self._total_rejected = 0
@@ -154,6 +158,17 @@ class Live2SignalEngine:
     def evaluate(self, *, state: SymbolState, candle: Live2Candle, actionable_reason: str) -> Live2SignalDecision:
         self._total_evaluations += 1
         features = self._features(state=state, candle=candle, actionable_reason=actionable_reason)
+        repair_result = self._maybe_repair_rolling_context(state=state, features=features, decision_time_ms=int(candle.close_time_ms))
+        if repair_result:
+            features = {
+                **self._features(state=state, candle=candle, actionable_reason=actionable_reason),
+                "rolling_1m_rest_repair_status": repair_result.get("status", ""),
+                "rolling_1m_rest_repair_reason": repair_result.get("reason", ""),
+                "rolling_1m_rest_repair_candles_loaded": repair_result.get("candles_loaded", 0),
+                "rolling_1m_rest_repair_recent_contiguous_count": repair_result.get("recent_contiguous_count", 0),
+                "rolling_1m_rest_repair_duration_ms": repair_result.get("duration_ms", 0),
+                "rolling_1m_rest_repair_before_ms": repair_result.get("before_ms", 0),
+            }
         if candle.open <= 0 or candle.close <= 0:
             return self._reject("invalid_stream_candle_price", features=features)
         if candle.quote_volume <= 0 or candle.number_of_trades <= 0:
@@ -209,6 +224,30 @@ class Live2SignalEngine:
             },
             reject_reasons=reject_reasons or ("no_rolling_runner_category_accepted",),
         )
+
+    def _maybe_repair_rolling_context(self, *, state: SymbolState, features: dict[str, object], decision_time_ms: int) -> dict[str, object]:
+        if self.rolling_context_repair is None:
+            return {}
+        before_ms_raw = features.get("rolling_1m_repair_before_ms")
+        try:
+            before_ms = int(before_ms_raw) if before_ms_raw is not None else 0
+        except (TypeError, ValueError):
+            before_ms = 0
+        if before_ms <= 0:
+            return {}
+        repair_reason = str(features.get("rolling_1m_repair_reason", "") or "")
+        if not repair_reason:
+            return {}
+        try:
+            return dict(self.rolling_context_repair(state.symbol, before_ms))
+        except Exception as exc:  # pragma: no cover - exchange boundary
+            return {
+                "status": "error",
+                "reason": "rolling_1m_context_rest_repair_hook_failed",
+                "before_ms": before_ms,
+                "decision_time_ms": int(decision_time_ms),
+                "error": f"{type(exc).__name__}:{str(exc)[:180]}",
+            }
 
     def status(self) -> dict[str, object]:
         return {
@@ -1487,13 +1526,20 @@ def _rolling_runner_category_setup(*, state: SymbolState, decision_candle: Live2
         "rolling_runner_dependency_reasons": (),
         "rolling_runner_reject_reasons": (),
         "rolling_runner_decision_timeframe_ms": 30_000,
+        "rolling_1m_repair_reason": "",
+        "rolling_1m_repair_before_ms": 0,
     }
     if decision_candle.timeframe_ms != 30_000:
         return {**common, "rolling_runner_reject_reasons": ("decision_candle_is_not_30s",)}
     if not closed_30s or closed_30s[-1].open_time_ms != decision_candle.open_time_ms:
         return {**common, "rolling_runner_dependency_reasons": ("latest_closed_30s_decision_candle_not_ready",)}
     if not closed_1m:
-        return {**common, "rolling_runner_dependency_reasons": ("closed_1m_baseline_not_ready",)}
+        return {
+            **common,
+            "rolling_runner_dependency_reasons": ("closed_1m_baseline_not_ready",),
+            "rolling_1m_repair_reason": "closed_1m_baseline_not_ready",
+            "rolling_1m_repair_before_ms": int(decision_candle.open_time_ms),
+        }
 
     evaluations: list[dict[str, object]] = []
     dependency_reasons: list[str] = []
@@ -1575,13 +1621,45 @@ def _evaluate_rolling_profile(
         if htf_quality["status"] == "rejected":
             return {**profile_common, **htf_quality, "status": "not_ready", "reason": "rolling_htf_30s_aggtrade_gap_above_tolerance"}
         htf_open_ms = int(htf[0].open_time_ms)
+        latest_1m_before_htf = max(
+            (item for item in closed_1m if int(item.close_time_ms) <= htf_open_ms),
+            key=lambda item: int(item.close_time_ms),
+            default=None,
+        )
+        if latest_1m_before_htf is None:
+            return {
+                **profile_common,
+                "status": "not_ready",
+                "reason": "rolling_1m_history_not_ready:no_closed_1m_before_htf",
+                "rolling_1m_repair_reason": "no_closed_1m_before_htf",
+                "rolling_1m_repair_before_ms": htf_open_ms,
+            }
+        latest_1m_gap_ms = int(htf_open_ms) - int(latest_1m_before_htf.close_time_ms)
+        if latest_1m_gap_ms > 60_000:
+            return {
+                **profile_common,
+                "status": "not_ready",
+                "reason": f"rolling_1m_history_stale:gap_ms={latest_1m_gap_ms}",
+                "rolling_1m_repair_reason": "rolling_1m_history_stale",
+                "rolling_1m_repair_before_ms": htf_open_ms,
+                "rolling_1m_latest_close_ms": int(latest_1m_before_htf.close_time_ms),
+                "rolling_1m_context_gap_ms": latest_1m_gap_ms,
+            }
         history = _aggregate_1m_history_to_htf(closed_1m=closed_1m, htf_timeframe_ms=htf_timeframe_ms, before_ms=htf_open_ms)
         required_history = max(
             LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_DORMANCY_WINDOWS + LIVE2_ROLLING_PREGROWTH_WINDOWS,
             math.ceil((LIVE2_ROLLING_PRIOR_SPIKE_LOOKBACK_MS + LIVE2_ROLLING_BASELINE_WINDOWS * htf_timeframe_ms) / htf_timeframe_ms),
         )
         if len(history) < required_history:
-            return {**profile_common, "status": "not_ready", "reason": f"rolling_1m_history_not_ready:{len(history)}/{required_history}"}
+            return {
+                **profile_common,
+                "status": "not_ready",
+                "reason": f"rolling_1m_history_not_ready:{len(history)}/{required_history}",
+                "rolling_1m_repair_reason": "rolling_1m_history_not_ready",
+                "rolling_1m_repair_before_ms": htf_open_ms,
+                "rolling_1m_latest_close_ms": int(latest_1m_before_htf.close_time_ms),
+                "rolling_1m_context_gap_ms": latest_1m_gap_ms,
+            }
         baseline = history[-LIVE2_ROLLING_BASELINE_WINDOWS:]
         dormancy = history[-(LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_DORMANCY_WINDOWS):-LIVE2_ROLLING_BASELINE_WINDOWS]
         pregrowth = history[-(LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_PREGROWTH_WINDOWS):-LIVE2_ROLLING_BASELINE_WINDOWS]
@@ -1639,6 +1717,8 @@ def _evaluate_rolling_profile(
             "decision_available_timestamp_ms": int(decision_candle.close_time_ms),
             "rolling_htf_open_ms": htf_open_ms,
             "rolling_htf_close_ms": int(htf[-1].close_time_ms),
+            "rolling_1m_latest_close_ms": int(latest_1m_before_htf.close_time_ms),
+            "rolling_1m_context_gap_ms": latest_1m_gap_ms,
             **_quality_artifact_fields(confirm_quality),
             **_quality_artifact_fields(htf_quality),
             "htf_quote_ratio": htf_quote_ratio,

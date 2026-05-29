@@ -1006,16 +1006,24 @@ class SymbolStateStore:
             return
         with self._lock:
             state = self.get_or_create(symbol)
-            for candle in sorted(candles, key=lambda item: (item.timeframe_ms, item.open_time_ms)):
-                ring = state.candle_book.rings.get(int(candle.timeframe_ms))
+            by_timeframe: dict[int, list[Live2Candle]] = {}
+            for candle in candles:
+                by_timeframe.setdefault(int(candle.timeframe_ms), []).append(candle)
+            for timeframe_ms, timeframe_candles in by_timeframe.items():
+                ring = state.candle_book.rings.get(timeframe_ms)
                 if ring is None:
                     continue
-                existing_open_times = {int(item.open_time_ms) for item in ring.closed}
-                if int(candle.open_time_ms) in existing_open_times:
-                    continue
-                ring.closed.append(candle)
-                ring.last_closed_open_time_ms = candle.open_time_ms
-                ring.closed_count += 1
+                merged_by_open_time = {int(item.open_time_ms): item for item in ring.closed}
+                for candle in timeframe_candles:
+                    # Official REST klines may repair or replace a partial live-built
+                    # 1m context candle.  Keep one candle per open time and preserve
+                    # chronological order; never append old repair candles to the tail.
+                    merged_by_open_time[int(candle.open_time_ms)] = candle
+                ordered = [merged_by_open_time[key] for key in sorted(merged_by_open_time)]
+                ring.closed.clear()
+                ring.closed.extend(ordered[-int(ring.max_closed_candles):])
+                ring.last_closed_open_time_ms = None if not ring.closed else int(ring.closed[-1].open_time_ms)
+                ring.closed_count = len(ring.closed)
             state.mark_dirty()
 
     def close_due_candles(self, *, now_ms: int) -> int:

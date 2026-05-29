@@ -294,7 +294,7 @@ class Live2StartupAggTradeWarmup:
                 )
             if self.config.request_sleep_seconds > 0:
                 time.sleep(self.config.request_sleep_seconds)
-        symbols_failed = len(errors)
+        symbols_failed = max(0, len(limited_symbols) - symbols_warmed)
         if symbols_warmed == len(limited_symbols) and not errors:
             status = "ready"
             reason = "startup_aggtrade_warmup_ready"
@@ -450,9 +450,8 @@ class Live2StartupHtfBaselineWarmup:
                     timeframe_ms=timeframe_ms,
                 )
             except Exception as exc:  # pragma: no cover - exchange boundary
-                errors.append(f"{symbol}:{type(exc).__name__}:{str(exc)[:160]}")
-                if len(errors) >= self.config.error_limit:
-                    break
+                if len(errors) < self.config.error_limit:
+                    errors.append(f"{symbol}:{type(exc).__name__}:{str(exc)[:160]}")
                 if self.config.request_sleep_seconds > 0:
                     time.sleep(self.config.request_sleep_seconds)
                 continue
@@ -473,16 +472,15 @@ class Live2StartupHtfBaselineWarmup:
             if recent_contiguous_count >= LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES:
                 symbols_warmed += 1
             else:
-                errors.append(
-                    f"{symbol}:incomplete_1m_htf_baseline:"
-                    f"recent_contiguous={recent_contiguous_count}/"
-                    f"{LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES}:loaded={len(candles)}"
-                )
-                if len(errors) >= self.config.error_limit:
-                    break
+                if len(errors) < self.config.error_limit:
+                    errors.append(
+                        f"{symbol}:incomplete_1m_htf_baseline:"
+                        f"recent_contiguous={recent_contiguous_count}/"
+                        f"{LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES}:loaded={len(candles)}"
+                    )
             if self.config.request_sleep_seconds > 0:
                 time.sleep(self.config.request_sleep_seconds)
-        symbols_failed = len(errors)
+        symbols_failed = max(0, len(limited_symbols) - symbols_warmed)
         if symbols_warmed == len(limited_symbols) and not errors:
             status = "ready"
             reason = "startup_htf_baseline_warmup_ready"
@@ -515,42 +513,226 @@ class Live2StartupHtfBaselineWarmup:
     ) -> tuple[list[object], ...]:
         if self.exchange_client is None:
             return ()
-        rows_by_open_time: dict[int, list[object]] = {}
-        cursor_ms = int(start_timestamp_ms)
-        end_ms = int(end_timestamp_ms)
-        while cursor_ms <= end_ms:
-            remaining_candles = max(1, ((end_ms - cursor_ms) // int(timeframe_ms)) + 1)
-            limit = min(BINANCE_KLINE_PAGE_LIMIT, remaining_candles)
-            page = self.exchange_client.fetch_binance_klines(
+        return _fetch_paginated_1m_klines(
+            exchange_client=self.exchange_client,
+            symbol=symbol,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+            timeframe_ms=timeframe_ms,
+        )
+
+
+
+@dataclass(frozen=True, slots=True)
+class Live2RollingContextRestRepairConfig:
+    """Bounded REST repair for live rolling 1m context gaps."""
+
+    lookback_minutes: int = 2880
+    min_recent_1m_candles: int = LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES
+    min_retry_interval_ms: int = 60_000
+    request_sleep_seconds: float = 0.02
+
+    def __post_init__(self) -> None:
+        if self.lookback_minutes <= 0:
+            raise ValueError("lookback_minutes must be > 0")
+        if self.min_recent_1m_candles <= 0:
+            raise ValueError("min_recent_1m_candles must be > 0")
+        if self.min_retry_interval_ms < 0:
+            raise ValueError("min_retry_interval_ms must be >= 0")
+        if self.request_sleep_seconds < 0:
+            raise ValueError("request_sleep_seconds must be >= 0")
+
+
+@dataclass(frozen=True, slots=True)
+class Live2RollingContextRestRepairResult:
+    status: str
+    reason: str
+    symbol: str
+    before_ms: int
+    started_at_ms: int
+    completed_at_ms: int
+    candles_loaded: int = 0
+    recent_contiguous_count: int = 0
+    source: str = "binance_futures_klines_emergency_rest_1m_rolling_context"
+    error: str = ""
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "ready"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "ready": self.ready,
+            "reason": self.reason,
+            "symbol": self.symbol,
+            "before_ms": self.before_ms,
+            "started_at_ms": self.started_at_ms,
+            "completed_at_ms": self.completed_at_ms,
+            "duration_ms": max(0, self.completed_at_ms - self.started_at_ms),
+            "candles_loaded": self.candles_loaded,
+            "recent_contiguous_count": self.recent_contiguous_count,
+            "source": self.source,
+            "error": self.error,
+        }
+
+
+class Live2RollingContextRestRepair:
+    """Repair missing/stale 1m rolling context with official REST klines.
+
+    This is not a trading fallback and it does not invent candles.  It only
+    appends real Binance 1m klines, including exchange-reported zero-volume
+    candles, then the signal path rechecks the same continuity contract.
+    """
+
+    def __init__(
+        self,
+        *,
+        state_store: SymbolStateStore,
+        exchange_client: Live2StartupHtfBaselineExchange | None,
+        config: Live2RollingContextRestRepairConfig,
+    ) -> None:
+        self.state_store = state_store
+        self.exchange_client = exchange_client
+        self.config = config
+        self._last_attempt_at_ms_by_symbol: dict[str, int] = {}
+
+    def repair(self, *, symbol: str, before_ms: int, now_ms: int | None = None) -> Live2RollingContextRestRepairResult:
+        started_at_ms = utc_now_ms()
+        effective_now_ms = started_at_ms if now_ms is None else int(now_ms)
+        last_attempt_at_ms = self._last_attempt_at_ms_by_symbol.get(symbol)
+        if (
+            last_attempt_at_ms is not None
+            and self.config.min_retry_interval_ms > 0
+            and effective_now_ms - int(last_attempt_at_ms) < self.config.min_retry_interval_ms
+        ):
+            return Live2RollingContextRestRepairResult(
+                status="throttled",
+                reason="rolling_1m_context_rest_repair_throttled",
                 symbol=symbol,
-                timeframe=Timeframe.M1,
-                start_timestamp_ms=cursor_ms,
-                end_timestamp_ms=end_ms,
-                limit=limit,
+                before_ms=int(before_ms),
+                started_at_ms=started_at_ms,
+                completed_at_ms=utc_now_ms(),
             )
-            if not page:
-                break
-            page_open_times: list[int] = []
-            for row in page:
-                if not isinstance(row, list):
-                    continue
-                open_time_ms = optional_int(row[0]) if row else None
-                if open_time_ms is None:
-                    continue
-                if int(open_time_ms) < int(start_timestamp_ms) or int(open_time_ms) > end_ms:
-                    continue
-                rows_by_open_time[int(open_time_ms)] = row
-                page_open_times.append(int(open_time_ms))
-            if not page_open_times:
-                break
-            next_cursor_ms = max(page_open_times) + int(timeframe_ms)
-            if next_cursor_ms <= cursor_ms:
-                break
-            cursor_ms = next_cursor_ms
-        return tuple(rows_by_open_time[key] for key in sorted(rows_by_open_time))
+        self._last_attempt_at_ms_by_symbol[symbol] = effective_now_ms
+        if self.exchange_client is None:
+            return Live2RollingContextRestRepairResult(
+                status="not_ready",
+                reason="rolling_1m_context_rest_repair_exchange_client_missing",
+                symbol=symbol,
+                before_ms=int(before_ms),
+                started_at_ms=started_at_ms,
+                completed_at_ms=utc_now_ms(),
+            )
+        if not isinstance(self.exchange_client, Live2StartupHtfBaselineExchange):
+            return Live2RollingContextRestRepairResult(
+                status="not_ready",
+                reason="rolling_1m_context_rest_repair_boundary_missing_fetch_binance_klines",
+                symbol=symbol,
+                before_ms=int(before_ms),
+                started_at_ms=started_at_ms,
+                completed_at_ms=utc_now_ms(),
+            )
+        timeframe_ms = int(Timeframe.M1.to_milliseconds())
+        context_end_ms = max(0, int(before_ms) - timeframe_ms)
+        context_start_ms = max(0, context_end_ms - int(self.config.lookback_minutes) * timeframe_ms + 1)
+        try:
+            rows = _fetch_paginated_1m_klines(
+                exchange_client=self.exchange_client,
+                symbol=symbol,
+                start_timestamp_ms=context_start_ms,
+                end_timestamp_ms=context_end_ms,
+                timeframe_ms=timeframe_ms,
+            )
+            candles = tuple(
+                sorted(
+                    (candle for row in rows if (candle := _parse_binance_kline_1m(row, source="binance_futures_klines_emergency_rest_1m_rolling_context")) is not None),
+                    key=lambda item: item.open_time_ms,
+                )
+            )
+            if candles:
+                self.state_store.append_closed_candles(symbol=symbol, candles=candles)
+            recent_contiguous_count = _recent_contiguous_1m_count(
+                candles=candles,
+                context_end_ms=context_end_ms,
+                timeframe_ms=timeframe_ms,
+            )
+            if self.config.request_sleep_seconds > 0:
+                time.sleep(self.config.request_sleep_seconds)
+        except Exception as exc:  # pragma: no cover - exchange boundary
+            return Live2RollingContextRestRepairResult(
+                status="error",
+                reason="rolling_1m_context_rest_repair_failed",
+                symbol=symbol,
+                before_ms=int(before_ms),
+                started_at_ms=started_at_ms,
+                completed_at_ms=utc_now_ms(),
+                error=f"{type(exc).__name__}:{str(exc)[:180]}",
+            )
+        if recent_contiguous_count >= int(self.config.min_recent_1m_candles):
+            status = "ready"
+            reason = "rolling_1m_context_rest_repair_ready"
+        elif candles:
+            status = "partial"
+            reason = "rolling_1m_context_rest_repair_incomplete"
+        else:
+            status = "not_ready"
+            reason = "rolling_1m_context_rest_repair_no_candles"
+        return Live2RollingContextRestRepairResult(
+            status=status,
+            reason=reason,
+            symbol=symbol,
+            before_ms=int(before_ms),
+            started_at_ms=started_at_ms,
+            completed_at_ms=utc_now_ms(),
+            candles_loaded=len(candles),
+            recent_contiguous_count=recent_contiguous_count,
+        )
 
 
-def _parse_binance_kline_1m(row: list[object]) -> Live2Candle | None:
+def _fetch_paginated_1m_klines(
+    *,
+    exchange_client: Live2StartupHtfBaselineExchange,
+    symbol: str,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+    timeframe_ms: int,
+) -> tuple[list[object], ...]:
+    rows_by_open_time: dict[int, list[object]] = {}
+    cursor_ms = int(start_timestamp_ms)
+    end_ms = int(end_timestamp_ms)
+    while cursor_ms <= end_ms:
+        remaining_candles = max(1, ((end_ms - cursor_ms) // int(timeframe_ms)) + 1)
+        limit = min(BINANCE_KLINE_PAGE_LIMIT, remaining_candles)
+        page = exchange_client.fetch_binance_klines(
+            symbol=symbol,
+            timeframe=Timeframe.M1,
+            start_timestamp_ms=cursor_ms,
+            end_timestamp_ms=end_ms,
+            limit=limit,
+        )
+        if not page:
+            break
+        page_open_times: list[int] = []
+        for row in page:
+            if not isinstance(row, list):
+                continue
+            open_time_ms = optional_int(row[0]) if row else None
+            if open_time_ms is None:
+                continue
+            if int(open_time_ms) < int(start_timestamp_ms) or int(open_time_ms) > end_ms:
+                continue
+            rows_by_open_time[int(open_time_ms)] = row
+            page_open_times.append(int(open_time_ms))
+        if not page_open_times:
+            break
+        next_cursor_ms = max(page_open_times) + int(timeframe_ms)
+        if next_cursor_ms <= cursor_ms:
+            break
+        cursor_ms = next_cursor_ms
+    return tuple(rows_by_open_time[key] for key in sorted(rows_by_open_time))
+
+def _parse_binance_kline_1m(row: list[object], *, source: str = "binance_futures_klines_startup_rest_1m_htf_baseline") -> Live2Candle | None:
     if len(row) < 11:
         return None
     open_time_ms = optional_int(row[0])
@@ -599,8 +781,8 @@ def _parse_binance_kline_1m(row: list[object]) -> Live2Candle | None:
         taker_buy_quote_volume=0.0 if taker_buy_quote_volume is None else float(taker_buy_quote_volume),
         first_trade_time_ms=int(open_time_ms),
         last_trade_time_ms=int(open_time_ms) + timeframe_ms - 1,
-        first_source="binance_futures_klines_startup_rest_1m_htf_baseline",
-        last_source="binance_futures_klines_startup_rest_1m_htf_baseline",
+        first_source=source,
+        last_source=source,
     )
 
 

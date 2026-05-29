@@ -3444,6 +3444,12 @@ P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or 
 Current commit: UNKNOWN.
 
 Status: P451 PROPOSED after P450 feedback. Live2 rolling C/A/S should not fail permanently on tiny aggTrade delivery holes, but it also must not trade blindly on large missing-flow gaps. The contract is now explicit tolerance + artifact visibility: small 30s aggTrade-id gaps are marked tolerated, large gaps remain data-dependency blocks. Startup 48h 1m history remains a REST warmup, not waiting in real time. Runtime decisions still require enough currently contiguous 1m history for the rolling context; missing 1m data causes not-ready until sufficient fresh contiguous history exists, not silent fallback.
+
+## 2026-05-29 - P452 live2 rolling 1m emergency repair
+
+Current commit: UNKNOWN.
+
+Status: P452 PROPOSED. Live2 rolling C/A/S now has a cleaner data-completeness model: 30s aggTrade holes use explicit tolerance artifacts, while missing/stale 1m baseline context triggers a bounded REST repair from official 1m klines. The repair is not a trading fallback: if REST cannot restore enough recent contiguous 1m history, signal remains `data_dependency_not_ready`.
 ## 2026-05-29 - P448 live2 rolling context parity audit
 
 Current commit: UNKNOWN.

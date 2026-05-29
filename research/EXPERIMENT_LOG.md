@@ -4571,3 +4571,9 @@ P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or 
 ## 2026-05-29 - P451 live rolling tolerance audit
 
 Protocol after P451: in live artifacts, separate selected trades by `confirm_30s_aggtrade_gap_quality` and `rolling_htf_30s_aggtrade_gap_quality`. Do not mix tolerated-gap trades with clean trades when evaluating live edge. Watch counts of `*_aggtrade_gap_above_tolerance` reasons; frequent rejects mean the stream quality is insufficient for real-flow trading, not that the entry filter is bad.
+
+## 2026-05-29 - P452 live2 rolling data repair audit
+
+Hypothesis: quiet periods should be represented by exchange-reported 1m zero-volume klines, not by missing in-memory candles. P452 should reduce false `rolling_1m_history_not_ready` during live rolling C/A/S without allowing decisions on stale or incomplete context.
+
+Protocol: after applying P452, run live2 in minimal-risk/scouting mode and inspect `live_events.csv` / deadline decisions for `rolling_1m_context_rest_repair_ready`, `rolling_1m_context_rest_repair_incomplete`, selected C/A/S signals, and 30s gap tolerance fields. Selected signals must still have no future/outcome-derived fields and must pass entry guard from current live price.

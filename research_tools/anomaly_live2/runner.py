@@ -29,6 +29,8 @@ from .market_data.startup_tickers import Live2StartupTickerSnapshot, Live2Startu
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .market_data.warmup import (
     Live2StartupAggTradeWarmup,
+    Live2RollingContextRestRepair,
+    Live2RollingContextRestRepairConfig,
     Live2StartupHtfBaselineConfig,
     Live2StartupHtfBaselineResult,
     Live2StartupHtfBaselineWarmup,
@@ -129,6 +131,14 @@ class AnomalyLive2Runner:
         self.startup_warmup_result: Live2StartupWarmupResult | None = None
         self.startup_htf_baseline_result: Live2StartupHtfBaselineResult | None = None
         self.startup_context_prewarm_result: dict[str, object] | None = None
+        self.rolling_context_repair = Live2RollingContextRestRepair(
+            state_store=self.state_store,
+            exchange_client=self.execution_engine.exchange_client,
+            config=Live2RollingContextRestRepairConfig(
+                lookback_minutes=config.startup_htf_baseline_lookback_minutes,
+                request_sleep_seconds=config.startup_htf_baseline_request_sleep_seconds,
+            ),
+        )
         self.session_top_tracker = Live2SessionTopTracker()
         self._last_session_top_snapshot: dict[str, object] | None = None
         self.top_growth_audit = Live2TopGrowthAudit(
@@ -166,6 +176,10 @@ class AnomalyLive2Runner:
                 mark_stale_ms=config.mark_price_stale_ms,
                 oi_stale_ms=config.oi_stale_ms,
                 prior_context_stale_ms=config.prior_context_stale_ms,
+                rolling_context_repair=lambda symbol, before_ms: self.rolling_context_repair.repair(
+                    symbol=symbol,
+                    before_ms=before_ms,
+                ).as_dict(),
             ),
             entry_guard=Live2EntryGuardEngine(
                 config=Live2EntryGuardConfig(

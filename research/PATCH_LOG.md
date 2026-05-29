@@ -9829,6 +9829,10 @@ P450 also blocks rolling live C/A/S decisions when selected 30s confirmation or 
 ## 2026-05-29 - P451 live2 rolling gap tolerance
 
 Status: PROPOSED. P450 hardened live2 data completeness but treated any selected 30s aggTrade-id gap as a hard dependency failure. P451 keeps hard rejection for large holes but allows small explicit tolerance for confirmation/rolling-HTF 30s candles, exporting quality fields into signal artifacts so tolerated-gap trades can be audited separately. It does not synthesize missing flow and does not use future/outcome data.
+
+## 2026-05-29 - P452 live2 emergency 1m REST repair
+
+Status: PROPOSED. After P451, live C/A/S had explicit 30s aggTrade gap tolerance, but rolling 1m context could still become stale after startup when quiet/no-trade minutes did not create live 1m candles. P452 adds a bounded emergency REST repair: when signal evaluation detects missing/stale/not-enough 1m context, it fetches official Binance 1m klines for the symbol, stores real zero-volume candles when the exchange reports them, rechecks continuity, and only then evaluates C/A/S. Large 30s aggTrade gaps remain governed by P451 tolerance; no synthetic candles, future labels, PnL, or outcome fields are used.
 ## P448 - fix live2 rolling context parity
 
 Status: PROPOSED. Fix live2 rolling C/A/S context so the signal engine has enough closed 1m history for 24h prior-spike features plus the pre-spike baseline, and align live HTF context aggregation with the rolling discovery backtest. The traded HTF seed remains rolling, but baseline/dormancy/pregrowth/prior-spike context uses calendar HTF candles fully closed before the rolling window start. No fallback signal path is added.
