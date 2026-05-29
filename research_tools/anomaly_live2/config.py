@@ -59,6 +59,14 @@ class AnomalyLive2Config:
     startup_htf_baseline_lookback_minutes: int = 2880
     startup_htf_baseline_request_sleep_seconds: float = 0.02
     startup_htf_baseline_error_limit: int = 20
+    rolling_context_maintenance_enabled: bool = True
+    rolling_context_maintenance_poll_interval_seconds: float = 10.0
+    rolling_context_maintenance_symbol_cooldown_seconds: float = 60.0
+    rolling_context_maintenance_lookback_minutes: int = 180
+    rolling_context_maintenance_max_symbols_per_cycle: int = 8
+    rolling_context_maintenance_request_sleep_seconds: float = 0.02
+    rolling_context_maintenance_active_symbol_ttl_ms: int = 60_000
+    rolling_context_maintenance_closed_candle_lag_ms: int = 5_000
     max_closed_candles_per_timeframe: int = 3000
     universe_max_symbols: int = 600
     universe_min_quote_volume_24h: float = 30_000.0
@@ -184,6 +192,20 @@ class AnomalyLive2Config:
             raise ValueError("startup_htf_baseline_request_sleep_seconds must be >= 0")
         if self.startup_htf_baseline_error_limit <= 0:
             raise ValueError("startup_htf_baseline_error_limit must be > 0")
+        if self.rolling_context_maintenance_poll_interval_seconds <= 0:
+            raise ValueError("rolling_context_maintenance_poll_interval_seconds must be > 0")
+        if self.rolling_context_maintenance_symbol_cooldown_seconds <= 0:
+            raise ValueError("rolling_context_maintenance_symbol_cooldown_seconds must be > 0")
+        if self.rolling_context_maintenance_lookback_minutes <= 0:
+            raise ValueError("rolling_context_maintenance_lookback_minutes must be > 0")
+        if self.rolling_context_maintenance_max_symbols_per_cycle <= 0:
+            raise ValueError("rolling_context_maintenance_max_symbols_per_cycle must be > 0")
+        if self.rolling_context_maintenance_request_sleep_seconds < 0:
+            raise ValueError("rolling_context_maintenance_request_sleep_seconds must be >= 0")
+        if self.rolling_context_maintenance_active_symbol_ttl_ms <= 0:
+            raise ValueError("rolling_context_maintenance_active_symbol_ttl_ms must be > 0")
+        if self.rolling_context_maintenance_closed_candle_lag_ms < 0:
+            raise ValueError("rolling_context_maintenance_closed_candle_lag_ms must be >= 0")
         if self.max_closed_candles_per_timeframe <= 0:
             raise ValueError("max_closed_candles_per_timeframe must be > 0")
         if self.universe_max_symbols <= 0:

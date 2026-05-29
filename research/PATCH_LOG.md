@@ -1,3 +1,15 @@
+## 2026-05-29 - P447 proposed - live2 rolling 1m context maintenance
+
+Status: PROPOSED after P446 / commit UNKNOWN.
+
+Files: `research_tools/anomaly_live2/market_data/warmup.py`, `research_tools/anomaly_live2/runner.py`, `research_tools/anomaly_live2/config.py`, `research_tools/anomaly_live2/state.py`, `research_tools/anomaly_live2/status_grid.py`, `cli/parser.py`, `cli/commands.py`, `research/STRATEGY_SPEC.md`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/EXPERIMENT_LOG.md`.
+
+Purpose: add bounded async official Binance 1m kline maintenance for rolling baseline/dormancy context. The worker fetches only closed 1m klines, uses an explicit `binance_futures_klines_maintenance_rest_1m_rolling_context` source label, prioritizes active/actionable symbols, and never blocks the deadline hot path or replaces live 30s aggTrade flow.
+
+Honesty: this is not a trading fallback and does not invent candles. It only maintains historical 1m continuity that aggTrade streams cannot represent during zero-trade dormant minutes. Entry still requires fresh WS flow, entry guard, actual fill, and verified stop.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic maintenance smoke should verify closed-only fetch range, source label, status counters, and non-blocking start/close.
+
 ## 2026-05-29 - P446 proposed - live2 actionable data-readiness hygiene
 
 Status: PROPOSED after local audit writer patch / commit UNKNOWN.

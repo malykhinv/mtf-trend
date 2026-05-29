@@ -29,6 +29,8 @@ from .market_data.startup_tickers import Live2StartupTickerSnapshot, Live2Startu
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .market_data.warmup import (
     Live2StartupAggTradeWarmup,
+    Live2RollingContextMaintenance,
+    Live2RollingContextMaintenanceConfig,
     Live2RollingContextRestRepair,
     Live2RollingContextRestRepairConfig,
     Live2StartupHtfBaselineConfig,
@@ -137,6 +139,20 @@ class AnomalyLive2Runner:
             config=Live2RollingContextRestRepairConfig(
                 lookback_minutes=config.startup_htf_baseline_lookback_minutes,
                 request_sleep_seconds=config.startup_htf_baseline_request_sleep_seconds,
+            ),
+        )
+        self.rolling_context_maintenance_source = Live2RollingContextMaintenance(
+            state_store=self.state_store,
+            exchange_client=self.execution_engine.exchange_client,
+            config=Live2RollingContextMaintenanceConfig(
+                enabled=config.rolling_context_maintenance_enabled,
+                poll_interval_seconds=config.rolling_context_maintenance_poll_interval_seconds,
+                symbol_cooldown_seconds=config.rolling_context_maintenance_symbol_cooldown_seconds,
+                lookback_minutes=config.rolling_context_maintenance_lookback_minutes,
+                max_symbols_per_cycle=config.rolling_context_maintenance_max_symbols_per_cycle,
+                request_sleep_seconds=config.rolling_context_maintenance_request_sleep_seconds,
+                active_symbol_ttl_ms=config.rolling_context_maintenance_active_symbol_ttl_ms,
+                closed_candle_lag_ms=config.rolling_context_maintenance_closed_candle_lag_ms,
             ),
         )
         self.session_top_tracker = Live2SessionTopTracker()
@@ -394,6 +410,8 @@ class AnomalyLive2Runner:
                     f"готово {self.startup_htf_baseline_result.symbols_warmed}/{self.startup_htf_baseline_result.symbols_requested} · "
                     f"1m candles {self.startup_htf_baseline_result.candles_loaded}",
                 )
+                self._write_rolling_context_maintenance_starting_event(writer)
+                self.rolling_context_maintenance_source.start()
                 self.startup_warmup_result = self._run_startup_aggtrade_warmup(writer)
                 self._set_startup_status(
                     "прогрев",
@@ -646,6 +664,7 @@ class AnomalyLive2Runner:
                                 "position_supervisor_cycle": supervisor_result.as_dict(),
                                 "session_top": self._last_session_top_snapshot or {},
                                 "top_growth_audit": self._last_top_growth_audit_stats.as_dict(),
+                                "rolling_context_maintenance": self._rolling_context_maintenance_status(),
                                 "artifact_writer_status": writer.status().as_dict(),
                             },
                         )
@@ -771,6 +790,7 @@ class AnomalyLive2Runner:
             self.status_logger.finish_status()
             if self.user_data_source is not None:
                 self.user_data_source.close()
+            self.rolling_context_maintenance_source.close()
             if self.prior_context_source is not None:
                 self.prior_context_source.close()
             if self.open_interest_source is not None:
@@ -1300,7 +1320,11 @@ class AnomalyLive2Runner:
             "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
             "startup_htf_baseline": None if self.startup_htf_baseline_result is None else self.startup_htf_baseline_result.as_dict(),
             "startup_context_prewarm": self.startup_context_prewarm_result,
+            "rolling_context_maintenance": self._rolling_context_maintenance_status(),
         }
+
+    def _rolling_context_maintenance_status(self) -> dict[str, object]:
+        return self.rolling_context_maintenance_source.status()
 
     def _execution_status(self) -> dict[str, object]:
         return {
@@ -1488,6 +1512,7 @@ class AnomalyLive2Runner:
             "mark_price_ws": mark_price_status,
             "open_interest": open_interest_status,
             "prior_context": prior_context_status,
+            "rolling_context_maintenance": self._rolling_context_maintenance_status(),
             "live_decision_watermark_ms": live_decision_watermark_ms,
             "symbol_counts_included": bool(symbol_counts.get("included")),
             "actionable_symbol_counts": symbol_counts.get("actionable_symbol_counts", {}),
@@ -1706,6 +1731,12 @@ class AnomalyLive2Runner:
                     "startup_warmup_max_trades_per_symbol": self.config.startup_warmup_max_trades_per_symbol,
                     "startup_warmup_max_pages_per_symbol": self.config.startup_warmup_max_pages_per_symbol,
                     "startup_htf_baseline_lookback_minutes": self.config.startup_htf_baseline_lookback_minutes,
+                    "rolling_context_maintenance_enabled": self.config.rolling_context_maintenance_enabled,
+                    "rolling_context_maintenance_poll_interval_seconds": self.config.rolling_context_maintenance_poll_interval_seconds,
+                    "rolling_context_maintenance_symbol_cooldown_seconds": self.config.rolling_context_maintenance_symbol_cooldown_seconds,
+                    "rolling_context_maintenance_lookback_minutes": self.config.rolling_context_maintenance_lookback_minutes,
+                    "rolling_context_maintenance_max_symbols_per_cycle": self.config.rolling_context_maintenance_max_symbols_per_cycle,
+                    "rolling_context_maintenance_closed_candle_lag_ms": self.config.rolling_context_maintenance_closed_candle_lag_ms,
                     "max_closed_candles_per_timeframe": self.config.max_closed_candles_per_timeframe,
                     "ws_reconnect_initial_delay_seconds": self.config.ws_reconnect_initial_delay_seconds,
                     "ws_reconnect_max_delay_seconds": self.config.ws_reconnect_max_delay_seconds,
@@ -1827,6 +1858,29 @@ class AnomalyLive2Runner:
         ).run(selected_symbols, progress=self._set_warmup_progress_status)
         writer.write_event(result.as_event())
         return result
+
+    def _write_rolling_context_maintenance_starting_event(self, writer: Live2ArtifactWriter) -> None:
+        writer.write_event(
+            Live2Event(
+                event_type="rolling_1m_context_maintenance_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO,
+                message="starting bounded background official 1m kline maintenance for rolling context",
+                data={
+                    "source": "binance_futures_klines_maintenance_rest_1m_rolling_context",
+                    "hot_path_available": False,
+                    "scope": "closed_1m_context_only_not_live_30s_flow",
+                    "enabled": self.config.rolling_context_maintenance_enabled,
+                    "poll_interval_seconds": self.config.rolling_context_maintenance_poll_interval_seconds,
+                    "symbol_cooldown_seconds": self.config.rolling_context_maintenance_symbol_cooldown_seconds,
+                    "lookback_minutes": self.config.rolling_context_maintenance_lookback_minutes,
+                    "max_symbols_per_cycle": self.config.rolling_context_maintenance_max_symbols_per_cycle,
+                    "request_sleep_seconds": self.config.rolling_context_maintenance_request_sleep_seconds,
+                    "active_symbol_ttl_ms": self.config.rolling_context_maintenance_active_symbol_ttl_ms,
+                    "closed_candle_lag_ms": self.config.rolling_context_maintenance_closed_candle_lag_ms,
+                },
+            )
+        )
 
     def _run_startup_htf_baseline_warmup(self, writer: Live2ArtifactWriter) -> Live2StartupHtfBaselineResult:
         selected_symbols = () if self.universe_selection is None else self.universe_selection.selected_symbols

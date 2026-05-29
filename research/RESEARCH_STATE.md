@@ -1,3 +1,11 @@
+## 2026-05-29 - P447 live2 rolling 1m context maintenance
+
+Current commit: UNKNOWN.
+
+Status: P447 PROPOSED after P446. Live2 now has a separate bounded background official-1m-kline maintenance layer for rolling context. It refreshes only closed 1m candles, prioritizes active/actionable symbols, exposes status in JSON/grid artifacts, and keeps WS aggTrade as the only live-flow source for 30s decisions.
+
+Next: run a 60-90 minute live smoke. Acceptance: maintenance status is `running`, `total_errors` stays near zero, `last_loaded_candles` increments after minute boundaries, `rolling_1m_maintenance_source` appears in `live2_symbol_state.csv`, `rolling_1m_history_not_ready` falls materially versus the prior run, and decision latency / WS reconnects do not degrade.
+
 ## 2026-05-29 - P446 live2 actionable data-readiness hygiene
 
 Current commit: UNKNOWN.

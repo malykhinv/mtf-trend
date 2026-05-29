@@ -210,6 +210,15 @@ class SymbolState:
     prior_context_live_5m_gap_rejected_count: int = 0
     prior_context_last_live_5m_missing_aggtrade_ids: int = 0
     prior_context_last_live_5m_gap_tolerance: int = 0
+    rolling_1m_maintenance_first_seen_ms: int | None = None
+    rolling_1m_maintenance_last_seen_ms: int | None = None
+    rolling_1m_maintenance_update_count: int = 0
+    rolling_1m_maintenance_candles_loaded_total: int = 0
+    rolling_1m_maintenance_latest_open_time_ms: int | None = None
+    rolling_1m_maintenance_expected_open_time_ms: int | None = None
+    rolling_1m_maintenance_source: str = ""
+    rolling_1m_maintenance_status: str = "not_seen"
+    rolling_1m_maintenance_reason: str = ""
     candle_coverage_status: str = "not_ready"
     candle_gap_count: int = 0
     candle_out_of_order_count: int = 0
@@ -563,6 +572,29 @@ class SymbolState:
             self.prior_context_last_live_5m_gap_tolerance = int(live_5m_gap_tolerance)
         self.mark_dirty(now_ms=fetched_at_ms)
 
+    def update_rolling_context_maintenance(
+        self,
+        *,
+        fetched_at_ms: int,
+        status: str,
+        reason: str,
+        source: str,
+        candles_loaded: int,
+        latest_open_time_ms: int | None,
+        expected_open_time_ms: int | None,
+    ) -> None:
+        if self.rolling_1m_maintenance_first_seen_ms is None:
+            self.rolling_1m_maintenance_first_seen_ms = fetched_at_ms
+        self.rolling_1m_maintenance_last_seen_ms = fetched_at_ms
+        self.rolling_1m_maintenance_update_count += 1
+        self.rolling_1m_maintenance_candles_loaded_total += max(0, int(candles_loaded))
+        self.rolling_1m_maintenance_latest_open_time_ms = latest_open_time_ms
+        self.rolling_1m_maintenance_expected_open_time_ms = expected_open_time_ms
+        self.rolling_1m_maintenance_source = source
+        self.rolling_1m_maintenance_status = status
+        self.rolling_1m_maintenance_reason = reason
+        self.mark_dirty(now_ms=fetched_at_ms)
+
     def to_artifact_row(self, *, now_ms: int | None = None, aggtrade_stale_ms: int | None = None) -> dict[str, object]:
         effective_live_status = self.live_aggtrade_status
         effective_live_reason = self.live_aggtrade_reason
@@ -739,6 +771,15 @@ class SymbolState:
             "prior_context_live_5m_gap_rejected_count": self.prior_context_live_5m_gap_rejected_count,
             "prior_context_last_live_5m_missing_aggtrade_ids": self.prior_context_last_live_5m_missing_aggtrade_ids,
             "prior_context_last_live_5m_gap_tolerance": self.prior_context_last_live_5m_gap_tolerance,
+            "rolling_1m_maintenance_first_seen_ms": self.rolling_1m_maintenance_first_seen_ms,
+            "rolling_1m_maintenance_last_seen_ms": self.rolling_1m_maintenance_last_seen_ms,
+            "rolling_1m_maintenance_update_count": self.rolling_1m_maintenance_update_count,
+            "rolling_1m_maintenance_candles_loaded_total": self.rolling_1m_maintenance_candles_loaded_total,
+            "rolling_1m_maintenance_latest_open_time_ms": self.rolling_1m_maintenance_latest_open_time_ms,
+            "rolling_1m_maintenance_expected_open_time_ms": self.rolling_1m_maintenance_expected_open_time_ms,
+            "rolling_1m_maintenance_source": self.rolling_1m_maintenance_source,
+            "rolling_1m_maintenance_status": self.rolling_1m_maintenance_status,
+            "rolling_1m_maintenance_reason": self.rolling_1m_maintenance_reason,
             "candle_coverage_status": self.candle_coverage_status,
             "candle_gap_count": self.candle_gap_count,
             "candle_out_of_order_count": self.candle_out_of_order_count,
@@ -994,6 +1035,30 @@ class SymbolStateStore:
                 live_5m_gap_tolerance=live_5m_gap_tolerance,
             )
 
+
+    def update_rolling_context_maintenance(
+        self,
+        *,
+        symbol: str,
+        fetched_at_ms: int,
+        status: str,
+        reason: str,
+        source: str,
+        candles_loaded: int,
+        latest_open_time_ms: int | None,
+        expected_open_time_ms: int | None,
+    ) -> None:
+        with self._lock:
+            state = self.get_or_create(symbol)
+            state.update_rolling_context_maintenance(
+                fetched_at_ms=fetched_at_ms,
+                status=status,
+                reason=reason,
+                source=source,
+                candles_loaded=candles_loaded,
+                latest_open_time_ms=latest_open_time_ms,
+                expected_open_time_ms=expected_open_time_ms,
+            )
 
     def update_aggtrade_many(self, trades: tuple[Live2AggTradeEvent, ...], *, received_at_ms: int) -> None:
         if not trades:

@@ -7,6 +7,7 @@ hot path, so a late/missing decision never waits for REST.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from collections.abc import Callable
@@ -17,13 +18,14 @@ from domain.enums.timeframe import Timeframe
 
 from ..clock import utc_now_ms
 from ..contracts import Live2Component, Live2Event, Live2Severity
-from ..state import SymbolStateStore
+from ..state import SymbolLive2Status, SymbolState, SymbolStateStore
 from .candles import Live2AggTradeEvent, Live2Candle
 from .common import optional_float, optional_int, symbol_to_market_id
 
 
 BINANCE_KLINE_PAGE_LIMIT = 1500
 LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES = 1800
+LIVE2_ROLLING_CONTEXT_MAINTENANCE_SOURCE = "binance_futures_klines_maintenance_rest_1m_rolling_context"
 
 
 @runtime_checkable
@@ -689,6 +691,467 @@ class Live2RollingContextRestRepair:
             recent_contiguous_count=recent_contiguous_count,
         )
 
+
+
+@dataclass(frozen=True, slots=True)
+class Live2RollingContextMaintenanceConfig:
+    """Low-priority official 1m kline maintenance for rolling context.
+
+    This worker is intentionally outside the signal hot path. It keeps closed
+    1m context continuous for selected symbols, but live 30s flow still comes
+    only from aggTrade WS buckets and entry execution still uses live guards.
+    """
+
+    enabled: bool = True
+    poll_interval_seconds: float = 10.0
+    symbol_cooldown_seconds: float = 60.0
+    lookback_minutes: int = 180
+    max_symbols_per_cycle: int = 8
+    request_sleep_seconds: float = 0.02
+    active_symbol_ttl_ms: int = 60_000
+    closed_candle_lag_ms: int = 5_000
+
+    def __post_init__(self) -> None:
+        if self.poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be > 0")
+        if self.symbol_cooldown_seconds <= 0:
+            raise ValueError("symbol_cooldown_seconds must be > 0")
+        if self.lookback_minutes <= 0:
+            raise ValueError("lookback_minutes must be > 0")
+        if self.max_symbols_per_cycle <= 0:
+            raise ValueError("max_symbols_per_cycle must be > 0")
+        if self.request_sleep_seconds < 0:
+            raise ValueError("request_sleep_seconds must be >= 0")
+        if self.active_symbol_ttl_ms <= 0:
+            raise ValueError("active_symbol_ttl_ms must be > 0")
+        if self.closed_candle_lag_ms < 0:
+            raise ValueError("closed_candle_lag_ms must be >= 0")
+
+
+@dataclass(slots=True)
+class Live2RollingContextMaintenanceStatus:
+    source_id: str = LIVE2_ROLLING_CONTEXT_MAINTENANCE_SOURCE
+    status: str = "not_started"
+    reason: str = "not_started"
+    ready: bool = False
+    enabled: bool = True
+    poll_interval_seconds: float = 0.0
+    symbol_cooldown_seconds: float = 0.0
+    lookback_minutes: int = 0
+    max_symbols_per_cycle: int = 0
+    request_sleep_seconds: float = 0.0
+    active_symbol_ttl_ms: int = 0
+    closed_candle_lag_ms: int = 0
+    started_at_ms: int | None = None
+    last_cycle_started_at_ms: int | None = None
+    last_cycle_completed_at_ms: int | None = None
+    last_success_at_ms: int | None = None
+    last_error_at_ms: int | None = None
+    last_error_type: str = ""
+    last_error: str = ""
+    total_cycles: int = 0
+    total_requests: int = 0
+    total_success: int = 0
+    total_empty: int = 0
+    total_errors: int = 0
+    total_skipped_current: int = 0
+    total_symbols_considered: int = 0
+    last_target_symbols: tuple[str, ...] = ()
+    last_polled_symbols: tuple[str, ...] = ()
+    last_loaded_candles: int = 0
+    last_expected_open_time_ms: int | None = None
+    active_target_symbols: int = 0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "source_id": self.source_id,
+            "status": self.status,
+            "ready": self.ready,
+            "reason": self.reason,
+            "enabled": self.enabled,
+            "poll_interval_seconds": self.poll_interval_seconds,
+            "symbol_cooldown_seconds": self.symbol_cooldown_seconds,
+            "lookback_minutes": self.lookback_minutes,
+            "max_symbols_per_cycle": self.max_symbols_per_cycle,
+            "request_sleep_seconds": self.request_sleep_seconds,
+            "active_symbol_ttl_ms": self.active_symbol_ttl_ms,
+            "closed_candle_lag_ms": self.closed_candle_lag_ms,
+            "started_at_ms": self.started_at_ms,
+            "last_cycle_started_at_ms": self.last_cycle_started_at_ms,
+            "last_cycle_completed_at_ms": self.last_cycle_completed_at_ms,
+            "last_success_at_ms": self.last_success_at_ms,
+            "last_error_at_ms": self.last_error_at_ms,
+            "last_error_type": self.last_error_type,
+            "last_error": self.last_error,
+            "total_cycles": self.total_cycles,
+            "total_requests": self.total_requests,
+            "total_success": self.total_success,
+            "total_empty": self.total_empty,
+            "total_errors": self.total_errors,
+            "total_skipped_current": self.total_skipped_current,
+            "total_symbols_considered": self.total_symbols_considered,
+            "last_target_symbols": list(self.last_target_symbols),
+            "last_polled_symbols": list(self.last_polled_symbols),
+            "last_loaded_candles": self.last_loaded_candles,
+            "last_expected_open_time_ms": self.last_expected_open_time_ms,
+            "active_target_symbols": self.active_target_symbols,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Live2RollingContextMaintenanceResult:
+    symbol: str
+    status: str
+    reason: str
+    fetched_at_ms: int
+    expected_open_time_ms: int | None = None
+    start_open_time_ms: int | None = None
+    end_open_time_ms: int | None = None
+    candles_loaded: int = 0
+    latest_open_time_ms: int | None = None
+    source: str = LIVE2_ROLLING_CONTEXT_MAINTENANCE_SOURCE
+    error: str = ""
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "ok"
+
+
+class Live2RollingContextMaintenance:
+    """Async maintenance of closed official 1m klines for rolling context.
+
+    The worker fetches only closed Binance 1m klines and appends/upserts them in
+    the 1m candle ring with an explicit maintenance source label. It never
+    blocks the deadline loop, never writes current partial candles, and never
+    substitutes for aggTrade WS decision flow.
+    """
+
+    source_id = LIVE2_ROLLING_CONTEXT_MAINTENANCE_SOURCE
+
+    def __init__(
+        self,
+        *,
+        state_store: SymbolStateStore,
+        exchange_client: Live2StartupHtfBaselineExchange | None,
+        config: Live2RollingContextMaintenanceConfig,
+    ) -> None:
+        self.state_store = state_store
+        self.exchange_client = exchange_client
+        self.config = config
+        self._stop_event = threading.Event()
+        self._lock = threading.RLock()
+        self._thread: threading.Thread | None = None
+        self._last_poll_by_symbol: dict[str, int] = {}
+        self._status = Live2RollingContextMaintenanceStatus(
+            enabled=config.enabled,
+            poll_interval_seconds=config.poll_interval_seconds,
+            symbol_cooldown_seconds=config.symbol_cooldown_seconds,
+            lookback_minutes=config.lookback_minutes,
+            max_symbols_per_cycle=config.max_symbols_per_cycle,
+            request_sleep_seconds=config.request_sleep_seconds,
+            active_symbol_ttl_ms=config.active_symbol_ttl_ms,
+            closed_candle_lag_ms=config.closed_candle_lag_ms,
+        )
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        with self._lock:
+            self._status.started_at_ms = utc_now_ms()
+            if not self.config.enabled:
+                self._status.status = "disabled"
+                self._status.ready = True
+                self._status.reason = "rolling_1m_context_maintenance_disabled"
+                return
+            if self.exchange_client is None or not isinstance(self.exchange_client, Live2StartupHtfBaselineExchange):
+                self._status.status = "disabled"
+                self._status.ready = False
+                self._status.reason = "exchange_client_has_no_fetch_binance_klines_boundary"
+                return
+            self._status.status = "running"
+            self._status.ready = True
+            self._status.reason = "rolling_1m_context_maintenance_running"
+        self._thread = threading.Thread(target=self._run_thread, name="live2-rolling-1m-maintenance", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+
+    def status(self) -> dict[str, object]:
+        now_ms = utc_now_ms()
+        active_targets = self._eligible_symbols(now_ms=now_ms)
+        with self._lock:
+            self._status.active_target_symbols = len(active_targets)
+            self._status.last_target_symbols = active_targets[:25]
+            if self._status.status == "running" and self._status.total_errors > 0 and self._status.total_success <= 0:
+                self._status.status = "degraded"
+                self._status.reason = "rolling_1m_context_maintenance_errors_without_success"
+                self._status.ready = False
+            elif self._status.status == "degraded" and self._status.total_success > 0:
+                self._status.status = "running"
+                self._status.reason = "rolling_1m_context_maintenance_running_after_success"
+                self._status.ready = True
+            return self._status.as_dict()
+
+    def _run_thread(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._run_cycle()
+            except Exception as exc:  # defensive: maintenance must not die silently
+                with self._lock:
+                    self._status.status = "degraded"
+                    self._status.ready = False
+                    self._status.reason = "rolling_1m_context_maintenance_thread_error"
+                    self._status.last_error_at_ms = utc_now_ms()
+                    self._status.last_error_type = type(exc).__name__
+                    self._status.last_error = str(exc)[:500]
+                    self._status.total_errors += 1
+            self._stop_event.wait(self.config.poll_interval_seconds)
+
+    def _run_cycle(self) -> None:
+        now_ms = utc_now_ms()
+        targets = self._eligible_symbols(now_ms=now_ms)
+        with self._lock:
+            self._status.total_cycles += 1
+            self._status.last_cycle_started_at_ms = now_ms
+            self._status.last_target_symbols = targets[:25]
+            self._status.total_symbols_considered += len(targets)
+        polled: list[str] = []
+        loaded_candles = 0
+        expected_open_ms = _last_closed_1m_open_ms(now_ms=now_ms, closed_candle_lag_ms=self.config.closed_candle_lag_ms)
+        for symbol in targets[: self.config.max_symbols_per_cycle]:
+            if self._stop_event.is_set():
+                break
+            result = self._fetch_symbol(symbol=symbol, now_ms=utc_now_ms(), expected_open_ms=expected_open_ms)
+            self._last_poll_by_symbol[symbol] = result.fetched_at_ms
+            polled.append(symbol)
+            loaded_candles += int(result.candles_loaded)
+            with self._lock:
+                self._status.total_requests += 1
+                if result.status == "ok":
+                    self._status.total_success += 1
+                    self._status.last_success_at_ms = result.fetched_at_ms
+                elif result.status == "current":
+                    self._status.total_skipped_current += 1
+                elif result.status == "empty":
+                    self._status.total_empty += 1
+                else:
+                    self._status.total_errors += 1
+                    self._status.last_error_at_ms = result.fetched_at_ms
+                    self._status.last_error_type = result.status
+                    self._status.last_error = (result.error or result.reason)[:500]
+            if self.config.request_sleep_seconds > 0:
+                self._stop_event.wait(self.config.request_sleep_seconds)
+        completed_at_ms = utc_now_ms()
+        with self._lock:
+            self._status.last_cycle_completed_at_ms = completed_at_ms
+            self._status.last_polled_symbols = tuple(polled[-25:])
+            self._status.last_loaded_candles = loaded_candles
+            self._status.last_expected_open_time_ms = expected_open_ms
+            if self._status.status in {"running", "degraded"}:
+                if self._status.total_success > 0 or not polled:
+                    self._status.status = "running"
+                    self._status.ready = True
+                    self._status.reason = "rolling_1m_context_maintenance_running"
+                elif self._status.total_errors > 0:
+                    self._status.status = "degraded"
+                    self._status.ready = False
+                    self._status.reason = "rolling_1m_context_maintenance_errors_without_success"
+
+    def _fetch_symbol(self, *, symbol: str, now_ms: int, expected_open_ms: int) -> Live2RollingContextMaintenanceResult:
+        fetched_at_ms = utc_now_ms()
+        if expected_open_ms <= 0:
+            return Live2RollingContextMaintenanceResult(
+                symbol=symbol,
+                status="current",
+                reason="no_fully_closed_1m_candle_after_lag",
+                fetched_at_ms=fetched_at_ms,
+                expected_open_time_ms=expected_open_ms,
+            )
+        state = self._state_for_symbol(symbol)
+        latest_open_ms = _latest_closed_1m_open_ms(state)
+        if latest_open_ms is not None and latest_open_ms >= expected_open_ms:
+            self.state_store.update_rolling_context_maintenance(
+                symbol=symbol,
+                fetched_at_ms=fetched_at_ms,
+                status="current",
+                reason="rolling_1m_context_current",
+                source=self.source_id,
+                candles_loaded=0,
+                latest_open_time_ms=latest_open_ms,
+                expected_open_time_ms=expected_open_ms,
+            )
+            return Live2RollingContextMaintenanceResult(
+                symbol=symbol,
+                status="current",
+                reason="rolling_1m_context_current",
+                fetched_at_ms=fetched_at_ms,
+                expected_open_time_ms=expected_open_ms,
+                latest_open_time_ms=latest_open_ms,
+            )
+        timeframe_ms = int(Timeframe.M1.to_milliseconds())
+        if latest_open_ms is None:
+            start_open_ms = max(0, expected_open_ms - (int(self.config.lookback_minutes) - 1) * timeframe_ms)
+        else:
+            catchup_start_ms = int(latest_open_ms) + timeframe_ms
+            lookback_start_ms = max(0, expected_open_ms - (int(self.config.lookback_minutes) - 1) * timeframe_ms)
+            start_open_ms = max(catchup_start_ms, lookback_start_ms)
+        if start_open_ms > expected_open_ms:
+            self.state_store.update_rolling_context_maintenance(
+                symbol=symbol,
+                fetched_at_ms=fetched_at_ms,
+                status="current",
+                reason="rolling_1m_context_current_after_start_check",
+                source=self.source_id,
+                candles_loaded=0,
+                latest_open_time_ms=latest_open_ms,
+                expected_open_time_ms=expected_open_ms,
+            )
+            return Live2RollingContextMaintenanceResult(
+                symbol=symbol,
+                status="current",
+                reason="rolling_1m_context_current_after_start_check",
+                fetched_at_ms=fetched_at_ms,
+                expected_open_time_ms=expected_open_ms,
+                latest_open_time_ms=latest_open_ms,
+            )
+        if self.exchange_client is None or not isinstance(self.exchange_client, Live2StartupHtfBaselineExchange):
+            return Live2RollingContextMaintenanceResult(
+                symbol=symbol,
+                status="error",
+                reason="exchange_client_has_no_fetch_binance_klines_boundary",
+                fetched_at_ms=fetched_at_ms,
+                expected_open_time_ms=expected_open_ms,
+                start_open_time_ms=start_open_ms,
+                end_open_time_ms=expected_open_ms,
+            )
+        try:
+            rows = _fetch_paginated_1m_klines(
+                exchange_client=self.exchange_client,
+                symbol=symbol,
+                start_timestamp_ms=start_open_ms,
+                end_timestamp_ms=expected_open_ms + timeframe_ms - 1,
+                timeframe_ms=timeframe_ms,
+            )
+            candles = tuple(
+                sorted(
+                    (
+                        candle
+                        for row in rows
+                        if (candle := _parse_binance_kline_1m(row, source=self.source_id)) is not None
+                    ),
+                    key=lambda item: item.open_time_ms,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - exchange boundary
+            self.state_store.update_rolling_context_maintenance(
+                symbol=symbol,
+                fetched_at_ms=fetched_at_ms,
+                status="error",
+                reason="rolling_1m_context_maintenance_fetch_failed",
+                source=self.source_id,
+                candles_loaded=0,
+                latest_open_time_ms=latest_open_ms,
+                expected_open_time_ms=expected_open_ms,
+            )
+            return Live2RollingContextMaintenanceResult(
+                symbol=symbol,
+                status="error",
+                reason="rolling_1m_context_maintenance_fetch_failed",
+                fetched_at_ms=fetched_at_ms,
+                expected_open_time_ms=expected_open_ms,
+                start_open_time_ms=start_open_ms,
+                end_open_time_ms=expected_open_ms,
+                latest_open_time_ms=latest_open_ms,
+                error=f"{type(exc).__name__}:{str(exc)[:180]}",
+            )
+        if candles:
+            self.state_store.append_closed_candles(symbol=symbol, candles=candles)
+            latest_loaded_open_ms = int(candles[-1].open_time_ms)
+            status = "ok"
+            reason = "rolling_1m_context_maintenance_loaded_closed_klines"
+        else:
+            latest_loaded_open_ms = latest_open_ms
+            status = "empty"
+            reason = "rolling_1m_context_maintenance_empty_response"
+        self.state_store.update_rolling_context_maintenance(
+            symbol=symbol,
+            fetched_at_ms=fetched_at_ms,
+            status=status,
+            reason=reason,
+            source=self.source_id,
+            candles_loaded=len(candles),
+            latest_open_time_ms=latest_loaded_open_ms,
+            expected_open_time_ms=expected_open_ms,
+        )
+        return Live2RollingContextMaintenanceResult(
+            symbol=symbol,
+            status=status,
+            reason=reason,
+            fetched_at_ms=fetched_at_ms,
+            expected_open_time_ms=expected_open_ms,
+            start_open_time_ms=start_open_ms,
+            end_open_time_ms=expected_open_ms,
+            candles_loaded=len(candles),
+            latest_open_time_ms=latest_loaded_open_ms,
+        )
+
+    def _eligible_symbols(self, *, now_ms: int) -> tuple[str, ...]:
+        expected_open_ms = _last_closed_1m_open_ms(now_ms=now_ms, closed_candle_lag_ms=self.config.closed_candle_lag_ms)
+        if expected_open_ms <= 0:
+            return ()
+        scored: list[tuple[int, int, str]] = []
+        cooldown_ms = int(float(self.config.symbol_cooldown_seconds) * 1000.0)
+        for state in self.state_store.snapshot():
+            if not state.universe_selected:
+                continue
+            symbol = state.symbol
+            last_poll_ms = self._last_poll_by_symbol.get(symbol, 0)
+            if last_poll_ms > 0 and int(now_ms) - int(last_poll_ms) < cooldown_ms:
+                continue
+            latest_open_ms = _latest_closed_1m_open_ms(state)
+            if latest_open_ms is not None and latest_open_ms >= expected_open_ms:
+                continue
+            priority = _rolling_context_maintenance_priority(state, now_ms=now_ms, active_ttl_ms=self.config.active_symbol_ttl_ms)
+            scored.append((priority, int(last_poll_ms), symbol))
+        scored.sort(key=lambda item: (item[0], item[1], item[2]))
+        return tuple(symbol for _, _, symbol in scored)
+
+    def _state_for_symbol(self, symbol: str) -> SymbolState | None:
+        for state in self.state_store.snapshot():
+            if state.symbol == symbol:
+                return state
+        return None
+
+
+def _rolling_context_maintenance_priority(state: SymbolState, *, now_ms: int, active_ttl_ms: int) -> int:
+    if state.status == SymbolLive2Status.IN_POSITION:
+        return 0
+    if state.status == SymbolLive2Status.ACTIONABLE or state.last_signal_category_id:
+        return 1
+    if state.last_actionable_ms is not None and int(now_ms) - int(state.last_actionable_ms) <= int(active_ttl_ms):
+        return 2
+    if state.last_verdict in {"data_dependency_not_ready", "flow_freshness_reject"}:
+        return 3
+    return 10
+
+
+def _latest_closed_1m_open_ms(state: SymbolState | None) -> int | None:
+    if state is None:
+        return None
+    ring = state.candle_book.rings.get(int(Timeframe.M1.to_milliseconds()))
+    if ring is None or not ring.closed:
+        return None
+    return int(ring.closed[-1].open_time_ms)
+
+
+def _last_closed_1m_open_ms(*, now_ms: int, closed_candle_lag_ms: int) -> int:
+    timeframe_ms = int(Timeframe.M1.to_milliseconds())
+    effective_ms = max(0, int(now_ms) - int(closed_candle_lag_ms))
+    current_open_ms = (effective_ms // timeframe_ms) * timeframe_ms
+    return max(0, current_open_ms - timeframe_ms)
 
 def _fetch_paginated_1m_klines(
     *,

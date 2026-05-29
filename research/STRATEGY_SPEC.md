@@ -960,3 +960,7 @@ C_balanced_flow_acceptance -> A_resonance_prior_spike -> S_7d_5m30_strict
 ```
 
 Missing baseline/rolling context is a hard `data_dependency_not_ready` state, not a fallback to another signal model. Live position sizing uses account balance and stop distance so that planned risk is 2% per trade, with total protected open risk capped at 8% unless changed deliberately.
+
+## Live rolling 1m context maintenance
+
+Live 30s decision candles and entry flow remain WS aggTrade-derived. Official Binance 1m klines may be used only for closed historical rolling context: baseline, dormancy, pregrowth, prior-spike continuity, and zero-volume minute representation. Maintenance klines must carry an explicit source label (`binance_futures_klines_maintenance_rest_1m_rolling_context`) and must not replace current partial buckets or live entry flow. REST maintenance is bounded/background-only; it is not allowed to block signal/entry hot path or hide data-quality failures.

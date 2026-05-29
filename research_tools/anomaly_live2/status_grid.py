@@ -37,6 +37,7 @@ def format_live2_status_grid(
     mark_price_ws = _dict(market_data_status.get("mark_price_ws"))
     open_interest = _dict(market_data_status.get("open_interest"))
     prior_context = _dict(market_data_status.get("prior_context"))
+    rolling_context_maintenance = _dict(market_data_status.get("rolling_context_maintenance"))
     universe = _dict(market_data_status.get("universe"))
     startup_warmup = _dict(market_data_status.get("startup_warmup"))
     readiness = _dict(runtime_gate_status.get("readiness"))
@@ -64,6 +65,11 @@ def format_live2_status_grid(
     prior_gap_tolerated = _int(prior_context.get("total_ws_5m_gap_tolerated"))
     prior_gap_above_tolerance = _int(prior_context.get("total_ws_5m_gap_above_tolerance_tolerated"))
     prior_gap_rejected = _int(prior_context.get("total_ws_5m_gap_rejected"))
+    rolling_1m_status = str(rolling_context_maintenance.get("status") or "-")
+    rolling_1m_targets = _int(rolling_context_maintenance.get("active_target_symbols"))
+    rolling_1m_success = _int(rolling_context_maintenance.get("total_success"))
+    rolling_1m_errors = _int(rolling_context_maintenance.get("total_errors"))
+    rolling_1m_loaded = _int(rolling_context_maintenance.get("last_loaded_candles"))
     aggtrade_pre_first_payload_failures = _int(ws_health.get("aggtrade_pre_first_payload_failures"))
     coverage_ready = bool(market_data_status.get("stream_coverage_ready"))
     entry_stream_ready = bool(market_data_status.get("entry_stream_ready"))
@@ -198,6 +204,12 @@ def format_live2_status_grid(
             _format_status_cell("Контекст", f"{prior_ready_symbols}/{prior_active_symbols or selected_symbols}"),
             _format_status_cell("Контекст устарел", prior_stale_symbols),
             _format_status_cell("Разрывы контекста", context_gap_summary),
+        ),
+        _format_status_line(
+            _format_status_cell("1m maint", rolling_1m_status),
+            _format_status_cell("1m цели", rolling_1m_targets),
+            _format_status_cell("1m ok/err", f"{rolling_1m_success}/{rolling_1m_errors}"),
+            _format_status_cell("1m свечи", rolling_1m_loaded),
         ),
         _separator_line(),
         _section_title("Рынок"),

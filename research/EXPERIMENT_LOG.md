@@ -1,3 +1,17 @@
+## 2026-05-29 - P447 live2 data-health smoke plan
+
+Patch under test: P447 rolling 1m context maintenance.
+
+Run: 60-90 minute `run-anomaly-live2` with previous P445/P446/P447 stack. Do not judge profitability if no fills. Judge data health: maintenance status/counters, rolling dependency reasons, decision latency, WS reconnects, artifact writer drops, selected/entry_guard visibility, top-growth completion.
+
+Acceptance gates:
+- `rolling_context_maintenance.status in {running, degraded-after-success/ready-equivalent}` and no sustained error loop;
+- `rolling_1m_maintenance_source` / status columns present in `live2_symbol_state.csv`;
+- `rolling_1m_history_not_ready` and stale 1m context reasons materially lower than the previous run;
+- `data_not_ready` remains limited to true data-readiness issues;
+- `market_quiet_non_actionable` dominates quiet weak buckets instead of signal-engine rejects;
+- no increase in decision loop overruns or WS reconnects attributable to maintenance.
+
 ## 2026-05-29 - P446 live2 data health smoke
 
 Question: after removing weak real-trade buckets from the live signal path and enabling rolling 1m repair metadata, do the remaining data-readiness failures represent real missing context rather than routine market quietness or flow fade?
