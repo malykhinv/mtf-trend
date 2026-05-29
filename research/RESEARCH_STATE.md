@@ -1,3 +1,11 @@
+## 2026-05-29 - P444 rolling pair safe-superset widening
+
+Current commit: UNKNOWN.
+
+Status: P444 PROPOSED after P443 lookahead review. P443 made signal-time logic clean, but the two-HTF pair fetch gate still used strict legacy absolute/range thresholds. That can miss pairs where a live rolling window could pass the official seed (`htf_quote_ratio`, `htf_trade_ratio`, `htf_return`) but the calendar pair did not look large enough under the old targeted-download heuristic. P444 changes the pair gate into a true data-loading safe-superset: fetch the pair unless upper bounds prove the exact rolling seed is mathematically impossible. The gate is explicitly not a trading signal and does not use C/A/S or outcome fields.
+
+Next: rerun 45d rolling discovery and audit `htf_ltf_runner_targeted_ltf_plan.csv` for planned pair counts, rejection reasons, and nonzero exact rolling seeds. Expect more LTF fetches; this is the cost of reducing coverage self-deception.
+
 ## 2026-05-29 - P443 rolling baseline contamination guard
 
 Current commit: UNKNOWN.

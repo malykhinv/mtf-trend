@@ -533,17 +533,22 @@ def _build_targeted_ltf_backfill_plan(
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
         "targeted_ltf_phase": "pre_entry",
         "window_model": "two_adjacent_htf_candles_only_then_exact_ltf_rolling_seed_check",
-        "selection_model": "two_closed_htf_candle_safe_superset_for_rolling_seed_no_future",
+        "selection_model": "two_closed_htf_candle_pair_upper_bound_safe_superset_data_loading_only",
         "seed_gate": _targeted_ltf_seed_gate_description(config),
-        "min_htf_quote_ratio": float(config.targeted_backfill_min_htf_quote_ratio),
-        "min_htf_trade_ratio": float(config.targeted_backfill_min_htf_trade_ratio),
-        "min_htf_return_pct": float(config.targeted_backfill_min_htf_return_pct),
-        "min_htf_range_pct": float(config.targeted_backfill_min_htf_range_pct),
-        "min_dormancy_to_anomaly_quote_ratio": float(config.targeted_backfill_min_dormancy_to_anomaly_quote_ratio),
-        "min_dormancy_to_anomaly_trade_ratio": float(config.targeted_backfill_min_dormancy_to_anomaly_trade_ratio),
-        "max_dormancy_range_pct_median": float(config.targeted_backfill_max_dormancy_range_pct_median),
-        "min_abs_quote_volume": float(config.targeted_backfill_min_abs_quote_volume),
-        "min_abs_number_of_trades": float(config.targeted_backfill_min_abs_number_of_trades),
+        "pair_gate_model": "fetch_pair_unless_exact_rolling_seed_is_mathematically_impossible",
+        "pair_gate_uses_only_upper_bounds": True,
+        "pair_gate_trading_signal": False,
+        "pair_gate_min_htf_quote_ratio": float(config.min_htf_quote_ratio),
+        "pair_gate_min_htf_trade_ratio": float(config.min_htf_trade_ratio),
+        "pair_gate_min_htf_return_pct": float(config.min_htf_return_pct),
+        "pair_gate_min_abs_quote_volume": 0.0,
+        "pair_gate_min_abs_number_of_trades": 0.0,
+        "legacy_targeted_min_htf_quote_ratio_unused": float(config.targeted_backfill_min_htf_quote_ratio),
+        "legacy_targeted_min_htf_trade_ratio_unused": float(config.targeted_backfill_min_htf_trade_ratio),
+        "legacy_targeted_min_htf_return_pct_unused": float(config.targeted_backfill_min_htf_return_pct),
+        "legacy_targeted_min_htf_range_pct_unused": float(config.targeted_backfill_min_htf_range_pct),
+        "legacy_targeted_min_abs_quote_volume_unused": float(config.targeted_backfill_min_abs_quote_volume),
+        "legacy_targeted_min_abs_number_of_trades_unused": float(config.targeted_backfill_min_abs_number_of_trades),
         "max_events_per_symbol": int(config.targeted_backfill_max_events_per_symbol),
     }
     if plan.empty:
@@ -561,6 +566,13 @@ def _targeted_ltf_backfill_seeds_for_symbol(
     htf_ms: int,
     ltf_ms: int,
 ) -> tuple[list[dict[str, object]], list[tuple[int, int]]]:
+    """Plan LTF fetch windows as a safe superset for exact rolling HTF seeds.
+
+    The pair gate must never be a trading filter.  It is allowed to skip a pair
+    only when upper bounds prove that no rolling HTF window inside the two
+    adjacent closed HTF candles could pass the official rolling seed gate.
+    """
+
     empty_result: tuple[list[dict[str, object]], list[tuple[int, int]]] = ([], [])
     if htf.empty or "timestamp" not in htf.columns:
         return empty_result
@@ -574,16 +586,35 @@ def _targeted_ltf_backfill_seeds_for_symbol(
     prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"]).reset_index(drop=True)
     if len(prepared) < 2:
         return empty_result
+    prepared["_quote_volume"] = _numeric_column(prepared, "quote_volume")
+    prepared["_number_of_trades"] = _numeric_column(prepared, "number_of_trades")
+
+    calendar_timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce").astype("int64").to_numpy()
+    calendar_end_timestamps = calendar_timestamps + int(htf_ms)
+    baseline_quote_median = prepared["_quote_volume"].where(prepared["_quote_volume"] > 0).rolling(config.baseline_candles, min_periods=1).median().to_numpy()
+    baseline_trade_median = prepared["_number_of_trades"].where(prepared["_number_of_trades"] > 0).rolling(config.baseline_candles, min_periods=1).median().to_numpy()
+    min_history = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles)
 
     rows: list[dict[str, object]] = []
     windows: list[tuple[int, int]] = []
-    scored: list[tuple[float, int]] = []
-    for idx in range(len(prepared) - 1):
+    scored: list[tuple[float, int, dict[str, object]]] = []
+    rejection_counts: dict[str, int] = {
+        "non_adjacent_pair": 0,
+        "invalid_price_bound": 0,
+        "insufficient_pre_window_history": 0,
+        "impossible_return": 0,
+        "impossible_quote_ratio": 0,
+        "impossible_trade_ratio": 0,
+    }
+    total_pairs = max(0, len(prepared) - 1)
+
+    for idx in range(total_pairs):
         first = prepared.iloc[idx]
         second = prepared.iloc[idx + 1]
         first_ts = int(first["timestamp"])
         second_ts = int(second["timestamp"])
         if second_ts != first_ts + int(htf_ms):
+            rejection_counts["non_adjacent_pair"] += 1
             continue
         pair_quote = float(first["quote_volume"]) + float(second["quote_volume"])
         pair_trades = float(first["number_of_trades"]) + float(second["number_of_trades"])
@@ -591,38 +622,96 @@ def _targeted_ltf_backfill_seeds_for_symbol(
         pair_low = min(float(first["low"]), float(second["low"]))
         pair_open_floor = min(float(first["open"]), float(second["open"]), pair_low)
         if not np.isfinite(pair_open_floor) or pair_open_floor <= 0.0:
+            rejection_counts["invalid_price_bound"] += 1
             continue
         max_possible_return = _safe_divide(pair_high - pair_open_floor, pair_open_floor)
         max_possible_range = _safe_divide(pair_high - pair_low, pair_open_floor)
-        could_contain_seed = (
-            pair_quote >= float(config.targeted_backfill_min_abs_quote_volume)
-            and pair_trades >= float(config.targeted_backfill_min_abs_number_of_trades)
-            and max_possible_return >= float(config.targeted_backfill_min_htf_return_pct)
-            and max_possible_range >= float(config.targeted_backfill_min_htf_range_pct)
+
+        possible_history_ends = sorted(
+            {
+                int(np.searchsorted(calendar_end_timestamps, int(first_ts), side="right")),
+                int(np.searchsorted(calendar_end_timestamps, int(first_ts) + int(htf_ms), side="right")),
+            }
         )
-        if not could_contain_seed:
+        possible_history_ends = [history_end for history_end in possible_history_ends if history_end >= min_history]
+        if not possible_history_ends:
+            rejection_counts["insufficient_pre_window_history"] += 1
             continue
-        score = float(max_possible_return) * 100.0 + float(max_possible_range) * 25.0 + math.log1p(max(0.0, pair_quote)) + math.log1p(max(0.0, pair_trades))
-        scored.append((score, idx))
+
+        possible_quote_ratios: list[float] = []
+        possible_trade_ratios: list[float] = []
+        for history_end in possible_history_ends:
+            median_index = history_end - 1
+            if median_index < 0:
+                continue
+            baseline_quote = float(baseline_quote_median[median_index])
+            baseline_trades = float(baseline_trade_median[median_index])
+            possible_quote_ratios.append(_safe_divide(pair_quote, baseline_quote))
+            possible_trade_ratios.append(_safe_divide(pair_trades, baseline_trades))
+        max_possible_quote_ratio = max((value for value in possible_quote_ratios if np.isfinite(value)), default=float("nan"))
+        max_possible_trade_ratio = max((value for value in possible_trade_ratios if np.isfinite(value)), default=float("nan"))
+
+        if not np.isfinite(max_possible_return) or max_possible_return < float(config.min_htf_return_pct):
+            rejection_counts["impossible_return"] += 1
+            continue
+        if not np.isfinite(max_possible_quote_ratio) or max_possible_quote_ratio < float(config.min_htf_quote_ratio):
+            rejection_counts["impossible_quote_ratio"] += 1
+            continue
+        if not np.isfinite(max_possible_trade_ratio) or max_possible_trade_ratio < float(config.min_htf_trade_ratio):
+            rejection_counts["impossible_trade_ratio"] += 1
+            continue
+
+        score = (
+            float(max_possible_return) * 100.0
+            + float(max_possible_range if np.isfinite(max_possible_range) else 0.0) * 25.0
+            + math.log1p(max(0.0, float(max_possible_quote_ratio)))
+            + math.log1p(max(0.0, float(max_possible_trade_ratio)))
+        )
+        scored.append(
+            (
+                score,
+                idx,
+                {
+                    "pair_quote": pair_quote,
+                    "pair_trades": pair_trades,
+                    "pair_high": pair_high,
+                    "pair_low": pair_low,
+                    "pair_open_floor": pair_open_floor,
+                    "max_possible_return": float(max_possible_return),
+                    "max_possible_range": float(max_possible_range),
+                    "max_possible_quote_ratio": float(max_possible_quote_ratio),
+                    "max_possible_trade_ratio": float(max_possible_trade_ratio),
+                    "possible_history_ends": "|".join(str(value) for value in possible_history_ends),
+                },
+            )
+        )
 
     if not scored:
-        return empty_result
+        summary = {
+            "symbol": symbol,
+            "targeted_ltf_phase": "pre_entry",
+            "targeted_ltf_plan_status": "symbol_summary",
+            "selection_model": "two_closed_htf_candle_pair_upper_bound_safe_superset_data_loading_only",
+            "pair_gate_model": "fetch_pair_unless_exact_rolling_seed_is_mathematically_impossible",
+            "htf_timeframe": config.htf_timeframe,
+            "ltf_timeframe": config.ltf_timeframe,
+            "total_adjacent_pair_candidates": int(total_pairs),
+            "planned_pairs": 0,
+            **{f"rejected_{key}": int(value) for key, value in rejection_counts.items()},
+        }
+        return [summary], []
+
     scored.sort(reverse=True)
     max_events = int(config.targeted_backfill_max_events_per_symbol)
-    selected_indices = [idx for _, idx in (scored[:max_events] if max_events > 0 else scored)]
-    selected_indices = sorted(set(selected_indices))
+    selected = scored[:max_events] if max_events > 0 else scored
+    selected_by_idx: dict[int, dict[str, object]] = {idx: bounds for _, idx, bounds in selected}
+    selected_indices = sorted(selected_by_idx)
     for idx in selected_indices:
         first = prepared.iloc[idx]
         second = prepared.iloc[idx + 1]
+        bounds = selected_by_idx[idx]
         first_ts = int(first["timestamp"])
         pair_end_exclusive = first_ts + 2 * int(htf_ms)
-        pair_quote = float(first["quote_volume"]) + float(second["quote_volume"])
-        pair_trades = float(first["number_of_trades"]) + float(second["number_of_trades"])
-        pair_high = max(float(first["high"]), float(second["high"]))
-        pair_low = min(float(first["low"]), float(second["low"]))
-        pair_open_floor = min(float(first["open"]), float(second["open"]), pair_low)
-        max_possible_return = _safe_divide(pair_high - pair_open_floor, pair_open_floor)
-        max_possible_range = _safe_divide(pair_high - pair_low, pair_open_floor)
         window_start = int(first_ts)
         window_end = int(pair_end_exclusive - 1)
         windows.append((window_start, window_end))
@@ -631,7 +720,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "symbol": symbol,
                 "targeted_ltf_phase": "pre_entry",
                 "targeted_ltf_plan_status": "planned",
-                "selection_model": "two_closed_htf_candle_safe_superset_for_rolling_seed_no_future",
+                "selection_model": "two_closed_htf_candle_pair_upper_bound_safe_superset_data_loading_only",
                 "timestamp_ms": first_ts,
                 "timestamp_utc": _timestamp_to_utc(first_ts),
                 "pair_second_timestamp_ms": int(second["timestamp"]),
@@ -649,15 +738,34 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "seed_gate": _targeted_ltf_seed_gate_description(config),
                 "known_at_seed_cutoff_ms": pair_end_exclusive,
                 "known_at_seed_cutoff_utc": _timestamp_to_utc(pair_end_exclusive),
-                "pair_quote_volume_upper_bound": pair_quote,
-                "pair_number_of_trades_upper_bound": pair_trades,
-                "pair_max_possible_return_pct": float(max_possible_return),
-                "pair_max_possible_range_pct": float(max_possible_range),
+                "pair_quote_volume_upper_bound": float(bounds["pair_quote"]),
+                "pair_number_of_trades_upper_bound": float(bounds["pair_trades"]),
+                "pair_max_possible_return_pct": float(bounds["max_possible_return"]),
+                "pair_max_possible_range_pct": float(bounds["max_possible_range"]),
+                "pair_max_possible_htf_quote_ratio": float(bounds["max_possible_quote_ratio"]),
+                "pair_max_possible_htf_trade_ratio": float(bounds["max_possible_trade_ratio"]),
+                "pair_possible_history_ends": bounds["possible_history_ends"],
                 "pair_gate_used_only_as_safe_superset": True,
+                "pair_gate_trading_signal": False,
+                "pair_gate_fetch_reason": "exact_rolling_seed_not_mathematically_impossible",
             }
         )
-    return rows, windows
 
+    rows.append(
+        {
+            "symbol": symbol,
+            "targeted_ltf_phase": "pre_entry",
+            "targeted_ltf_plan_status": "symbol_summary",
+            "selection_model": "two_closed_htf_candle_pair_upper_bound_safe_superset_data_loading_only",
+            "pair_gate_model": "fetch_pair_unless_exact_rolling_seed_is_mathematically_impossible",
+            "htf_timeframe": config.htf_timeframe,
+            "ltf_timeframe": config.ltf_timeframe,
+            "total_adjacent_pair_candidates": int(total_pairs),
+            "planned_pairs": int(len(selected_indices)),
+            **{f"rejected_{key}": int(value) for key, value in rejection_counts.items()},
+        }
+    )
+    return rows, windows
 
 def _concat_targeted_phase_frames(
     phase_frames: list[tuple[str, pd.DataFrame, pd.DataFrame, pd.DataFrame]],
@@ -916,24 +1024,15 @@ def _coerce_int(value: object) -> int | None:
 
 def _targeted_ltf_seed_gate_description(config: HtfLtfRunnerDiscoveryConfig) -> str:
     return (
-        "htf_quote_ratio>={quote:.4g} AND htf_trade_ratio>={trade:.4g} AND "
-        "htf_return_pct>={ret:.4%} AND htf_range_pct>={rng:.4%} AND "
-        "dormancy_to_anomaly_quote_ratio>={d_quote:.4g} AND "
-        "dormancy_to_anomaly_trade_ratio>={d_trade:.4g} AND "
-        "dormancy_range_pct_median<={d_rng:.4%} AND "
-        "anomaly_quote_volume>={abs_quote:.4g} AND anomaly_number_of_trades>={abs_trades:.4g}"
+        "official rolling HTF seed: htf_quote_ratio>={quote:.4g} AND "
+        "htf_trade_ratio>={trade:.4g} AND htf_return_pct>={ret:.4%}; "
+        "2xHTF pair gate is data-loading only and fetches unless this seed is "
+        "mathematically impossible by pair upper bounds"
     ).format(
-        quote=float(config.targeted_backfill_min_htf_quote_ratio),
-        trade=float(config.targeted_backfill_min_htf_trade_ratio),
-        ret=float(config.targeted_backfill_min_htf_return_pct),
-        rng=float(config.targeted_backfill_min_htf_range_pct),
-        d_quote=float(config.targeted_backfill_min_dormancy_to_anomaly_quote_ratio),
-        d_trade=float(config.targeted_backfill_min_dormancy_to_anomaly_trade_ratio),
-        d_rng=float(config.targeted_backfill_max_dormancy_range_pct_median),
-        abs_quote=float(config.targeted_backfill_min_abs_quote_volume),
-        abs_trades=float(config.targeted_backfill_min_abs_number_of_trades),
+        quote=float(config.min_htf_quote_ratio),
+        trade=float(config.min_htf_trade_ratio),
+        ret=float(config.min_htf_return_pct),
     )
-
 
 def _ensure_targeted_ltf_backfill(
     *,

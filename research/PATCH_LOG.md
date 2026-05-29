@@ -1,3 +1,15 @@
+## P444 - widen rolling pair gate to safe-superset
+
+Status: PROPOSED.
+
+Files: `research_tools/htf_ltf_runner_discovery.py`, `cli/commands.py`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/EXPERIMENT_LOG.md`.
+
+Purpose: make the 2xHTF LTF-fetch planner a real safe-superset. The previous P443 stack still used strict legacy targeted absolute/range thresholds at the data-loading gate. P444 fetches a pair unless pair upper bounds prove no exact rolling HTF seed could pass the official quote-ratio/trade-ratio/return gate.
+
+Honesty: the pair gate remains data-loading only, not a signal/filter. C/A/S category, entry and exit continue to use only exact rolling LTF windows and already-closed historical context.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; `git apply --check` on source+P439-P443.
+
 ## P443 - Fix rolling baseline overlap contamination
 
 Status: PROPOSED.

@@ -1,3 +1,9 @@
+## 2026-05-29 - P444 rolling pair coverage audit
+
+Hypothesis: a rolling backtest can avoid full continuous subminute cache if the 2xHTF fetch planner is a broad safe-superset rather than an optimizer. The planner should skip only pairs where upper bounds prove the official rolling seed is impossible; everything else must be fetched and checked exactly on LTF.
+
+Protocol after P444: run 45d and inspect `htf_ltf_runner_targeted_ltf_plan.csv` for `pair_gate_model=fetch_pair_unless_exact_rolling_seed_is_mathematically_impossible`, rejection counts by reason, planned pair counts, and post-entry exact rolling seed counts. If planned pairs explode, reduce cost only by better impossible-proof bounds, not by adding outcome-like or C/A/S-like filters to the pair gate.
+
 ## 2026-05-29 - P443 rolling context purity check
 
 Hypothesis: rolling discovery must separate current rolling HTF window from baseline/dormancy/pregrowth context. Calendar HTF candles may be used as cheap historical context only when their close timestamp is `<= rolling_htf_window_start_ms`.
