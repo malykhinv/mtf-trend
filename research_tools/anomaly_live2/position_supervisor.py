@@ -1385,6 +1385,10 @@ def _valid_fill(fill: ExchangeOrderFill) -> bool:
     return _positive_finite(fill.average_price) and _positive_finite(fill.filled_amount)
 
 
+def _dict(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _fill_dict(fill: ExchangeOrderFill) -> dict[str, object]:
     return {
         "order_id": fill.order_id,

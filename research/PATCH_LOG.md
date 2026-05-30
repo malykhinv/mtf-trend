@@ -9918,3 +9918,18 @@ Risk:
 ```text
 Raw routine decision CSV is intentionally bounded and incomplete after budget. Strategy analysis should use the new summary/example artifacts for full-run funnels and raw CSV only for detailed examples. This patch does not change trading logic, fills, stops, or data-source fallbacks.
 ```
+
+
+## 2026-05-30 - P458 live2 NameError sweep
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes the remaining live2 undefined global found by a sweep after the flat-stop recovery crash: `Live2PositionSupervisor.run_cycle()` referenced `_dict(...)` when classifying final-close reasons, but this helper was not defined or imported in `position_supervisor.py`. The patch adds a local typed `_dict()` helper and does not change position-management logic, exchange calls, fills, stops, or PnL recovery.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Additional static sweep used for live2: import all `research_tools.anomaly_live2.*` modules and inspect function bytecode for unresolved `LOAD_GLOBAL` / `LOAD_NAME`; after this patch no unresolved live2 globals remain.

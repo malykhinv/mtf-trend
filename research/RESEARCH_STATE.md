@@ -3497,3 +3497,18 @@ Current commit: UNKNOWN.
 Status: P454 PROPOSED. Live2 artifact health issue is diagnosed as audit-policy/backpressure, not websocket connectivity. Product audit contract after P454: raw event/near-miss CSVs are bounded detail streams; durable strategy-review truth is the combination of `live2_deadline_summary.csv`, `live2_near_miss_summary.csv`, `live2_near_miss_examples.csv`, `live2_status.json`, `live2_symbol_state.csv`, and top-growth index/status/top files.
 
 Next validation: restart live2 and require `live2_events.csv` to stay near its configured budget, `artifact_writer_status.dropped_count` to no longer imply loss of selected/entry/execution rows, summary files to cover the full runtime, and interrupted top-growth scans to leave `completion_status=partial` rows with processed/remaining counts.
+
+
+## 2026-05-30 - P458 live2 NameError sweep
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes the remaining live2 undefined global found by a sweep after the flat-stop recovery crash: `Live2PositionSupervisor.run_cycle()` referenced `_dict(...)` when classifying final-close reasons, but this helper was not defined or imported in `position_supervisor.py`. The patch adds a local typed `_dict()` helper and does not change position-management logic, exchange calls, fills, stops, or PnL recovery.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Additional static sweep used for live2: import all `research_tools.anomaly_live2.*` modules and inspect function bytecode for unresolved `LOAD_GLOBAL` / `LOAD_NAME`; after this patch no unresolved live2 globals remain.

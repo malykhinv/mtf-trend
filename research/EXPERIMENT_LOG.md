@@ -4620,3 +4620,18 @@ Protocol: after applying P452, run live2 in minimal-risk/scouting mode and inspe
 Hypothesis: live2 can keep product-grade strategic audit even when high-volume raw deadline/near-miss rows exceed bounded CSV budgets.
 
 Protocol after P454: run live2 for at least one closed hour. Check that `live2_deadline_summary.csv` contains full-run counts for routine data readiness/dependency blockers, `live2_near_miss_summary.csv` and `live2_near_miss_examples.csv` keep updating after raw `live2_near_misses.csv` reaches budget, and `live2_events.csv` still contains every selected/entry_guard/execution/integrity decision. Stop during a top-growth scan once and verify `top_growth_index.csv` records `completion_status=partial`, `processed_count`, `remaining_count`, `top_file`, and `status_file`.
+
+
+## 2026-05-30 - P458 live2 NameError sweep
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes the remaining live2 undefined global found by a sweep after the flat-stop recovery crash: `Live2PositionSupervisor.run_cycle()` referenced `_dict(...)` when classifying final-close reasons, but this helper was not defined or imported in `position_supervisor.py`. The patch adds a local typed `_dict()` helper and does not change position-management logic, exchange calls, fills, stops, or PnL recovery.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Additional static sweep used for live2: import all `research_tools.anomaly_live2.*` modules and inspect function bytecode for unresolved `LOAD_GLOBAL` / `LOAD_NAME`; after this patch no unresolved live2 globals remain.
