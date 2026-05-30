@@ -687,7 +687,15 @@ class Live2DeadlineEngine:
             entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
             verdict = signal_decision.verdict
             reason = signal_decision.reason
-            if signal_decision.verdict == "selected":
+            if signal_finished_at_ms > deadline_ms:
+                # The signal engine may be CPU-heavy.  If it finishes after the live
+                # decision deadline, the result is audit-only: do not pass it to
+                # entry guard/execution as if it were a fresh live signal.
+                verdict = "deadline_missed"
+                reason = "signal_evaluation_finished_after_decision_deadline"
+                entry_attempt_timing["deadline_missed_stage"] = "after_signal_evaluation"
+                entry_attempt_timing["signal_finished_after_deadline_ms"] = max(0, signal_finished_at_ms - deadline_ms)
+            elif signal_decision.verdict == "selected":
                 guard_started_at_ms = utc_now_ms()
                 entry_attempt_timing["entry_guard_started_at_ms"] = guard_started_at_ms
                 entry_guard_result = self.entry_guard.evaluate(
@@ -700,7 +708,12 @@ class Live2DeadlineEngine:
                 entry_attempt_timing["entry_guard_finished_at_ms"] = guard_finished_at_ms
                 entry_attempt_timing["entry_guard_duration_ms"] = max(0, guard_finished_at_ms - guard_started_at_ms)
                 entry_attempt_timing["entry_guard_signal_age_ms"] = entry_guard_result.signal_age_ms
-                if entry_guard_result.verdict != "accepted":
+                if guard_finished_at_ms > deadline_ms:
+                    verdict = "deadline_missed"
+                    reason = "entry_guard_finished_after_decision_deadline"
+                    entry_attempt_timing["deadline_missed_stage"] = "after_entry_guard"
+                    entry_attempt_timing["entry_guard_finished_after_deadline_ms"] = max(0, guard_finished_at_ms - deadline_ms)
+                elif entry_guard_result.verdict != "accepted":
                     verdict = entry_guard_result.verdict
                     reason = entry_guard_result.reason
                 elif self.execution_engine is None:
@@ -716,7 +729,12 @@ class Live2DeadlineEngine:
                     entry_attempt_timing["runtime_gate_allowed"] = runtime_gate_allowed
                     pre_execution_age_ms = max(0, runtime_gate_finished_at_ms - int(candle.close_time_ms))
                     entry_attempt_timing["bucket_close_to_pre_execution_ms"] = pre_execution_age_ms
-                    if pre_execution_age_ms > int(self.entry_guard.config.max_signal_age_ms):
+                    if runtime_gate_finished_at_ms > deadline_ms:
+                        verdict = "deadline_missed"
+                        reason = "runtime_gate_check_finished_after_decision_deadline"
+                        entry_attempt_timing["deadline_missed_stage"] = "before_execution_call"
+                        entry_attempt_timing["runtime_gate_finished_after_deadline_ms"] = max(0, runtime_gate_finished_at_ms - deadline_ms)
+                    elif pre_execution_age_ms > int(self.entry_guard.config.max_signal_age_ms):
                         entry_guard_result = Live2EntryGuardResult(
                             verdict="rejected_entry_guard",
                             reason="stale_signal_before_execution_call",
