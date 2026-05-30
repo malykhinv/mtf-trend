@@ -1486,26 +1486,25 @@ class AnomalyLive2Runner:
         deadline_result: Live2DeadlineCycleResult,
         decision_cycle_elapsed_ms: int,
     ) -> bool:
-        loop_budget_ms = max(1, int(self.config.decision_loop_interval_seconds * 1000))
-        loop_overrun = decision_cycle_elapsed_ms > loop_budget_ms
+        # The loop interval is a polling cadence, not a live-entry freshness contract.
+        # Count only trading-relevant hot-path overloads here; 50ms cadence slips are
+        # expected during Python scheduling and should not make the operator grid look
+        # catastrophically overloaded.
         hot_path_latency_degraded = decision_cycle_elapsed_ms > int(self.config.decision_engine_cycle_budget_ms)
-        if loop_overrun:
-            self._decision_loop_overrun_count += 1
         with self._runtime_metrics_lock:
             main_loop_gap_ms = int(self._last_main_loop_gap_ms)
         wall_clock_gap = main_loop_gap_ms > int(self.config.decision_latency_wall_clock_gap_ms)
         cycle_skipped = str(getattr(deadline_result, "cycle_status", "ok") or "ok") != "ok"
         state_lock_timeout = int(getattr(deadline_result, "state_store_lock_timeout_count", 0) or 0) > 0
         stale_hot_path_skip = int(getattr(deadline_result, "stale_hot_path_skip_count", 0) or 0) > 0
+        severe_overrun = hot_path_latency_degraded or wall_clock_gap or cycle_skipped or state_lock_timeout or stale_hot_path_skip
+        if severe_overrun:
+            self._decision_loop_overrun_count += 1
         degraded = (
             deadline_result.deadline_missed_count > 0
             or deadline_result.deadline_expired_backlog_count > 0
             or deadline_result.max_latency_ms > self.config.decision_deadline_ms
-            or hot_path_latency_degraded
-            or wall_clock_gap
-            or cycle_skipped
-            or state_lock_timeout
-            or stale_hot_path_skip
+            or severe_overrun
         )
         now_ms = int(time.time() * 1000)
         if degraded:

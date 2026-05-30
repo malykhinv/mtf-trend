@@ -8,6 +8,7 @@ spamming the console.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sys
@@ -23,7 +24,8 @@ class Live2StatusLogger:
 
     def __init__(self, logger: Callable[[str], None]) -> None:
         self._logger = logger
-        self._inline_status_enabled = logger is print and sys.stdout.isatty()
+        self._status_output_enabled = True
+        self._inline_status_enabled = self._resolve_inline_status_enabled(logger)
         self._lock = threading.RLock()
         self._status_line_open = False
         self._status_line_rows = 0
@@ -35,6 +37,22 @@ class Live2StatusLogger:
     @property
     def inline_status_enabled(self) -> bool:
         return self._inline_status_enabled
+
+    def _resolve_inline_status_enabled(self, logger: Callable[[str], None]) -> bool:
+        mode = os.environ.get("LIVE2_STATUS_MODE", "").strip().lower()
+        if mode in {"silent", "off", "none"}:
+            self._status_output_enabled = False
+            return False
+        if mode in {"inline", "ansi", "repaint"}:
+            return logger is print and sys.stdout.isatty()
+        if mode in {"snapshot", "plain", "line", "non_inline", "non-inline"}:
+            return False
+        # PyCharm and Windows consoles often report isatty=true but do not
+        # reliably support multi-line ANSI repaint.  Prefer bounded periodic
+        # snapshots unless inline mode is explicitly requested.
+        if os.name == "nt" or os.environ.get("PYCHARM_HOSTED"):
+            return False
+        return logger is print and sys.stdout.isatty()
 
     def __call__(self, message: str) -> None:
         with self._lock:
@@ -59,6 +77,10 @@ class Live2StatusLogger:
 
     def status(self, message: str, *, highlight: bool = False) -> None:
         with self._lock:
+            if not self._status_output_enabled:
+                self._last_status_message = str(message)
+                self._last_status_highlight = bool(highlight)
+                return
             self._last_status_message = str(message)
             self._last_status_highlight = bool(highlight)
             if not self._inline_status_enabled:

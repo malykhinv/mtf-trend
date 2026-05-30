@@ -139,6 +139,8 @@ def format_live2_status_grid(
     active_total = seen_actionable_symbols
     context_gap_summary = f"{prior_gap_tolerated}/{prior_gap_above_tolerance}/{prior_gap_rejected}"
 
+    trading_title = _trading_title(entries_allowed=entries_allowed, runtime_reason=runtime_reason, trading_allowed_ratio=trading_allowed_ratio)
+
     rows = [
         _section_title("Соединение"),
         _format_status_line(
@@ -221,7 +223,7 @@ def format_live2_status_grid(
         ),
         *_format_session_top_block(session_top_snapshot),
         _separator_line(),
-        _section_title(f"Торговля {_format_percent(trading_allowed_ratio, signed=False, precision=0)}"),
+        _section_title(trading_title),
         _format_status_line(
             _format_status_cell("Позиции", f"{open_positions}/{max_positions_label}"),
             _format_status_cell("Сделки", session_positions_total),
@@ -237,6 +239,17 @@ def format_live2_status_grid(
     ]
     return "\n".join(rows)
 
+
+
+def _trading_title(*, entries_allowed: bool, runtime_reason: str, trading_allowed_ratio: float | None) -> str:
+    current = "✓ входы" if entries_allowed else "× входы"
+    reason = "ok" if entries_allowed and runtime_reason == "ok" else runtime_reason
+    if reason and reason != "ok":
+        current = f"{current} {reason}"
+    ratio = _format_percent(trading_allowed_ratio, signed=False, precision=0)
+    if ratio != "-":
+        return f"Торговля {current} · {ratio}"
+    return f"Торговля {current}"
 
 def _format_session_top_block(session_top_snapshot: Mapping[str, object] | None) -> list[str]:
     if not session_top_snapshot:
