@@ -153,17 +153,19 @@ class Live2SignalEngine:
         self._dependency_reason_counts: Counter[str] = Counter()
         self._reject_reason_counts: Counter[str] = Counter()
         self._rolling_context_repair_status_counts: Counter[str] = Counter()
+        self._hot_path_feature_mode_counts: Counter[str] = Counter()
         self._last_dependency_reasons: tuple[str, ...] = ()
         self._last_reject_reasons: tuple[str, ...] = ()
 
     def evaluate(self, *, state: SymbolState, candle: Live2Candle, actionable_reason: str) -> Live2SignalDecision:
         self._total_evaluations += 1
-        features = self._features(state=state, candle=candle, actionable_reason=actionable_reason)
+        features = self._rolling_hot_path_features(state=state, candle=candle, actionable_reason=actionable_reason)
+        self._hot_path_feature_mode_counts[str(features.get("feature_mode", "unknown") or "unknown")] += 1
         repair_result = self._maybe_repair_rolling_context(state=state, features=features, decision_time_ms=int(candle.close_time_ms))
         if repair_result:
             self._rolling_context_repair_status_counts[str(repair_result.get("status", "unknown") or "unknown")] += 1
             features = {
-                **self._features(state=state, candle=candle, actionable_reason=actionable_reason),
+                **self._rolling_hot_path_features(state=state, candle=candle, actionable_reason=actionable_reason),
                 "rolling_1m_rest_repair_status": repair_result.get("status", ""),
                 "rolling_1m_rest_repair_reason": repair_result.get("reason", ""),
                 "rolling_1m_rest_repair_candles_loaded": repair_result.get("candles_loaded", 0),
@@ -178,6 +180,17 @@ class Live2SignalEngine:
 
         category_id = str(features.get("rolling_runner_category_id", "") or "")
         if category_id:
+            # Full legacy/post-HTF diagnostics are intentionally deferred until a
+            # category actually selects.  Rejected/dependency rows stay compact so
+            # the live hot path does not spend seconds formatting diagnostics for
+            # hundreds of non-trades every 30s bucket.
+            features = self._features(
+                state=state,
+                candle=candle,
+                actionable_reason=actionable_reason,
+                rolling_runner=dict(features),
+            )
+            self._hot_path_feature_mode_counts["full_selected_diagnostics"] += 1
             stop = _float_or_none(features.get("rolling_initial_stop_at_decision"))
             entry = _float_or_none(features.get("rolling_signal_entry_price"))
             tp1 = _float_or_none(features.get("rolling_tp1_at_decision"))
@@ -264,6 +277,7 @@ class Live2SignalEngine:
             "dependency_reason_counts": dict(self._dependency_reason_counts),
             "reject_reason_counts": dict(self._reject_reason_counts),
             "rolling_context_repair_status_counts": dict(self._rolling_context_repair_status_counts),
+            "hot_path_feature_mode_counts": dict(self._hot_path_feature_mode_counts),
             "last_dependency_reasons": self._last_dependency_reasons,
             "last_reject_reasons": self._last_reject_reasons,
             "limitations": (
@@ -327,7 +341,79 @@ class Live2SignalEngine:
             },
         )
 
-    def _features(self, *, state: SymbolState, candle: Live2Candle, actionable_reason: str) -> dict[str, object]:
+    def _rolling_hot_path_features(self, *, state: SymbolState, candle: Live2Candle, actionable_reason: str) -> dict[str, object]:
+        """Return only fields needed to decide the rolling C/A/S contract.
+
+        Legacy live-setup and post-HTF diagnostics are useful for research, but
+        they are not required to reject most candidates and were dominating the
+        live deadline loop.  This hot-path feature set keeps rejects honest and
+        compact; full diagnostics are computed only for selected candidates.
+        """
+
+        return_pct = (candle.close / candle.open) - 1.0 if candle.open > 0 else 0.0
+        rolling_runner = _rolling_runner_category_setup(state=state, decision_candle=candle)
+        mark_basis_status = _effective_context_status(
+            status=state.mark_status,
+            last_seen_ms=state.mark_last_seen_ms,
+            decision_time_ms=candle.close_time_ms,
+            stale_ms=self.mark_stale_ms,
+        ) or "not_available"
+        oi_status = _effective_context_status(
+            status=state.oi_status,
+            last_seen_ms=state.oi_last_seen_ms,
+            decision_time_ms=candle.close_time_ms,
+            stale_ms=self.oi_stale_ms,
+        )
+        current_oi_status = _effective_context_status(
+            status=state.current_oi_status,
+            last_seen_ms=state.current_oi_last_seen_ms,
+            decision_time_ms=candle.close_time_ms,
+            stale_ms=self.oi_stale_ms,
+        )
+        prior_context_status = _effective_context_status(
+            status=state.prior_context_status,
+            last_seen_ms=state.prior_context_last_seen_ms,
+            decision_time_ms=candle.close_time_ms,
+            stale_ms=self.prior_context_stale_ms,
+        )
+        return {
+            "actionable_reason": actionable_reason,
+            "feature_mode": "rolling_hot_path_minimal",
+            **rolling_runner,
+            "return_pct": return_pct,
+            "abs_return_pct": abs(return_pct),
+            "quote_volume": candle.quote_volume,
+            "number_of_trades": candle.number_of_trades,
+            "mark_basis_status": mark_basis_status,
+            "oi_status": oi_status,
+            "oi_open_interest": state.oi_open_interest,
+            "oi_previous_open_interest": state.oi_previous_open_interest,
+            "oi_change_pct_3x5m": state.oi_change_pct_3x5m,
+            "oi_latest_timestamp_ms": state.oi_latest_timestamp_ms,
+            "current_oi_status": current_oi_status,
+            "current_oi_open_interest": state.current_oi_open_interest,
+            "current_oi_timestamp_ms": state.current_oi_timestamp_ms,
+            "current_oi_last_seen_ms": state.current_oi_last_seen_ms,
+            "current_oi_source": state.current_oi_source,
+            "prior_context_status": prior_context_status,
+            "prior_context_reason": state.prior_context_reason,
+            "prior_spike_count_24h": state.prior_spike_count_24h,
+            "prior_fast_fade_count_24h": state.prior_fast_fade_count_24h,
+            "initial_risk_pct_at_decision": rolling_runner.get("rolling_initial_risk_pct_at_decision"),
+            "signal_entry_price": rolling_runner.get("rolling_signal_entry_price"),
+            "initial_stop_at_decision": rolling_runner.get("rolling_initial_stop_at_decision"),
+            "tp1_at_decision": rolling_runner.get("rolling_tp1_at_decision"),
+            "diagnostics_note": "full_legacy_setup_diagnostics_deferred_until_selected",
+        }
+
+    def _features(
+        self,
+        *,
+        state: SymbolState,
+        candle: Live2Candle,
+        actionable_reason: str,
+        rolling_runner: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         closed_5s = state.candle_book.rings.get(5_000).closed_snapshot() if 5_000 in state.candle_book.rings else ()
         closed_1m = (
             state.candle_book.rings.get(LIVE2_BACKTEST_SETUP_TIMEFRAME_MS).closed_snapshot()
@@ -451,9 +537,10 @@ class Live2SignalEngine:
         risk_fraction = (entry / stop) - 1.0 if stop > 0 else 0.0
         setup_tp1 = live_setup.get("tp1_at_decision")
         tp1 = float(setup_tp1) if setup_tp1 is not None else entry + LIVE2_BACKTEST_TP1_R * (entry - decision_box_low)
-        rolling_runner = _rolling_runner_category_setup(state=state, decision_candle=candle)
+        rolling_runner = dict(rolling_runner) if rolling_runner is not None else _rolling_runner_category_setup(state=state, decision_candle=candle)
         return {
             "actionable_reason": actionable_reason,
+            "feature_mode": "full_selected_diagnostics",
             **rolling_runner,
             "signal_entry_price": entry,
             "initial_stop_at_decision": stop,
@@ -1643,6 +1730,14 @@ def _evaluate_rolling_profile(
         "rolling_runner_htf_timeframe_ms": htf_timeframe_ms,
         "rolling_runner_profile_rank": profile_rank,
     }
+    # Per-signal cache.  The same htf_open can be reached by adjacent confirm
+    # counts/profiles; aggregating 24h+ of 1m candles is the hot cost, so never
+    # do it twice inside one candidate evaluation.
+    history_cache: dict[tuple[int, int], tuple[Live2Candle, ...]] = {}
+    required_history = max(
+        LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_DORMANCY_WINDOWS + LIVE2_ROLLING_PREGROWTH_WINDOWS,
+        math.ceil((LIVE2_ROLLING_PRIOR_SPIKE_LOOKBACK_MS + LIVE2_ROLLING_BASELINE_WINDOWS * htf_timeframe_ms) / htf_timeframe_ms),
+    )
     for confirm_count in range(min_confirm, max_confirm + 1):
         confirm = _closed_30s_confirm_segment(closed_30s, decision_candle=decision_candle, confirm_count=confirm_count)
         if confirm is None:
@@ -1654,6 +1749,13 @@ def _evaluate_rolling_profile(
         )
         if confirm_quality["status"] == "rejected":
             return {**profile_common, **confirm_quality, "status": "not_ready", "reason": "confirm_30s_aggtrade_gap_above_tolerance"}
+        # Exact necessary LTF conditions that do not need rolling baseline.  This
+        # is not an optimizer: if any of these fail, the later full contract would
+        # fail the same way.  It prevents expensive 1m-history aggregation for the
+        # common case where the confirmation segment is not runner-shaped at all.
+        ltf_shape_reject = _rolling_ltf_shape_prefilter_reject_reason(confirm)
+        if ltf_shape_reject:
+            continue
         htf = _closed_segment_before(candles=closed_30s, end_open_ms=confirm[0].open_time_ms, count=htf_candles, timeframe_ms=30_000)
         if htf is None:
             continue
@@ -1664,12 +1766,12 @@ def _evaluate_rolling_profile(
         )
         if htf_quality["status"] == "rejected":
             return {**profile_common, **htf_quality, "status": "not_ready", "reason": "rolling_htf_30s_aggtrade_gap_above_tolerance"}
+        htf_candle = _aggregate_candles_to_live2_candle(candles=htf, timeframe_ms=htf_timeframe_ms)
+        htf_return = (htf_candle.close / htf_candle.open) - 1.0 if htf_candle.open > 0 else float("nan")
+        if htf_return < LIVE2_ROLLING_SEED_MIN_HTF_RETURN_PCT:
+            continue
         htf_open_ms = int(htf[0].open_time_ms)
-        latest_1m_before_htf = max(
-            (item for item in closed_1m if int(item.close_time_ms) <= htf_open_ms),
-            key=lambda item: int(item.close_time_ms),
-            default=None,
-        )
+        latest_1m_before_htf = _latest_closed_1m_before(closed_1m=closed_1m, before_ms=htf_open_ms)
         if latest_1m_before_htf is None:
             return {
                 **profile_common,
@@ -1689,11 +1791,11 @@ def _evaluate_rolling_profile(
                 "rolling_1m_latest_close_ms": int(latest_1m_before_htf.close_time_ms),
                 "rolling_1m_context_gap_ms": latest_1m_gap_ms,
             }
-        history = _aggregate_1m_history_to_htf(closed_1m=closed_1m, htf_timeframe_ms=htf_timeframe_ms, before_ms=htf_open_ms)
-        required_history = max(
-            LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_DORMANCY_WINDOWS + LIVE2_ROLLING_PREGROWTH_WINDOWS,
-            math.ceil((LIVE2_ROLLING_PRIOR_SPIKE_LOOKBACK_MS + LIVE2_ROLLING_BASELINE_WINDOWS * htf_timeframe_ms) / htf_timeframe_ms),
-        )
+        cache_key = (htf_timeframe_ms, htf_open_ms)
+        history = history_cache.get(cache_key)
+        if history is None:
+            history = _aggregate_1m_history_to_htf(closed_1m=closed_1m, htf_timeframe_ms=htf_timeframe_ms, before_ms=htf_open_ms)
+            history_cache[cache_key] = history
         if len(history) < required_history:
             return {
                 **profile_common,
@@ -1707,16 +1809,14 @@ def _evaluate_rolling_profile(
         baseline = history[-LIVE2_ROLLING_BASELINE_WINDOWS:]
         dormancy = history[-(LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_DORMANCY_WINDOWS):-LIVE2_ROLLING_BASELINE_WINDOWS]
         pregrowth = history[-(LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_PREGROWTH_WINDOWS):-LIVE2_ROLLING_BASELINE_WINDOWS]
-        htf_candle = _aggregate_candles_to_live2_candle(candles=htf, timeframe_ms=htf_timeframe_ms)
         baseline_quote = _median([item.quote_volume for item in baseline])
         baseline_trades = _median([float(item.number_of_trades) for item in baseline])
         dormancy_trades = _median([float(item.number_of_trades) for item in dormancy])
         if baseline_quote <= 0.0 or baseline_trades <= 0.0 or dormancy_trades <= 0.0:
             return {**profile_common, "status": "not_ready", "reason": "rolling_baseline_or_dormancy_invalid"}
-        htf_return = (htf_candle.close / htf_candle.open) - 1.0 if htf_candle.open > 0 else float("nan")
         htf_quote_ratio = htf_candle.quote_volume / baseline_quote
         htf_trade_ratio = float(htf_candle.number_of_trades) / baseline_trades
-        if htf_return < LIVE2_ROLLING_SEED_MIN_HTF_RETURN_PCT or htf_quote_ratio < LIVE2_ROLLING_SEED_MIN_HTF_QUOTE_RATIO or htf_trade_ratio < LIVE2_ROLLING_SEED_MIN_HTF_TRADE_RATIO:
+        if htf_quote_ratio < LIVE2_ROLLING_SEED_MIN_HTF_QUOTE_RATIO or htf_trade_ratio < LIVE2_ROLLING_SEED_MIN_HTF_TRADE_RATIO:
             continue
         ltf_features = _rolling_ltf_confirmation_features(confirm, baseline_quote=baseline_quote, baseline_trades=baseline_trades, htf_ms=htf_timeframe_ms)
         if (
@@ -1791,12 +1891,23 @@ def _closed_30s_confirm_segment(
     decision_candle: Live2Candle,
     confirm_count: int,
 ) -> tuple[Live2Candle, ...] | None:
-    ordered = tuple(sorted((item for item in closed_30s if item.close_time_ms <= decision_candle.close_time_ms), key=lambda item: item.open_time_ms))
-    if len(ordered) < confirm_count or ordered[-1].open_time_ms != decision_candle.open_time_ms:
+    if len(closed_30s) < confirm_count:
         return None
-    segment = ordered[-confirm_count:]
-    expected = tuple(segment[0].open_time_ms + index * 30_000 for index in range(confirm_count))
-    if tuple(item.open_time_ms for item in segment) != expected:
+    end_idx: int | None = None
+    # Candle rings are already chronological.  Walk from the tail instead of
+    # sorting every candidate; the decision candle is normally the tail.
+    for idx in range(len(closed_30s) - 1, -1, -1):
+        item = closed_30s[idx]
+        if int(item.open_time_ms) == int(decision_candle.open_time_ms):
+            end_idx = idx + 1
+            break
+        if int(item.open_time_ms) < int(decision_candle.open_time_ms):
+            break
+    if end_idx is None or end_idx < confirm_count:
+        return None
+    segment = closed_30s[end_idx - confirm_count:end_idx]
+    expected = tuple(int(segment[0].open_time_ms) + index * 30_000 for index in range(confirm_count))
+    if tuple(int(item.open_time_ms) for item in segment) != expected:
         return None
     return segment
 
@@ -1808,13 +1919,59 @@ def _closed_segment_before(
     count: int,
     timeframe_ms: int,
 ) -> tuple[Live2Candle, ...] | None:
-    segment = tuple(sorted((item for item in candles if item.open_time_ms < end_open_ms), key=lambda item: item.open_time_ms))[-count:]
-    if len(segment) < count:
+    end_idx = 0
+    for idx in range(len(candles) - 1, -1, -1):
+        if int(candles[idx].open_time_ms) < int(end_open_ms):
+            end_idx = idx + 1
+            break
+    if end_idx < count:
         return None
-    expected = tuple(segment[0].open_time_ms + index * timeframe_ms for index in range(count))
-    if tuple(item.open_time_ms for item in segment) != expected:
+    segment = candles[end_idx - count:end_idx]
+    expected = tuple(int(segment[0].open_time_ms) + index * timeframe_ms for index in range(count))
+    if tuple(int(item.open_time_ms) for item in segment) != expected:
         return None
     return segment
+
+
+def _latest_closed_1m_before(*, closed_1m: tuple[Live2Candle, ...], before_ms: int) -> Live2Candle | None:
+    for item in reversed(closed_1m):
+        if int(item.close_time_ms) <= int(before_ms):
+            return item
+    return None
+
+
+def _rolling_ltf_shape_prefilter_reject_reason(confirm: tuple[Live2Candle, ...]) -> str:
+    """Exact baseline-free rejects for rolling LTF confirmation.
+
+    These checks are a safe subset of the full contract.  They use only the
+    already-closed 30s confirmation segment and never reject on an estimated
+    baseline/ratio.  If this returns a reason, the full contract would reject too.
+    """
+
+    if not confirm:
+        return "confirm_segment_missing"
+    first_open = float(confirm[0].open)
+    if first_open <= 0:
+        return "confirm_first_open_invalid"
+    last_close = float(confirm[-1].close)
+    if (last_close - first_open) / first_open < 0.004:
+        return "ltf_confirm_return_below_min"
+    first_half = confirm[: max(1, len(confirm) // 2)]
+    second_half = confirm[len(first_half):] or confirm[-1:]
+    second_open = float(second_half[0].open)
+    if second_open <= 0:
+        return "confirm_second_half_open_invalid"
+    if (float(second_half[-1].close) - second_open) / second_open < 0.0:
+        return "ltf_second_half_return_negative"
+    first_quote = sum(item.quote_volume for item in first_half)
+    second_quote = sum(item.quote_volume for item in second_half)
+    if first_quote <= 0 or second_quote / first_quote < 1.0:
+        return "ltf_quote_acceleration_below_min"
+    first_trades = sum(float(item.number_of_trades) for item in first_half)
+    second_trades = sum(float(item.number_of_trades) for item in second_half)
+    if first_trades <= 0 or second_trades / first_trades < 1.0:
+        return "ltf_trade_acceleration_below_min"
+    return ""
 
 
 def _aggregate_1m_history_to_htf(*, closed_1m: tuple[Live2Candle, ...], htf_timeframe_ms: int, before_ms: int) -> tuple[Live2Candle, ...]:
@@ -1828,17 +1985,25 @@ def _aggregate_1m_history_to_htf(*, closed_1m: tuple[Live2Candle, ...], htf_time
     """
 
     group_size = htf_timeframe_ms // 60_000
-    if group_size <= 0:
+    if group_size <= 0 or len(closed_1m) < group_size:
         return ()
-    ordered = tuple(sorted((item for item in closed_1m if item.close_time_ms <= before_ms), key=lambda item: item.open_time_ms))
-    if len(ordered) < group_size:
+    end = 0
+    for idx in range(len(closed_1m) - 1, -1, -1):
+        if int(closed_1m[idx].close_time_ms) <= int(before_ms):
+            end = idx + 1
+            break
+    if end < group_size:
         return ()
     groups_reversed: list[Live2Candle] = []
-    end = len(ordered)
     while end >= group_size:
-        chunk = tuple(ordered[end - group_size:end])
-        expected = tuple(int(chunk[0].open_time_ms) + offset * 60_000 for offset in range(group_size))
-        if tuple(int(item.open_time_ms) for item in chunk) != expected:
+        chunk = tuple(closed_1m[end - group_size:end])
+        first_open = int(chunk[0].open_time_ms)
+        contiguous = True
+        for offset, item in enumerate(chunk):
+            if int(item.open_time_ms) != first_open + offset * 60_000:
+                contiguous = False
+                break
+        if not contiguous:
             break
         groups_reversed.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
         end -= group_size
