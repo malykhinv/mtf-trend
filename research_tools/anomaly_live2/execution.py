@@ -19,6 +19,7 @@ market close and marks execution as unsafe for any further entries.
 from __future__ import annotations
 
 import time
+import threading
 from dataclasses import dataclass, field
 from math import isfinite
 from typing import Protocol, runtime_checkable
@@ -351,6 +352,7 @@ class Live2ExecutionEngine:
             reason="execution_preflight_not_checked",
             checked_at_ms=0,
         )
+        self._lock = threading.RLock()
         self._protected_positions: dict[str, Live2ProtectedPosition] = {}
         self._symbol_cooldown_until_ms: dict[str, int] = {}
         self._trading_halted_reason = ""
@@ -448,7 +450,9 @@ class Live2ExecutionEngine:
                 ),
                 timing=timing,
             )
-        if state.symbol in self._protected_positions:
+        with self._lock:
+            symbol_already_open = state.symbol in self._protected_positions
+        if symbol_already_open:
             self._total_rejected_existing_position += 1
             return self._finish_result(
                 Live2ExecutionResult(
@@ -459,7 +463,8 @@ class Live2ExecutionEngine:
                 ),
                 timing=timing,
             )
-        cooldown_until_ms = int(self._symbol_cooldown_until_ms.get(state.symbol, 0) or 0)
+        with self._lock:
+            cooldown_until_ms = int(self._symbol_cooldown_until_ms.get(state.symbol, 0) or 0)
         if cooldown_until_ms > checked_at_ms:
             self._total_rejected_capacity += 1
             return self._finish_result(
@@ -472,7 +477,9 @@ class Live2ExecutionEngine:
                 ),
                 timing=timing,
             )
-        if self.config.max_open_positions > 0 and len(self._protected_positions) >= self.config.max_open_positions:
+        with self._lock:
+            open_position_count = len(self._protected_positions)
+        if self.config.max_open_positions > 0 and open_position_count >= self.config.max_open_positions:
             self._total_rejected_capacity += 1
             return self._finish_result(
                 Live2ExecutionResult(
@@ -838,8 +845,9 @@ class Live2ExecutionEngine:
             source_flow_trade_ratio=_finite_float_or_none(signal_decision.features.get("selected_source_flow_trade_ratio")),
             selected_rolling_htf_timeframe_ms=_int_or_none(signal_decision.features.get("rolling_runner_htf_timeframe_ms")),
         )
-        self._protected_positions[state.symbol] = protected_position
-        self._total_positions_protected += 1
+        with self._lock:
+            self._protected_positions[state.symbol] = protected_position
+            self._total_positions_protected += 1
         return self._finish_result(
             Live2ExecutionResult(
             verdict="selected",
@@ -917,22 +925,27 @@ class Live2ExecutionEngine:
 
 
     def protected_positions_snapshot(self) -> tuple[Live2ProtectedPosition, ...]:
-        return tuple(self._protected_positions.values())
+        with self._lock:
+            return tuple(self._protected_positions.values())
 
     def replace_protected_position(self, position: Live2ProtectedPosition) -> None:
-        if position.symbol not in self._protected_positions:
-            raise KeyError(f"protected position is not registered: {position.symbol}")
-        self._protected_positions[position.symbol] = position
+        with self._lock:
+            if position.symbol not in self._protected_positions:
+                raise KeyError(f"protected position is not registered: {position.symbol}")
+            self._protected_positions[position.symbol] = position
 
     def remove_protected_position(self, symbol: str) -> Live2ProtectedPosition | None:
-        removed = self._protected_positions.pop(symbol, None)
-        if removed is not None and removed.selected_rolling_htf_timeframe_ms is not None:
-            self._symbol_cooldown_until_ms[symbol] = utc_now_ms() + max(0, int(removed.selected_rolling_htf_timeframe_ms))
-        return removed
+        with self._lock:
+            removed = self._protected_positions.pop(symbol, None)
+            if removed is not None and removed.selected_rolling_htf_timeframe_ms is not None:
+                self._symbol_cooldown_until_ms[symbol] = utc_now_ms() + max(0, int(removed.selected_rolling_htf_timeframe_ms))
+            return removed
 
     def _open_risk_usdt(self) -> float:
         total = 0.0
-        for position in self._protected_positions.values():
+        with self._lock:
+            positions = tuple(self._protected_positions.values())
+        for position in positions:
             notional = float(position.entry_fill_price) * max(0.0, float(position.remaining_amount))
             risk = notional * max(0.0, float(position.initial_risk_pct))
             if isfinite(risk):
@@ -940,11 +953,13 @@ class Live2ExecutionEngine:
         return total
 
     def halt_due_to_position_integrity(self, reason: str) -> None:
-        self._total_integrity_errors += 1
-        self._trading_halted_reason = f"position_integrity_error:{reason}"
+        with self._lock:
+            self._total_integrity_errors += 1
+            self._trading_halted_reason = f"position_integrity_error:{reason}"
 
     def mark_exchange_error(self) -> None:
-        self._total_exchange_errors += 1
+        with self._lock:
+            self._total_exchange_errors += 1
 
     def attempt_emergency_close(self, symbol: str, amount: float | None) -> str:
         return self._attempt_emergency_close(symbol, amount)
@@ -1123,28 +1138,35 @@ class Live2ExecutionEngine:
         return f"{normalized_symbol}_{timestamp_ms}_{order_id}"
 
     def status(self) -> dict[str, object]:
+        with self._lock:
+            protected_positions = tuple(self._protected_positions.values())
+            symbol_cooldowns = dict(self._symbol_cooldown_until_ms)
+            trading_halted_reason = self._trading_halted_reason
+            totals = {
+                "total_execute_calls": self._total_execute_calls,
+                "total_rejected_existing_position": self._total_rejected_existing_position,
+                "total_rejected_capacity": self._total_rejected_capacity,
+                "total_orders_submitted": self._total_orders_submitted,
+                "total_positions_protected": self._total_positions_protected,
+                "total_integrity_errors": self._total_integrity_errors,
+                "total_exchange_errors": self._total_exchange_errors,
+            }
         return {
             "status": "ready" if self.ready else "not_ready",
             "ready": self.ready,
             "preflight": self.preflight_result.as_dict(),
             "order_placement_status": "verified_entry_and_initial_stop_enabled",
-            "trading_halted_reason": self._trading_halted_reason,
+            "trading_halted_reason": trading_halted_reason,
             "position_sizing_model": "fixed_notional_v1",
             "order_notional_usdt": self.config.order_notional_usdt,
             "max_initial_risk_pct": self.config.max_initial_risk_pct,
             "max_open_positions": self.config.max_open_positions,
             "max_open_positions_unlimited": self.config.max_open_positions == 0,
-            "open_protected_positions": len(self._protected_positions),
-            "protected_positions": [position.as_dict() for position in self._protected_positions.values()],
+            "open_protected_positions": len(protected_positions),
+            "protected_positions": [position.as_dict() for position in protected_positions],
             "open_risk_usdt": self._open_risk_usdt(),
-            "symbol_cooldowns": dict(self._symbol_cooldown_until_ms),
-            "total_execute_calls": self._total_execute_calls,
-            "total_rejected_existing_position": self._total_rejected_existing_position,
-            "total_rejected_capacity": self._total_rejected_capacity,
-            "total_orders_submitted": self._total_orders_submitted,
-            "total_positions_protected": self._total_positions_protected,
-            "total_integrity_errors": self._total_integrity_errors,
-            "total_exchange_errors": self._total_exchange_errors,
+            "symbol_cooldowns": symbol_cooldowns,
+            **totals,
         }
 
 

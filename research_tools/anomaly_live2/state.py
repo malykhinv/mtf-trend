@@ -1162,6 +1162,20 @@ class SymbolStateStore:
         with self._lock:
             return tuple(self._states.values())
 
+    def artifact_rows_snapshot(self, *, now_ms: int | None = None, aggtrade_stale_ms: int | None = None) -> tuple[dict[str, object], ...]:
+        """Build symbol artifact rows while holding the store lock.
+
+        Symbol rows include candle ring summaries, and those rings are mutated by
+        websocket ingestion and maintenance. Holding the store lock here keeps
+        background status reporting from racing with deque mutation.
+        """
+
+        with self._lock:
+            return tuple(
+                state.to_artifact_row(now_ms=now_ms, aggtrade_stale_ms=aggtrade_stale_ms)
+                for state in self._states.values()
+            )
+
     def decision_snapshot(self) -> tuple[SymbolState, ...]:
         with self._lock:
             return tuple(

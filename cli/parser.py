@@ -297,6 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--universe-min-auto-symbols", type=_non_negative_int_for("--universe-min-auto-symbols"), default=300)
     anomaly_live2.add_argument("--decision-loop-interval-seconds", type=float, default=0.05)
     anomaly_live2.add_argument("--decision-backlog-expire-ms", type=_positive_int_for("--decision-backlog-expire-ms"), default=10_000)
+    anomaly_live2.add_argument("--decision-latency-wall-clock-gap-ms", type=_positive_int_for("--decision-latency-wall-clock-gap-ms"), default=2_000)
+    anomaly_live2.add_argument("--decision-latency-degraded-hold-ms", type=_positive_int_for("--decision-latency-degraded-hold-ms"), default=15_000)
     anomaly_live2.add_argument("--startup-warmup-lookback-minutes", type=_positive_int_for("--startup-warmup-lookback-minutes"), default=15)
     anomaly_live2.add_argument("--startup-warmup-max-trades-per-symbol", type=_positive_int_for("--startup-warmup-max-trades-per-symbol"), default=1000)
     anomaly_live2.add_argument("--startup-warmup-max-pages-per-symbol", type=_positive_int_for("--startup-warmup-max-pages-per-symbol"), default=1)

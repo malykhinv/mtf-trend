@@ -234,6 +234,18 @@ class AnomalyLive2Runner:
         self._session_runtime_baseline: dict[str, int] = {}
         self._last_runtime_gate_reason = "startup"
         self._last_decision_cycle_elapsed_ms = 0
+        self._last_hot_path_elapsed_ms = 0
+        self._last_heartbeat_elapsed_ms = 0
+        self._last_main_loop_gap_ms = 0
+        self._hot_path_max_elapsed_ms = 0
+        self._heartbeat_max_elapsed_ms = 0
+        self._main_loop_gap_max_ms = 0
+        self._last_loop_started_monotonic: float | None = None
+        self._latency_watchdog_degraded_until_ms = 0
+        self._last_deadline_cycle: dict[str, object] = {}
+        self._last_position_supervisor_cycle: dict[str, object] = {}
+        self._runtime_metrics_lock = threading.RLock()
+        self._background_threads: list[threading.Thread] = []
         self._started_monotonic = time.perf_counter()
         self._market_started_monotonic: float | None = None
 
@@ -587,23 +599,28 @@ class AnomalyLive2Runner:
                 f"universe {len(self.universe_selection.selected_symbols)} · "
                 "ticker+aggTrade+mark WS включены · private user stream включен · verified entry+stop execution включен"
             )
-            last_heartbeat_at = 0.0
+            self._start_background_runtime_threads(writer)
             while not self._shutdown_requested:
                 cycle_started = time.perf_counter()
+                with self._runtime_metrics_lock:
+                    if self._last_loop_started_monotonic is not None:
+                        gap_ms = int(max(0.0, cycle_started - self._last_loop_started_monotonic) * 1000)
+                        self._last_main_loop_gap_ms = gap_ms
+                        self._main_loop_gap_max_ms = max(self._main_loop_gap_max_ms, gap_ms)
+                    self._last_loop_started_monotonic = cycle_started
                 decision_now_ms = int(time.time() * 1000)
                 self.state_store.close_due_candles(now_ms=decision_now_ms)
-                self._sync_open_position_symbol_states(now_ms=decision_now_ms)
-                supervisor_result = self.position_supervisor.run_cycle(self.state_store)
-                for action in supervisor_result.actions:
-                    writer.write_event(action.as_event())
-                    self.telegram.notify_supervisor_action(action)
                 deadline_result = self.deadline_engine.run_cycle(now_ms=decision_now_ms)
-                self._sync_open_position_symbol_states(now_ms=decision_now_ms)
-                self._last_decision_cycle_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
+                hot_path_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
+                self._last_decision_cycle_elapsed_ms = hot_path_elapsed_ms
                 self._decision_loop_max_elapsed_ms = max(
                     self._decision_loop_max_elapsed_ms,
-                    self._last_decision_cycle_elapsed_ms,
+                    hot_path_elapsed_ms,
                 )
+                with self._runtime_metrics_lock:
+                    self._last_hot_path_elapsed_ms = hot_path_elapsed_ms
+                    self._hot_path_max_elapsed_ms = max(self._hot_path_max_elapsed_ms, hot_path_elapsed_ms)
+                    self._last_deadline_cycle = deadline_result.as_dict()
                 for decision in deadline_result.decisions:
                     writer.write_event(decision.as_event())
                     near_miss_row = decision.as_near_miss_row()
@@ -616,109 +633,8 @@ class AnomalyLive2Runner:
                     writer=writer,
                     market_data_status=market_data_status,
                     deadline_result=deadline_result,
-                    decision_cycle_elapsed_ms=self._last_decision_cycle_elapsed_ms,
+                    decision_cycle_elapsed_ms=hot_path_elapsed_ms,
                 )
-
-                now_monotonic = time.monotonic()
-                if now_monotonic - last_heartbeat_at >= self.config.heartbeat_interval_seconds:
-                    last_heartbeat_at = now_monotonic
-                    self.session_top_tracker.update_from_state_snapshot(self.state_store.snapshot())
-                    self._last_session_top_snapshot = self.session_top_tracker.snapshot()
-                    self._kick_top_growth_audit(
-                        symbols=self._selected_symbols_tuple(),
-                        now_ms=int(time.time() * 1000),
-                    )
-                    for top_growth_event_data in self._drain_top_growth_completed_events():
-                        writer.write_event(
-                            Live2Event(
-                                event_type="live2_top_growth_audit_completed",
-                                component=Live2Component.RUNNER,
-                                severity=Live2Severity.INFO,
-                                symbol="__top_growth__",
-                                message=str(top_growth_event_data.get("reason") or "closed_hour_top_growth_artifacts_written"),
-                                data=top_growth_event_data,
-                            )
-                        )
-                    market_data_status = self._market_data_status(include_symbol_counts=True)
-                    runtime_gate_status = self._runtime_gate_status()
-                    writer.write_event(
-                        Live2Event(
-                            event_type="live2_heartbeat",
-                            component=Live2Component.RUNNER,
-                            message="generation_0_fast_decision_loop_alive",
-                            data={
-                                "symbols_total": len(self.state_store),
-                                "ticker_status_counts": self.state_store.ticker_counts(),
-                                "aggtrade_status_counts": market_data_status.get("aggtrade_status_counts", {}),
-                                "startup_aggtrade_status_counts": market_data_status.get("startup_aggtrade_status_counts", {}),
-                                "live_aggtrade_status_counts": market_data_status.get("live_aggtrade_status_counts", {}),
-                                "candle_coverage_counts": market_data_status.get("candle_coverage_counts", {}),
-                                "market_data_status": market_data_status,
-                                "decision_status": self.deadline_engine.status(),
-                                "deadline_cycle": deadline_result.as_dict(),
-                                "decision_cycle_elapsed_ms": self._last_decision_cycle_elapsed_ms,
-                                "runtime_gate_status": runtime_gate_status,
-                                "new_entries_allowed": self.readiness.new_entries_allowed,
-                                "execution_status": self._execution_status(),
-                                "user_data_stream_status": self._user_data_stream_status(),
-                                "position_supervisor_cycle": supervisor_result.as_dict(),
-                                "session_top": self._last_session_top_snapshot or {},
-                                "top_growth_audit": self._last_top_growth_audit_stats.as_dict(),
-                                "rolling_context_maintenance": self._rolling_context_maintenance_status(),
-                                "artifact_writer_status": writer.status().as_dict(),
-                            },
-                        )
-                    )
-                    decision_status = self.deadline_engine.status()
-                    execution_status = self._execution_status()
-                    artifact_writer_status = writer.status().as_dict()
-                    grid_decision_status, grid_execution_status, grid_runtime_gate_status = self._session_scoped_grid_status(
-                        decision_status=decision_status,
-                        execution_status=execution_status,
-                        runtime_gate_status=runtime_gate_status,
-                    )
-                    diagnostics_summary = self._diagnostics_summary(
-                        writer=writer,
-                        market_data_status=market_data_status,
-                        decision_status=decision_status,
-                        execution_status=execution_status,
-                        runtime_gate_status=runtime_gate_status,
-                    )
-                    writer.write_symbol_state(self.state_store, aggtrade_stale_ms=self.config.aggtrade_stale_ms)
-                    writer.write_status(
-                        runtime_generation=self.config.runtime_generation,
-                        started_at_utc=self.started_at_utc,
-                        readiness=self.readiness,
-                        state_store=self.state_store,
-                        status="running",
-                        reason="generation_0_fast_decision_loop_alive",
-                        market_data_status=market_data_status,
-                        decision_status=decision_status,
-                        execution_status=execution_status,
-                        runtime_gate_status=runtime_gate_status,
-                        diagnostics_summary=diagnostics_summary,
-                    )
-                    writer.write_diagnostics_summary(diagnostics_summary)
-                    self.status_logger.status(
-                        format_live2_status_grid(
-                            runtime_seconds=self._market_runtime_seconds(),
-                            cycle_seconds=max(0.0, self._last_decision_cycle_elapsed_ms / 1000.0),
-                            state_counts=self.state_store.counts_by_status(),
-                            ticker_counts=self.state_store.ticker_counts(),
-                            aggtrade_counts=market_data_status.get("aggtrade_status_counts", {}),
-                            mark_counts=market_data_status.get("mark_price_status_counts", {}),
-                            open_interest_counts=market_data_status.get("open_interest_status_counts", {}),
-                            prior_context_counts=market_data_status.get("prior_context_status_counts", {}),
-                            candle_counts=market_data_status.get("candle_coverage_counts", {}),
-                            market_data_status=market_data_status,
-                            decision_status=grid_decision_status,
-                            execution_status=grid_execution_status,
-                            user_data_stream_status=self._user_data_stream_status(),
-                            runtime_gate_status=grid_runtime_gate_status,
-                            artifact_writer_status=artifact_writer_status,
-                            session_top_snapshot=self._last_session_top_snapshot,
-                        ),
-                    )
 
                 elapsed = time.perf_counter() - cycle_started
                 sleep_seconds = self.config.decision_loop_interval_seconds - elapsed
@@ -788,6 +704,8 @@ class AnomalyLive2Runner:
             raise
         finally:
             self.status_logger.finish_status()
+            self._shutdown_requested = True
+            self._join_background_runtime_threads(timeout_seconds=2.0)
             if self.user_data_source is not None:
                 self.user_data_source.close()
             self.rolling_context_maintenance_source.close()
@@ -804,6 +722,191 @@ class AnomalyLive2Runner:
             self.telegram.close()
             writer.close()
         return 0
+
+    def _start_background_runtime_threads(self, writer: Live2ArtifactWriter) -> None:
+        self._background_threads = [
+            threading.Thread(
+                target=self._position_supervisor_loop,
+                args=(writer,),
+                name="live2-position-supervisor",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=self._status_reporter_loop,
+                args=(writer,),
+                name="live2-status-reporter",
+                daemon=True,
+            ),
+        ]
+        for thread in self._background_threads:
+            thread.start()
+
+    def _join_background_runtime_threads(self, *, timeout_seconds: float = 2.0) -> None:
+        deadline = time.perf_counter() + max(0.1, float(timeout_seconds))
+        for thread in list(self._background_threads):
+            remaining = max(0.0, deadline - time.perf_counter())
+            if remaining <= 0.0:
+                break
+            thread.join(timeout=remaining)
+
+    def _position_supervisor_loop(self, writer: Live2ArtifactWriter) -> None:
+        while not self._shutdown_requested:
+            started = time.perf_counter()
+            try:
+                supervisor_result = self.position_supervisor.run_cycle(self.state_store)
+                for action in supervisor_result.actions:
+                    writer.write_event(action.as_event())
+                    self.telegram.notify_supervisor_action(action)
+                with self._runtime_metrics_lock:
+                    self._last_position_supervisor_cycle = supervisor_result.as_dict()
+                self._sync_open_position_symbol_states(now_ms=int(time.time() * 1000))
+            except Exception as exc:  # keep hot decision loop alive but block new entries
+                self.readiness.position_supervisor_ready = False
+                writer.write_event(
+                    Live2Event(
+                        event_type="position_supervisor_background_error",
+                        component=Live2Component.EXECUTION,
+                        severity=Live2Severity.ERROR,
+                        message=f"{type(exc).__name__}: {str(exc)[:240]}",
+                        data={"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                    )
+                )
+            elapsed = time.perf_counter() - started
+            sleep_seconds = max(0.05, self.config.position_supervisor_monitor_interval_ms / 1000.0 - elapsed)
+            time.sleep(sleep_seconds)
+
+    def _status_reporter_loop(self, writer: Live2ArtifactWriter) -> None:
+        while not self._shutdown_requested:
+            started = time.perf_counter()
+            try:
+                self._write_runtime_heartbeat(writer)
+            except Exception as exc:
+                writer.write_event(
+                    Live2Event(
+                        event_type="status_reporter_background_error",
+                        component=Live2Component.RUNNER,
+                        severity=Live2Severity.ERROR,
+                        message=f"{type(exc).__name__}: {str(exc)[:240]}",
+                        data={"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                    )
+                )
+            elapsed = time.perf_counter() - started
+            elapsed_ms = int(max(0.0, elapsed) * 1000)
+            with self._runtime_metrics_lock:
+                self._last_heartbeat_elapsed_ms = elapsed_ms
+                self._heartbeat_max_elapsed_ms = max(self._heartbeat_max_elapsed_ms, elapsed_ms)
+            sleep_seconds = max(0.05, self.config.heartbeat_interval_seconds - elapsed)
+            time.sleep(sleep_seconds)
+
+    def _write_runtime_heartbeat(self, writer: Live2ArtifactWriter) -> None:
+        heartbeat_started = time.perf_counter()
+        now_ms = int(time.time() * 1000)
+        self._sync_open_position_symbol_states(now_ms=now_ms)
+        self.session_top_tracker.update_from_state_snapshot(self.state_store.snapshot())
+        self._last_session_top_snapshot = self.session_top_tracker.snapshot()
+        self._kick_top_growth_audit(
+            symbols=self._selected_symbols_tuple(),
+            now_ms=now_ms,
+        )
+        for top_growth_event_data in self._drain_top_growth_completed_events():
+            writer.write_event(
+                Live2Event(
+                    event_type="live2_top_growth_audit_completed",
+                    component=Live2Component.RUNNER,
+                    severity=Live2Severity.INFO,
+                    symbol="__top_growth__",
+                    message=str(top_growth_event_data.get("reason") or "closed_hour_top_growth_artifacts_written"),
+                    data=top_growth_event_data,
+                )
+            )
+        market_data_status = self._market_data_status(include_symbol_counts=True)
+        runtime_gate_status = self._runtime_gate_status()
+        decision_status = self.deadline_engine.status()
+        execution_status = self._execution_status()
+        artifact_writer_status = writer.status().as_dict()
+        grid_decision_status, grid_execution_status, grid_runtime_gate_status = self._session_scoped_grid_status(
+            decision_status=decision_status,
+            execution_status=execution_status,
+            runtime_gate_status=runtime_gate_status,
+        )
+        diagnostics_summary = self._diagnostics_summary(
+            writer=writer,
+            market_data_status=market_data_status,
+            decision_status=decision_status,
+            execution_status=execution_status,
+            runtime_gate_status=runtime_gate_status,
+        )
+        heartbeat_elapsed_ms = int(max(0.0, time.perf_counter() - heartbeat_started) * 1000)
+        with self._runtime_metrics_lock:
+            self._last_heartbeat_elapsed_ms = heartbeat_elapsed_ms
+            self._heartbeat_max_elapsed_ms = max(self._heartbeat_max_elapsed_ms, heartbeat_elapsed_ms)
+            deadline_cycle = dict(self._last_deadline_cycle)
+            supervisor_cycle = dict(self._last_position_supervisor_cycle)
+        writer.write_event(
+            Live2Event(
+                event_type="live2_heartbeat",
+                component=Live2Component.RUNNER,
+                message="generation_0_fast_decision_loop_alive",
+                data={
+                    "symbols_total": len(self.state_store),
+                    "ticker_status_counts": self.state_store.ticker_counts(),
+                    "aggtrade_status_counts": market_data_status.get("aggtrade_status_counts", {}),
+                    "startup_aggtrade_status_counts": market_data_status.get("startup_aggtrade_status_counts", {}),
+                    "live_aggtrade_status_counts": market_data_status.get("live_aggtrade_status_counts", {}),
+                    "candle_coverage_counts": market_data_status.get("candle_coverage_counts", {}),
+                    "market_data_status": market_data_status,
+                    "decision_status": decision_status,
+                    "deadline_cycle": deadline_cycle,
+                    "decision_cycle_elapsed_ms": self._last_decision_cycle_elapsed_ms,
+                    "hot_path_elapsed_ms": self._last_hot_path_elapsed_ms,
+                    "heartbeat_elapsed_ms": heartbeat_elapsed_ms,
+                    "main_loop_gap_ms": self._last_main_loop_gap_ms,
+                    "runtime_gate_status": runtime_gate_status,
+                    "new_entries_allowed": self.readiness.new_entries_allowed,
+                    "execution_status": execution_status,
+                    "user_data_stream_status": self._user_data_stream_status(),
+                    "position_supervisor_cycle": supervisor_cycle,
+                    "session_top": self._last_session_top_snapshot or {},
+                    "top_growth_audit": self._last_top_growth_audit_stats.as_dict(),
+                    "artifact_writer_status": artifact_writer_status,
+                },
+            )
+        )
+        writer.write_symbol_state(self.state_store, aggtrade_stale_ms=self.config.aggtrade_stale_ms)
+        writer.write_status(
+            runtime_generation=self.config.runtime_generation,
+            started_at_utc=self.started_at_utc,
+            readiness=self.readiness,
+            state_store=self.state_store,
+            status="running",
+            reason="generation_0_fast_decision_loop_alive",
+            market_data_status=market_data_status,
+            decision_status=decision_status,
+            execution_status=execution_status,
+            runtime_gate_status=runtime_gate_status,
+            diagnostics_summary=diagnostics_summary,
+        )
+        writer.write_diagnostics_summary(diagnostics_summary)
+        self.status_logger.status(
+            format_live2_status_grid(
+                runtime_seconds=self._market_runtime_seconds(),
+                cycle_seconds=max(0.0, self._last_hot_path_elapsed_ms / 1000.0),
+                state_counts=self.state_store.counts_by_status(),
+                ticker_counts=self.state_store.ticker_counts(),
+                aggtrade_counts=market_data_status.get("aggtrade_status_counts", {}),
+                mark_counts=market_data_status.get("mark_price_status_counts", {}),
+                open_interest_counts=market_data_status.get("open_interest_status_counts", {}),
+                prior_context_counts=market_data_status.get("prior_context_status_counts", {}),
+                candle_counts=market_data_status.get("candle_coverage_counts", {}),
+                market_data_status=market_data_status,
+                decision_status=grid_decision_status,
+                execution_status=grid_execution_status,
+                user_data_stream_status=self._user_data_stream_status(),
+                runtime_gate_status=grid_runtime_gate_status,
+                artifact_writer_status=artifact_writer_status,
+                session_top_snapshot=self._last_session_top_snapshot,
+            ),
+        )
 
     def shutdown(self, *, reason: str) -> None:
         self._shutdown_requested = True
@@ -1189,6 +1292,9 @@ class AnomalyLive2Runner:
                 (
                     "decision_loop_overrun_count",
                     "decision_loop_max_elapsed_ms",
+                    "main_loop_gap_max_ms",
+                    "heartbeat_max_elapsed_ms",
+                    "hot_path_max_elapsed_ms",
                     "market_data_clean_windows",
                     "market_data_degraded_windows",
                 ),
@@ -1204,7 +1310,7 @@ class AnomalyLive2Runner:
         session_runtime_gate_status = _subtract_counter_baseline(
             runtime_gate_status,
             self._session_runtime_baseline,
-            max_keys={"decision_loop_max_elapsed_ms"},
+            max_keys={"decision_loop_max_elapsed_ms", "main_loop_gap_max_ms", "heartbeat_max_elapsed_ms", "hot_path_max_elapsed_ms"},
         )
         session_decision_status["counter_scope"] = "session"
         session_decision_status["session_metric_start_ms"] = metric_start_ms
@@ -1315,18 +1421,31 @@ class AnomalyLive2Runner:
         loop_overrun = decision_cycle_elapsed_ms > loop_budget_ms
         if loop_overrun:
             self._decision_loop_overrun_count += 1
+        with self._runtime_metrics_lock:
+            main_loop_gap_ms = int(self._last_main_loop_gap_ms)
+        wall_clock_gap = main_loop_gap_ms > int(self.config.decision_latency_wall_clock_gap_ms)
         degraded = (
             deadline_result.deadline_missed_count > 0
+            or deadline_result.deadline_expired_backlog_count > 0
             or deadline_result.max_latency_ms > self.config.decision_deadline_ms
             or loop_overrun
+            or wall_clock_gap
         )
+        now_ms = int(time.time() * 1000)
         if degraded:
             self._decision_latency_degraded_windows += 1
             self._decision_latency_clean_windows = 0
+            if wall_clock_gap or deadline_result.deadline_missed_count > 0 or deadline_result.deadline_expired_backlog_count > 0:
+                self._latency_watchdog_degraded_until_ms = max(
+                    self._latency_watchdog_degraded_until_ms,
+                    now_ms + int(self.config.decision_latency_degraded_hold_ms),
+                )
         else:
             self._decision_latency_clean_windows += 1
             if self._decision_latency_clean_windows >= self.config.decision_latency_recovery_windows:
                 self._decision_latency_degraded_windows = 0
+        if now_ms < int(self._latency_watchdog_degraded_until_ms):
+            return False
         return self._decision_latency_degraded_windows < self.config.decision_latency_degraded_windows
 
     def _runtime_gate_status(self) -> dict[str, object]:
@@ -1352,6 +1471,15 @@ class AnomalyLive2Runner:
             "reason": reason,
             "decision_loop_interval_seconds": self.config.decision_loop_interval_seconds,
             "decision_cycle_elapsed_ms": self._last_decision_cycle_elapsed_ms,
+            "hot_path_elapsed_ms": self._last_hot_path_elapsed_ms,
+            "hot_path_max_elapsed_ms": self._hot_path_max_elapsed_ms,
+            "heartbeat_elapsed_ms": self._last_heartbeat_elapsed_ms,
+            "heartbeat_max_elapsed_ms": self._heartbeat_max_elapsed_ms,
+            "main_loop_gap_ms": self._last_main_loop_gap_ms,
+            "main_loop_gap_max_ms": self._main_loop_gap_max_ms,
+            "decision_latency_wall_clock_gap_ms": self.config.decision_latency_wall_clock_gap_ms,
+            "decision_latency_degraded_hold_ms": self.config.decision_latency_degraded_hold_ms,
+            "latency_watchdog_degraded_until_ms": self._latency_watchdog_degraded_until_ms,
             "decision_latency_degraded_windows": self._decision_latency_degraded_windows,
             "decision_latency_clean_windows": self._decision_latency_clean_windows,
             "decision_latency_degraded_limit": self.config.decision_latency_degraded_windows,

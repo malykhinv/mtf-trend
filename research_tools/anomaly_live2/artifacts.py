@@ -440,10 +440,7 @@ class Live2ArtifactWriter:
 
     def write_symbol_state(self, state_store: SymbolStateStore, *, aggtrade_stale_ms: int | None = None) -> None:
         now_ms = utc_now_ms()
-        rows = [
-            state.to_artifact_row(now_ms=now_ms, aggtrade_stale_ms=aggtrade_stale_ms)
-            for state in state_store.snapshot()
-        ]
+        rows = list(state_store.artifact_rows_snapshot(now_ms=now_ms, aggtrade_stale_ms=aggtrade_stale_ms))
         base_fieldnames = [
             "symbol",
             "status",

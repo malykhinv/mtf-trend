@@ -238,17 +238,21 @@ class Live2TopGrowthAudit:
                 time.sleep(self.config.fetch_spacing_seconds)
 
         if task.cursor < len(task.symbols):
+            top_rows = _rank_candidates(task.candidates, limit=self.config.limit)
+            top_path, status_path = self._write_snapshot(task=task, top_rows=top_rows, completion_status="processing")
             self._last_stats = Live2TopGrowthAuditStats(
                 enabled=True,
                 status="processing",
-                reason="bounded_chunk_processed",
+                reason="bounded_chunk_processed_partial_artifacts_written",
                 period_start_ms=task.period_start_ms,
                 period_end_ms=task.period_end_ms,
                 processed_count=task.cursor,
                 remaining_count=len(task.symbols) - task.cursor,
                 symbols_total=len(task.symbols),
-                top_count=len(task.candidates),
+                top_count=len(top_rows),
                 cycle_seconds=time.perf_counter() - started,
+                top_file=str(top_path.relative_to(self.output_dir)),
+                status_file=str(status_path.relative_to(self.output_dir)),
             )
             return self._last_stats
 
