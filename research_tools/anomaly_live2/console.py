@@ -12,6 +12,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from collections.abc import Callable
 
 
@@ -28,6 +29,8 @@ class Live2StatusLogger:
         self._status_line_rows = 0
         self._last_status_message: str | None = None
         self._last_status_highlight = False
+        self._last_non_inline_status_emit_monotonic = 0.0
+        self._non_inline_status_interval_seconds = 30.0
 
     @property
     def inline_status_enabled(self) -> bool:
@@ -59,7 +62,18 @@ class Live2StatusLogger:
             self._last_status_message = str(message)
             self._last_status_highlight = bool(highlight)
             if not self._inline_status_enabled:
-                self._logger(message)
+                # In redirected / IDE consoles we cannot reliably repaint a
+                # multi-line block. Do not spam the full grid on every
+                # heartbeat; artifacts remain the source of truth and the
+                # operator still gets bounded periodic snapshots.
+                now = time.monotonic()
+                if (
+                    bool(highlight)
+                    or self._last_non_inline_status_emit_monotonic <= 0.0
+                    or now - self._last_non_inline_status_emit_monotonic >= self._non_inline_status_interval_seconds
+                ):
+                    self._logger(message)
+                    self._last_non_inline_status_emit_monotonic = now
                 return
             self._paint_status(self._last_status_message, highlight=self._last_status_highlight)
 
@@ -106,7 +120,7 @@ class Live2StatusLogger:
 
     @classmethod
     def _rendered_rows(cls, rendered: str, terminal_columns: int) -> int:
-        visible = cls._ANSI_RE.sub("", rendered)
+        visible = cls._ANSI_RE.sub("", rendered).expandtabs(4)
         if not visible:
             return 1
         columns = max(1, terminal_columns)

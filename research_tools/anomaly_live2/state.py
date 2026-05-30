@@ -1099,6 +1099,41 @@ class SymbolStateStore:
                 ring.closed_count = len(ring.closed)
             state.mark_dirty()
 
+    def rolling_1m_context_snapshot(self, *, symbol: str, expected_open_ms: int) -> tuple[int | None, int]:
+        """Return latest closed 1m open and contiguous count under store lock.
+
+        The 1m candle ring is mutated by websocket candle closing and the
+        background official-kline maintenance worker. Callers that only hold a
+        SymbolState reference must not iterate the ring directly; doing so can
+        raise ``RuntimeError: deque mutated during iteration``.
+        """
+
+        timeframe_ms = 60_000
+        if int(expected_open_ms) <= 0:
+            return None, 0
+        with self._lock:
+            state = self._states.get(symbol.strip())
+            if state is None:
+                return None, 0
+            ring = state.candle_book.rings.get(timeframe_ms)
+            if ring is None or not ring.closed:
+                return None, 0
+            open_times = tuple(
+                int(item.open_time_ms)
+                for item in ring.closed
+                if int(item.open_time_ms) <= int(expected_open_ms)
+            )
+        if not open_times:
+            return None, 0
+        latest_open_ms = open_times[-1]
+        available = set(open_times)
+        count = 0
+        cursor_ms = int(expected_open_ms)
+        while cursor_ms in available:
+            count += 1
+            cursor_ms -= timeframe_ms
+        return latest_open_ms, count
+
     def close_due_candles(self, *, now_ms: int) -> int:
         """Finalize ended real-trade candles without synthetic gap filling."""
 

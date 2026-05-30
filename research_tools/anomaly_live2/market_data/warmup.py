@@ -881,11 +881,10 @@ class Live2RollingContextMaintenance:
             self._thread.join(timeout=5.0)
 
     def status(self) -> dict[str, object]:
-        now_ms = utc_now_ms()
-        active_targets = self._eligible_symbols(now_ms=now_ms)
+        # Status is read from the runner heartbeat path.  It must never rescan
+        # all symbol candle rings or touch mutable deques; the worker cycle owns
+        # target discovery and publishes the latest counters under _lock.
         with self._lock:
-            self._status.active_target_symbols = len(active_targets)
-            self._status.last_target_symbols = active_targets[:25]
             if self._status.status == "running" and self._status.total_errors > 0 and self._status.total_success <= 0:
                 self._status.status = "degraded"
                 self._status.reason = "rolling_1m_context_maintenance_errors_without_success"
@@ -918,6 +917,7 @@ class Live2RollingContextMaintenance:
             self._status.total_cycles += 1
             self._status.last_cycle_started_at_ms = now_ms
             self._status.last_target_symbols = targets[:25]
+            self._status.active_target_symbols = len(targets)
             self._status.total_symbols_considered += len(targets)
         polled: list[str] = []
         loaded_candles = 0
@@ -971,15 +971,13 @@ class Live2RollingContextMaintenance:
                 fetched_at_ms=fetched_at_ms,
                 expected_open_time_ms=expected_open_ms,
             )
-        state = self._state_for_symbol(symbol)
-        latest_open_ms = _latest_closed_1m_open_ms(state)
+        latest_open_ms, recent_contiguous_count = self.state_store.rolling_1m_context_snapshot(
+            symbol=symbol,
+            expected_open_ms=expected_open_ms,
+        )
         timeframe_ms = int(Timeframe.M1.to_milliseconds())
         lookback_start_ms = max(0, expected_open_ms - (int(self.config.lookback_minutes) - 1) * timeframe_ms)
         required_recent = int(self.config.lookback_minutes)
-        recent_contiguous_count = _recent_contiguous_1m_count_from_state(
-            state,
-            expected_open_ms=expected_open_ms,
-        )
         if (
             latest_open_ms is not None
             and latest_open_ms >= expected_open_ms
@@ -1095,11 +1093,12 @@ class Live2RollingContextMaintenance:
             latest_loaded_open_ms = latest_open_ms
             status = "empty"
             reason = "rolling_1m_context_maintenance_empty_response"
-        refreshed_state = self._state_for_symbol(symbol)
-        recent_contiguous_after = _recent_contiguous_1m_count_from_state(
-            refreshed_state,
+        latest_loaded_open_ms_after, recent_contiguous_after = self.state_store.rolling_1m_context_snapshot(
+            symbol=symbol,
             expected_open_ms=expected_open_ms,
         )
+        if latest_loaded_open_ms_after is not None:
+            latest_loaded_open_ms = latest_loaded_open_ms_after
         self.state_store.update_rolling_context_maintenance(
             symbol=symbol,
             fetched_at_ms=fetched_at_ms,
@@ -1137,9 +1136,8 @@ class Live2RollingContextMaintenance:
             last_poll_ms = self._last_poll_by_symbol.get(symbol, 0)
             if last_poll_ms > 0 and int(now_ms) - int(last_poll_ms) < cooldown_ms:
                 continue
-            latest_open_ms = _latest_closed_1m_open_ms(state)
-            recent_contiguous_count = _recent_contiguous_1m_count_from_state(
-                state,
+            latest_open_ms, recent_contiguous_count = self.state_store.rolling_1m_context_snapshot(
+                symbol=symbol,
                 expected_open_ms=expected_open_ms,
             )
             if (
@@ -1170,35 +1168,6 @@ def _rolling_context_maintenance_priority(state: SymbolState, *, now_ms: int, ac
     if state.last_verdict in {"data_dependency_not_ready", "flow_freshness_reject"}:
         return 3
     return 10
-
-
-def _latest_closed_1m_open_ms(state: SymbolState | None) -> int | None:
-    if state is None:
-        return None
-    ring = state.candle_book.rings.get(int(Timeframe.M1.to_milliseconds()))
-    if ring is None or not ring.closed:
-        return None
-    return int(ring.closed[-1].open_time_ms)
-
-
-def _recent_contiguous_1m_count_from_state(
-    state: SymbolState | None,
-    *,
-    expected_open_ms: int,
-) -> int:
-    if state is None or expected_open_ms <= 0:
-        return 0
-    timeframe_ms = int(Timeframe.M1.to_milliseconds())
-    ring = state.candle_book.rings.get(timeframe_ms)
-    if ring is None or not ring.closed:
-        return 0
-    available = {int(item.open_time_ms) for item in ring.closed if int(item.open_time_ms) <= int(expected_open_ms)}
-    count = 0
-    cursor_ms = int(expected_open_ms)
-    while cursor_ms in available:
-        count += 1
-        cursor_ms -= timeframe_ms
-    return count
 
 
 def _last_closed_1m_open_ms(*, now_ms: int, closed_candle_lag_ms: int) -> int:

@@ -9983,3 +9983,30 @@ Risk:
 ```text
 Initial maintenance may fetch a larger 1m lookback for symbols whose recent tail is fresh but internally gappy. This increases REST rows per repaired symbol, but not request count. If Binance rate-limit errors appear, lower max_symbols_per_cycle or add auto-degrade before changing trading logic.
 ```
+
+
+## 2026-05-30 - P461 live2 maintenance snapshot and console throttling
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes two live stability defects seen in run `20260530_080733`: the rolling 1m maintenance status path could iterate a candle deque while websocket/maintenance writers mutated it, crashing live with `RuntimeError: deque mutated during iteration`; and non-inline consoles/IDEs printed the full status grid on every heartbeat, producing repeated `◆ Соединение` blocks.
+
+Changes:
+
+- Add a locked `SymbolStateStore.rolling_1m_context_snapshot()` read boundary for latest closed 1m open time and recent contiguous count.
+- Move rolling 1m maintenance currentness checks to the locked boundary instead of iterating `ring.closed` from a mutable `SymbolState` reference.
+- Make `Live2RollingContextMaintenance.status()` a cheap lock-only snapshot; target discovery now publishes `active_target_symbols` from the worker cycle instead of rescanning candle rings from the runner heartbeat.
+- Throttle full status-grid snapshots when inline terminal repaint is unavailable; artifacts remain the source of truth.
+- Expand tabs before rendered-row counting to reduce stale-line leftovers in inline repaint mode.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Non-inline consoles now receive periodic status snapshots instead of every heartbeat. This reduces operator-log spam but does not change artifacts or trading logic. Rolling 1m maintenance reads are serialized only while copying open_time_ms values; REST fetches and websocket ingestion remain outside this read path.
+```

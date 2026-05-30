@@ -4647,3 +4647,10 @@ Protocol after P459: run live2 for 60-90 minutes. Accept only if `market_data_re
 Hypothesis: high `rolling_1m_history_not_ready` after P459 is caused by recent 1m continuity gaps behind a fresh WS-built tail, not by broken sockets or insufficient ring capacity.
 
 Protocol after P460: run live2 for 60-90 minutes. Accept only if `rolling_1m_maintenance_recent_contiguous_count` is populated in `live2_symbol_state.csv`, maintenance has `total_errors=0`, and `signal_engine.dependency_reason_counts` no longer clusters around tiny histories like `0/348`, `1/348`, `1/540`. If `rolling_1m_history_not_ready` persists, inspect symbols whose contiguous count is below 720 and check whether REST responses are missing candles or maintenance scheduling is too slow.
+
+
+## 2026-05-30 - P461 live2 maintenance concurrency validation protocol
+
+Hypothesis: the P460 rolling 1m maintenance model is correct, but its status/currentness read path must use a locked state-store snapshot because websocket candle closing and official-kline maintenance can mutate `ring.closed` concurrently.
+
+Protocol after P461: run live2 for 60-90 minutes. Accept only if the process does not crash with deque mutation, `rolling_1m_maintenance_recent_contiguous_count` continues to update, maintenance errors stay near zero, and the operator console no longer prints the full multi-line grid on every heartbeat in non-inline terminals. If rolling 1m dependency rejects return, inspect maintenance scheduling/rate limits rather than reintroducing unlocked deque reads. Also check that runtime-gate refresh does not call maintenance target discovery directly; `active_target_symbols` should update from worker cycles.

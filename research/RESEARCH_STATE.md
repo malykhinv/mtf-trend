@@ -3528,3 +3528,12 @@ Current commit: UNKNOWN. Status: P460 PROPOSED.
 Run `20260530_065636` proved that sockets, writer, graceful shutdown, and top-growth partial artifacts are materially healthier after P454-P459, but rolling C/A/S remained mostly blocked by `rolling_1m_history_not_ready`. Artifact rows showed `max_closed_candles=3000` and thousands of 1m candles for major symbols, so the earlier ring-capacity diagnosis was incomplete. The actual issue is maintenance currentness: a fresh latest 1m candle does not prove the preceding recent 1m context is contiguous. P460 changes maintenance to require contiguous recent official 1m coverage and to backfill bounded official-klines gaps behind a fresh tail.
 
 Next validation: run live2 after P460 and require `rolling_1m_maintenance_recent_contiguous_count` to climb toward the configured lookback for active symbols, while `rolling_1m_history_not_ready` drops sharply. If dependency rejects remain high, separate true 30s aggTrade gap reasons from residual 1m context lag.
+
+
+## 2026-05-30 - P461 live2 maintenance crash state
+
+Current commit: UNKNOWN. Status: P461 PROPOSED.
+
+Run `20260530_080733` showed healthy WS ingestion and a working P460 rolling 1m maintenance model, but live crashed from a concurrent-read bug in maintenance status: `_recent_contiguous_1m_count_from_state()` iterated `ring.closed` while another thread mutated the deque. P461 moves the recent 1m context read behind a `SymbolStateStore` lock boundary and throttles non-inline console grid prints so IDE/redirected terminals do not spam repeated `◆ Соединение` blocks. Status reads are now cheap snapshots, not eligibility rescans from the runtime gate heartbeat.
+
+Next validation: restart live2 and require no `RuntimeError: deque mutated during iteration`, `rolling_context_maintenance.total_errors=0`, `decision_loop_overrun_count` not to regress, and the console to show bounded periodic snapshots rather than one full grid per heartbeat when repaint is unavailable.
