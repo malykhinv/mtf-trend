@@ -398,6 +398,15 @@ class Live2DeadlineCycleResult:
     deadline_expired_backlog_count: int = 0
     pre_live_bucket_skipped_count: int = 0
     max_latency_ms: int = 0
+    cycle_status: str = "ok"
+    cycle_reason: str = ""
+    state_store_lock_timeout_count: int = 0
+    stale_hot_path_skip_count: int = 0
+    symbols_total: int = 0
+    close_due_candles_closed_count: int = 0
+    close_due_candles_ms: int = 0
+    decision_snapshot_ms: int = 0
+    deadline_engine_ms: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -413,6 +422,15 @@ class Live2DeadlineCycleResult:
             "deadline_expired_backlog_count": self.deadline_expired_backlog_count,
             "pre_live_bucket_skipped_count": self.pre_live_bucket_skipped_count,
             "max_latency_ms": self.max_latency_ms,
+            "cycle_status": self.cycle_status,
+            "cycle_reason": self.cycle_reason,
+            "state_store_lock_timeout_count": self.state_store_lock_timeout_count,
+            "stale_hot_path_skip_count": self.stale_hot_path_skip_count,
+            "symbols_total": self.symbols_total,
+            "close_due_candles_closed_count": self.close_due_candles_closed_count,
+            "close_due_candles_ms": self.close_due_candles_ms,
+            "decision_snapshot_ms": self.decision_snapshot_ms,
+            "deadline_engine_ms": self.deadline_engine_ms,
         }
 
 
@@ -453,11 +471,28 @@ class Live2DeadlineEngine:
         self._total_rejected = 0
         self._total_selected = 0
 
-    def run_cycle(self, *, now_ms: int | None = None) -> Live2DeadlineCycleResult:
+    def run_cycle(
+        self,
+        *,
+        now_ms: int | None = None,
+        candidates: tuple[SymbolState, ...] | None = None,
+        symbols_total: int | None = None,
+        skip_signal_evaluation_reason: str = "",
+    ) -> Live2DeadlineCycleResult:
         effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
         result = Live2DeadlineCycleResult()
-        candidates = self._fresh_first_candidates(self.state_store.decision_snapshot(), now_ms=effective_now_ms)
-        result.skipped_symbols = max(0, len(self.state_store) - len(candidates))
+        if candidates is None:
+            candidates = self.state_store.decision_snapshot()
+        candidates = self._fresh_first_candidates(candidates, now_ms=effective_now_ms)
+        total_symbols = len(candidates) if symbols_total is None else max(0, int(symbols_total))
+        result.symbols_total = total_symbols
+        result.skipped_symbols = max(0, total_symbols - len(candidates))
+        if skip_signal_evaluation_reason:
+            result.cycle_status = "skipped"
+            result.cycle_reason = skip_signal_evaluation_reason
+            result.stale_hot_path_skip_count = len(candidates)
+            self._last_cycle = result
+            return result
         live_watermark_ms = self.live_decision_watermark_ms()
         for state in candidates:
             result.checked_symbols += 1

@@ -662,10 +662,15 @@ def _ensure_csv(path: Path, fieldnames: tuple[str, ...]) -> None:
 
 def _write_csv(path: Path, fieldnames: tuple[str, ...], rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+    # Write closed-hour snapshots atomically so an operator copying artifacts while
+    # the worker is running never sees a half-written status file whose row count
+    # disagrees with top_growth_index.csv.
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+    tmp_path.replace(path)
 
 
 def _append_csv(path: Path, fieldnames: tuple[str, ...], row: dict[str, object]) -> None:

@@ -440,7 +440,18 @@ class Live2ArtifactWriter:
 
     def write_symbol_state(self, state_store: SymbolStateStore, *, aggtrade_stale_ms: int | None = None) -> None:
         now_ms = utc_now_ms()
-        rows = list(state_store.artifact_rows_snapshot(now_ms=now_ms, aggtrade_stale_ms=aggtrade_stale_ms))
+        rows_snapshot, complete, reason = state_store.artifact_rows_snapshot_bounded(
+            now_ms=now_ms,
+            aggtrade_stale_ms=aggtrade_stale_ms,
+            lock_timeout_ms=0,
+            max_lock_ms=250,
+        )
+        if not complete:
+            # Symbol-state CSV is operator UI, not the trading contract.  Keeping the
+            # previous complete file is safer than blocking the realtime state lock
+            # or writing a misleading partial grid during a hot path contention spike.
+            return
+        rows = list(rows_snapshot)
         base_fieldnames = [
             "symbol",
             "status",

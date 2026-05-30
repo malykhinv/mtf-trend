@@ -18,6 +18,7 @@ class AnomalyLive2Config:
     decision_latency_recovery_windows: int = 3
     decision_latency_wall_clock_gap_ms: int = 2_000
     decision_latency_degraded_hold_ms: int = 15_000
+    decision_state_lock_timeout_ms: int = 250
     market_data_recovery_windows: int = 3
     ticker_stale_ms: int = 5_000
     ticker_startup_wait_seconds: float = 10.0
@@ -115,6 +116,8 @@ class AnomalyLive2Config:
             raise ValueError("decision_latency_wall_clock_gap_ms must be > 0")
         if self.decision_latency_degraded_hold_ms <= 0:
             raise ValueError("decision_latency_degraded_hold_ms must be > 0")
+        if self.decision_state_lock_timeout_ms <= 0:
+            raise ValueError("decision_state_lock_timeout_ms must be > 0")
         if self.market_data_recovery_windows <= 0:
             raise ValueError("market_data_recovery_windows must be > 0")
         if self.ticker_stale_ms <= 0:

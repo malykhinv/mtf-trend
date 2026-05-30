@@ -602,15 +602,78 @@ class AnomalyLive2Runner:
             self._start_background_runtime_threads(writer)
             while not self._shutdown_requested:
                 cycle_started = time.perf_counter()
+                hot_path_started_ms = int(time.time() * 1000)
+                stale_hot_path_reason = ""
                 with self._runtime_metrics_lock:
                     if self._last_loop_started_monotonic is not None:
                         gap_ms = int(max(0.0, cycle_started - self._last_loop_started_monotonic) * 1000)
                         self._last_main_loop_gap_ms = gap_ms
                         self._main_loop_gap_max_ms = max(self._main_loop_gap_max_ms, gap_ms)
+                        if gap_ms > int(self.config.decision_latency_wall_clock_gap_ms):
+                            stale_hot_path_reason = "main_loop_wall_clock_gap_before_cycle"
                     self._last_loop_started_monotonic = cycle_started
-                decision_now_ms = int(time.time() * 1000)
-                self.state_store.close_due_candles(now_ms=decision_now_ms)
-                deadline_result = self.deadline_engine.run_cycle(now_ms=decision_now_ms)
+
+                close_due_started = time.perf_counter()
+                close_due_now_ms = int(time.time() * 1000)
+                closed_count, close_due_ok, close_due_reason = self.state_store.close_due_candles_bounded(
+                    now_ms=close_due_now_ms,
+                    lock_timeout_ms=self.config.decision_state_lock_timeout_ms,
+                )
+                close_due_ms = int(max(0.0, time.perf_counter() - close_due_started) * 1000)
+                if not close_due_ok:
+                    stale_hot_path_reason = close_due_reason
+
+                snapshot_ms = 0
+                deadline_engine_ms = 0
+                symbols_total = len(self.universe_selection.selected_symbols) if self.universe_selection is not None else 0
+                if close_due_ok:
+                    snapshot_started = time.perf_counter()
+                    candidates, snapshot_ok, snapshot_reason, snapshot_symbols_total = self.state_store.decision_snapshot_bounded(
+                        lock_timeout_ms=self.config.decision_state_lock_timeout_ms,
+                    )
+                    snapshot_ms = int(max(0.0, time.perf_counter() - snapshot_started) * 1000)
+                    if snapshot_symbols_total > 0:
+                        symbols_total = snapshot_symbols_total
+                    if not snapshot_ok:
+                        stale_hot_path_reason = snapshot_reason
+                        deadline_result = Live2DeadlineCycleResult(
+                            cycle_status="skipped",
+                            cycle_reason=snapshot_reason,
+                            state_store_lock_timeout_count=1,
+                            symbols_total=symbols_total,
+                            close_due_candles_closed_count=closed_count,
+                            close_due_candles_ms=close_due_ms,
+                            decision_snapshot_ms=snapshot_ms,
+                        )
+                    else:
+                        decision_now_ms = int(time.time() * 1000)
+                        pre_eval_age_ms = max(0, decision_now_ms - hot_path_started_ms)
+                        if not stale_hot_path_reason and pre_eval_age_ms > int(self.config.decision_latency_wall_clock_gap_ms):
+                            stale_hot_path_reason = "hot_path_stale_before_signal_evaluation"
+                        deadline_started = time.perf_counter()
+                        deadline_result = self.deadline_engine.run_cycle(
+                            now_ms=decision_now_ms,
+                            candidates=candidates,
+                            symbols_total=symbols_total,
+                            skip_signal_evaluation_reason=stale_hot_path_reason,
+                        )
+                        deadline_engine_ms = int(max(0.0, time.perf_counter() - deadline_started) * 1000)
+                        deadline_result.close_due_candles_closed_count = closed_count
+                        deadline_result.close_due_candles_ms = close_due_ms
+                        deadline_result.decision_snapshot_ms = snapshot_ms
+                        deadline_result.deadline_engine_ms = deadline_engine_ms
+                else:
+                    deadline_result = Live2DeadlineCycleResult(
+                        cycle_status="skipped",
+                        cycle_reason=close_due_reason,
+                        state_store_lock_timeout_count=1,
+                        symbols_total=symbols_total,
+                        close_due_candles_closed_count=closed_count,
+                        close_due_candles_ms=close_due_ms,
+                        decision_snapshot_ms=0,
+                        deadline_engine_ms=0,
+                    )
+
                 hot_path_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
                 self._last_decision_cycle_elapsed_ms = hot_path_elapsed_ms
                 self._decision_loop_max_elapsed_ms = max(
@@ -628,6 +691,7 @@ class AnomalyLive2Runner:
                         writer.write_near_miss(near_miss_row)
                     self.telegram.notify_decision(decision)
 
+                gate_started = time.perf_counter()
                 market_data_status = self._market_data_status(include_symbol_counts=False)
                 self._refresh_runtime_gates(
                     writer=writer,
@@ -635,6 +699,11 @@ class AnomalyLive2Runner:
                     deadline_result=deadline_result,
                     decision_cycle_elapsed_ms=hot_path_elapsed_ms,
                 )
+                gate_ms = int(max(0.0, time.perf_counter() - gate_started) * 1000)
+                with self._runtime_metrics_lock:
+                    cycle_dict = dict(self._last_deadline_cycle)
+                    cycle_dict["runtime_gate_ms"] = gate_ms
+                    self._last_deadline_cycle = cycle_dict
 
                 elapsed = time.perf_counter() - cycle_started
                 sleep_seconds = self.config.decision_loop_interval_seconds - elapsed
@@ -1424,18 +1493,31 @@ class AnomalyLive2Runner:
         with self._runtime_metrics_lock:
             main_loop_gap_ms = int(self._last_main_loop_gap_ms)
         wall_clock_gap = main_loop_gap_ms > int(self.config.decision_latency_wall_clock_gap_ms)
+        cycle_skipped = str(getattr(deadline_result, "cycle_status", "ok") or "ok") != "ok"
+        state_lock_timeout = int(getattr(deadline_result, "state_store_lock_timeout_count", 0) or 0) > 0
+        stale_hot_path_skip = int(getattr(deadline_result, "stale_hot_path_skip_count", 0) or 0) > 0
         degraded = (
             deadline_result.deadline_missed_count > 0
             or deadline_result.deadline_expired_backlog_count > 0
             or deadline_result.max_latency_ms > self.config.decision_deadline_ms
             or loop_overrun
             or wall_clock_gap
+            or cycle_skipped
+            or state_lock_timeout
+            or stale_hot_path_skip
         )
         now_ms = int(time.time() * 1000)
         if degraded:
             self._decision_latency_degraded_windows += 1
             self._decision_latency_clean_windows = 0
-            if wall_clock_gap or deadline_result.deadline_missed_count > 0 or deadline_result.deadline_expired_backlog_count > 0:
+            if (
+                wall_clock_gap
+                or deadline_result.deadline_missed_count > 0
+                or deadline_result.deadline_expired_backlog_count > 0
+                or cycle_skipped
+                or state_lock_timeout
+                or stale_hot_path_skip
+            ):
                 self._latency_watchdog_degraded_until_ms = max(
                     self._latency_watchdog_degraded_until_ms,
                     now_ms + int(self.config.decision_latency_degraded_hold_ms),
@@ -1479,7 +1561,9 @@ class AnomalyLive2Runner:
             "main_loop_gap_max_ms": self._main_loop_gap_max_ms,
             "decision_latency_wall_clock_gap_ms": self.config.decision_latency_wall_clock_gap_ms,
             "decision_latency_degraded_hold_ms": self.config.decision_latency_degraded_hold_ms,
+            "decision_state_lock_timeout_ms": self.config.decision_state_lock_timeout_ms,
             "latency_watchdog_degraded_until_ms": self._latency_watchdog_degraded_until_ms,
+            "last_deadline_cycle": dict(self._last_deadline_cycle),
             "decision_latency_degraded_windows": self._decision_latency_degraded_windows,
             "decision_latency_clean_windows": self._decision_latency_clean_windows,
             "decision_latency_degraded_limit": self.config.decision_latency_degraded_windows,

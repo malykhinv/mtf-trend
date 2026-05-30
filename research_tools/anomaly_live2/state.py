@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 from math import isfinite
 from enum import StrEnum
@@ -1139,23 +1140,40 @@ class SymbolStateStore:
 
         closed_symbols = 0
         with self._lock:
-            for state in self._states.values():
-                if not state.universe_selected:
-                    continue
-                result = state.candle_book.close_due(now_ms=int(now_ms))
-                if result.closed_count <= 0:
-                    continue
-                state.candle_gap_count = state.candle_book.total_gap_count()
-                state.candle_out_of_order_count = state.candle_book.total_out_of_order_count()
-                if state.live_aggtrade_update_count > 0:
-                    state.candle_coverage_status = "live_ready"
-                elif state.startup_aggtrade_update_count > 0:
-                    state.candle_coverage_status = "startup_warmup_only"
-                else:
-                    state.candle_coverage_status = "not_ready"
-                state.decision_dirty_since_ms = int(now_ms)
-                state.mark_dirty(now_ms=int(now_ms))
-                closed_symbols += 1
+            closed_symbols = self._close_due_candles_locked(now_ms=int(now_ms))
+        return closed_symbols
+
+    def close_due_candles_bounded(self, *, now_ms: int, lock_timeout_ms: int) -> tuple[int, bool, str]:
+        """Finalize ended candles, but never wait indefinitely for reporting locks."""
+
+        timeout_seconds = max(0.0, float(lock_timeout_ms) / 1000.0)
+        acquired = self._lock.acquire(timeout=timeout_seconds)
+        if not acquired:
+            return 0, False, "state_store_lock_timeout_close_due_candles"
+        try:
+            return self._close_due_candles_locked(now_ms=int(now_ms)), True, "ok"
+        finally:
+            self._lock.release()
+
+    def _close_due_candles_locked(self, *, now_ms: int) -> int:
+        closed_symbols = 0
+        for state in self._states.values():
+            if not state.universe_selected:
+                continue
+            result = state.candle_book.close_due(now_ms=int(now_ms))
+            if result.closed_count <= 0:
+                continue
+            state.candle_gap_count = state.candle_book.total_gap_count()
+            state.candle_out_of_order_count = state.candle_book.total_out_of_order_count()
+            if state.live_aggtrade_update_count > 0:
+                state.candle_coverage_status = "live_ready"
+            elif state.startup_aggtrade_update_count > 0:
+                state.candle_coverage_status = "startup_warmup_only"
+            else:
+                state.candle_coverage_status = "not_ready"
+            state.decision_dirty_since_ms = int(now_ms)
+            state.mark_dirty(now_ms=int(now_ms))
+            closed_symbols += 1
         return closed_symbols
 
     def snapshot(self) -> tuple[SymbolState, ...]:
@@ -1176,6 +1194,41 @@ class SymbolStateStore:
                 for state in self._states.values()
             )
 
+    def artifact_rows_snapshot_bounded(
+        self,
+        *,
+        now_ms: int | None = None,
+        aggtrade_stale_ms: int | None = None,
+        lock_timeout_ms: int = 0,
+        max_lock_ms: int = 250,
+    ) -> tuple[tuple[dict[str, object], ...], bool, str]:
+        """Return artifact rows without letting reporting block the hot path.
+
+        The normal ``artifact_rows_snapshot`` is exact but can hold the global
+        state lock while every symbol row expands candle-ring summaries.  That is
+        fine for shutdown, but a live status reporter must never block websocket
+        ingestion or the deadline loop for tens of seconds.  This method either
+        obtains the lock immediately/quickly and finishes within a small budget,
+        or returns ``complete=False`` so the caller can skip this cosmetic grid
+        refresh and keep the last good file.
+        """
+
+        timeout_seconds = max(0.0, float(lock_timeout_ms) / 1000.0)
+        acquired = self._lock.acquire(timeout=timeout_seconds)
+        if not acquired:
+            return (), False, "state_store_lock_busy"
+        started = time.perf_counter()
+        try:
+            rows: list[dict[str, object]] = []
+            max_seconds = max(0.001, float(max_lock_ms) / 1000.0)
+            for state in self._states.values():
+                rows.append(state.to_artifact_row(now_ms=now_ms, aggtrade_stale_ms=aggtrade_stale_ms))
+                if time.perf_counter() - started > max_seconds:
+                    return tuple(rows), False, "state_store_symbol_rows_budget_exceeded"
+            return tuple(rows), True, "ok"
+        finally:
+            self._lock.release()
+
     def decision_snapshot(self) -> tuple[SymbolState, ...]:
         with self._lock:
             return tuple(
@@ -1183,6 +1236,23 @@ class SymbolStateStore:
                 for state in self._states.values()
                 if state.universe_selected and state.decision_dirty_since_ms is not None
             )
+
+    def decision_snapshot_bounded(self, *, lock_timeout_ms: int) -> tuple[tuple[SymbolState, ...], bool, str, int]:
+        """Return deadline candidates without allowing lock contention to stale timestamps."""
+
+        timeout_seconds = max(0.0, float(lock_timeout_ms) / 1000.0)
+        acquired = self._lock.acquire(timeout=timeout_seconds)
+        if not acquired:
+            return (), False, "state_store_lock_timeout_decision_snapshot", 0
+        try:
+            candidates = tuple(
+                state
+                for state in self._states.values()
+                if state.universe_selected and state.decision_dirty_since_ms is not None
+            )
+            return candidates, True, "ok", len(self._states)
+        finally:
+            self._lock.release()
 
     def counts_by_status(self) -> dict[str, int]:
         counts: dict[str, int] = {status.value: 0 for status in SymbolLive2Status}

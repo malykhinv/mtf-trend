@@ -2157,6 +2157,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 decision_backlog_expire_ms=int(getattr(args, "decision_backlog_expire_ms", 10_000)),
                 decision_latency_wall_clock_gap_ms=int(getattr(args, "decision_latency_wall_clock_gap_ms", 2_000)),
                 decision_latency_degraded_hold_ms=int(getattr(args, "decision_latency_degraded_hold_ms", 15_000)),
+                decision_state_lock_timeout_ms=int(getattr(args, "decision_state_lock_timeout_ms", 250)),
                 startup_warmup_lookback_minutes=int(getattr(args, "startup_warmup_lookback_minutes", 15)),
                 startup_warmup_max_trades_per_symbol=int(getattr(args, "startup_warmup_max_trades_per_symbol", 1000)),
                 startup_warmup_max_pages_per_symbol=int(getattr(args, "startup_warmup_max_pages_per_symbol", 1)),
