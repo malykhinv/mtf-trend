@@ -3567,3 +3567,7 @@ P462 removed the observed deadline-miss bottleneck without top-K selection: all 
 P463 separates critical append-only audit writes from non-critical snapshot/status writes, overlaps independent startup warmups, makes user-data readiness more explicit, accelerates top-growth completion, and makes console output compact during warmup and grid-only after startup. Trading filters, entry contract, execution, fills, stops, and PnL logic are not changed.
 
 Next validation: run live2 without opening/copying current artifact CSVs if possible, but also deliberately copy/zip the run folder during live once. Accept if a transient `live2_symbol_state.csv` lock increments `artifact_writer_status.noncritical_error_count` without disabling `new_entries_allowed`; reject if any critical event/near-miss writer error occurs. Also compare startup wall-clock against the previous ~29 minutes and inspect user-data status fields separately: `transport_ready`, `payload_seen`, `order_event_seen`.
+
+## 2026-05-30 — P464 proposed
+
+P464 is PROPOSED / UNKNOWN commit. It fixes live2 operator console hygiene after P463: stdout should expose only two repainting surfaces, startup warmup and live grid. Retry warnings, command logger lines, and background thread tracebacks are routed to run artifacts instead of corrupting the terminal UI. No trading logic changed.

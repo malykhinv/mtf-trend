@@ -10077,3 +10077,18 @@ Risk:
 ```text
 Startup now uses two concurrent public REST warmups and two concurrent context prewarms. If Binance rate-limit errors rise, reduce the overlapping startup concurrency or add an explicit shared rate gate before changing trading filters. Non-critical snapshot write failures are visible in artifact_writer_status but no longer block entries; critical audit stream failures still block entries.
 ```
+
+## P464 live2 operator console isolation — PROPOSED / UNKNOWN commit
+
+Reason: P463 made startup progress compact, but ordinary logging StreamHandlers, retry warnings, and uncaught background-thread tracebacks could still write into stdout/stderr and split the repainting warmup/grid UI.
+
+Changes:
+- live2 operator console is now a single repainting ANSI surface; it clears and redraws the full operator block instead of appending snapshot blocks;
+- run-anomaly-live2 uses file-only command logging, so command start/finish lines are not printed to console;
+- non-operator stdout/stderr and existing console logging handlers are redirected to `live2_suppressed_stdout.log` / `live2_suppressed_stderr.log` inside the run artifacts;
+- exchange retry diagnostics for live2 use a file-only logger;
+- top-growth background worker exceptions are caught and written to `live2_events.csv` instead of printing a thread traceback.
+
+Risk: terminal UI only. Trading logic, signal selection, order placement, and data artifacts are unchanged.
+
+Verification: run `python -m compileall data/exchanges research_tools cli constants.py main.py`; then live-smoke must show only the repainting warmup block before readiness and the repainting grid after readiness. Detailed errors must appear in artifacts only.

@@ -53,6 +53,8 @@ def get_logger(
     name: str,
     level: int | str = logging.INFO,
     logs_dir: str | Path = DEFAULT_LOGS_DIR,
+    *,
+    console_output: bool = True,
 ) -> logging.Logger:
     """Создает или возвращает настроенный логгер в формате `ЧЧ:ММ:СС Сообщение`."""
     if isinstance(level, str):
@@ -68,10 +70,11 @@ def get_logger(
     file_path = resolved_logs_dir / f"{name}.log"
 
     if not logger.handlers:
-        stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(resolved_level)
-        stream_handler.setFormatter(_ColorFormatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
-        logger.addHandler(stream_handler)
+        if console_output:
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel(resolved_level)
+            stream_handler.setFormatter(_ColorFormatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
+            logger.addHandler(stream_handler)
 
         file_handler = RotatingFileHandler(
             file_path,
@@ -83,7 +86,30 @@ def get_logger(
         file_handler.setFormatter(logging.Formatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
         logger.addHandler(file_handler)
     else:
+        has_file_handler = False
+        has_stream_handler = False
         for handler in logger.handlers:
-            handler.setLevel(resolved_level)
+            if isinstance(handler, RotatingFileHandler):
+                has_file_handler = True
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                has_stream_handler = True
+                handler.setLevel(resolved_level if console_output else logging.CRITICAL + 1)
+            else:
+                handler.setLevel(resolved_level)
+        if console_output and not has_stream_handler:
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel(resolved_level)
+            stream_handler.setFormatter(_ColorFormatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
+            logger.addHandler(stream_handler)
+        if not has_file_handler:
+            file_handler = RotatingFileHandler(
+                file_path,
+                maxBytes=LOGGER_FILE_MAX_BYTES,
+                backupCount=LOGGER_FILE_BACKUP_COUNT,
+                encoding=LOGGER_FILE_ENCODING,
+            )
+            file_handler.setLevel(resolved_level)
+            file_handler.setFormatter(logging.Formatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
+            logger.addHandler(file_handler)
 
     return logger

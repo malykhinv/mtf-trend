@@ -258,6 +258,8 @@ class AnomalyLive2Runner:
             self.config.output_dir,
             queue_max_size=self.config.artifact_writer_queue_max_size,
         )
+        console_isolation = self.status_logger.isolate_console(self.config.output_dir)
+        console_isolation.__enter__()
         try:
             self._set_startup_status("инициализация", "готовлю артефакты и preflight")
             self.telegram.set_event_writer(writer.write_event)
@@ -763,24 +765,27 @@ class AnomalyLive2Runner:
             )
             raise
         finally:
-            self.status_logger.finish_status()
-            self._shutdown_requested = True
-            self._join_background_runtime_threads(timeout_seconds=2.0)
-            if self.user_data_source is not None:
-                self.user_data_source.close()
-            self.rolling_context_maintenance_source.close()
-            if self.prior_context_source is not None:
-                self.prior_context_source.close()
-            if self.open_interest_source is not None:
-                self.open_interest_source.close()
-            if self.mark_price_source is not None:
-                self.mark_price_source.close()
-            if self.aggtrade_source is not None:
-                self.aggtrade_source.close()
-            self.ticker_source.close()
-            self._flush_top_growth_audit_on_shutdown(writer, reason=self._shutdown_reason or "runner_finally")
-            self.telegram.close()
-            writer.close()
+            try:
+                self.status_logger.finish_status()
+                self._shutdown_requested = True
+                self._join_background_runtime_threads(timeout_seconds=2.0)
+                if self.user_data_source is not None:
+                    self.user_data_source.close()
+                self.rolling_context_maintenance_source.close()
+                if self.prior_context_source is not None:
+                    self.prior_context_source.close()
+                if self.open_interest_source is not None:
+                    self.open_interest_source.close()
+                if self.mark_price_source is not None:
+                    self.mark_price_source.close()
+                if self.aggtrade_source is not None:
+                    self.aggtrade_source.close()
+                self.ticker_source.close()
+                self._flush_top_growth_audit_on_shutdown(writer, reason=self._shutdown_reason or "runner_finally")
+                self.telegram.close()
+                writer.close()
+            finally:
+                console_isolation.__exit__(None, None, None)
         return 0
 
     def _start_background_runtime_threads(self, writer: Live2ArtifactWriter) -> None:
@@ -865,6 +870,7 @@ class AnomalyLive2Runner:
         self.session_top_tracker.update_from_state_snapshot(self.state_store.snapshot())
         self._last_session_top_snapshot = self.session_top_tracker.snapshot()
         self._kick_top_growth_audit(
+            writer=writer,
             symbols=self._selected_symbols_tuple(),
             now_ms=now_ms,
         )
@@ -1005,7 +1011,7 @@ class AnomalyLive2Runner:
         )
 
     def _set_startup_status(self, stage: str, message: str) -> None:
-        self.status_logger.status(f"Live2 · {stage}: {message}")
+        self.status_logger.status(f"Прогрев {stage} · {message}")
 
     def _set_warmup_progress_status(self, progress: Live2StartupWarmupProgress) -> None:
         self._set_startup_progress_line(
@@ -1671,21 +1677,40 @@ class AnomalyLive2Runner:
             return ()
         return tuple(self.universe_selection.selected_symbols)
 
-    def _kick_top_growth_audit(self, *, symbols: tuple[str, ...], now_ms: int) -> None:
+    def _kick_top_growth_audit(self, *, writer: Live2ArtifactWriter, symbols: tuple[str, ...], now_ms: int) -> None:
         with self._top_growth_audit_lock:
             if self._top_growth_audit_worker is not None and self._top_growth_audit_worker.is_alive():
                 return
 
             def run_worker() -> None:
-                stats = self.top_growth_audit.process_due(symbols=symbols, now_ms=now_ms)
-                while stats.status == "processing" and not self._shutdown_requested:
+                try:
+                    stats = self.top_growth_audit.process_due(symbols=symbols, now_ms=now_ms)
+                    while stats.status == "processing" and not self._shutdown_requested:
+                        with self._top_growth_audit_lock:
+                            self._last_top_growth_audit_stats = stats
+                        stats = self.top_growth_audit.process_due(symbols=symbols, now_ms=now_ms)
                     with self._top_growth_audit_lock:
                         self._last_top_growth_audit_stats = stats
-                    stats = self.top_growth_audit.process_due(symbols=symbols, now_ms=now_ms)
-                with self._top_growth_audit_lock:
-                    self._last_top_growth_audit_stats = stats
-                    if stats.status == "completed":
-                        self._top_growth_completed_events.append(stats.as_dict())
+                        if stats.status == "completed":
+                            self._top_growth_completed_events.append(stats.as_dict())
+                except Exception as exc:
+                    stats = Live2TopGrowthAuditStats(
+                        enabled=self.config.top_growth_enabled,
+                        status="error",
+                        reason=f"{type(exc).__name__}: {str(exc)[:240]}",
+                    )
+                    with self._top_growth_audit_lock:
+                        self._last_top_growth_audit_stats = stats
+                    writer.write_event(
+                        Live2Event(
+                            event_type="live2_top_growth_audit_error",
+                            component=Live2Component.RUNNER,
+                            severity=Live2Severity.ERROR,
+                            symbol="__top_growth__",
+                            message=stats.reason,
+                            data={"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                        )
+                    )
 
             self._last_top_growth_audit_stats = Live2TopGrowthAuditStats(
                 enabled=self.config.top_growth_enabled,

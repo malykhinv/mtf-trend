@@ -320,11 +320,18 @@ def _build_futures_symbol_map(symbols: list[str]) -> dict[str, str]:
     }
 
 
-def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
+def _run_with_logging(
+    command_name: str,
+    config: AppConfig,
+    body: Callable[[], int],
+    *,
+    console_output: bool = True,
+) -> int:
     logger = get_logger(
         command_name,
         level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
+        console_output=console_output,
     )
     logger.debug("Команда запущена: %s", command_name)
     try:
@@ -334,7 +341,8 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
     except KeyboardInterrupt:
         message = f"Команда остановлена пользователем: {command_name}"
         logger.info(message)
-        print(message, flush=True)
+        if console_output:
+            print(message, flush=True)
         return 130
     except Exception as exc:
         logger.exception("Ошибка: %s", exc)
@@ -2143,8 +2151,17 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
             output_dir = config.backtest.results_dir / "live2_anomaly_runs" / run_id
         symbols_arg = getattr(args, "symbols", None)
         symbols = tuple(str(symbol).strip() for symbol in (symbols_arg or ()) if str(symbol).strip())
-        print(f"live2 · подготовка · артефакты {output_dir} · symbols {len(symbols) if symbols else 'auto'}", flush=True)
         _, exchange_client, _ = _build_fetch_stack(config)
+        set_retry_logger = getattr(exchange_client, "set_retry_logger", None)
+        if callable(set_retry_logger):
+            set_retry_logger(
+                get_logger(
+                    "run-anomaly-live2-exchange",
+                    level=config.backtest.log_level,
+                    logs_dir=config.backtest.logs_dir,
+                    console_output=False,
+                )
+            )
         runner = AnomalyLive2Runner(
             AnomalyLive2Config(
                 output_dir=output_dir,
@@ -2211,7 +2228,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
         )
         return runner.run()
 
-    return _run_with_logging("run-anomaly-live2", config, _run)
+    return _run_with_logging("run-anomaly-live2", config, _run, console_output=False)
 
 
 def run_live_order_smoke(config: AppConfig, args: argparse.Namespace) -> int:
