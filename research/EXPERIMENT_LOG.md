@@ -4641,3 +4641,9 @@ Additional static sweep used for live2: import all `research_tools.anomaly_live2
 Hypothesis: removing heavy routine payloads and REST repair from the decision hot path improves live2 latency without creating hidden data holes, because WS candles remain the source of live flow and missing rolling context remains visible until background official-1m maintenance fills it.
 
 Protocol after P459: run live2 for 60-90 minutes. Accept only if `market_data_ready_for_entries=true`, WS stale shard count remains 0, `rolling_context_maintenance.total_errors=0`, `symbol_status_counts.in_position == execution_status.open_protected_positions`, selected/entry/execution rows remain present in events after budget pressure, and top-growth status has normal `ok`/`below_threshold` rows for the closed hour. If `data_dependency_not_ready` remains high, split it by 30s aggTrade gaps vs true 1m maintenance lag before touching strategy thresholds.
+
+## 2026-05-30 - P460 rolling 1m continuity validation protocol
+
+Hypothesis: high `rolling_1m_history_not_ready` after P459 is caused by recent 1m continuity gaps behind a fresh WS-built tail, not by broken sockets or insufficient ring capacity.
+
+Protocol after P460: run live2 for 60-90 minutes. Accept only if `rolling_1m_maintenance_recent_contiguous_count` is populated in `live2_symbol_state.csv`, maintenance has `total_errors=0`, and `signal_engine.dependency_reason_counts` no longer clusters around tiny histories like `0/348`, `1/348`, `1/540`. If `rolling_1m_history_not_ready` persists, inspect symbols whose contiguous count is below 720 and check whether REST responses are missing candles or maintenance scheduling is too slow.

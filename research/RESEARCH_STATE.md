@@ -3520,3 +3520,11 @@ Current commit: UNKNOWN. Status: P459 PROPOSED.
 Run `20260529_190712` showed that data-ingestion sockets were healthy, but product health still failed on runtime hygiene: decision latency degraded, routine event payloads exhausted raw budgets, protected positions stayed `watching` in the grid, and top-growth partial status contained only `empty_ohlcv` rows. P459 keeps socket ingestion untouched and moves the remaining cleanup to audit/state/projection boundaries: compact routine decision events, sync protected position state into the grid, defer hot-path REST repair to background 1m maintenance, and fetch top-growth from explicit closed Binance 1h klines.
 
 Next validation after restart: `symbol_status_counts.in_position` must match `execution_status.open_protected_positions`, routine raw event file growth must slow materially, `decision_loop_overrun_count` should stop climbing from REST repair stalls, and top-growth status should contain `ok` / `below_threshold` rows rather than all `empty_ohlcv` for normal Binance symbols.
+
+## 2026-05-30 - P460 live2 data-health state
+
+Current commit: UNKNOWN. Status: P460 PROPOSED.
+
+Run `20260530_065636` proved that sockets, writer, graceful shutdown, and top-growth partial artifacts are materially healthier after P454-P459, but rolling C/A/S remained mostly blocked by `rolling_1m_history_not_ready`. Artifact rows showed `max_closed_candles=3000` and thousands of 1m candles for major symbols, so the earlier ring-capacity diagnosis was incomplete. The actual issue is maintenance currentness: a fresh latest 1m candle does not prove the preceding recent 1m context is contiguous. P460 changes maintenance to require contiguous recent official 1m coverage and to backfill bounded official-klines gaps behind a fresh tail.
+
+Next validation: run live2 after P460 and require `rolling_1m_maintenance_recent_contiguous_count` to climb toward the configured lookback for active symbols, while `rolling_1m_history_not_ready` drops sharply. If dependency rejects remain high, separate true 30s aggTrade gap reasons from residual 1m context lag.

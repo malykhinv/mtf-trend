@@ -216,6 +216,7 @@ class SymbolState:
     rolling_1m_maintenance_candles_loaded_total: int = 0
     rolling_1m_maintenance_latest_open_time_ms: int | None = None
     rolling_1m_maintenance_expected_open_time_ms: int | None = None
+    rolling_1m_maintenance_recent_contiguous_count: int = 0
     rolling_1m_maintenance_source: str = ""
     rolling_1m_maintenance_status: str = "not_seen"
     rolling_1m_maintenance_reason: str = ""
@@ -582,6 +583,7 @@ class SymbolState:
         candles_loaded: int,
         latest_open_time_ms: int | None,
         expected_open_time_ms: int | None,
+        recent_contiguous_count: int = 0,
     ) -> None:
         if self.rolling_1m_maintenance_first_seen_ms is None:
             self.rolling_1m_maintenance_first_seen_ms = fetched_at_ms
@@ -590,6 +592,7 @@ class SymbolState:
         self.rolling_1m_maintenance_candles_loaded_total += max(0, int(candles_loaded))
         self.rolling_1m_maintenance_latest_open_time_ms = latest_open_time_ms
         self.rolling_1m_maintenance_expected_open_time_ms = expected_open_time_ms
+        self.rolling_1m_maintenance_recent_contiguous_count = max(0, int(recent_contiguous_count))
         self.rolling_1m_maintenance_source = source
         self.rolling_1m_maintenance_status = status
         self.rolling_1m_maintenance_reason = reason
@@ -777,6 +780,7 @@ class SymbolState:
             "rolling_1m_maintenance_candles_loaded_total": self.rolling_1m_maintenance_candles_loaded_total,
             "rolling_1m_maintenance_latest_open_time_ms": self.rolling_1m_maintenance_latest_open_time_ms,
             "rolling_1m_maintenance_expected_open_time_ms": self.rolling_1m_maintenance_expected_open_time_ms,
+            "rolling_1m_maintenance_recent_contiguous_count": self.rolling_1m_maintenance_recent_contiguous_count,
             "rolling_1m_maintenance_source": self.rolling_1m_maintenance_source,
             "rolling_1m_maintenance_status": self.rolling_1m_maintenance_status,
             "rolling_1m_maintenance_reason": self.rolling_1m_maintenance_reason,
@@ -1047,6 +1051,7 @@ class SymbolStateStore:
         candles_loaded: int,
         latest_open_time_ms: int | None,
         expected_open_time_ms: int | None,
+        recent_contiguous_count: int = 0,
     ) -> None:
         with self._lock:
             state = self.get_or_create(symbol)
@@ -1058,6 +1063,7 @@ class SymbolStateStore:
                 candles_loaded=candles_loaded,
                 latest_open_time_ms=latest_open_time_ms,
                 expected_open_time_ms=expected_open_time_ms,
+                recent_contiguous_count=recent_contiguous_count,
             )
 
     def update_aggtrade_many(self, trades: tuple[Live2AggTradeEvent, ...], *, received_at_ms: int) -> None:

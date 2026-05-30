@@ -9958,3 +9958,28 @@ Risk:
 ```text
 A rolling-context gap may remain visible for one or more maintenance cycles instead of being synchronously repaired inside the signal evaluation. This is intentional: the live bot should preserve low-latency socket/decision processing and expose the gap, not block the hot path on REST. Trading entries still require fresh WS flow, live price guard, actual fill, and verified stop.
 ```
+
+## 2026-05-30 - P460 live2 rolling 1m maintenance gap bridge
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes the remaining high `rolling_1m_history_not_ready` seen in run `20260530_065636`. The problem was not socket health and not ring capacity in the patched run: 1m rings already held ~3000 candles. The product bug was that background maintenance treated a symbol as current when the latest 1m candle existed, even if a no-trade gap immediately before that fresh WS-built tail broke the contiguous rolling baseline. Maintenance now verifies recent contiguous official 1m coverage up to the expected closed minute and fetches a bounded official-kline lookback window when the tail is fresh but not contiguous.
+
+Changes:
+
+- Increase default maintenance lookback to 720 closed 1m candles so one bounded request can bridge long post-startup gaps without touching the decision hot path.
+- Add `rolling_1m_maintenance_recent_contiguous_count` to symbol artifacts.
+- Do not skip maintenance solely because `latest_open >= expected_open`; require contiguous recent 1m coverage as well.
+- Keep WS aggTrade 30s decision flow untouched; official 1m klines remain baseline/dormancy context only.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Initial maintenance may fetch a larger 1m lookback for symbols whose recent tail is fresh but internally gappy. This increases REST rows per repaired symbol, but not request count. If Binance rate-limit errors appear, lower max_symbols_per_cycle or add auto-degrade before changing trading logic.
+```

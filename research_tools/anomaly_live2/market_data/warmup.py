@@ -809,6 +809,7 @@ class Live2RollingContextMaintenanceResult:
     end_open_time_ms: int | None = None
     candles_loaded: int = 0
     latest_open_time_ms: int | None = None
+    recent_contiguous_count: int = 0
     source: str = LIVE2_ROLLING_CONTEXT_MAINTENANCE_SOURCE
     error: str = ""
 
@@ -972,32 +973,46 @@ class Live2RollingContextMaintenance:
             )
         state = self._state_for_symbol(symbol)
         latest_open_ms = _latest_closed_1m_open_ms(state)
-        if latest_open_ms is not None and latest_open_ms >= expected_open_ms:
+        timeframe_ms = int(Timeframe.M1.to_milliseconds())
+        lookback_start_ms = max(0, expected_open_ms - (int(self.config.lookback_minutes) - 1) * timeframe_ms)
+        required_recent = int(self.config.lookback_minutes)
+        recent_contiguous_count = _recent_contiguous_1m_count_from_state(
+            state,
+            expected_open_ms=expected_open_ms,
+        )
+        if (
+            latest_open_ms is not None
+            and latest_open_ms >= expected_open_ms
+            and recent_contiguous_count >= required_recent
+        ):
             self.state_store.update_rolling_context_maintenance(
                 symbol=symbol,
                 fetched_at_ms=fetched_at_ms,
                 status="current",
-                reason="rolling_1m_context_current",
+                reason="rolling_1m_context_current_and_contiguous",
                 source=self.source_id,
                 candles_loaded=0,
                 latest_open_time_ms=latest_open_ms,
                 expected_open_time_ms=expected_open_ms,
+                recent_contiguous_count=recent_contiguous_count,
             )
             return Live2RollingContextMaintenanceResult(
                 symbol=symbol,
                 status="current",
-                reason="rolling_1m_context_current",
+                reason="rolling_1m_context_current_and_contiguous",
                 fetched_at_ms=fetched_at_ms,
                 expected_open_time_ms=expected_open_ms,
                 latest_open_time_ms=latest_open_ms,
+                recent_contiguous_count=recent_contiguous_count,
             )
-        timeframe_ms = int(Timeframe.M1.to_milliseconds())
-        if latest_open_ms is None:
-            start_open_ms = max(0, expected_open_ms - (int(self.config.lookback_minutes) - 1) * timeframe_ms)
+        if latest_open_ms is None or recent_contiguous_count < required_recent:
+            # A symbol can have a fresh WS-built 1m tail while still having a
+            # no-trade gap immediately before it.  Fetch the bounded official
+            # kline lookback window to bridge those zero-volume minutes instead
+            # of treating a fresh tail as complete context.
+            start_open_ms = lookback_start_ms
         else:
-            catchup_start_ms = int(latest_open_ms) + timeframe_ms
-            lookback_start_ms = max(0, expected_open_ms - (int(self.config.lookback_minutes) - 1) * timeframe_ms)
-            start_open_ms = max(catchup_start_ms, lookback_start_ms)
+            start_open_ms = max(int(latest_open_ms) + timeframe_ms, lookback_start_ms)
         if start_open_ms > expected_open_ms:
             self.state_store.update_rolling_context_maintenance(
                 symbol=symbol,
@@ -1008,6 +1023,7 @@ class Live2RollingContextMaintenance:
                 candles_loaded=0,
                 latest_open_time_ms=latest_open_ms,
                 expected_open_time_ms=expected_open_ms,
+                recent_contiguous_count=recent_contiguous_count,
             )
             return Live2RollingContextMaintenanceResult(
                 symbol=symbol,
@@ -1016,6 +1032,7 @@ class Live2RollingContextMaintenance:
                 fetched_at_ms=fetched_at_ms,
                 expected_open_time_ms=expected_open_ms,
                 latest_open_time_ms=latest_open_ms,
+                recent_contiguous_count=recent_contiguous_count,
             )
         if self.exchange_client is None or not isinstance(self.exchange_client, Live2StartupHtfBaselineExchange):
             return Live2RollingContextMaintenanceResult(
@@ -1055,6 +1072,7 @@ class Live2RollingContextMaintenance:
                 candles_loaded=0,
                 latest_open_time_ms=latest_open_ms,
                 expected_open_time_ms=expected_open_ms,
+                recent_contiguous_count=recent_contiguous_count,
             )
             return Live2RollingContextMaintenanceResult(
                 symbol=symbol,
@@ -1065,6 +1083,7 @@ class Live2RollingContextMaintenance:
                 start_open_time_ms=start_open_ms,
                 end_open_time_ms=expected_open_ms,
                 latest_open_time_ms=latest_open_ms,
+                recent_contiguous_count=recent_contiguous_count,
                 error=f"{type(exc).__name__}:{str(exc)[:180]}",
             )
         if candles:
@@ -1076,6 +1095,11 @@ class Live2RollingContextMaintenance:
             latest_loaded_open_ms = latest_open_ms
             status = "empty"
             reason = "rolling_1m_context_maintenance_empty_response"
+        refreshed_state = self._state_for_symbol(symbol)
+        recent_contiguous_after = _recent_contiguous_1m_count_from_state(
+            refreshed_state,
+            expected_open_ms=expected_open_ms,
+        )
         self.state_store.update_rolling_context_maintenance(
             symbol=symbol,
             fetched_at_ms=fetched_at_ms,
@@ -1085,6 +1109,7 @@ class Live2RollingContextMaintenance:
             candles_loaded=len(candles),
             latest_open_time_ms=latest_loaded_open_ms,
             expected_open_time_ms=expected_open_ms,
+            recent_contiguous_count=recent_contiguous_after,
         )
         return Live2RollingContextMaintenanceResult(
             symbol=symbol,
@@ -1096,6 +1121,7 @@ class Live2RollingContextMaintenance:
             end_open_time_ms=expected_open_ms,
             candles_loaded=len(candles),
             latest_open_time_ms=latest_loaded_open_ms,
+            recent_contiguous_count=recent_contiguous_after,
         )
 
     def _eligible_symbols(self, *, now_ms: int) -> tuple[str, ...]:
@@ -1112,7 +1138,15 @@ class Live2RollingContextMaintenance:
             if last_poll_ms > 0 and int(now_ms) - int(last_poll_ms) < cooldown_ms:
                 continue
             latest_open_ms = _latest_closed_1m_open_ms(state)
-            if latest_open_ms is not None and latest_open_ms >= expected_open_ms:
+            recent_contiguous_count = _recent_contiguous_1m_count_from_state(
+                state,
+                expected_open_ms=expected_open_ms,
+            )
+            if (
+                latest_open_ms is not None
+                and latest_open_ms >= expected_open_ms
+                and recent_contiguous_count >= int(self.config.lookback_minutes)
+            ):
                 continue
             priority = _rolling_context_maintenance_priority(state, now_ms=now_ms, active_ttl_ms=self.config.active_symbol_ttl_ms)
             scored.append((priority, int(last_poll_ms), symbol))
@@ -1145,6 +1179,26 @@ def _latest_closed_1m_open_ms(state: SymbolState | None) -> int | None:
     if ring is None or not ring.closed:
         return None
     return int(ring.closed[-1].open_time_ms)
+
+
+def _recent_contiguous_1m_count_from_state(
+    state: SymbolState | None,
+    *,
+    expected_open_ms: int,
+) -> int:
+    if state is None or expected_open_ms <= 0:
+        return 0
+    timeframe_ms = int(Timeframe.M1.to_milliseconds())
+    ring = state.candle_book.rings.get(timeframe_ms)
+    if ring is None or not ring.closed:
+        return 0
+    available = {int(item.open_time_ms) for item in ring.closed if int(item.open_time_ms) <= int(expected_open_ms)}
+    count = 0
+    cursor_ms = int(expected_open_ms)
+    while cursor_ms in available:
+        count += 1
+        cursor_ms -= timeframe_ms
+    return count
 
 
 def _last_closed_1m_open_ms(*, now_ms: int, closed_candle_lag_ms: int) -> int:

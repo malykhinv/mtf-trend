@@ -62,7 +62,7 @@ class AnomalyLive2Config:
     rolling_context_maintenance_enabled: bool = True
     rolling_context_maintenance_poll_interval_seconds: float = 10.0
     rolling_context_maintenance_symbol_cooldown_seconds: float = 60.0
-    rolling_context_maintenance_lookback_minutes: int = 180
+    rolling_context_maintenance_lookback_minutes: int = 720
     rolling_context_maintenance_max_symbols_per_cycle: int = 8
     rolling_context_maintenance_request_sleep_seconds: float = 0.02
     rolling_context_maintenance_active_symbol_ttl_ms: int = 60_000
