@@ -1,3 +1,29 @@
+## 2026-05-30 - P462 live2 all-symbol baseline-free deadline gate
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes the main runtime bottleneck seen in the Ctrl+C live artifact review without adding top-K blindness. The deadline engine now runs an exact baseline-free impossibility gate before the expensive rolling context/category evaluation. The gate observes every dirty symbol, but skips full signal evaluation only when closed 30s candles already prove the rolling C/A/S contract cannot pass.
+
+Changes:
+
+- Add `Live2SignalEngine.evaluate_baseline_free_prefilter()` for deterministic no-baseline rejects.
+- Reject only on exact prerequisites already required by full rolling evaluation: contiguous confirmation, LTF return/acceleration shape, HTF seed availability/return, confirmation not undercutting HTF low, and structural risk cap.
+- Preserve full evaluation for candidates with aggTrade gap dependencies or anything that may still pass after baseline/dormancy/category checks.
+- Add timing fields for the baseline-free prefilter and expose `total_baseline_free_prefilter_rejected` in signal-engine status.
+- Align default live2 decision engine cycle budget with the 1500 ms decision deadline instead of stopping at 1000 ms.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+The gate must remain a strict impossibility proof, not a quality ranker. Do not add baseline ratio estimates, category-like thresholds, symbols top-K, or outcome-like filters here. If false rejects are suspected, compare prefilter reject reasons with full signal evaluation on an offline replay sample.
+```
+
 ## 2026-05-30 - P449 proposed - live2 entry/stop audit truthfulness hygiene
 
 Status: PROPOSED against uploaded workspace / commit UNKNOWN.

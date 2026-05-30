@@ -145,6 +145,7 @@ class Live2SignalEngine:
         self.prior_context_stale_ms = None if prior_context_stale_ms is None else int(prior_context_stale_ms)
         self.rolling_context_repair = rolling_context_repair
         self._total_evaluations = 0
+        self._total_baseline_free_prefilter_rejected = 0
         self._total_selected = 0
         self._total_rejected = 0
         self._total_data_dependency_not_ready = 0
@@ -239,6 +240,46 @@ class Live2SignalEngine:
             reject_reasons=reject_reasons or ("no_rolling_runner_category_accepted",),
         )
 
+    def evaluate_baseline_free_prefilter(
+        self,
+        *,
+        state: SymbolState,
+        candle: Live2Candle,
+        actionable_reason: str,
+    ) -> Live2SignalDecision | None:
+        """Reject candidates that cannot pass the rolling runner contract without 1m baseline work.
+
+        This is not top-K prioritisation and not a lossy shortcut: it only uses
+        exact baseline-free prerequisites that the full rolling contract checks
+        again later.  If the function returns ``None``, the candidate still gets
+        the full signal evaluation.
+        """
+
+        reason = _rolling_baseline_free_prefilter_reject_reason(state=state, decision_candle=candle)
+        if not reason:
+            return None
+        self._total_baseline_free_prefilter_rejected += 1
+        self._hot_path_feature_mode_counts["rolling_baseline_free_prefilter"] += 1
+        return self._reject(
+            reason,
+            features={
+                "actionable_reason": actionable_reason,
+                "feature_mode": "rolling_baseline_free_prefilter",
+                "rolling_runner_contract": LIVE2_ROLLING_RUNNER_CONTRACT_ID,
+                "rolling_runner_model": "rolling_htf_then_first_category_qualified_30s_confirm",
+                "rolling_runner_category_id": "",
+                "rolling_runner_dependency_reasons": (),
+                "rolling_runner_reject_reasons": (reason,),
+                "return_pct": (candle.close / candle.open) - 1.0 if candle.open > 0 else 0.0,
+                "abs_return_pct": abs((candle.close / candle.open) - 1.0) if candle.open > 0 else 0.0,
+                "quote_volume": candle.quote_volume,
+                "number_of_trades": candle.number_of_trades,
+                "baseline_free_prefilter_reason": reason,
+                "diagnostics_note": "baseline_free_impossibility_gate_before_full_rolling_context",
+            },
+            reject_reasons=(reason,),
+        )
+
     def _maybe_repair_rolling_context(self, *, state: SymbolState, features: dict[str, object], decision_time_ms: int) -> dict[str, object]:
         if self.rolling_context_repair is None:
             return {}
@@ -269,6 +310,7 @@ class Live2SignalEngine:
             "category_contract": LIVE2_ROLLING_RUNNER_CONTRACT_ID,
             "category_ids": self.category_ids,
             "total_evaluations": self._total_evaluations,
+            "total_baseline_free_prefilter_rejected": self._total_baseline_free_prefilter_rejected,
             "total_selected": self._total_selected,
             "total_rejected": self._total_rejected,
             "total_data_dependency_not_ready": self._total_data_dependency_not_ready,
@@ -1591,6 +1633,108 @@ def _rolling_category_rank(category_id: str) -> int | None:
         return LIVE2_ROLLING_RUNNER_CATEGORY_PRIORITY.index(category_id) + 1
     except ValueError:
         return None
+
+
+def _rolling_baseline_free_prefilter_reject_reason(*, state: SymbolState, decision_candle: Live2Candle) -> str:
+    """Return an exact no-baseline reject reason, or empty string if full evaluation is still needed.
+
+    The checks here are necessary prerequisites of ``_evaluate_rolling_profile``:
+    contiguous confirmation, acceptable aggTrade-id quality, positive LTF shape,
+    available HTF seed, positive HTF seed move, no confirmation undercut, and
+    structural risk within max.  It deliberately does not estimate baseline quote
+    or trade ratios, dormancy, prior spikes, OI, or category thresholds.
+    """
+
+    ring_30s = state.candle_book.rings.get(30_000)
+    closed_30s = () if ring_30s is None else ring_30s.closed_snapshot()
+    if decision_candle.timeframe_ms != 30_000:
+        return "decision_candle_is_not_30s"
+    if not closed_30s or closed_30s[-1].open_time_ms != decision_candle.open_time_ms:
+        return "latest_closed_30s_decision_candle_not_ready"
+
+    saw_confirm_segment = False
+    saw_ltf_shape_possible = False
+    saw_htf_segment = False
+    saw_htf_return_possible = False
+    saw_undercut_safe = False
+    saw_risk_possible = False
+    saw_gap_dependency = False
+    ltf_shape_reasons: set[str] = set()
+
+    for profile in LIVE2_ROLLING_RUNNER_PROFILES:
+        htf_timeframe_ms = int(profile["htf_timeframe_ms"])
+        htf_candles = int(profile["htf_candles"])
+        min_confirm = int(profile["min_confirm_candles"])
+        max_confirm = int(profile["max_confirm_candles"])
+        for confirm_count in range(min_confirm, max_confirm + 1):
+            confirm = _closed_30s_confirm_segment(closed_30s, decision_candle=decision_candle, confirm_count=confirm_count)
+            if confirm is None:
+                continue
+            saw_confirm_segment = True
+            confirm_quality = _aggtrade_gap_quality(
+                candles=confirm,
+                label="confirm_30s",
+                max_gappy_candles=LIVE2_ROLLING_MAX_GAPPY_CONFIRM_CANDLES,
+            )
+            if confirm_quality["status"] == "rejected":
+                saw_gap_dependency = True
+                continue
+            ltf_shape_reject = _rolling_ltf_shape_prefilter_reject_reason(confirm)
+            if ltf_shape_reject:
+                ltf_shape_reasons.add(ltf_shape_reject)
+                continue
+            saw_ltf_shape_possible = True
+            htf = _closed_segment_before(candles=closed_30s, end_open_ms=confirm[0].open_time_ms, count=htf_candles, timeframe_ms=30_000)
+            if htf is None:
+                continue
+            saw_htf_segment = True
+            htf_quality = _aggtrade_gap_quality(
+                candles=htf,
+                label="rolling_htf_30s",
+                max_gappy_candles=LIVE2_ROLLING_MAX_GAPPY_HTF_CANDLES,
+            )
+            if htf_quality["status"] == "rejected":
+                saw_gap_dependency = True
+                continue
+            htf_candle = _aggregate_candles_to_live2_candle(candles=htf, timeframe_ms=htf_timeframe_ms)
+            htf_return = (htf_candle.close / htf_candle.open) - 1.0 if htf_candle.open > 0 else float("nan")
+            if not math.isfinite(htf_return) or htf_return < LIVE2_ROLLING_SEED_MIN_HTF_RETURN_PCT:
+                continue
+            saw_htf_return_possible = True
+            anomaly_low = min(item.low for item in htf)
+            if min(item.low for item in confirm) < anomaly_low:
+                continue
+            saw_undercut_safe = True
+            entry = float(decision_candle.close)
+            stop = float(anomaly_low) * (1.0 - LIVE2_ROLLING_STRUCTURAL_STOP_BUFFER_PCT)
+            initial_risk = entry - stop
+            initial_risk_pct = initial_risk / entry if entry > 0 else float("nan")
+            if not math.isfinite(initial_risk) or initial_risk <= 0.0 or not math.isfinite(initial_risk_pct):
+                continue
+            if initial_risk_pct > LIVE2_ROLLING_MAX_INITIAL_RISK_PCT:
+                continue
+            saw_risk_possible = True
+            return ""
+
+    if saw_gap_dependency:
+        # Preserve full evaluation so the existing data-dependency path and repair
+        # metadata decide whether the symbol is blocked by missing/gappy data.
+        return ""
+    if not saw_confirm_segment:
+        return "no_contiguous_30s_confirmation_segment"
+    if not saw_ltf_shape_possible:
+        if len(ltf_shape_reasons) == 1:
+            return next(iter(ltf_shape_reasons))
+        return "baseline_free_ltf_confirmation_shape_impossible"
+    if not saw_htf_segment:
+        return "no_contiguous_rolling_htf_seed_segment"
+    if not saw_htf_return_possible:
+        return "rolling_htf_return_below_min_for_all_confirmations"
+    if not saw_undercut_safe:
+        return "confirmation_undercuts_rolling_htf_low_for_all_confirmations"
+    if not saw_risk_possible:
+        return "structural_initial_risk_above_max_for_all_confirmations"
+    return ""
 
 
 def _rolling_runner_category_setup(*, state: SymbolState, decision_candle: Live2Candle) -> dict[str, object]:

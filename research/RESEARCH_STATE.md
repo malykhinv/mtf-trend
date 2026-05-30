@@ -1,3 +1,13 @@
+## 2026-05-30 - P462 live2 all-symbol baseline-free deadline gate
+
+Current commit: UNKNOWN. Status: P462 PROPOSED. P449 was applied by the user locally / UNKNOWN commit.
+
+Goal: reduce live2 deadline load without top-K and without narrowing the universe. Every dirty symbol is still observed. The new gate only rejects candidates that cannot pass the same rolling C/A/S contract by exact baseline-free prerequisites: contiguous 30s confirmation, LTF runner shape, HTF seed availability/return, no confirmation undercut, and structural risk cap. Anything that might still pass baseline/dormancy/category checks continues into the full signal engine.
+
+This is a scheduler/hot-path patch, not a strategy-threshold change. It should turn many `closed_bucket_was_not_evaluated_before_deadline` rows into explicit `rejected_signal_contract` rows with `feature_mode=rolling_baseline_free_prefilter`.
+
+Next: run 60-90 minutes live2 and compare `deadline_missed_count`, `budget_exhausted_count`, and `signal_engine.total_baseline_free_prefilter_rejected`. If deadline misses remain high, the next clean step is incremental rolling context/state caching, not top-K.
+
 ## 2026-05-30 - Live2 audit state after Ctrl+C artifact review
 
 Current commit: UNKNOWN. Uploaded workspace patch status: P449 PROPOSED.

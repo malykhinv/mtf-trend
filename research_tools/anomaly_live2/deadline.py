@@ -675,20 +675,36 @@ class Live2DeadlineEngine:
             verdict = "flow_freshness_reject"
             reason = "latest_closed_bucket_trade_flow_did_not_hold_into_decision_deadline"
         else:
-            signal_started_at_ms = utc_now_ms()
-            entry_attempt_timing["signal_evaluate_started_at_ms"] = signal_started_at_ms
-            signal_decision = self.signal_engine.evaluate(
+            prefilter_started_at_ms = utc_now_ms()
+            entry_attempt_timing["baseline_free_prefilter_started_at_ms"] = prefilter_started_at_ms
+            signal_decision = self.signal_engine.evaluate_baseline_free_prefilter(
                 state=state,
                 candle=candle,
                 actionable_reason=actionable_reason,
             )
-            signal_finished_at_ms = utc_now_ms()
-            entry_attempt_timing["signal_evaluate_finished_at_ms"] = signal_finished_at_ms
-            entry_attempt_timing["signal_evaluate_duration_ms"] = max(0, signal_finished_at_ms - signal_started_at_ms)
-            entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
+            prefilter_finished_at_ms = utc_now_ms()
+            entry_attempt_timing["baseline_free_prefilter_finished_at_ms"] = prefilter_finished_at_ms
+            entry_attempt_timing["baseline_free_prefilter_duration_ms"] = max(0, prefilter_finished_at_ms - prefilter_started_at_ms)
+            entry_attempt_timing["baseline_free_prefilter_rejected"] = signal_decision is not None
+            if signal_decision is None:
+                signal_started_at_ms = utc_now_ms()
+                entry_attempt_timing["signal_evaluate_started_at_ms"] = signal_started_at_ms
+                signal_decision = self.signal_engine.evaluate(
+                    state=state,
+                    candle=candle,
+                    actionable_reason=actionable_reason,
+                )
+                signal_finished_at_ms = utc_now_ms()
+                entry_attempt_timing["signal_evaluate_finished_at_ms"] = signal_finished_at_ms
+                entry_attempt_timing["signal_evaluate_duration_ms"] = max(0, signal_finished_at_ms - signal_started_at_ms)
+                entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
+            else:
+                signal_finished_at_ms = prefilter_finished_at_ms
+                entry_attempt_timing["signal_evaluate_skipped_reason"] = "baseline_free_impossibility_reject"
+                entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
             verdict = signal_decision.verdict
             reason = signal_decision.reason
-            if signal_finished_at_ms > deadline_ms:
+            if signal_decision.features.get("feature_mode") != "rolling_baseline_free_prefilter" and signal_finished_at_ms > deadline_ms:
                 # The signal engine may be CPU-heavy.  If it finishes after the live
                 # decision deadline, the result is audit-only: do not pass it to
                 # entry guard/execution as if it were a fresh live signal.

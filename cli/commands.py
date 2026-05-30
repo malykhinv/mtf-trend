@@ -2155,7 +2155,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 universe_min_auto_symbols=int(getattr(args, "universe_min_auto_symbols", 300)),
                 decision_loop_interval_seconds=float(getattr(args, "decision_loop_interval_seconds", 0.05)),
                 decision_backlog_expire_ms=int(getattr(args, "decision_backlog_expire_ms", 10_000)),
-                decision_engine_cycle_budget_ms=int(getattr(args, "decision_engine_cycle_budget_ms", 1_000)),
+                decision_engine_cycle_budget_ms=int(getattr(args, "decision_engine_cycle_budget_ms", 1_500)),
                 decision_latency_wall_clock_gap_ms=int(getattr(args, "decision_latency_wall_clock_gap_ms", 2_000)),
                 decision_latency_degraded_hold_ms=int(getattr(args, "decision_latency_degraded_hold_ms", 15_000)),
                 decision_state_lock_timeout_ms=int(getattr(args, "decision_state_lock_timeout_ms", 250)),

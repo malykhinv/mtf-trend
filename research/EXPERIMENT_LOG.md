@@ -1,3 +1,11 @@
+## 2026-05-30 - P462 live2 all-symbol deadline-load validation protocol
+
+Hypothesis: live2 deadline misses are dominated by expensive full rolling signal evaluation on candidates that already fail exact baseline-free prerequisites. An all-symbol impossibility gate should reduce `closed_bucket_was_not_evaluated_before_deadline` without hiding symbols or changing the trading contract.
+
+Protocol after P462: run live2 for 60-90 minutes with the same universe size. Accept only if every cycle still reports full symbol visibility, `signal_engine.total_baseline_free_prefilter_rejected` increases, `deadline_missed_count` and `budget_exhausted_count` fall materially, and selected/entry-guard/execution rows still contain normal full diagnostics. Inspect `live2_deadline_summary.csv` for new baseline-free reject reasons; they should replace missed deadlines, not selected signals.
+
+If deadline misses remain high, next step is incremental per-symbol rolling aggregates/caches. Do not introduce top-K.
+
 ## 2026-05-30 - Live2 deadline load review after Ctrl+C run
 
 Input: uploaded `20260530_155320` live artifacts and uploaded workspace code.

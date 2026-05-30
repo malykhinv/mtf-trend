@@ -19,7 +19,7 @@ class AnomalyLive2Config:
     decision_latency_wall_clock_gap_ms: int = 2_000
     decision_latency_degraded_hold_ms: int = 15_000
     decision_state_lock_timeout_ms: int = 250
-    decision_engine_cycle_budget_ms: int = 1_000
+    decision_engine_cycle_budget_ms: int = 1_500
     market_data_recovery_windows: int = 3
     ticker_stale_ms: int = 5_000
     ticker_startup_wait_seconds: float = 10.0
