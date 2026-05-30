@@ -285,7 +285,7 @@ class Live2PositionSupervisor:
             )
             data: dict[str, object] = {
                 "reason": "stop_trigger_settled_exchange_flat_stop_gone",
-                "exchange_position_amount": refreshed_amount,
+                "exchange_position_amount": exchange_amount,
                 "old_stop_order_id": position.stop_order_id,
                 "old_stop_client_order_id": position.stop_client_order_id,
                 **close_recovery,

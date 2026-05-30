@@ -1,3 +1,11 @@
+## 2026-05-30 - P448 live2 flat-stop recovery crash fix
+
+Current commit: UNKNOWN.
+
+Status: P448 PROPOSED after the 2026-05-29 live run crashed at 22:54:34 in `Live2PositionSupervisor._supervise_position` with `NameError: name 'refreshed_amount' is not defined`. The crash occurred in the safe recovery path where Binance showed the position flat and the protected stop gone. The intended contract remains: treat that as a verified final close only after the stop is gone, recover realized PnL from user-data when available, remove the protected position, and continue live.
+
+Next: apply P448, restart live2, and verify that a normal stop-trigger/flat-stop-gone transition writes `position_final_close_verified` instead of crashing. Then address the remaining health issues: decision backlog/latency, open-position status sync in grid, and compacting routine deadline event payloads.
+
 ## 2026-05-29 - P447 live2 rolling 1m context maintenance
 
 Current commit: UNKNOWN.

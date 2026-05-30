@@ -1,3 +1,15 @@
+## 2026-05-30 - P448 proposed - live2 flat-stop recovery NameError fix
+
+Status: PROPOSED after P447 / commit UNKNOWN.
+
+Files: `research_tools/anomaly_live2/position_supervisor.py`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/EXPERIMENT_LOG.md`.
+
+Purpose: fix a crash in the protected-position supervisor when the exchange position is already flat and the protected stop is gone. The recovery artifact used `refreshed_amount` outside its scope; this path already has the current fetched amount as `exchange_amount`. The patch records `exchange_amount` and lets the supervisor remove the protected position, recover stop-close PnL from user-data when available, and finish the run instead of crashing.
+
+Honesty: no trading thresholds, fill inference, stop semantics, or exchange calls change. This only fixes the recovery-path artifact payload variable.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; grep should show no `refreshed_amount` reference in the direct flat-position branch.
+
 ## 2026-05-29 - P447 proposed - live2 rolling 1m context maintenance
 
 Status: PROPOSED after P446 / commit UNKNOWN.

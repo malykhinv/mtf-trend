@@ -1,3 +1,9 @@
+## 2026-05-30 - P448 live2 stop recovery regression check
+
+Incident: live2 crashed during position supervision when the exchange position was already flat and the protected stop was gone, because the direct flat branch wrote `refreshed_amount` without defining it.
+
+Protocol after P448: run live2 through a stop-trigger/flat-stop-gone transition or synthetic supervisor smoke. Acceptance: no NameError; `position_final_close_verified` is written with `exchange_position_amount` from the fetched flat amount; protected position is removed; realized PnL is present when user-data recovery has the fill.
+
 ## 2026-05-29 - P447 live2 data-health smoke plan
 
 Patch under test: P447 rolling 1m context maintenance.
