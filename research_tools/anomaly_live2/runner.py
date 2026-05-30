@@ -108,7 +108,6 @@ class AnomalyLive2Runner:
                 order_notional_usdt=config.execution_order_notional_usdt,
                 risk_per_trade_pct=config.execution_risk_per_trade_pct,
                 max_total_open_risk_pct=config.execution_max_total_open_risk_pct,
-                max_initial_risk_pct=config.execution_max_initial_risk_pct,
                 max_open_positions=config.execution_max_open_positions,
                 max_position_amount_slippage_ratio=config.execution_max_position_amount_slippage_ratio,
                 stop_visibility_attempts=config.execution_stop_visibility_attempts,
@@ -188,6 +187,7 @@ class AnomalyLive2Runner:
                 actionable_min_trade_count=config.actionable_min_trade_count,
                 actionable_min_abs_return_pct=config.actionable_min_abs_return_pct,
                 stale_trade_ms=config.aggtrade_stale_ms,
+                cycle_budget_ms=config.decision_engine_cycle_budget_ms,
             ),
             signal_engine=Live2SignalEngine(
                 mark_stale_ms=config.mark_price_stale_ms,
@@ -1488,6 +1488,7 @@ class AnomalyLive2Runner:
     ) -> bool:
         loop_budget_ms = max(1, int(self.config.decision_loop_interval_seconds * 1000))
         loop_overrun = decision_cycle_elapsed_ms > loop_budget_ms
+        hot_path_latency_degraded = decision_cycle_elapsed_ms > int(self.config.decision_engine_cycle_budget_ms)
         if loop_overrun:
             self._decision_loop_overrun_count += 1
         with self._runtime_metrics_lock:
@@ -1500,7 +1501,7 @@ class AnomalyLive2Runner:
             deadline_result.deadline_missed_count > 0
             or deadline_result.deadline_expired_backlog_count > 0
             or deadline_result.max_latency_ms > self.config.decision_deadline_ms
-            or loop_overrun
+            or hot_path_latency_degraded
             or wall_clock_gap
             or cycle_skipped
             or state_lock_timeout
@@ -1514,6 +1515,7 @@ class AnomalyLive2Runner:
                 wall_clock_gap
                 or deadline_result.deadline_missed_count > 0
                 or deadline_result.deadline_expired_backlog_count > 0
+                or hot_path_latency_degraded
                 or cycle_skipped
                 or state_lock_timeout
                 or stale_hot_path_skip
@@ -1562,6 +1564,7 @@ class AnomalyLive2Runner:
             "decision_latency_wall_clock_gap_ms": self.config.decision_latency_wall_clock_gap_ms,
             "decision_latency_degraded_hold_ms": self.config.decision_latency_degraded_hold_ms,
             "decision_state_lock_timeout_ms": self.config.decision_state_lock_timeout_ms,
+            "decision_engine_cycle_budget_ms": self.config.decision_engine_cycle_budget_ms,
             "latency_watchdog_degraded_until_ms": self._latency_watchdog_degraded_until_ms,
             "last_deadline_cycle": dict(self._last_deadline_cycle),
             "decision_latency_degraded_windows": self._decision_latency_degraded_windows,

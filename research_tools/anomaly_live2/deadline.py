@@ -9,6 +9,7 @@ not run the real signal strategy yet, so actionable buckets end in an explicit
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -22,6 +23,10 @@ from .signal import Live2SignalDecision, Live2SignalEngine
 from .state import SymbolLive2Status, SymbolState, SymbolStateStore
 
 
+def _monotonic_ms() -> int:
+    return int(time.perf_counter() * 1000)
+
+
 @dataclass(frozen=True, slots=True)
 class Live2DeadlineEngineConfig:
     """Tunable deadline contract for generation-0 live2 decisions."""
@@ -33,6 +38,7 @@ class Live2DeadlineEngineConfig:
     actionable_min_trade_count: int = 20
     actionable_min_abs_return_pct: float = 0.003
     stale_trade_ms: int = 5_000
+    cycle_budget_ms: int = 1_000
 
     def __post_init__(self) -> None:
         if self.timeframe_ms <= 0:
@@ -49,6 +55,8 @@ class Live2DeadlineEngineConfig:
             raise ValueError("actionable_min_abs_return_pct must be >= 0")
         if self.stale_trade_ms <= 0:
             raise ValueError("stale_trade_ms must be > 0")
+        if self.cycle_budget_ms <= 0:
+            raise ValueError("cycle_budget_ms must be > 0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +415,9 @@ class Live2DeadlineCycleResult:
     close_due_candles_ms: int = 0
     decision_snapshot_ms: int = 0
     deadline_engine_ms: int = 0
+    cycle_budget_ms: int = 0
+    cycle_elapsed_ms: int = 0
+    budget_exhausted_count: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -431,6 +442,9 @@ class Live2DeadlineCycleResult:
             "close_due_candles_ms": self.close_due_candles_ms,
             "decision_snapshot_ms": self.decision_snapshot_ms,
             "deadline_engine_ms": self.deadline_engine_ms,
+            "cycle_budget_ms": self.cycle_budget_ms,
+            "cycle_elapsed_ms": self.cycle_elapsed_ms,
+            "budget_exhausted_count": self.budget_exhausted_count,
         }
 
 
@@ -479,11 +493,12 @@ class Live2DeadlineEngine:
         symbols_total: int | None = None,
         skip_signal_evaluation_reason: str = "",
     ) -> Live2DeadlineCycleResult:
-        effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
-        result = Live2DeadlineCycleResult()
+        sort_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
+        cycle_started_monotonic = _monotonic_ms()
+        result = Live2DeadlineCycleResult(cycle_budget_ms=int(self.config.cycle_budget_ms))
         if candidates is None:
             candidates = self.state_store.decision_snapshot()
-        candidates = self._fresh_first_candidates(candidates, now_ms=effective_now_ms)
+        candidates = self._fresh_first_candidates(candidates, now_ms=sort_now_ms)
         total_symbols = len(candidates) if symbols_total is None else max(0, int(symbols_total))
         result.symbols_total = total_symbols
         result.skipped_symbols = max(0, total_symbols - len(candidates))
@@ -491,13 +506,21 @@ class Live2DeadlineEngine:
             result.cycle_status = "skipped"
             result.cycle_reason = skip_signal_evaluation_reason
             result.stale_hot_path_skip_count = len(candidates)
+            result.cycle_elapsed_ms = max(0, _monotonic_ms() - cycle_started_monotonic)
             self._last_cycle = result
             return result
         live_watermark_ms = self.live_decision_watermark_ms()
-        for state in candidates:
+        for index, state in enumerate(candidates):
+            elapsed_ms = max(0, _monotonic_ms() - cycle_started_monotonic)
+            if elapsed_ms > int(self.config.cycle_budget_ms):
+                result.cycle_status = "budget_exhausted"
+                result.cycle_reason = "deadline_engine_cycle_budget_exhausted_before_all_candidates"
+                result.budget_exhausted_count += 1
+                result.skipped_symbols += len(candidates) - index
+                break
             result.checked_symbols += 1
             previous_bucket_ms = state.last_decision_bucket_ms
-            decision = self._evaluate_state(state, now_ms=effective_now_ms, live_watermark_ms=live_watermark_ms)
+            decision = self._evaluate_state(state, now_ms=utc_now_ms(), live_watermark_ms=live_watermark_ms)
             if decision is None:
                 if (
                     state.last_decision_bucket_ms is not None
@@ -525,6 +548,7 @@ class Live2DeadlineEngine:
                 result.deadline_expired_backlog_count += 1
             else:
                 result.rejected_count += 1
+        result.cycle_elapsed_ms = max(0, _monotonic_ms() - cycle_started_monotonic)
         self._last_cycle = result
         self._total_decisions += len(result.decisions)
         self._total_deadline_missed += result.deadline_missed_count
@@ -543,6 +567,7 @@ class Live2DeadlineEngine:
             "reason": "deadline_engine_active_with_live2_stream_signal_adapter",
             "timeframe_ms": self.config.timeframe_ms,
             "decision_deadline_ms": self.config.decision_deadline_ms,
+            "cycle_budget_ms": self.config.cycle_budget_ms,
             "actionable_min_quote_volume": self.config.actionable_min_quote_volume,
             "actionable_min_trade_count": self.config.actionable_min_trade_count,
             "actionable_min_abs_return_pct": self.config.actionable_min_abs_return_pct,
@@ -590,6 +615,7 @@ class Live2DeadlineEngine:
         now_ms: int,
         live_watermark_ms: int | None,
     ) -> Live2DecisionRecord | None:
+        candidate_started_ms = utc_now_ms()
         ring = state.candle_book.rings.get(self.config.timeframe_ms)
         if ring is None:
             state.decision_dirty_since_ms = None
@@ -605,7 +631,7 @@ class Live2DeadlineEngine:
             self._apply_pre_live_bucket(
                 state,
                 candle=candle,
-                now_ms=now_ms,
+                now_ms=candidate_started_ms,
                 verdict="pre_live_ws_not_ready",
                 reason="live_aggtrade_ws_has_no_valid_payload_yet",
             )
@@ -614,7 +640,7 @@ class Live2DeadlineEngine:
             self._apply_pre_live_bucket(
                 state,
                 candle=candle,
-                now_ms=now_ms,
+                now_ms=candidate_started_ms,
                 verdict="pre_live_warmup_bucket_ignored",
                 reason="closed_bucket_before_live_aggtrade_ws_watermark",
             )
@@ -622,33 +648,32 @@ class Live2DeadlineEngine:
         return_pct = _candle_return_pct(candle)
         actionable_reason = self._actionable_reason(candle=candle, return_pct=return_pct)
         if actionable_reason is None:
-            self._apply_non_actionable(state, candle=candle, now_ms=now_ms)
+            self._apply_non_actionable(state, candle=candle, now_ms=candidate_started_ms)
             return None
         deadline_ms = candle.close_time_ms + self.config.decision_deadline_ms
-        latency_ms = now_ms - candle.close_time_ms
+        pre_signal_latency_ms = candidate_started_ms - candle.close_time_ms
         signal_decision: Live2SignalDecision | None = None
         entry_guard_result: Live2EntryGuardResult | None = None
         execution_result: Live2ExecutionResult | None = None
         entry_attempt_timing: dict[str, object] = {
             "bucket_close_ms": candle.close_time_ms,
-            "decision_timestamp_ms": now_ms,
-            "bucket_close_to_decision_ms": max(0, latency_ms),
+            "candidate_started_at_ms": candidate_started_ms,
+            "cycle_now_ms_argument": now_ms,
+            "bucket_close_to_candidate_start_ms": max(0, pre_signal_latency_ms),
             "decision_deadline_ms": deadline_ms,
         }
-        if latency_ms > self.config.backlog_expire_ms:
+        verdict: str
+        reason: str
+        if pre_signal_latency_ms > self.config.backlog_expire_ms:
             verdict = "deadline_expired_backlog"
             reason = "closed_bucket_expired_before_hot_path_reconnect_or_backlog"
-        elif now_ms > deadline_ms:
+        elif candidate_started_ms > deadline_ms:
             verdict = "deadline_missed"
             reason = "closed_bucket_was_not_evaluated_before_deadline"
-        elif _is_trade_stale(candle=candle, now_ms=now_ms, stale_trade_ms=self.config.stale_trade_ms):
+        elif _is_trade_stale(candle=candle, now_ms=candidate_started_ms, stale_trade_ms=self.config.stale_trade_ms):
             verdict = "flow_freshness_reject"
             reason = "latest_closed_bucket_trade_flow_did_not_hold_into_decision_deadline"
         else:
-            # Cumulative gap/out-of-order counters are diagnostics, not a permanent
-            # hard rejection. Dormant symbols naturally have no-trade gaps between
-            # real aggTrade buckets; banning all future buckets after the first gap
-            # would make live2 blind to exactly the wake-up pattern it is meant to see.
             signal_started_at_ms = utc_now_ms()
             entry_attempt_timing["signal_evaluate_started_at_ms"] = signal_started_at_ms
             signal_decision = self.signal_engine.evaluate(
@@ -659,6 +684,7 @@ class Live2DeadlineEngine:
             signal_finished_at_ms = utc_now_ms()
             entry_attempt_timing["signal_evaluate_finished_at_ms"] = signal_finished_at_ms
             entry_attempt_timing["signal_evaluate_duration_ms"] = max(0, signal_finished_at_ms - signal_started_at_ms)
+            entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
             verdict = signal_decision.verdict
             reason = signal_decision.reason
             if signal_decision.verdict == "selected":
@@ -668,7 +694,7 @@ class Live2DeadlineEngine:
                     state=state,
                     signal_decision=signal_decision,
                     signal_timestamp_ms=candle.close_time_ms,
-                    now_ms=now_ms,
+                    now_ms=guard_started_at_ms,
                 )
                 guard_finished_at_ms = utc_now_ms()
                 entry_attempt_timing["entry_guard_finished_at_ms"] = guard_finished_at_ms
@@ -688,7 +714,27 @@ class Live2DeadlineEngine:
                     entry_attempt_timing["runtime_gate_check_finished_at_ms"] = runtime_gate_finished_at_ms
                     entry_attempt_timing["runtime_gate_check_duration_ms"] = max(0, runtime_gate_finished_at_ms - runtime_gate_started_at_ms)
                     entry_attempt_timing["runtime_gate_allowed"] = runtime_gate_allowed
-                    if not runtime_gate_allowed:
+                    pre_execution_age_ms = max(0, runtime_gate_finished_at_ms - int(candle.close_time_ms))
+                    entry_attempt_timing["bucket_close_to_pre_execution_ms"] = pre_execution_age_ms
+                    if pre_execution_age_ms > int(self.entry_guard.config.max_signal_age_ms):
+                        entry_guard_result = Live2EntryGuardResult(
+                            verdict="rejected_entry_guard",
+                            reason="stale_signal_before_execution_call",
+                            live_price=entry_guard_result.live_price,
+                            signal_age_ms=pre_execution_age_ms,
+                            entry_price_drift_pct=entry_guard_result.entry_price_drift_pct,
+                            rr_to_tp1_at_live_price=entry_guard_result.rr_to_tp1_at_live_price,
+                            features={
+                                **entry_guard_result.features,
+                                "signal_age_ms": pre_execution_age_ms,
+                                "decision_timestamp_ms": runtime_gate_finished_at_ms,
+                                "max_signal_age_ms": self.entry_guard.config.max_signal_age_ms,
+                                "stale_stage": "after_signal_evaluation_before_execution",
+                            },
+                        )
+                        verdict = entry_guard_result.verdict
+                        reason = entry_guard_result.reason
+                    elif not runtime_gate_allowed:
                         verdict = "rejected_runtime_gates_not_ready"
                         reason = "live2_runtime_gates_do_not_allow_new_entries"
                     else:
@@ -707,7 +753,7 @@ class Live2DeadlineEngine:
         if "entry_guard_started_at_ms" in entry_attempt_timing:
             last_stage_finished = entry_attempt_timing.get("execution_call_finished_at_ms") or entry_attempt_timing.get("runtime_gate_check_finished_at_ms") or entry_attempt_timing.get("entry_guard_finished_at_ms")
             try:
-                entry_attempt_timing["selected_signal_to_attempt_done_ms"] = max(0, int(last_stage_finished) - now_ms) if last_stage_finished is not None else None
+                entry_attempt_timing["selected_signal_to_attempt_done_ms"] = max(0, int(last_stage_finished) - candidate_started_ms) if last_stage_finished is not None else None
             except (TypeError, ValueError):
                 entry_attempt_timing["selected_signal_to_attempt_done_ms"] = None
         if "execution_call_finished_at_ms" in entry_attempt_timing:
@@ -715,12 +761,16 @@ class Live2DeadlineEngine:
                 entry_attempt_timing["bucket_close_to_execution_done_ms"] = max(0, int(entry_attempt_timing["execution_call_finished_at_ms"]) - int(candle.close_time_ms))
             except (TypeError, ValueError):
                 entry_attempt_timing["bucket_close_to_execution_done_ms"] = None
+        decision_finished_ms = utc_now_ms()
+        final_latency_ms = max(0, decision_finished_ms - int(candle.close_time_ms))
+        entry_attempt_timing["final_decision_timestamp_ms"] = decision_finished_ms
+        entry_attempt_timing["bucket_close_to_final_decision_ms"] = final_latency_ms
         self._apply_verdict(
             state,
             candle=candle,
-            now_ms=now_ms,
+            now_ms=decision_finished_ms,
             deadline_ms=deadline_ms,
-            latency_ms=latency_ms,
+            latency_ms=final_latency_ms,
             verdict=verdict,
             reason=reason,
             signal_decision=signal_decision,
@@ -735,9 +785,9 @@ class Live2DeadlineEngine:
             reason=reason,
             bucket_open_ms=candle.open_time_ms,
             bucket_close_ms=candle.close_time_ms,
-            decision_timestamp_ms=now_ms,
+            decision_timestamp_ms=decision_finished_ms,
             deadline_ms=deadline_ms,
-            latency_ms=latency_ms,
+            latency_ms=final_latency_ms,
             quote_volume=candle.quote_volume,
             number_of_trades=candle.number_of_trades,
             return_pct=return_pct,

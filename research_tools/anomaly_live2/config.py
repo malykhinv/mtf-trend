@@ -19,6 +19,7 @@ class AnomalyLive2Config:
     decision_latency_wall_clock_gap_ms: int = 2_000
     decision_latency_degraded_hold_ms: int = 15_000
     decision_state_lock_timeout_ms: int = 250
+    decision_engine_cycle_budget_ms: int = 1_000
     market_data_recovery_windows: int = 3
     ticker_stale_ms: int = 5_000
     ticker_startup_wait_seconds: float = 10.0
@@ -88,7 +89,6 @@ class AnomalyLive2Config:
     execution_order_notional_usdt: float = 12.0
     execution_risk_per_trade_pct: float = 0.02
     execution_max_total_open_risk_pct: float = 0.08
-    execution_max_initial_risk_pct: float = 0.01
     execution_max_open_positions: int = 0
     execution_stop_visibility_attempts: int = 5
     execution_stop_visibility_sleep_seconds: float = 0.5
@@ -118,6 +118,8 @@ class AnomalyLive2Config:
             raise ValueError("decision_latency_degraded_hold_ms must be > 0")
         if self.decision_state_lock_timeout_ms <= 0:
             raise ValueError("decision_state_lock_timeout_ms must be > 0")
+        if self.decision_engine_cycle_budget_ms <= 0:
+            raise ValueError("decision_engine_cycle_budget_ms must be > 0")
         if self.market_data_recovery_windows <= 0:
             raise ValueError("market_data_recovery_windows must be > 0")
         if self.ticker_stale_ms <= 0:
@@ -254,8 +256,6 @@ class AnomalyLive2Config:
             raise ValueError("execution_risk_per_trade_pct must be > 0")
         if self.execution_max_total_open_risk_pct <= 0.0:
             raise ValueError("execution_max_total_open_risk_pct must be > 0")
-        if self.execution_max_initial_risk_pct <= 0.0:
-            raise ValueError("execution_max_initial_risk_pct must be > 0")
         if self.execution_max_open_positions < 0:
             raise ValueError("execution_max_open_positions must be >= 0; 0 means unlimited")
         if self.execution_stop_visibility_attempts <= 0:

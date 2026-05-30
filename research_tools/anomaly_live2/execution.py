@@ -98,7 +98,6 @@ class Live2ExecutionConfig:
     order_notional_usdt: float = 12.0
     risk_per_trade_pct: float = 0.02
     max_total_open_risk_pct: float = 0.08
-    max_initial_risk_pct: float = 0.01
     max_open_positions: int = 0
     max_position_amount_slippage_ratio: float = 0.05
     stop_visibility_attempts: int = 5
@@ -113,8 +112,6 @@ class Live2ExecutionConfig:
             raise ValueError("risk_per_trade_pct must be > 0")
         if self.max_total_open_risk_pct <= 0.0:
             raise ValueError("max_total_open_risk_pct must be > 0")
-        if self.max_initial_risk_pct <= 0.0:
-            raise ValueError("max_initial_risk_pct must be > 0")
         if self.max_open_positions < 0:
             raise ValueError("max_open_positions must be >= 0; 0 means unlimited")
         if self.max_position_amount_slippage_ratio < 0:
@@ -563,26 +560,32 @@ class Live2ExecutionEngine:
                 ),
                 timing=timing,
             )
-        if planned_initial_risk_pct > self.config.max_initial_risk_pct + 1e-12:
+        order_notional_usdt = float(self.config.order_notional_usdt)
+        planned_risk_usdt = order_notional_usdt * planned_initial_risk_pct
+        max_single_trade_risk_usdt = account_balance_usdt * self.config.risk_per_trade_pct
+        if planned_risk_usdt > max_single_trade_risk_usdt + 1e-9:
+            self._total_rejected_capacity += 1
             return self._finish_result(
                 Live2ExecutionResult(
-                verdict="rejected_execution_initial_risk_too_wide",
-                reason="planned_initial_stop_distance_exceeds_fixed_1pct_contract",
+                verdict="rejected_execution_trade_risk_budget_exceeded",
+                reason="fixed_notional_stop_risk_exceeds_per_trade_deposit_risk_budget",
                 checked_at_ms=checked_at_ms,
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
                 details={
+                    "account_balance_usdt": account_balance_usdt,
+                    "position_sizing_model": "fixed_notional_v1",
+                    "order_notional_usdt": order_notional_usdt,
+                    "risk_per_trade_pct": self.config.risk_per_trade_pct,
+                    "planned_initial_risk_pct": planned_initial_risk_pct,
+                    "planned_risk_usdt": planned_risk_usdt,
+                    "max_single_trade_risk_usdt": max_single_trade_risk_usdt,
                     "live_price": live_price,
                     "stop_price": stop_price,
-                    "planned_initial_risk_pct": planned_initial_risk_pct,
-                    "max_initial_risk_pct": self.config.max_initial_risk_pct,
-                    "position_sizing_model": "fixed_notional_v1",
                 },
                 ),
                 timing=timing,
             )
-        order_notional_usdt = float(self.config.order_notional_usdt)
-        planned_risk_usdt = order_notional_usdt * planned_initial_risk_pct
         current_open_risk_usdt = self._open_risk_usdt()
         max_total_open_risk_usdt = account_balance_usdt * self.config.max_total_open_risk_pct
         if current_open_risk_usdt + planned_risk_usdt > max_total_open_risk_usdt + 1e-9:
@@ -598,7 +601,8 @@ class Live2ExecutionEngine:
                     "account_balance_usdt": account_balance_usdt,
                     "position_sizing_model": "fixed_notional_v1",
                     "order_notional_usdt": order_notional_usdt,
-                    "max_initial_risk_pct": self.config.max_initial_risk_pct,
+                    "risk_per_trade_pct": self.config.risk_per_trade_pct,
+                    "max_single_trade_risk_usdt": max_single_trade_risk_usdt,
                     "max_total_open_risk_pct": self.config.max_total_open_risk_pct,
                     "current_open_risk_usdt": current_open_risk_usdt,
                     "planned_risk_usdt": planned_risk_usdt,
@@ -723,10 +727,12 @@ class Live2ExecutionEngine:
                 timing=timing,
             )
 
-        if actual_initial_risk_pct > self.config.max_initial_risk_pct + 1e-12:
+        actual_initial_risk_usdt = actual_initial_risk * position_delta_amount
+        max_single_trade_risk_usdt = account_balance_usdt * self.config.risk_per_trade_pct
+        if actual_initial_risk_usdt > max_single_trade_risk_usdt + 1e-9:
             return self._integrity_error_after_fill(
                 state=state,
-                reason="actual_initial_stop_distance_exceeds_fixed_1pct_contract_after_fill",
+                reason="actual_entry_risk_exceeds_per_trade_deposit_risk_budget_after_fill",
                 fill=fill,
                 pre_position_amount=pre_position_amount,
                 position_delta_amount=position_delta_amount,
@@ -734,7 +740,9 @@ class Live2ExecutionEngine:
                 details={
                     "stop_price": stop_price,
                     "actual_initial_risk_pct": actual_initial_risk_pct,
-                    "max_initial_risk_pct": self.config.max_initial_risk_pct,
+                    "actual_initial_risk_usdt": actual_initial_risk_usdt,
+                    "max_single_trade_risk_usdt": max_single_trade_risk_usdt,
+                    "risk_per_trade_pct": self.config.risk_per_trade_pct,
                     "position_sizing_model": "fixed_notional_v1",
                 },
                 timing=timing,
@@ -871,12 +879,12 @@ class Live2ExecutionEngine:
                 "position_sizing_model": "fixed_notional_v1",
                 "order_notional_usdt": order_notional_usdt,
                 "account_balance_usdt": account_balance_usdt,
-                "risk_per_trade_pct_configured_but_not_used_for_sizing": self.config.risk_per_trade_pct,
-                "max_initial_risk_pct": self.config.max_initial_risk_pct,
+                "risk_per_trade_pct": self.config.risk_per_trade_pct,
+                "max_single_trade_risk_usdt": max_single_trade_risk_usdt,
                 "max_total_open_risk_pct": self.config.max_total_open_risk_pct,
                 "planned_risk_usdt": planned_risk_usdt,
                 "actual_initial_risk_pct": actual_initial_risk_pct,
-                "actual_initial_risk_usdt": actual_initial_risk * position_delta_amount,
+                "actual_initial_risk_usdt": actual_initial_risk_usdt,
                 "planned_initial_risk_pct": planned_initial_risk_pct,
                 "current_open_risk_usdt_before_entry": current_open_risk_usdt,
                 "entry_current_open_interest": {
@@ -1159,7 +1167,7 @@ class Live2ExecutionEngine:
             "trading_halted_reason": trading_halted_reason,
             "position_sizing_model": "fixed_notional_v1",
             "order_notional_usdt": self.config.order_notional_usdt,
-            "max_initial_risk_pct": self.config.max_initial_risk_pct,
+            "risk_per_trade_pct": self.config.risk_per_trade_pct,
             "max_open_positions": self.config.max_open_positions,
             "max_open_positions_unlimited": self.config.max_open_positions == 0,
             "open_protected_positions": len(protected_positions),
