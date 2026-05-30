@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 
 from .clock import utc_now_ms
@@ -118,54 +118,7 @@ class Live2DecisionRecord:
             severity=severity,
             symbol=self.symbol,
             message=self.verdict,
-            data={
-                "verdict": self.verdict,
-                "reason": self.reason,
-                "bucket_open_ms": self.bucket_open_ms,
-                "bucket_close_ms": self.bucket_close_ms,
-                "decision_timestamp_ms": self.decision_timestamp_ms,
-                "deadline_ms": self.deadline_ms,
-                "latency_ms": self.latency_ms,
-                "quote_volume": self.quote_volume,
-                "number_of_trades": self.number_of_trades,
-                "return_pct": self.return_pct,
-                "candle_first_source": self.candle_first_source,
-                "candle_last_source": self.candle_last_source,
-                "candle_startup_rest_trade_count": self.candle_startup_rest_trade_count,
-                "candle_live_ws_trade_count": self.candle_live_ws_trade_count,
-                "category_id": self.category_id,
-                "category_rank": self.category_rank,
-                "signal_entry_price": self.signal_entry_price,
-                "initial_stop_at_decision": self.initial_stop_at_decision,
-                "initial_risk_pct_at_decision": self.initial_risk_pct_at_decision,
-                "tp1_at_decision": self.tp1_at_decision,
-                "entry_guard_verdict": self.entry_guard_verdict,
-                "entry_guard_reason": self.entry_guard_reason,
-                "entry_guard_live_price": self.entry_guard_live_price,
-                "entry_guard_signal_age_ms": self.entry_guard_signal_age_ms,
-                "entry_guard_price_drift_pct": self.entry_guard_price_drift_pct,
-                "entry_guard_rr_to_tp1": self.entry_guard_rr_to_tp1,
-                "entry_attempt_timing": self.entry_attempt_timing,
-                "execution_verdict": self.execution_verdict,
-                "execution_reason": self.execution_reason,
-                "execution_pre_position_amount": self.execution_pre_position_amount,
-                "execution_order_placement_status": self.execution_order_placement_status,
-                "execution_position_id": self.execution_position_id,
-                "execution_entry_order_id": self.execution_entry_order_id,
-                "execution_entry_fill_price": self.execution_entry_fill_price,
-                "execution_entry_filled_amount": self.execution_entry_filled_amount,
-                "execution_stop_order_id": self.execution_stop_order_id,
-                "execution_stop_price": self.execution_stop_price,
-                "execution_integrity_error": self.execution_integrity_error,
-                "execution_emergency_close_status": self.execution_emergency_close_status,
-                "execution_started_at_ms": self.execution_started_at_ms,
-                "execution_finished_at_ms": self.execution_finished_at_ms,
-                "execution_duration_ms": self.execution_duration_ms,
-                "execution_timing": self.execution_timing,
-                "signal_features": self.signal_features,
-                "signal_dependency_reasons": self.signal_dependency_reasons,
-                "signal_reject_reasons": self.signal_reject_reasons,
-            },
+            data=_decision_event_data(self),
         )
 
     def as_near_miss_row(self) -> dict[str, object] | None:
@@ -333,6 +286,100 @@ class Live2DecisionRecord:
             "tp1_at_decision": self.tp1_at_decision,
             "event_data_json": json.dumps(self.as_event().data, ensure_ascii=False, sort_keys=True),
         }
+
+
+def _decision_event_data(record: Live2DecisionRecord) -> dict[str, object]:
+    if _decision_requires_full_event_payload(record):
+        payload = asdict(record)
+        payload["event_payload_mode"] = "full_critical"
+        return payload
+    return _decision_compact_event_payload(record)
+
+
+def _decision_requires_full_event_payload(record: Live2DecisionRecord) -> bool:
+    if record.verdict in {"selected", "position_integrity_error"}:
+        return True
+    if record.execution_integrity_error:
+        return True
+    if record.verdict.startswith("rejected_entry_guard") or record.verdict.startswith("rejected_execution"):
+        return True
+    if record.verdict in {"rejected_runtime_gates_not_ready", "rejected_existing_exchange_position"}:
+        return True
+    if record.entry_guard_verdict or record.execution_verdict:
+        return True
+    if record.execution_position_id or record.execution_entry_order_id or record.execution_stop_order_id:
+        return True
+    return any(
+        value is not None
+        for value in (
+            record.signal_entry_price,
+            record.initial_stop_at_decision,
+            record.initial_risk_pct_at_decision,
+            record.tp1_at_decision,
+        )
+    )
+
+
+def _decision_compact_event_payload(record: Live2DecisionRecord) -> dict[str, object]:
+    features = record.signal_features if isinstance(record.signal_features, dict) else {}
+    compact_feature_keys = (
+        "actionable_reason",
+        "rolling_1m_repair_reason",
+        "rolling_1m_repair_before_ms",
+        "rolling_1m_latest_close_ms",
+        "rolling_1m_context_gap_ms",
+        "rolling_1m_rest_repair_status",
+        "rolling_1m_rest_repair_reason",
+        "rolling_1m_rest_repair_candles_loaded",
+        "rolling_1m_rest_repair_recent_contiguous_count",
+        "rolling_1m_rest_repair_duration_ms",
+        "rolling_runner_category_id",
+        "rolling_runner_tf_set",
+        "rolling_runner_htf_timeframe_ms",
+        "rolling_runner_dependency_reasons",
+        "rolling_runner_reject_reasons",
+        "live_setup_status",
+        "live_setup_reason",
+        "post_htf_acceptance_status",
+        "post_htf_acceptance_reason",
+        "prior_context_status",
+        "prior_context_reason",
+        "oi_status",
+        "oi_reason",
+        "current_oi_status",
+        "current_oi_reason",
+        "mark_basis_status",
+        "start_quote_ratio",
+        "start_trade_ratio",
+        "start_range_pct_ratio_to_baseline",
+        "start_taker_buy_quote_share",
+        "selected_source_flow_quote_ratio",
+        "selected_source_flow_trade_ratio",
+    )
+    payload: dict[str, object] = {
+        "event_payload_mode": "compact_routine",
+        "verdict": record.verdict,
+        "reason": record.reason,
+        "bucket_open_ms": record.bucket_open_ms,
+        "bucket_close_ms": record.bucket_close_ms,
+        "decision_timestamp_ms": record.decision_timestamp_ms,
+        "deadline_ms": record.deadline_ms,
+        "latency_ms": record.latency_ms,
+        "quote_volume": record.quote_volume,
+        "number_of_trades": record.number_of_trades,
+        "return_pct": record.return_pct,
+        "candle_first_source": record.candle_first_source,
+        "candle_last_source": record.candle_last_source,
+        "candle_startup_rest_trade_count": record.candle_startup_rest_trade_count,
+        "candle_live_ws_trade_count": record.candle_live_ws_trade_count,
+        "signal_dependency_reasons": record.signal_dependency_reasons,
+        "signal_reject_reasons": record.signal_reject_reasons,
+    }
+    for key in compact_feature_keys:
+        value = features.get(key)
+        if value not in (None, "", (), []):
+            payload[key] = value
+    return payload
 
 
 @dataclass(slots=True)

@@ -455,6 +455,31 @@ def _load_top_growth_symbol_row(
         "timeframe": Timeframe.H1.value,
         "source": "exchange_1h_closed_candle",
     }
+    if hasattr(exchange, "fetch_binance_klines"):
+        try:
+            raw_row = _fetch_exact_binance_1h_kline(
+                exchange=exchange,
+                symbol=symbol,
+                period_start_ms=period_start_ms,
+                period_end_ms=period_end_ms,
+            )
+        except Exception as exc:
+            return {**base, "reason": f"fetch_binance_klines_failed:{type(exc).__name__}:{str(exc)[:160]}"}
+        if raw_row is None:
+            return {**base, "reason": "empty_binance_1h_klines"}
+        return _status_row_from_prices(
+            base=base,
+            open_time_ms=period_start_ms,
+            open_price=_float_or_none(raw_row[1] if len(raw_row) > 1 else None),
+            high_price=_float_or_none(raw_row[2] if len(raw_row) > 2 else None),
+            low_price=_float_or_none(raw_row[3] if len(raw_row) > 3 else None),
+            close_price=_float_or_none(raw_row[4] if len(raw_row) > 4 else None),
+            quote_volume=_float_or_none(raw_row[7] if len(raw_row) > 7 else None),
+            number_of_trades=_float_or_none(raw_row[8] if len(raw_row) > 8 else None),
+            taker_buy_quote_volume=_float_or_none(raw_row[10] if len(raw_row) > 10 else None),
+            threshold_fraction=threshold_fraction,
+        )
+
     try:
         frame = exchange.fetch_ohlcv(symbol, Timeframe.H1, period_start_ms, period_end_ms - 1)
     except Exception as exc:
@@ -472,10 +497,61 @@ def _load_top_growth_symbol_row(
             reason += f":first={int(timestamps.min())}:last={int(timestamps.max())}"
         return {**base, "reason": reason}
     row = exact.sort_values("timestamp").iloc[-1]
-    open_price = _float_or_none(row.get("open"))
-    close_price = _float_or_none(row.get("close"))
-    high_price = _float_or_none(row.get("high"))
-    low_price = _float_or_none(row.get("low"))
+    return _status_row_from_prices(
+        base=base,
+        open_time_ms=period_start_ms,
+        open_price=_float_or_none(row.get("open")),
+        high_price=_float_or_none(row.get("high")),
+        low_price=_float_or_none(row.get("low")),
+        close_price=_float_or_none(row.get("close")),
+        quote_volume=_float_or_none(row.get("quote_volume")),
+        number_of_trades=_float_or_none(row.get("number_of_trades")),
+        taker_buy_quote_volume=_float_or_none(row.get("taker_buy_quote_volume")),
+        threshold_fraction=threshold_fraction,
+    )
+
+
+def _fetch_exact_binance_1h_kline(
+    *,
+    exchange: Any,
+    symbol: str,
+    period_start_ms: int,
+    period_end_ms: int,
+) -> list[object] | None:
+    rows = exchange.fetch_binance_klines(
+        symbol=symbol,
+        timeframe=Timeframe.H1,
+        start_timestamp_ms=int(period_start_ms),
+        end_timestamp_ms=int(period_end_ms) - 1,
+        limit=2,
+    )
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or not row:
+            continue
+        try:
+            open_time_ms = int(float(row[0]))
+        except (TypeError, ValueError):
+            continue
+        if open_time_ms == int(period_start_ms):
+            return list(row)
+    return None
+
+
+def _status_row_from_prices(
+    *,
+    base: dict[str, object],
+    open_time_ms: int,
+    open_price: float | None,
+    high_price: float | None,
+    low_price: float | None,
+    close_price: float | None,
+    quote_volume: float | None,
+    number_of_trades: float | None,
+    taker_buy_quote_volume: float | None,
+    threshold_fraction: float,
+) -> dict[str, object]:
     if open_price is None or close_price is None or high_price is None or low_price is None or open_price <= 0.0:
         return {
             **base,
@@ -484,7 +560,7 @@ def _load_top_growth_symbol_row(
             "high": _blank_or_value(high_price),
             "low": _blank_or_value(low_price),
             "close": _blank_or_value(close_price),
-            "candle_timestamp_ms": period_start_ms,
+            "candle_timestamp_ms": open_time_ms,
         }
     growth_fraction = (close_price - open_price) / open_price
     status = "ok" if growth_fraction >= threshold_fraction else "below_threshold"
@@ -498,10 +574,10 @@ def _load_top_growth_symbol_row(
         "high": high_price,
         "low": low_price,
         "close": close_price,
-        "quote_volume": _blank_or_value(_float_or_none(row.get("quote_volume"))),
-        "number_of_trades": _blank_or_value(_float_or_none(row.get("number_of_trades"))),
-        "taker_buy_quote_volume": _blank_or_value(_float_or_none(row.get("taker_buy_quote_volume"))),
-        "candle_timestamp_ms": period_start_ms,
+        "quote_volume": _blank_or_value(quote_volume),
+        "number_of_trades": _blank_or_value(number_of_trades),
+        "taker_buy_quote_volume": _blank_or_value(taker_buy_quote_volume),
+        "candle_timestamp_ms": open_time_ms,
     }
 
 

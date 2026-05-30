@@ -9933,3 +9933,28 @@ python -m compileall -q data/exchanges research_tools cli constants.py main.py
 ```
 
 Additional static sweep used for live2: import all `research_tools.anomaly_live2.*` modules and inspect function bytecode for unresolved `LOAD_GLOBAL` / `LOAD_NAME`; after this patch no unresolved live2 globals remain.
+
+## 2026-05-30 - P459 live2 runtime health cleanup
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes the next live2 health issues observed in run `20260529_190712` after the NameError crash: protected open positions were not projected back into `SymbolState.status`, routine deadline events still carried full heavy `signal_features` payloads, synchronous rolling-context REST repair could block the signal hot path while background maintenance was already running, and top-growth used the generic OHLCV path even though Binance raw closed 1h klines are available.
+
+Changes:
+
+- Project open protected positions into symbol state on every loop, so `live2_symbol_state.csv` and operator grid show `in_position` for protected positions instead of `watching`.
+- Keep full deadline event payloads only for selected / entry-guard / execution / integrity rows. Routine rejects, backlog, missed deadline, flow freshness, and dependency decisions use a compact payload while full-run counts stay in summary artifacts.
+- Defer emergency rolling 1m repair to the async maintenance worker when maintenance is healthy, avoiding REST in the decision hot path.
+- Prefer explicit Binance raw 1h klines for top-growth snapshots, preserving quote volume / trade count / taker buy fields and avoiding generic OHLCV empty-frame ambiguity.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+A rolling-context gap may remain visible for one or more maintenance cycles instead of being synchronously repaired inside the signal evaluation. This is intentional: the live bot should preserve low-latency socket/decision processing and expose the gap, not block the hot path on REST. Trading entries still require fresh WS flow, live price guard, actual fill, and verified stop.
+```

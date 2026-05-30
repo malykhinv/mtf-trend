@@ -43,7 +43,7 @@ from .market_data.warmup import (
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
 from .session_top import Live2SessionTopTracker, live2_session_metric_window_ms
 from .signal import Live2SignalEngine
-from .state import SymbolStateStore
+from .state import SymbolLive2Status, SymbolStateStore
 from .status_grid import format_live2_status_grid
 from .telegram import Live2TelegramConfig, Live2TelegramDispatcher
 from .top_growth import Live2TopGrowthAudit, Live2TopGrowthAuditConfig, Live2TopGrowthAuditStats
@@ -192,10 +192,7 @@ class AnomalyLive2Runner:
                 mark_stale_ms=config.mark_price_stale_ms,
                 oi_stale_ms=config.oi_stale_ms,
                 prior_context_stale_ms=config.prior_context_stale_ms,
-                rolling_context_repair=lambda symbol, before_ms: self.rolling_context_repair.repair(
-                    symbol=symbol,
-                    before_ms=before_ms,
-                ).as_dict(),
+                rolling_context_repair=self._rolling_context_repair_for_signal,
             ),
             entry_guard=Live2EntryGuardEngine(
                 config=Live2EntryGuardConfig(
@@ -594,11 +591,13 @@ class AnomalyLive2Runner:
                 cycle_started = time.perf_counter()
                 decision_now_ms = int(time.time() * 1000)
                 self.state_store.close_due_candles(now_ms=decision_now_ms)
+                self._sync_open_position_symbol_states(now_ms=decision_now_ms)
                 supervisor_result = self.position_supervisor.run_cycle(self.state_store)
                 for action in supervisor_result.actions:
                     writer.write_event(action.as_event())
                     self.telegram.notify_supervisor_action(action)
                 deadline_result = self.deadline_engine.run_cycle(now_ms=decision_now_ms)
+                self._sync_open_position_symbol_states(now_ms=decision_now_ms)
                 self._last_decision_cycle_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
                 self._decision_loop_max_elapsed_ms = max(
                     self._decision_loop_max_elapsed_ms,
@@ -878,6 +877,57 @@ class AnomalyLive2Runner:
         if self._market_started_monotonic is None:
             return 0.0
         return max(0.0, time.perf_counter() - self._market_started_monotonic)
+
+    def _rolling_context_repair_for_signal(self, symbol: str, before_ms: int) -> dict[str, object]:
+        """Keep REST rolling-context repair out of the signal hot path when maintenance is active."""
+
+        maintenance_status = self.rolling_context_maintenance_source.status()
+        if self.config.rolling_context_maintenance_enabled and bool(maintenance_status.get("ready")):
+            return {
+                "status": "deferred",
+                "reason": "rolling_1m_context_hot_path_repair_deferred_to_background_maintenance",
+                "symbol": symbol,
+                "before_ms": int(before_ms),
+                "maintenance_status": str(maintenance_status.get("status") or ""),
+                "maintenance_reason": str(maintenance_status.get("reason") or ""),
+                "maintenance_last_success_at_ms": maintenance_status.get("last_success_at_ms"),
+                "maintenance_last_loaded_candles": maintenance_status.get("last_loaded_candles"),
+            }
+        return self.rolling_context_repair.repair(symbol=symbol, before_ms=before_ms).as_dict()
+
+    def _sync_open_position_symbol_states(self, *, now_ms: int) -> None:
+        """Reflect protected-position truth in the per-symbol grid state."""
+
+        open_symbols: set[str] = set()
+        for position in self.execution_engine.protected_positions_snapshot():
+            remaining_amount = float(position.remaining_amount)
+            if remaining_amount <= self.config.position_supervisor_flat_position_abs_epsilon:
+                continue
+            if str(position.status).startswith("closed"):
+                continue
+            open_symbols.add(position.symbol)
+            state = self.state_store.get_or_create(position.symbol)
+            state.status = SymbolLive2Status.IN_POSITION
+            state.updated_ms = max(int(state.updated_ms or 0), int(now_ms))
+            state.last_execution_verdict = state.last_execution_verdict or "selected"
+            state.last_execution_reason = state.last_execution_reason or "protected_position_open_sync"
+            state.last_execution_position_id = position.position_id
+            state.last_execution_entry_order_id = position.entry_order_id
+            state.last_execution_entry_fill_price = position.entry_fill_price
+            state.last_execution_entry_filled_amount = position.initial_amount
+            state.last_execution_stop_order_id = position.stop_order_id
+            state.last_execution_stop_price = position.stop_price
+            state.last_signal_category_id = state.last_signal_category_id or position.category_id
+            state.last_signal_entry_price = state.last_signal_entry_price or position.signal_entry_price
+            state.last_signal_initial_stop = state.last_signal_initial_stop or position.stop_price
+            state.last_signal_initial_risk_pct = state.last_signal_initial_risk_pct or position.initial_risk_pct
+            state.last_signal_tp1 = state.last_signal_tp1 or position.tp1_price
+        if not open_symbols:
+            return
+        for state in self.state_store.snapshot():
+            if state.status == SymbolLive2Status.IN_POSITION and state.symbol not in open_symbols:
+                state.status = SymbolLive2Status.WATCHING
+                state.updated_ms = max(int(state.updated_ms or 0), int(now_ms))
 
     def _refresh_runtime_gates(
         self,

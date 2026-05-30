@@ -3512,3 +3512,11 @@ python -m compileall -q data/exchanges research_tools cli constants.py main.py
 ```
 
 Additional static sweep used for live2: import all `research_tools.anomaly_live2.*` modules and inspect function bytecode for unresolved `LOAD_GLOBAL` / `LOAD_NAME`; after this patch no unresolved live2 globals remain.
+
+## 2026-05-30 - P459 live2 health state
+
+Current commit: UNKNOWN. Status: P459 PROPOSED.
+
+Run `20260529_190712` showed that data-ingestion sockets were healthy, but product health still failed on runtime hygiene: decision latency degraded, routine event payloads exhausted raw budgets, protected positions stayed `watching` in the grid, and top-growth partial status contained only `empty_ohlcv` rows. P459 keeps socket ingestion untouched and moves the remaining cleanup to audit/state/projection boundaries: compact routine decision events, sync protected position state into the grid, defer hot-path REST repair to background 1m maintenance, and fetch top-growth from explicit closed Binance 1h klines.
+
+Next validation after restart: `symbol_status_counts.in_position` must match `execution_status.open_protected_positions`, routine raw event file growth must slow materially, `decision_loop_overrun_count` should stop climbing from REST repair stalls, and top-growth status should contain `ok` / `below_threshold` rows rather than all `empty_ohlcv` for normal Binance symbols.

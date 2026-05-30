@@ -4635,3 +4635,9 @@ python -m compileall -q data/exchanges research_tools cli constants.py main.py
 ```
 
 Additional static sweep used for live2: import all `research_tools.anomaly_live2.*` modules and inspect function bytecode for unresolved `LOAD_GLOBAL` / `LOAD_NAME`; after this patch no unresolved live2 globals remain.
+
+## 2026-05-30 - P459 live2 post-crash validation protocol
+
+Hypothesis: removing heavy routine payloads and REST repair from the decision hot path improves live2 latency without creating hidden data holes, because WS candles remain the source of live flow and missing rolling context remains visible until background official-1m maintenance fills it.
+
+Protocol after P459: run live2 for 60-90 minutes. Accept only if `market_data_ready_for_entries=true`, WS stale shard count remains 0, `rolling_context_maintenance.total_errors=0`, `symbol_status_counts.in_position == execution_status.open_protected_positions`, selected/entry/execution rows remain present in events after budget pressure, and top-growth status has normal `ok`/`below_threshold` rows for the closed hour. If `data_dependency_not_ready` remains high, split it by 30s aggTrade gaps vs true 1m maintenance lag before touching strategy thresholds.
