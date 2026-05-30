@@ -85,6 +85,7 @@ class AnomalyLive2Config:
     execution_order_notional_usdt: float = 12.0
     execution_risk_per_trade_pct: float = 0.02
     execution_max_total_open_risk_pct: float = 0.08
+    execution_max_initial_risk_pct: float = 0.01
     execution_max_open_positions: int = 0
     execution_stop_visibility_attempts: int = 5
     execution_stop_visibility_sleep_seconds: float = 0.5
@@ -242,8 +243,10 @@ class AnomalyLive2Config:
             raise ValueError("execution_order_notional_usdt must be > 0")
         if self.execution_risk_per_trade_pct <= 0.0:
             raise ValueError("execution_risk_per_trade_pct must be > 0")
-        if self.execution_max_total_open_risk_pct < self.execution_risk_per_trade_pct:
-            raise ValueError("execution_max_total_open_risk_pct must be >= execution_risk_per_trade_pct")
+        if self.execution_max_total_open_risk_pct <= 0.0:
+            raise ValueError("execution_max_total_open_risk_pct must be > 0")
+        if self.execution_max_initial_risk_pct <= 0.0:
+            raise ValueError("execution_max_initial_risk_pct must be > 0")
         if self.execution_max_open_positions < 0:
             raise ValueError("execution_max_open_positions must be >= 0; 0 means unlimited")
         if self.execution_stop_visibility_attempts <= 0:
