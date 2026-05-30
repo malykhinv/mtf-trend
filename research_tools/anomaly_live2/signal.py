@@ -88,7 +88,6 @@ LIVE2_ROLLING_SEED_MIN_HTF_TRADE_RATIO = 5.0
 LIVE2_ROLLING_SEED_MIN_HTF_RETURN_PCT = 0.0100
 LIVE2_ROLLING_STRUCTURAL_STOP_BUFFER_PCT = 0.0005
 LIVE2_ROLLING_TP1_R = 0.75
-LIVE2_ROLLING_MAX_ENTRY_DRIFT_PCT = 0.004
 LIVE2_ROLLING_MAX_INITIAL_RISK_PCT = 0.05
 LIVE2_ROLLING_MAX_MISSING_AGGTRADE_IDS_PER_30S = 5
 LIVE2_ROLLING_MAX_MISSING_AGGTRADE_ID_RATIO_30S = 0.05
@@ -1839,9 +1838,6 @@ def _evaluate_rolling_profile(
         if not math.isfinite(initial_risk) or initial_risk <= 0.0 or not math.isfinite(initial_risk_pct):
             continue
         if initial_risk_pct > LIVE2_ROLLING_MAX_INITIAL_RISK_PCT:
-            continue
-        entry_drift = abs((entry - float(decision_candle.close)) / float(decision_candle.close)) if decision_candle.close > 0 else float("nan")
-        if math.isfinite(entry_drift) and entry_drift > LIVE2_ROLLING_MAX_ENTRY_DRIFT_PCT:
             continue
         prior_spike = _rolling_prior_spike_features(history=history, current=htf_candle, current_open_ms=htf_open_ms)
         pregrowth_max_single = max(((item.close / item.open) - 1.0 for item in pregrowth if item.open > 0), default=float("nan"))

@@ -1,3 +1,15 @@
+## 2026-05-30 - Live2 deadline load review after Ctrl+C run
+
+Input: uploaded `20260530_155320` live artifacts and uploaded workspace code.
+
+Interpretation: Ctrl+C explains partial final artifacts such as top-growth completion, but it does not explain the earlier stream of `deadline_missed` decisions. The observed bottleneck is sequential per-symbol signal evaluation under a 1.5s deadline after many symbols become actionable on the same 30s bucket.
+
+Rejected fix idea: top-K candidate evaluation. It would violate the live goal of an all-symbol pump radar.
+
+Preferred experiment: measure and then implement all-symbol cheap impossibility classification. Necessary-condition gates must be deterministic and contract-safe, not ranking/capping. Longer-term target is incremental rolling C/A/S state per symbol so the deadline cycle reads precomputed features instead of rebuilding rolling 1m/30s context for every dirty symbol.
+
+P449 validation only: compileall. A separate P450 should address deadline load with timing instrumentation and a no-top impossibility/incremental design.
+
 ## 2026-05-30 - P448 live2 stop recovery regression check
 
 Incident: live2 crashed during position supervision when the exchange position was already flat and the protected stop was gone, because the direct flat branch wrote `refreshed_amount` without defining it.

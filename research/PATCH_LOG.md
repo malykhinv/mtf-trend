@@ -1,3 +1,15 @@
+## 2026-05-30 - P449 proposed - live2 entry/stop audit truthfulness hygiene
+
+Status: PROPOSED against uploaded workspace / commit UNKNOWN.
+
+Files: `research_tools/anomaly_live2/signal.py`, `research_tools/anomaly_live2/entry_guard.py`, `research_tools/anomaly_live2/deadline.py`, `research_tools/anomaly_live2/state.py`, `research_tools/anomaly_live2/execution.py`, `research_tools/anomaly_live2/position_supervisor.py`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/EXPERIMENT_LOG.md`.
+
+Purpose: remove the dead signal-layer entry-drift check that compared the decision close to itself, expose the live price source used by entry guard (`aggtrade_last_price` vs `ticker_last_price`), and replace ambiguous stop visibility checks with a typed `visible / absent / api_error` result on execution/supervision safety paths.
+
+Honesty: no trading thresholds, category selection, entry guard limits, fill model, TP/SL math, or scheduler policy change. Exchange `ExchangeOrderNotFound` is classified as `absent`; other exceptions are `api_error` and remain integrity/safety failures instead of being collapsed into “stop not visible”.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+
 ## 2026-05-30 - P448 proposed - live2 flat-stop recovery NameError fix
 
 Status: PROPOSED after P447 / commit UNKNOWN.

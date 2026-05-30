@@ -1,3 +1,13 @@
+## 2026-05-30 - Live2 audit state after Ctrl+C artifact review
+
+Current commit: UNKNOWN. Uploaded workspace patch status: P449 PROPOSED.
+
+Latest live artifacts were collected after forced Ctrl+C, so partial top-growth/user-data counters are not proof of live failure. The real unresolved runtime problem from the run is deadline load: hundreds of 30s actionable buckets can close together, while the deadline engine evaluates symbols sequentially and only a handful finish before the 1.5s decision deadline. No-trade execution lifecycle was not exercised in that run.
+
+P449 is audit/safety hygiene only: remove dead signal entry-drift duplicate, add entry guard live-price source to artifacts/state, and make stop visibility distinguish `visible`, `absent`, and `api_error`. It does not solve the deadline load.
+
+Next clean scheduler direction: keep the “all symbols observed” contract, but replace top-K with deterministic impossibility gates and incremental per-symbol rolling features so every symbol is cheap to classify and only mathematically possible C/A/S candidates reach expensive context/category checks.
+
 ## 2026-05-30 - P448 live2 flat-stop recovery crash fix
 
 Current commit: UNKNOWN.

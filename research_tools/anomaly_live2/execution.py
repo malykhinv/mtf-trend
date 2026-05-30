@@ -22,9 +22,10 @@ import time
 import threading
 from dataclasses import dataclass, field
 from math import isfinite
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOpenInterestSnapshot, ExchangeOrderFill
+from domain.exceptions import ExchangeOrderNotFound
 
 from .clock import utc_now_ms
 from .entry_guard import Live2EntryGuardResult
@@ -274,6 +275,34 @@ class Live2ProtectedPosition:
             "early_exit_last_reason": self.early_exit_last_reason,
             "early_exit_last_observed_ms": self.early_exit_last_observed_ms,
             "last_supervised_ms": self.last_supervised_ms,
+        }
+
+
+
+
+@dataclass(frozen=True, slots=True)
+class Live2StopVisibilityResult:
+    """Typed result for checking whether a protected stop is currently visible."""
+
+    status: Literal["visible", "absent", "api_error"]
+    reason: str
+    attempts: int
+    order: dict[str, object] | None = None
+    error_type: str = ""
+    error_message: str = ""
+
+    @property
+    def visible(self) -> bool:
+        return self.status == "visible" and self.order is not None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "reason": self.reason,
+            "attempts": self.attempts,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+            "order": self.order or {},
         }
 
 
@@ -780,14 +809,21 @@ class Live2ExecutionEngine:
         stop_order_id = _extract_order_id(stop_payload) or stop_client_order_id
         stop_verify_started_at_ms = utc_now_ms()
         timing["stop_verify_started_at_ms"] = stop_verify_started_at_ms
-        verified_stop = self._verify_stop_visible(state.symbol, stop_client_order_id)
+        stop_visibility = self.check_stop_visibility(state.symbol, stop_client_order_id)
         stop_verify_finished_at_ms = utc_now_ms()
         timing["stop_verify_finished_at_ms"] = stop_verify_finished_at_ms
         timing["stop_verify_duration_ms"] = max(0, stop_verify_finished_at_ms - stop_verify_started_at_ms)
-        if verified_stop is None:
+        timing["stop_visibility_status"] = stop_visibility.status
+        timing["stop_visibility_reason"] = stop_visibility.reason
+        if not stop_visibility.visible:
+            stop_visibility_reason = (
+                "initial_stop_visibility_api_error_after_submit"
+                if stop_visibility.status == "api_error"
+                else "initial_stop_not_visible_after_submit"
+            )
             return self._integrity_error_after_fill(
                 state=state,
-                reason="initial_stop_not_visible_after_submit",
+                reason=stop_visibility_reason,
                 fill=fill,
                 pre_position_amount=pre_position_amount,
                 position_delta_amount=position_delta_amount,
@@ -796,8 +832,10 @@ class Live2ExecutionEngine:
                 stop_order_id=stop_order_id,
                 stop_client_order_id=stop_client_order_id,
                 stop_price=float(stop_price),
+                details={"stop_visibility": stop_visibility.as_dict()},
                 timing=timing,
             )
+        verified_stop = stop_visibility.order or {}
         stop_order_id = _extract_order_id(verified_stop) or stop_order_id
         entry_current_oi_started_at_ms = utc_now_ms()
         timing["entry_current_oi_fetch_started_at_ms"] = entry_current_oi_started_at_ms
@@ -972,8 +1010,14 @@ class Live2ExecutionEngine:
     def attempt_emergency_close(self, symbol: str, amount: float | None) -> str:
         return self._attempt_emergency_close(symbol, amount)
 
+    def check_stop_visibility(self, symbol: str, client_order_id: str) -> Live2StopVisibilityResult:
+        return self._check_stop_visibility(symbol, client_order_id)
+
     def verify_stop_visible(self, symbol: str, client_order_id: str) -> dict[str, object] | None:
-        return self._verify_stop_visible(symbol, client_order_id)
+        """Legacy compatibility wrapper. Prefer check_stop_visibility for live safety decisions."""
+
+        result = self._check_stop_visibility(symbol, client_order_id)
+        return result.order if result.visible else None
 
     def make_client_order_id(self, *, prefix: str, symbol: str, timestamp_ms: int) -> str:
         return self._client_order_id(prefix=prefix, symbol=symbol, timestamp_ms=timestamp_ms)
@@ -1016,17 +1060,44 @@ class Live2ExecutionEngine:
             exchange_boundary_status="ready",
         )
 
-    def _verify_stop_visible(self, symbol: str, client_order_id: str) -> dict[str, object] | None:
+    def _check_stop_visibility(self, symbol: str, client_order_id: str) -> Live2StopVisibilityResult:
         assert self.exchange_client is not None
-        for attempt in range(1, self.config.stop_visibility_attempts + 1):
+        attempts = max(1, int(self.config.stop_visibility_attempts))
+        last_absent_error = ""
+        last_api_error_type = ""
+        last_api_error_message = ""
+        for attempt in range(1, attempts + 1):
             try:
-                return self.exchange_client.fetch_stop_order_by_client_order_id(symbol, client_order_id)
-            except Exception:
-                if attempt >= self.config.stop_visibility_attempts:
-                    return None
-                if self.config.stop_visibility_sleep_seconds > 0:
-                    time.sleep(self.config.stop_visibility_sleep_seconds)
-        return None
+                order = self.exchange_client.fetch_stop_order_by_client_order_id(symbol, client_order_id)
+                return Live2StopVisibilityResult(
+                    status="visible",
+                    reason="stop_order_visible_by_client_order_id",
+                    attempts=attempt,
+                    order=dict(order),
+                )
+            except ExchangeOrderNotFound as exc:
+                last_absent_error = str(exc)
+            except Exception as exc:
+                last_api_error_type = type(exc).__name__
+                last_api_error_message = str(exc)[:240]
+                if attempt >= attempts:
+                    self._total_exchange_errors += 1
+                    return Live2StopVisibilityResult(
+                        status="api_error",
+                        reason="stop_visibility_check_failed_at_exchange_boundary",
+                        attempts=attempt,
+                        error_type=last_api_error_type,
+                        error_message=last_api_error_message,
+                    )
+            if attempt < attempts and self.config.stop_visibility_sleep_seconds > 0:
+                time.sleep(self.config.stop_visibility_sleep_seconds)
+        return Live2StopVisibilityResult(
+            status="absent",
+            reason="stop_order_absent_by_client_order_id",
+            attempts=attempts,
+            error_type="ExchangeOrderNotFound" if last_absent_error else "",
+            error_message=last_absent_error[:240],
+        )
 
     def _integrity_error_after_fill(
         self,

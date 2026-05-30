@@ -33,6 +33,7 @@ class Live2EntryGuardResult:
     verdict: str
     reason: str
     live_price: float | None = None
+    live_price_source: str = ""
     signal_age_ms: int | None = None
     entry_price_drift_pct: float | None = None
     rr_to_tp1_at_live_price: float | None = None
@@ -58,7 +59,7 @@ class Live2EntryGuardEngine:
     ) -> Live2EntryGuardResult:
         self._total_checked += 1
         signal_age_ms = now_ms - signal_timestamp_ms
-        live_price = _latest_stream_price(state)
+        live_price, live_price_source = _latest_stream_price_with_source(state)
         signal_entry = signal_decision.signal_entry_price
         stop = signal_decision.initial_stop_at_decision
         tp1 = signal_decision.tp1_at_decision
@@ -70,22 +71,24 @@ class Live2EntryGuardEngine:
             "decision_timestamp_ms": now_ms,
             "signal_age_ms": signal_age_ms,
             "live_price": live_price,
+            "live_price_source": live_price_source,
             "signal_entry_price": signal_entry,
             "initial_stop_at_decision": stop,
             "tp1_at_decision": tp1,
         }
         if signal_age_ms > self.config.max_signal_age_ms:
-            return self._reject("stale_signal_before_execution", live_price=live_price, signal_age_ms=signal_age_ms, features=features)
+            return self._reject("stale_signal_before_execution", live_price=live_price, live_price_source=live_price_source, signal_age_ms=signal_age_ms, features=features)
         if live_price is None or live_price <= 0:
-            return self._reject("live_stream_price_not_available_for_entry_guard", live_price=live_price, signal_age_ms=signal_age_ms, features=features)
+            return self._reject("live_stream_price_not_available_for_entry_guard", live_price=live_price, live_price_source=live_price_source, signal_age_ms=signal_age_ms, features=features)
         if signal_entry is None or signal_entry <= 0 or stop is None or stop <= 0 or tp1 is None or tp1 <= 0:
-            return self._reject("signal_risk_levels_not_available_for_entry_guard", live_price=live_price, signal_age_ms=signal_age_ms, features=features)
+            return self._reject("signal_risk_levels_not_available_for_entry_guard", live_price=live_price, live_price_source=live_price_source, signal_age_ms=signal_age_ms, features=features)
         drift_pct = (live_price / signal_entry) - 1.0
         features["entry_price_drift_pct"] = drift_pct
         if drift_pct > self.config.max_entry_price_drift_pct:
             return self._reject(
                 "live_price_drift_above_entry_guard_max",
                 live_price=live_price,
+                live_price_source=live_price_source,
                 signal_age_ms=signal_age_ms,
                 drift_pct=drift_pct,
                 features=features,
@@ -94,6 +97,7 @@ class Live2EntryGuardEngine:
             return self._reject(
                 "tp1_already_touched_before_execution",
                 live_price=live_price,
+                live_price_source=live_price_source,
                 signal_age_ms=signal_age_ms,
                 drift_pct=drift_pct,
                 rr_to_tp1=0.0,
@@ -107,6 +111,7 @@ class Live2EntryGuardEngine:
             return self._reject(
                 "rr_collapsed_before_execution",
                 live_price=live_price,
+                live_price_source=live_price_source,
                 signal_age_ms=signal_age_ms,
                 drift_pct=drift_pct,
                 rr_to_tp1=rr,
@@ -117,6 +122,7 @@ class Live2EntryGuardEngine:
             verdict="accepted",
             reason="entry_guard_passed",
             live_price=live_price,
+            live_price_source=live_price_source,
             signal_age_ms=signal_age_ms,
             entry_price_drift_pct=drift_pct,
             rr_to_tp1_at_live_price=rr,
@@ -141,6 +147,7 @@ class Live2EntryGuardEngine:
         reason: str,
         *,
         live_price: float | None,
+        live_price_source: str,
         signal_age_ms: int,
         features: dict[str, object],
         drift_pct: float | None = None,
@@ -151,6 +158,7 @@ class Live2EntryGuardEngine:
             verdict="rejected_entry_guard",
             reason=reason,
             live_price=live_price,
+            live_price_source=live_price_source,
             signal_age_ms=signal_age_ms,
             entry_price_drift_pct=drift_pct,
             rr_to_tp1_at_live_price=rr_to_tp1,
@@ -159,8 +167,13 @@ class Live2EntryGuardEngine:
 
 
 def _latest_stream_price(state: SymbolState) -> float | None:
+    price, _source = _latest_stream_price_with_source(state)
+    return price
+
+
+def _latest_stream_price_with_source(state: SymbolState) -> tuple[float | None, str]:
     if state.aggtrade_last_price is not None and state.aggtrade_last_price > 0:
-        return state.aggtrade_last_price
+        return state.aggtrade_last_price, "aggtrade_last_price"
     if state.ticker_last_price is not None and state.ticker_last_price > 0:
-        return state.ticker_last_price
-    return None
+        return state.ticker_last_price, "ticker_last_price"
+    return None, "unavailable"

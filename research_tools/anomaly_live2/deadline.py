@@ -87,6 +87,7 @@ class Live2DecisionRecord:
     entry_guard_verdict: str = ""
     entry_guard_reason: str = ""
     entry_guard_live_price: float | None = None
+    entry_guard_live_price_source: str = ""
     entry_guard_signal_age_ms: int | None = None
     entry_guard_price_drift_pct: float | None = None
     entry_guard_rr_to_tp1: float | None = None
@@ -739,6 +740,7 @@ class Live2DeadlineEngine:
                             verdict="rejected_entry_guard",
                             reason="stale_signal_before_execution_call",
                             live_price=entry_guard_result.live_price,
+                            live_price_source=entry_guard_result.live_price_source,
                             signal_age_ms=pre_execution_age_ms,
                             entry_price_drift_pct=entry_guard_result.entry_price_drift_pct,
                             rr_to_tp1_at_live_price=entry_guard_result.rr_to_tp1_at_live_price,
@@ -822,6 +824,7 @@ class Live2DeadlineEngine:
             entry_guard_verdict="" if entry_guard_result is None else entry_guard_result.verdict,
             entry_guard_reason="" if entry_guard_result is None else entry_guard_result.reason,
             entry_guard_live_price=None if entry_guard_result is None else entry_guard_result.live_price,
+            entry_guard_live_price_source="" if entry_guard_result is None else entry_guard_result.live_price_source,
             entry_guard_signal_age_ms=None if entry_guard_result is None else entry_guard_result.signal_age_ms,
             entry_guard_price_drift_pct=None if entry_guard_result is None else entry_guard_result.entry_price_drift_pct,
             entry_guard_rr_to_tp1=None if entry_guard_result is None else entry_guard_result.rr_to_tp1_at_live_price,
@@ -946,12 +949,14 @@ class Live2DeadlineEngine:
             state.last_entry_guard_verdict = entry_guard_result.verdict
             state.last_entry_guard_reason = entry_guard_result.reason
             state.last_entry_guard_live_price = entry_guard_result.live_price
+            state.last_entry_guard_live_price_source = entry_guard_result.live_price_source
             state.last_entry_guard_price_drift_pct = entry_guard_result.entry_price_drift_pct
             state.last_entry_guard_rr_to_tp1 = entry_guard_result.rr_to_tp1_at_live_price
         else:
             state.last_entry_guard_verdict = ""
             state.last_entry_guard_reason = ""
             state.last_entry_guard_live_price = None
+            state.last_entry_guard_live_price_source = ""
             state.last_entry_guard_price_drift_pct = None
             state.last_entry_guard_rr_to_tp1 = None
         if execution_result is not None:

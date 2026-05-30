@@ -302,7 +302,19 @@ class Live2PositionSupervisor:
                 data=data,
             )
 
-        if self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id) is None:
+        stop_visibility = self.execution_engine.check_stop_visibility(position.symbol, position.stop_client_order_id)
+        if not stop_visibility.visible:
+            if stop_visibility.status == "api_error":
+                return self._integrity_error(
+                    position=position,
+                    reason="protected_position_stop_visibility_api_error_during_supervision",
+                    emergency_amount=exchange_amount,
+                    details={
+                        "stop_client_order_id": position.stop_client_order_id,
+                        "stop_order_id": position.stop_order_id,
+                        "stop_visibility": stop_visibility.as_dict(),
+                    },
+                )
             settled = self._wait_for_stop_trigger_settle(position=position, exchange_amount=exchange_amount, now_ms=now_ms)
             if settled is not None:
                 return settled
@@ -310,7 +322,11 @@ class Live2PositionSupervisor:
                 position=position,
                 reason="protected_position_stop_not_visible_during_supervision",
                 emergency_amount=exchange_amount,
-                details={"stop_client_order_id": position.stop_client_order_id, "stop_order_id": position.stop_order_id},
+                details={
+                    "stop_client_order_id": position.stop_client_order_id,
+                    "stop_order_id": position.stop_order_id,
+                    "stop_visibility": stop_visibility.as_dict(),
+                },
             )
 
         managed_statuses = {"protected_initial_stop_verified", "tp1_partial_protected_stop_verified"}
@@ -674,8 +690,8 @@ class Live2PositionSupervisor:
         for _ in range(attempts):
             if self.config.stop_trigger_settle_sleep_seconds > 0:
                 time.sleep(float(self.config.stop_trigger_settle_sleep_seconds))
-            visible_stop = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
-            if visible_stop is not None:
+            stop_visibility = self.execution_engine.check_stop_visibility(position.symbol, position.stop_client_order_id)
+            if stop_visibility.visible:
                 self.execution_engine.replace_protected_position(replace(position, last_supervised_ms=now_ms))
                 return Live2PositionSupervisorAction(
                     event_type="position_stop_visibility_restored",
@@ -688,6 +704,18 @@ class Live2PositionSupervisor:
                         "exchange_position_amount": last_amount,
                         "stop_client_order_id": position.stop_client_order_id,
                         "stop_order_id": position.stop_order_id,
+                        "stop_visibility": stop_visibility.as_dict(),
+                    },
+                )
+            if stop_visibility.status == "api_error":
+                return self._integrity_error(
+                    position=position,
+                    reason="stop_trigger_settle_stop_visibility_api_error",
+                    emergency_amount=last_amount,
+                    details={
+                        "stop_client_order_id": position.stop_client_order_id,
+                        "stop_order_id": position.stop_order_id,
+                        "stop_visibility": stop_visibility.as_dict(),
                     },
                 )
             refreshed_amount = self._fetch_position_amount(position.symbol)
@@ -1135,14 +1163,24 @@ class Live2PositionSupervisor:
                 emergency_amount=remaining_amount,
                 details={"remaining_amount": remaining_amount, "stop_price": stop_price},
             )
-        visible = self.execution_engine.verify_stop_visible(position.symbol, new_stop_client_order_id)
-        if visible is None:
+        stop_visibility = self.execution_engine.check_stop_visibility(position.symbol, new_stop_client_order_id)
+        if not stop_visibility.visible:
+            visibility_reason = (
+                f"{reason}:replacement_stop_visibility_api_error"
+                if stop_visibility.status == "api_error"
+                else f"{reason}:replacement_stop_not_visible"
+            )
             return self._integrity_error(
                 position=position,
-                reason=f"{reason}:replacement_stop_not_visible",
+                reason=visibility_reason,
                 emergency_amount=remaining_amount,
-                details={"remaining_amount": remaining_amount, "stop_price": stop_price},
+                details={
+                    "remaining_amount": remaining_amount,
+                    "stop_price": stop_price,
+                    "stop_visibility": stop_visibility.as_dict(),
+                },
             )
+        visible = stop_visibility.order or {}
         cancel_result = self._cancel_old_stop_and_verify_gone(position)
         if cancel_result is not None:
             return self._integrity_error(
@@ -1216,16 +1254,21 @@ class Live2PositionSupervisor:
         except Exception as exc:
             self.execution_engine.mark_exchange_error()
             return f"old_stop_cancel_failed:{type(exc).__name__}:{exc}"
-        still_visible = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
-        if still_visible is not None:
+        stop_visibility = self.execution_engine.check_stop_visibility(position.symbol, position.stop_client_order_id)
+        if stop_visibility.status == "api_error":
+            return f"old_stop_cancel_verify_api_error:{stop_visibility.error_type}:{stop_visibility.error_message}"
+        if stop_visibility.visible:
             return "old_stop_still_visible_after_cancel"
         return None
 
     def _ensure_old_stop_gone_after_flat(self, position: Live2ProtectedPosition) -> str | None:
         assert self.exchange_client is not None
-        visible_stop = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
-        if visible_stop is None:
+        stop_visibility = self.execution_engine.check_stop_visibility(position.symbol, position.stop_client_order_id)
+        if stop_visibility.status == "api_error":
+            return f"flat_position_stop_visibility_api_error:{stop_visibility.error_type}:{stop_visibility.error_message}"
+        if not stop_visibility.visible:
             return None
+        visible_stop = stop_visibility.order or {}
         order_id = _extract_order_id(visible_stop) or position.stop_order_id
         if not order_id:
             return "flat_position_visible_stop_without_order_id"
@@ -1234,8 +1277,10 @@ class Live2PositionSupervisor:
         except Exception as exc:
             self.execution_engine.mark_exchange_error()
             return f"flat_position_orphan_stop_cancel_failed:{type(exc).__name__}:{exc}"
-        still_visible = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
-        if still_visible is not None:
+        stop_visibility = self.execution_engine.check_stop_visibility(position.symbol, position.stop_client_order_id)
+        if stop_visibility.status == "api_error":
+            return f"flat_position_orphan_stop_cancel_verify_api_error:{stop_visibility.error_type}:{stop_visibility.error_message}"
+        if stop_visibility.visible:
             return "flat_position_orphan_stop_still_visible_after_cancel"
         return None
 
