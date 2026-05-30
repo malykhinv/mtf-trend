@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 from typing import Any
 
@@ -248,6 +249,9 @@ class AnomalyLive2Runner:
         self._background_threads: list[threading.Thread] = []
         self._started_monotonic = time.perf_counter()
         self._market_started_monotonic: float | None = None
+        self._startup_progress_started_by_stage: dict[str, float] = {}
+        self._startup_progress_lines: dict[str, str] = {}
+        self._startup_progress_lock = threading.RLock()
 
     def run(self) -> int:
         writer = Live2ArtifactWriter(
@@ -414,20 +418,9 @@ class AnomalyLive2Runner:
             )
             aggtrade_ready = False
             if self.universe_selection.selected_symbols:
-                self.startup_htf_baseline_result = self._run_startup_htf_baseline_warmup(writer)
-                self._set_startup_status(
-                    "HTF baseline",
-                    f"готово {self.startup_htf_baseline_result.symbols_warmed}/{self.startup_htf_baseline_result.symbols_requested} · "
-                    f"1m candles {self.startup_htf_baseline_result.candles_loaded}",
-                )
+                self._run_startup_market_warmups(writer)
                 self._write_rolling_context_maintenance_starting_event(writer)
                 self.rolling_context_maintenance_source.start()
-                self.startup_warmup_result = self._run_startup_aggtrade_warmup(writer)
-                self._set_startup_status(
-                    "прогрев",
-                    f"готово {self.startup_warmup_result.symbols_warmed}/{self.startup_warmup_result.symbols_requested} · "
-                    f"trades {self.startup_warmup_result.trades_loaded}",
-                )
                 self.aggtrade_source = Live2AggTradeWsSource(
                     state_store=self.state_store,
                     symbols=self.universe_selection.selected_symbols,
@@ -594,11 +587,10 @@ class AnomalyLive2Runner:
                 runtime_generation=self.config.runtime_generation,
             )
             self._market_started_monotonic = time.perf_counter()
-            self.status_logger(
-                f"live2 · старт · артефакты {self.config.output_dir} · "
-                f"universe {len(self.universe_selection.selected_symbols)} · "
-                "ticker+aggTrade+mark WS включены · private user stream включен · verified entry+stop execution включен"
-            )
+            with self._startup_progress_lock:
+                self._startup_progress_lines.clear()
+                self._startup_progress_started_by_stage.clear()
+            self.status_logger.set_log_output_enabled(False)
             self._start_background_runtime_threads(writer)
             while not self._shutdown_requested:
                 cycle_started = time.perf_counter()
@@ -752,7 +744,6 @@ class AnomalyLive2Runner:
                 symbol="__telegram__",
             )
             self.status_logger.finish_status()
-            self.status_logger("live2 · остановлено пользователем")
             return 130
         except Exception as exc:
             self.shutdown(reason="runner_exception")
@@ -1014,32 +1005,65 @@ class AnomalyLive2Runner:
         )
 
     def _set_startup_status(self, stage: str, message: str) -> None:
-        self.status_logger.status(
-            "\n".join(
-                (
-                    "Live2",
-                    f"Этап {stage}",
-                    str(message),
-                    f"Артефакты {self.config.output_dir}",
-                )
-            )
-        )
+        self.status_logger.status(f"Live2 · {stage}: {message}")
 
     def _set_warmup_progress_status(self, progress: Live2StartupWarmupProgress) -> None:
-        self.status_logger.status(
-            "\n".join(
-                (
-                    "Live2",
-                    "Этап прогрев",
-                    (
-                        f"{progress.current_index}/{progress.symbols_total} · "
-                        f"готово {progress.symbols_warmed} · ошибок {progress.symbols_failed} · "
-                        f"trades {progress.trades_loaded}"
-                    ),
-                    f"Символ {progress.symbol}",
-                )
-            )
+        self._set_startup_progress_line(
+            stage="aggTrade",
+            current=progress.current_index,
+            total=progress.symbols_total,
+            suffix=f"ok {progress.symbols_warmed} · errors {progress.symbols_failed} · trades {progress.trades_loaded}",
         )
+
+    def _set_htf_prewarm_progress_status(self, progress: dict[str, object]) -> None:
+        self._set_startup_progress_line(
+            stage="ohlcv 1m",
+            current=int(progress.get("current_index") or 0),
+            total=int(progress.get("symbols_requested") or 0),
+            suffix=(
+                f"ok {progress.get('symbols_warmed')} · errors {progress.get('symbols_failed')} · "
+                f"candles {progress.get('candles_loaded')}"
+            ),
+        )
+
+    def _set_startup_progress_line(self, *, stage: str, current: int, total: int, suffix: str = "") -> None:
+        total = max(0, int(total or 0))
+        current = max(0, min(int(current or 0), total)) if total else 0
+        now = time.perf_counter()
+        with self._startup_progress_lock:
+            started = self._startup_progress_started_by_stage.setdefault(stage, now)
+            pct = 100 if total <= 0 else int((current / total) * 100)
+            eta = self._format_eta_seconds(
+                self._estimate_eta_seconds(started=started, now=now, current=current, total=total)
+            )
+            line = f"Прогрев {stage} {pct}% ETA {eta}"
+            if suffix:
+                line += f" · {suffix}"
+            self._startup_progress_lines[stage] = line
+            self.status_logger.status("\n".join(self._startup_progress_lines.values()))
+
+    @staticmethod
+    def _estimate_eta_seconds(*, started: float, now: float, current: int, total: int) -> float | None:
+        if total <= 0 or current <= 0:
+            return None
+        elapsed = max(0.0, now - started)
+        rate = current / elapsed if elapsed > 0.0 else 0.0
+        if rate <= 0.0:
+            return None
+        return max(0.0, (total - current) / rate)
+
+    @staticmethod
+    def _format_eta_seconds(value: float | None) -> str:
+        if value is None:
+            return "—"
+        seconds = int(round(max(0.0, value)))
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}ч {minutes}м"
+        if minutes:
+            return f"{minutes}м {seconds}с"
+        return f"{seconds}с"
 
 
     def _refresh_artifact_writer_readiness(self, writer: Live2ArtifactWriter) -> None:
@@ -1654,6 +1678,10 @@ class AnomalyLive2Runner:
 
             def run_worker() -> None:
                 stats = self.top_growth_audit.process_due(symbols=symbols, now_ms=now_ms)
+                while stats.status == "processing" and not self._shutdown_requested:
+                    with self._top_growth_audit_lock:
+                        self._last_top_growth_audit_stats = stats
+                    stats = self.top_growth_audit.process_due(symbols=symbols, now_ms=now_ms)
                 with self._top_growth_audit_lock:
                     self._last_top_growth_audit_stats = stats
                     if stats.status == "completed":
@@ -2173,9 +2201,23 @@ class AnomalyLive2Runner:
                 request_sleep_seconds=self.config.startup_htf_baseline_request_sleep_seconds,
                 error_limit=self.config.startup_htf_baseline_error_limit,
             ),
-        ).run(selected_symbols)
+        ).run(selected_symbols, progress=self._set_htf_prewarm_progress_status)
         writer.write_event(result.as_event())
         return result
+
+    def _run_startup_market_warmups(self, writer: Live2ArtifactWriter) -> None:
+        """Hydrate independent startup REST contexts concurrently.
+
+        The two warmups write different SymbolState fields under the state-store lock:
+        official 1m candles for HTF baseline and aggTrade-derived 30s/1m flow
+        candles. Running them concurrently cuts startup wall-clock time without
+        skipping any symbol or using a fallback dataset.
+        """
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="live2-startup-market") as pool:
+            htf_future = pool.submit(self._run_startup_htf_baseline_warmup, writer)
+            agg_future = pool.submit(self._run_startup_aggtrade_warmup, writer)
+            self.startup_htf_baseline_result = htf_future.result()
+            self.startup_warmup_result = agg_future.result()
 
     def _run_startup_context_prewarm(self, writer: Live2ArtifactWriter) -> dict[str, object]:
         selected_symbols = () if self.universe_selection is None else self.universe_selection.selected_symbols
@@ -2201,13 +2243,32 @@ class AnomalyLive2Runner:
                 },
             )
         )
-        self._set_startup_status("OI prewarm", f"0/{len(selected_symbols)}")
-        oi_summary = self.open_interest_source.poll_symbols_once(
-            selected_symbols,
-            request_sleep_seconds=self.config.startup_context_prewarm_request_sleep_seconds,
-            error_limit=self.config.startup_context_prewarm_error_limit,
-            progress=self._set_oi_prewarm_progress_status,
-        )
+        open_interest_source = self.open_interest_source
+        prior_context_source = self.prior_context_source
+        self._set_startup_progress_line(stage="OI 5m", current=0, total=len(selected_symbols))
+        self._set_startup_progress_line(stage="24h context", current=0, total=len(selected_symbols))
+
+        def run_oi_prewarm() -> dict[str, object]:
+            return open_interest_source.poll_symbols_once(
+                selected_symbols,
+                request_sleep_seconds=self.config.startup_context_prewarm_request_sleep_seconds,
+                error_limit=self.config.startup_context_prewarm_error_limit,
+                progress=self._set_oi_prewarm_progress_status,
+            )
+
+        def run_prior_prewarm() -> dict[str, object]:
+            return prior_context_source.poll_symbols_once(
+                selected_symbols,
+                request_sleep_seconds=self.config.startup_context_prewarm_request_sleep_seconds,
+                error_limit=self.config.startup_context_prewarm_error_limit,
+                progress=self._set_prior_prewarm_progress_status,
+            )
+
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="live2-startup-context") as pool:
+            oi_future = pool.submit(run_oi_prewarm)
+            prior_future = pool.submit(run_prior_prewarm)
+            oi_summary = oi_future.result()
+            prior_summary = prior_future.result()
         writer.write_event(
             Live2Event(
                 event_type="startup_open_interest_prewarm_completed",
@@ -2216,13 +2277,6 @@ class AnomalyLive2Runner:
                 message="startup open-interest prewarm completed",
                 data=oi_summary,
             )
-        )
-        self._set_startup_status("24h prewarm", f"0/{len(selected_symbols)}")
-        prior_summary = self.prior_context_source.poll_symbols_once(
-            selected_symbols,
-            request_sleep_seconds=self.config.startup_context_prewarm_request_sleep_seconds,
-            error_limit=self.config.startup_context_prewarm_error_limit,
-            progress=self._set_prior_prewarm_progress_status,
         )
         writer.write_event(
             Live2Event(
@@ -2254,33 +2308,19 @@ class AnomalyLive2Runner:
         return result
 
     def _set_oi_prewarm_progress_status(self, progress: dict[str, object]) -> None:
-        self.status_logger.status(
-            "\n".join(
-                (
-                    "Live2",
-                    "Этап OI prewarm",
-                    (
-                        f"{progress.get('current_index')}/{progress.get('symbols_requested')} · "
-                        f"ok {progress.get('ok')} · empty {progress.get('empty')} · errors {progress.get('error')}"
-                    ),
-                    f"Символ {progress.get('symbol')}",
-                )
-            )
+        self._set_startup_progress_line(
+            stage="OI 5m",
+            current=int(progress.get("current_index") or 0),
+            total=int(progress.get("symbols_requested") or 0),
+            suffix=f"ok {progress.get('ok')} · empty {progress.get('empty')} · errors {progress.get('error')}",
         )
 
     def _set_prior_prewarm_progress_status(self, progress: dict[str, object]) -> None:
-        self.status_logger.status(
-            "\n".join(
-                (
-                    "Live2",
-                    "Этап 24h prewarm",
-                    (
-                        f"{progress.get('current_index')}/{progress.get('symbols_requested')} · "
-                        f"ok {progress.get('ok')} · empty {progress.get('empty')} · errors {progress.get('error')}"
-                    ),
-                    f"Символ {progress.get('symbol')}",
-                )
-            )
+        self._set_startup_progress_line(
+            stage="24h context",
+            current=int(progress.get("current_index") or 0),
+            total=int(progress.get("symbols_requested") or 0),
+            suffix=f"ok {progress.get('ok')} · empty {progress.get('empty')} · errors {progress.get('error')}",
         )
 
 

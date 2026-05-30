@@ -408,7 +408,13 @@ class Live2StartupHtfBaselineWarmup:
         self.exchange_client = exchange_client
         self.config = config
 
-    def run(self, symbols: tuple[str, ...], *, now_ms: int | None = None) -> Live2StartupHtfBaselineResult:
+    def run(
+        self,
+        symbols: tuple[str, ...],
+        *,
+        now_ms: int | None = None,
+        progress: Callable[[dict[str, object]], None] | None = None,
+    ) -> Live2StartupHtfBaselineResult:
         started_at_ms = utc_now_ms()
         effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
         if not self.config.enabled:
@@ -443,7 +449,7 @@ class Live2StartupHtfBaselineWarmup:
         candles_loaded = 0
         symbols_warmed = 0
         errors: list[str] = []
-        for symbol in limited_symbols:
+        for index, symbol in enumerate(limited_symbols, start=1):
             try:
                 rows = self._fetch_paginated_1m_klines(
                     symbol=symbol,
@@ -480,6 +486,15 @@ class Live2StartupHtfBaselineWarmup:
                         f"recent_contiguous={recent_contiguous_count}/"
                         f"{LIVE2_ROLLING_CONTEXT_MIN_RECENT_1M_CANDLES}:loaded={len(candles)}"
                     )
+            if progress is not None and (index == 1 or index == len(limited_symbols) or index % 10 == 0 or (errors and errors[-1].startswith(f"{symbol}:"))):
+                progress({
+                    "current_index": index,
+                    "symbols_requested": len(limited_symbols),
+                    "symbol": symbol,
+                    "symbols_warmed": symbols_warmed,
+                    "symbols_failed": max(0, index - symbols_warmed),
+                    "candles_loaded": candles_loaded,
+                })
             if self.config.request_sleep_seconds > 0:
                 time.sleep(self.config.request_sleep_seconds)
         symbols_failed = max(0, len(limited_symbols) - symbols_warmed)

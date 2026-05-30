@@ -45,8 +45,8 @@ class AnomalyLive2Config:
     top_growth_enabled: bool = True
     top_growth_min_return_pct: float = 0.10
     top_growth_limit: int = 5
-    top_growth_symbols_per_cycle: int = 1
-    top_growth_max_cycle_seconds: float = 0.75
+    top_growth_symbols_per_cycle: int = 16
+    top_growth_max_cycle_seconds: float = 3.0
     top_growth_fetch_spacing_seconds: float = 0.02
     startup_context_prewarm_request_sleep_seconds: float = 0.0
     startup_context_prewarm_error_limit: int = 50

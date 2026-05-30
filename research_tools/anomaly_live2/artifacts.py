@@ -38,6 +38,10 @@ class Live2ArtifactWriterStatus:
     events_enqueued_by_type: dict[str, int]
     error_count: int
     last_error: str
+    critical_error_count: int
+    last_critical_error: str
+    noncritical_error_count: int
+    last_noncritical_error: str
     dropped_count: int
     dropped_by_kind: dict[str, int]
     dropped_events_by_type: dict[str, int]
@@ -58,6 +62,10 @@ class Live2ArtifactWriterStatus:
             "events_enqueued_by_type": dict(getattr(self, "events_enqueued_by_type", {})),
             "error_count": self.error_count,
             "last_error": self.last_error,
+            "critical_error_count": self.critical_error_count,
+            "last_critical_error": self.last_critical_error,
+            "noncritical_error_count": self.noncritical_error_count,
+            "last_noncritical_error": self.last_noncritical_error,
             "dropped_count": self.dropped_count,
             "dropped_by_kind": dict(self.dropped_by_kind),
             "dropped_events_by_type": dict(self.dropped_events_by_type),
@@ -86,9 +94,11 @@ class Live2ArtifactWriter:
 
     Signal/deadline code calls this writer synchronously, but disk IO is done on
     a single background thread. The public methods never perform blocking CSV or
-    JSON writes on the caller path. If the bounded queue fills or the writer hits
-    an IO error, the writer becomes not-ready; the runner must then keep new
-    entries disabled rather than trade without reliable audit.
+    JSON writes on the caller path. Critical append-only audit failures
+    (events/near-miss) make the writer not-ready and block new entries.
+    Non-critical snapshot/status failures remain visible in writer status but do
+    not stop trading by themselves, because those files can be transiently locked
+    by Windows tools while live_events.csv remains intact.
     """
 
     _EVENT_FIELDS = (
@@ -328,6 +338,10 @@ class Live2ArtifactWriter:
         self._events_enqueued_by_type: dict[str, int] = {}
         self._error_count = 0
         self._last_error = ""
+        self._critical_error_count = 0
+        self._last_critical_error = ""
+        self._noncritical_error_count = 0
+        self._last_noncritical_error = ""
         self._dropped_count = 0
         self._dropped_by_kind: dict[str, int] = {}
         self._dropped_events_by_type: dict[str, int] = {}
@@ -520,6 +534,10 @@ class Live2ArtifactWriter:
                 events_enqueued_by_type=dict(self._events_enqueued_by_type),
                 error_count=self._error_count,
                 last_error=self._last_error,
+                critical_error_count=self._critical_error_count,
+                last_critical_error=self._last_critical_error,
+                noncritical_error_count=self._noncritical_error_count,
+                last_noncritical_error=self._last_noncritical_error,
                 dropped_count=self._dropped_count,
                 dropped_by_kind=dict(self._dropped_by_kind),
                 dropped_events_by_type=dict(self._dropped_events_by_type),
@@ -559,10 +577,20 @@ class Live2ArtifactWriter:
         try:
             self._queue.put_nowait(job)
         except queue.Full:
+            if self._is_critical_job(job):
+                with self._lock:
+                    self._ready = False
+                    self._rejected_count += 1
+                    self._error_count += 1
+                    self._critical_error_count += 1
+                    self._last_error = "artifact writer critical queue full"
+                    self._last_critical_error = "artifact writer critical queue full"
+                return
             with self._lock:
-                self._ready = False
-                self._rejected_count += 1
-                self._last_error = "artifact writer queue full"
+                self._dropped_count += 1
+                self._dropped_by_kind[job.kind] = self._dropped_by_kind.get(job.kind, 0) + 1
+                self._noncritical_error_count += 1
+                self._last_noncritical_error = f"artifact writer noncritical queue full:{job.kind}"
             return
         with self._lock:
             self._enqueued_count += 1
@@ -577,9 +605,24 @@ class Live2ArtifactWriter:
                 with self._lock:
                     self._written_count += 1
             except Exception as exc:  # noqa: BLE001 - artifact writer must surface any IO/serialization failure.
-                self._mark_error(f"{type(exc).__name__}: {exc}")
+                message = f"{type(exc).__name__}: {exc}"
+                if self._is_critical_job(job):
+                    self._mark_error(message)
+                else:
+                    self._mark_noncritical_error(kind=job.kind, message=message)
             finally:
                 self._queue.task_done()
+
+    @staticmethod
+    def _is_critical_job(job: _ArtifactJob) -> bool:
+        return job.kind in {"event", "near_miss", "stop"}
+
+    def _mark_noncritical_error(self, *, kind: str, message: str) -> None:
+        with self._lock:
+            self._error_count += 1
+            self._noncritical_error_count += 1
+            self._last_error = f"noncritical:{kind}:{message}"[:1000]
+            self._last_noncritical_error = f"{kind}:{message}"[:1000]
 
     def _write_job(self, job: _ArtifactJob) -> None:
         if job.kind == "event":
@@ -908,4 +951,6 @@ class Live2ArtifactWriter:
         with self._lock:
             self._ready = False
             self._error_count += 1
-            self._last_error = message
+            self._critical_error_count += 1
+            self._last_error = message[:1000]
+            self._last_critical_error = message[:1000]

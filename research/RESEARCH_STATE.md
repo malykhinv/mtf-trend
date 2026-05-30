@@ -3557,3 +3557,13 @@ Current commit: UNKNOWN. Status: P461 PROPOSED.
 Run `20260530_080733` showed healthy WS ingestion and a working P460 rolling 1m maintenance model, but live crashed from a concurrent-read bug in maintenance status: `_recent_contiguous_1m_count_from_state()` iterated `ring.closed` while another thread mutated the deque. P461 moves the recent 1m context read behind a `SymbolStateStore` lock boundary and throttles non-inline console grid prints so IDE/redirected terminals do not spam repeated `◆ Соединение` blocks. Status reads are now cheap snapshots, not eligibility rescans from the runtime gate heartbeat.
 
 Next validation: restart live2 and require no `RuntimeError: deque mutated during iteration`, `rolling_context_maintenance.total_errors=0`, `decision_loop_overrun_count` not to regress, and the console to show bounded periodic snapshots rather than one full grid per heartbeat when repaint is unavailable.
+
+## 2026-05-30 - P463 live2 runtime/operator hygiene
+
+Current commit: UNKNOWN. Status: P463 PROPOSED on top of P449/P462 from uploaded code state.
+
+P462 removed the observed deadline-miss bottleneck without top-K selection: all symbols remain observed, and baseline-free impossibility rejects replaced most heavy signal evaluations. The next run surfaced runtime/operator issues instead of strategy issues: a Windows lock on `live2_symbol_state.csv` could make `artifact_writer_ready=false`, startup was still slow due sequential warmups, user-data stream readiness mixed transport readiness with payload evidence, and top-growth took too many heartbeats to finish a full closed-hour universe audit.
+
+P463 separates critical append-only audit writes from non-critical snapshot/status writes, overlaps independent startup warmups, makes user-data readiness more explicit, accelerates top-growth completion, and makes console output compact during warmup and grid-only after startup. Trading filters, entry contract, execution, fills, stops, and PnL logic are not changed.
+
+Next validation: run live2 without opening/copying current artifact CSVs if possible, but also deliberately copy/zip the run folder during live once. Accept if a transient `live2_symbol_state.csv` lock increments `artifact_writer_status.noncritical_error_count` without disabling `new_entries_allowed`; reject if any critical event/near-miss writer error occurs. Also compare startup wall-clock against the previous ~29 minutes and inspect user-data status fields separately: `transport_ready`, `payload_seen`, `order_event_seen`.

@@ -22,6 +22,10 @@ HOUR_MS = 60 * 60 * 1000
 TOP_GROWTH_COLUMNS = (
     "period_start_utc",
     "period_end_utc",
+    "completion_status",
+    "symbols_total",
+    "processed_count",
+    "remaining_count",
     "rank",
     "symbol",
     "growth_pct",
@@ -42,6 +46,10 @@ TOP_GROWTH_STATUS_COLUMNS = (
     "period_start_utc",
     "period_end_utc",
     "snapshot_utc",
+    "completion_status",
+    "symbols_total",
+    "processed_count",
+    "remaining_count",
     "symbol",
     "status",
     "reason",
@@ -87,8 +95,8 @@ class Live2TopGrowthAuditConfig:
     enabled: bool = True
     min_return_pct: float = 0.10
     limit: int = 5
-    symbols_per_cycle: int = 1
-    max_cycle_seconds: float = 0.75
+    symbols_per_cycle: int = 16
+    max_cycle_seconds: float = 3.0
     fetch_spacing_seconds: float = 0.02
 
     def __post_init__(self) -> None:
@@ -312,10 +320,17 @@ class Live2TopGrowthAudit:
         status_path = self.top_growth_dir / f"top_growth_status_{stamp}.csv"
         period_start_utc = _iso_ms(task.period_start_ms)
         period_end_utc = _iso_ms(task.period_end_ms)
+        completion_metadata = {
+            "completion_status": completion_status,
+            "symbols_total": len(task.symbols),
+            "processed_count": len(task.status_rows),
+            "remaining_count": max(0, len(task.symbols) - len(task.status_rows)),
+        }
         top_payload = [
             {
                 "period_start_utc": period_start_utc,
                 "period_end_utc": period_end_utc,
+                **completion_metadata,
                 **row,
             }
             for row in top_rows
@@ -324,6 +339,7 @@ class Live2TopGrowthAudit:
             {
                 "period_start_utc": period_start_utc,
                 "period_end_utc": period_end_utc,
+                **completion_metadata,
                 **row,
             }
             for row in task.status_rows

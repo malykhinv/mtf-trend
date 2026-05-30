@@ -25,6 +25,8 @@ class Live2StatusLogger:
     def __init__(self, logger: Callable[[str], None]) -> None:
         self._logger = logger
         self._status_output_enabled = True
+        self._log_output_enabled = True
+        self._enable_windows_virtual_terminal()
         self._inline_status_enabled = self._resolve_inline_status_enabled(logger)
         self._lock = threading.RLock()
         self._status_line_open = False
@@ -47,15 +49,28 @@ class Live2StatusLogger:
             return logger is print and sys.stdout.isatty()
         if mode in {"snapshot", "plain", "line", "non_inline", "non-inline"}:
             return False
-        # PyCharm and Windows consoles often report isatty=true but do not
-        # reliably support multi-line ANSI repaint.  Prefer bounded periodic
-        # snapshots unless inline mode is explicitly requested.
-        if os.name == "nt" or os.environ.get("PYCHARM_HOSTED"):
-            return False
         return logger is print and sys.stdout.isatty()
+
+    @staticmethod
+    def _enable_windows_virtual_terminal() -> None:
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetStdHandle(-11)
+            mode = ctypes.c_uint32()
+            if handle == 0 or not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                return
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+        except Exception:
+            return
 
     def __call__(self, message: str) -> None:
         with self._lock:
+            if not self._log_output_enabled:
+                return
             repaint_status = self._inline_status_enabled and self._last_status_message is not None
             if self._inline_status_enabled:
                 self._clear_status_line_if_needed()
@@ -67,6 +82,8 @@ class Live2StatusLogger:
 
     def alert(self, message: str) -> None:
         with self._lock:
+            if not self._log_output_enabled:
+                return
             repaint_status = self._inline_status_enabled and self._last_status_message is not None
             if self._inline_status_enabled:
                 self._clear_status_line_if_needed()
@@ -74,6 +91,10 @@ class Live2StatusLogger:
             self._logger(rendered)
             if repaint_status and self._last_status_message is not None:
                 self._paint_status(self._last_status_message, highlight=self._last_status_highlight)
+
+    def set_log_output_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._log_output_enabled = bool(enabled)
 
     def status(self, message: str, *, highlight: bool = False) -> None:
         with self._lock:
@@ -84,18 +105,10 @@ class Live2StatusLogger:
             self._last_status_message = str(message)
             self._last_status_highlight = bool(highlight)
             if not self._inline_status_enabled:
-                # In redirected / IDE consoles we cannot reliably repaint a
-                # multi-line block. Do not spam the full grid on every
-                # heartbeat; artifacts remain the source of truth and the
-                # operator still gets bounded periodic snapshots.
-                now = time.monotonic()
-                if (
-                    bool(highlight)
-                    or self._last_non_inline_status_emit_monotonic <= 0.0
-                    or now - self._last_non_inline_status_emit_monotonic >= self._non_inline_status_interval_seconds
-                ):
-                    self._logger(message)
-                    self._last_non_inline_status_emit_monotonic = now
+                # No ANSI repaint means no truthful single-grid console. Do not
+                # drip-feed partial grids into stdout; artifacts remain the source
+                # of truth. Operators that need console UI should use a TTY or
+                # set LIVE2_STATUS_MODE=inline in an ANSI-capable terminal.
                 return
             self._paint_status(self._last_status_message, highlight=self._last_status_highlight)
 

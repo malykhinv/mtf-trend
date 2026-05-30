@@ -10048,3 +10048,32 @@ Risk:
 ```text
 Non-inline consoles now receive periodic status snapshots instead of every heartbeat. This reduces operator-log spam but does not change artifacts or trading logic. Rolling 1m maintenance reads are serialized only while copying open_time_ms values; REST fetches and websocket ingestion remain outside this read path.
 ```
+
+## 2026-05-30 - P463 live2 runtime operator hygiene
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fixes the next live2 runtime/operator issues found after P462: Windows file locks on non-critical snapshot artifacts could disable new entries, startup warmup phases ran sequentially when they could safely overlap, top-growth progressed too slowly because the heartbeat kicked only one bounded chunk, user-data stream readiness did not distinguish transport readiness from observed payload/order events, and non-inline consoles could still receive non-grid log lines after startup.
+
+Changes:
+
+- Treat `live2_events.csv` and `live2_near_misses.csv` writer failures as critical, but keep status/symbol-state/diagnostics snapshot write failures non-critical so a locked `live2_symbol_state.csv` does not disable entries.
+- Add critical/non-critical artifact writer error counters to status artifacts.
+- Run startup HTF 1m baseline and aggTrade warmups concurrently; run startup OI and 24h prior-context prewarms concurrently.
+- Add compact ETA startup progress lines for aggTrade, 1m OHLCV, OI, and 24h context.
+- After startup, suppress normal console log lines and keep only the repaintable status grid; runtime errors remain in artifacts/Telegram paths.
+- Make top-growth continue bounded chunks in its own worker until the closed-hour audit is complete or shutdown is requested.
+- Add `completion_status`, processed/remaining counts, and symbol totals directly to top-growth top/status CSV rows.
+- Split user-data stream status into `transport_ready`, `payload_seen`, and `order_event_seen` while keeping `ready` as transport/listenKey readiness.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Startup now uses two concurrent public REST warmups and two concurrent context prewarms. If Binance rate-limit errors rise, reduce the overlapping startup concurrency or add an explicit shared rate gate before changing trading filters. Non-critical snapshot write failures are visible in artifact_writer_status but no longer block entries; critical audit stream failures still block entries.
+```

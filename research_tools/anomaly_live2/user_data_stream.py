@@ -91,6 +91,9 @@ class Live2UserDataStatus:
     source_id: str
     status: str
     ready: bool
+    transport_ready: bool
+    payload_seen: bool
+    order_event_seen: bool
     reason: str
     endpoint_category: str
     websocket_url_redacted: str
@@ -135,6 +138,9 @@ class Live2UserDataStatus:
             "source_id": self.source_id,
             "status": self.status,
             "ready": self.ready,
+            "transport_ready": self.transport_ready,
+            "payload_seen": self.payload_seen,
+            "order_event_seen": self.order_event_seen,
             "reason": self.reason,
             "endpoint_category": self.endpoint_category,
             "websocket_url_redacted": self.websocket_url_redacted,
@@ -275,19 +281,28 @@ class Live2UserDataStreamSource:
                 last_message_age_ms = max(0, now_ms - int(self._last_message_at_ms))
             listen_key_valid = self._listen_key_expires_at_ms is not None and int(self._listen_key_expires_at_ms) > now_ms
             boundary_ok = isinstance(self.exchange_client, Live2UserDataExchange)
-            ready = (
+            transport_ready = (
                 boundary_ok
                 and self._connection_status == "connected"
                 and self._listen_key_status == "active"
                 and listen_key_valid
                 and self._thread.is_alive()
             )
+            payload_seen = self._messages_received > 0
+            order_event_seen = self._order_events_received > 0
+            # `ready` intentionally remains transport readiness: Binance private
+            # streams can stay silent until an order/account event exists. Payload
+            # and order echo readiness are reported separately so artifacts do not
+            # overstate what has actually been observed in a no-trade run.
+            ready = transport_ready
             if not boundary_ok:
                 status = "not_ready"
                 reason = "exchange_client_missing_user_data_stream_boundary"
-            elif ready:
+            elif transport_ready:
                 status = "ready"
-                reason = "private_user_data_stream_connected_and_listen_key_active"
+                reason = "private_user_data_stream_transport_ready_listen_key_active"
+                if not payload_seen:
+                    reason += ":payload_not_seen_yet"
             else:
                 status = "not_ready"
                 reason = self._last_error or self._listen_key_status or self._connection_status
@@ -295,6 +310,9 @@ class Live2UserDataStreamSource:
                 source_id=self.source_id,
                 status=status,
                 ready=ready,
+                transport_ready=transport_ready,
+                payload_seen=payload_seen,
+                order_event_seen=order_event_seen,
                 reason=reason,
                 endpoint_category=self.endpoint_category,
                 websocket_url_redacted=self.websocket_url_redacted,
