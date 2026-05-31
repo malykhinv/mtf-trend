@@ -1,3 +1,30 @@
+## 2026-05-31 - P470 live2 shared-core-only signal adapter
+
+Status: PROPOSED. Current commit: UNKNOWN. Built on P465-P469 expected applied locally / UNKNOWN commit.
+
+Removes the executable legacy live signal paths after the P469 seed-first migration. `Live2SignalEngine` is now a thin adapter: it discovers pending rolling HTF seeds, builds a source-neutral `DecisionSnapshot`, calls `PumpDecisionCore.evaluate_first_ltf_confirm_after_seed`, and maps the typed core verdict to live execution guards.
+
+Changes:
+
+- Remove the old confirm-backward live evaluator and baseline-free prefilter methods from `anomaly_live2/signal.py`.
+- Remove live-only C/A/S/category helper paths (`_rolling_runner_category_setup`, `_evaluate_rolling_profile`, and legacy diagnostic/category functions) from the signal adapter.
+- Keep constructor compatibility for stale/context/repair arguments, but signal selection no longer uses live-only gates outside the shared core.
+- Status now explicitly reports `rolling_seed_first_core_signal_adapter_active` and `legacy_live_paths_removed=true`.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+grep -R --exclude-dir=__pycache__ "def _rolling_runner_category_setup\|def _evaluate_rolling_profile\|def _rolling_baseline_free_prefilter_reject_reason\|def evaluate_baseline_free_prefilter\|def evaluate(self" -n research_tools/anomaly_live2
+grep -R --exclude-dir=__pycache__ "rolling_htf_then_first_category_qualified_30s_confirm\|baseline_free_prefilter\|_rolling_runner_matches\|_runner_candidate_matches" -n research_tools
+```
+
+Risk:
+
+```text
+This intentionally removes live-only fast rejects and legacy selected diagnostics. Selected/rejected counts may change relative to pre-P469/P470 live because all signal verdicts now come from the shared seed-first core. That is intended parity exposure, not threshold tuning. Execution guards, portfolio/risk, order placement, fills, stops, and position supervision are unchanged.
+```
+
 ## 2026-05-31 - P469 live2 rolling seed state machine
 
 Status: PROPOSED. Current commit: UNKNOWN. Applies after P468.

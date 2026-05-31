@@ -1,3 +1,11 @@
+## 2026-05-31 - P470 live2 shared-core-only signal adapter
+
+Current commit: UNKNOWN. Status: P470 PROPOSED. P465-P469 expected applied locally / UNKNOWN commit.
+
+Live2 signal selection is now intended to have no separate executable decision implementation. The live adapter discovers rolling HTF seeds, builds `DecisionSnapshot`, calls `PumpDecisionCore.evaluate_first_ltf_confirm_after_seed`, and returns the core verdict to entry guard/execution. Legacy confirm-backward evaluation, baseline-free live prefilter, and duplicate live C/A/S helper paths are removed from the signal adapter.
+
+Next: P471 should separate core `signal_verdict` from portfolio/execution allocation verdicts in artifacts so max-position/risk/cooldown blocks never distort signal-quality statistics. Then add the explicit live/backtest parity ledger and snapshot-hash comparison.
+
 ## 2026-05-31 - P469 live2 rolling seed state machine
 
 Current commit: UNKNOWN. Status: P469 PROPOSED. P465-P468 expected applied locally / UNKNOWN commit.

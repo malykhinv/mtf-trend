@@ -1,3 +1,13 @@
+## Live2 shared-core-only signal adapter - P470 update
+
+After P470, live2 signal selection must not have a live-only C/A/S matcher, confirm-backward scanner, or baseline-free prefilter outside the shared decision core. The only signal-decision path is:
+
+```text
+closed live candles -> pending rolling HTF seed state -> DecisionSnapshot -> PumpDecisionCore.evaluate_first_ltf_confirm_after_seed -> DecisionVerdict
+```
+
+Entry guard, portfolio allocation, actual exchange fill, verified stop, TP1/structural trailing, and shutdown/manual-close reconciliation remain separate layers. Differences between live and backtest should now be classified as snapshot/data normalization differences, portfolio/execution differences, or bugs; not as alternate signal logic.
+
 ## Rolling live/backtest decision contract - P469 update
 
 Live and backtest must evaluate the same chronological signal contract:
