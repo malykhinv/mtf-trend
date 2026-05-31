@@ -10281,3 +10281,30 @@ Risk:
 ```text
 Artifact schema expands and live2 writes one additional append-only CSV. Same snapshot hash with different signal verdict is now a hard parity bug; same signal verdict with different portfolio/execution verdict is allocation/execution parity, not signal-core parity.
 ```
+
+## 2026-05-31 - P474 remove legacy duplicate decision paths
+
+Status: PROPOSED. Current commit: UNKNOWN. P473 scope-hygiene patch intentionally skipped by operator request.
+
+Cleanup-only patch after P472. It removes the remaining post-hoc backtest category rematch path and adds an explicit source guard against reintroducing duplicate live/backtest strategy decision implementations. It does not change thresholds, rolling seed-first logic, portfolio constraints, execution, exits, sizing, orders, or artifact scope rules.
+
+Changes:
+
+- HTF/LTF discovery now passes `trade_rows` directly into portfolio simulation instead of calling `_with_runner_candidate_categories(...)`.
+- Removes `_with_runner_candidate_categories(...)`; category id, matched categories and priority rank must originate from the shared decision core verdict/features.
+- Removes the adapter-side `match_rolling_categories` import from discovery.
+- Adds `research_tools/decision_contract_guard.py` to fail on legacy duplicate decision paths or adapter-side category rematching.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python -m research_tools.decision_contract_guard
+python research_tools/pump_decision_core.py
+```
+
+Risk:
+
+```text
+If an older intermediate patch stack still creates trade rows without `runner_candidate_category`, portfolio simulation will now fail visibly via missing required columns instead of silently recomputing categories after the fact. That is intentional: signal categories must come from the shared core only.
+```

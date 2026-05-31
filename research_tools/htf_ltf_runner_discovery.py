@@ -40,7 +40,6 @@ from research_tools.pump_decision_core import (
     decision_snapshot_hash,
     decision_snapshot_match_key,
     evaluate_first_ltf_confirm_after_seed,
-    match_rolling_categories,
     rolling_category_priority_rank,
 )
 
@@ -377,7 +376,7 @@ def run_htf_ltf_runner_discovery(
     decision_ledger_frame = pd.DataFrame(decision_rows)
     rejected_exact_windows_frame = pd.DataFrame(rejected_exact_window_rows)
     data_dependencies_frame = _decision_data_dependencies(decision_ledger_frame)
-    trades_frame = _with_runner_candidate_categories(pd.DataFrame(trade_rows))
+    trades_frame = pd.DataFrame(trade_rows)
     live_filtered, portfolio_events = _apply_runner_candidate_portfolio(trades_frame, config=config)
     candidate_rule_scores = _score_candidate_rules(candidates_frame)
     entry_window_rule_scores = _score_entry_window_rules(
@@ -3464,30 +3463,6 @@ def _entry_window_counts(config: HtfLtfRunnerDiscoveryConfig) -> tuple[int, ...]
         counts.add(value)
     return tuple(sorted(counts))
 
-
-
-def _with_runner_candidate_categories(trades: pd.DataFrame) -> pd.DataFrame:
-    if trades.empty:
-        return trades.copy()
-    frame = trades.copy()
-    matched_values: list[str] = []
-    selected_values: list[str] = []
-    priority_values: list[float] = []
-    for row in frame.to_dict("records"):
-        existing_category = str(row.get("runner_candidate_category", "") or "")
-        existing_matches = str(row.get("runner_candidate_matched_categories", "") or "")
-        if existing_category:
-            matches = [item for item in existing_matches.split("|") if item] or [existing_category]
-        else:
-            matches = match_rolling_categories(row)
-        matched_values.append("|".join(matches))
-        selected = matches[0] if matches else ""
-        selected_values.append(selected)
-        priority_values.append(float(rolling_category_priority_rank(selected) or float("nan")))
-    frame["runner_candidate_matched_categories"] = matched_values
-    frame["runner_candidate_category"] = selected_values
-    frame["runner_candidate_priority_rank"] = priority_values
-    return frame
 
 
 def _apply_runner_candidate_portfolio(

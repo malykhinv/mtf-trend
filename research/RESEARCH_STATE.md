@@ -1,3 +1,11 @@
+## 2026-05-31 - P474 remove legacy duplicate decision paths
+
+Current commit: UNKNOWN. Status: P474 PROPOSED. P465-P472 expected applied locally / UNKNOWN commit. P473 scope-hygiene patch intentionally skipped by operator request.
+
+The rolling seed-first contract cleanup now removes the remaining post-hoc backtest category rematch helper. HTF/LTF discovery must use the category selected by `PumpDecisionCore.evaluate_first_ltf_confirm_after_seed` and must not recompute C/A/S from trade rows after execution simulation. A source-level guard `python -m research_tools.decision_contract_guard` fails if legacy live/backtest-only decision helpers, baseline-free live prefilters, confirm-backward paths, or adapter-side `match_rolling_categories` calls are reintroduced.
+
+Next: run compile + guard, then run a small HTF/LTF discovery smoke and a short live2 dry/real smoke to verify `decision_ledger` and `live2_decision_ledger` are populated from the same snapshot-hash contract.
+
 ## 2026-05-31 - P470 live2 shared-core-only signal adapter
 
 Current commit: UNKNOWN. Status: P470 PROPOSED. P465-P469 expected applied locally / UNKNOWN commit.

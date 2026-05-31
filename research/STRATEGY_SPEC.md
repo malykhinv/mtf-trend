@@ -86,6 +86,8 @@ If live and backtest produce the same decision snapshot, the signal verdict must
 
 P471 note: artifacts must report signal and portfolio outcomes separately. `signal_verdict` belongs to the shared decision core. `portfolio_verdict` belongs to allocation/capacity/session constraints such as same-symbol-open, cooldown, max-open-positions, risk cap, runtime gates, or existing exchange position. Research conclusions about edge must not count portfolio blocks as signal rejects.
 
+P474 note: adapters must not rematch C/A/S categories after the shared core returns a verdict. `runner_candidate_category`, matched categories and priority rank must originate from `PumpDecisionCore` verdict/features. `research_tools/decision_contract_guard.py` is the source-level guard against reintroducing legacy duplicate decision paths.
+
 P466 note: C/A/S category matching is now a shared pure matcher in `research_tools/pump_decision_core.py`. Live and backtest adapters may still differ in how they discover seed/confirm windows until the seed-first evaluator migration is complete, but they must not carry separate C/A/S threshold copies.
 
 P467 note: `research_tools/pump_decision_core.py` now contains the executable source-neutral seed-first evaluator. It validates normalized candle continuity and data dependencies, computes seed/context/confirm features, applies the shared C/A/S matcher, and returns only the signal verdict. Live/backtest adapters are still pending migration and must become snapshot builders before parity claims are valid.
