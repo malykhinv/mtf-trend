@@ -63,6 +63,8 @@ If live and backtest produce the same decision snapshot, the signal verdict must
 
 P466 note: C/A/S category matching is now a shared pure matcher in `research_tools/pump_decision_core.py`. Live and backtest adapters may still differ in how they discover seed/confirm windows until the seed-first evaluator migration is complete, but they must not carry separate C/A/S threshold copies.
 
+P467 note: `research_tools/pump_decision_core.py` now contains the executable source-neutral seed-first evaluator. It validates normalized candle continuity and data dependencies, computes seed/context/confirm features, applies the shared C/A/S matcher, and returns only the signal verdict. Live/backtest adapters are still pending migration and must become snapshot builders before parity claims are valid.
+
 ## 2. Required anomaly evidence
 
 A candidate must show enough live-available evidence:

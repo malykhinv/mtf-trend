@@ -1,19 +1,20 @@
-"""Pure rolling seed-first decision contracts.
+"""Pure rolling seed-first decision contracts and evaluator.
 
-This module intentionally contains only typed contracts and immutable constants in
-P465. Live and backtest adapters must build these snapshots from their own data
-sources and, in later patches, pass them into one shared evaluator.
+Live and backtest adapters must build these snapshots from their own data
+sources, then call the source-neutral evaluator in this module. The evaluator
+must not know whether a snapshot came from websockets, REST, aggTrades, or a
+parity replay.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Sequence
 
 
 ROLLING_DECISION_CONTRACT_ID = "rolling_htf_seed_first_ltf_confirm_v1"
-ROLLING_DECISION_CORE_VERSION = "p466_shared_cas_matcher"
+ROLLING_DECISION_CORE_VERSION = "p467_seed_first_core"
 
 DecisionSource = Literal["live", "backtest", "parity_replay", "test"]
 DecisionVerdictType = Literal["selected", "rejected", "data_dependency_not_ready"]
@@ -36,6 +37,23 @@ ROLLING_CATEGORY_PRIORITY: tuple[str, ...] = (
 )
 SUPPORTED_ROLLING_TF_SETS: tuple[str, ...] = ("5m_30s", "3m_30s")
 
+ROLLING_BASELINE_WINDOWS = 60
+ROLLING_DORMANCY_WINDOWS = 30
+ROLLING_PREGROWTH_WINDOWS = 5
+ROLLING_PRIOR_SPIKE_LOOKBACK_MS = 24 * 60 * 60 * 1000
+ROLLING_SEED_MIN_HTF_QUOTE_RATIO = 5.0
+ROLLING_SEED_MIN_HTF_TRADE_RATIO = 5.0
+ROLLING_SEED_MIN_HTF_RETURN_PCT = 0.0100
+ROLLING_LTF_MIN_CONFIRM_RETURN_PCT = 0.004
+ROLLING_LTF_MIN_QUOTE_PACE_RATIO = 3.0
+ROLLING_LTF_MIN_TRADE_PACE_RATIO = 3.0
+ROLLING_LTF_MIN_SECOND_HALF_RETURN_PCT = 0.0
+ROLLING_LTF_MIN_QUOTE_ACCELERATION = 1.0
+ROLLING_LTF_MIN_TRADE_ACCELERATION = 1.0
+ROLLING_STRUCTURAL_STOP_BUFFER_PCT = 0.0005
+ROLLING_TP1_R = 0.75
+ROLLING_MAX_INITIAL_RISK_PCT = 0.05
+
 
 @dataclass(frozen=True, slots=True)
 class RollingProfileSpec:
@@ -44,13 +62,15 @@ class RollingProfileSpec:
     tf_set: str
     htf_seconds: int
     ltf_seconds: int
+    min_confirm_candles: int
+    max_confirm_candles: int
     contract_id: str = ROLLING_DECISION_CONTRACT_ID
     description: str = "rolling HTF seed, then first LTF confirm after seed"
 
 
 @dataclass(frozen=True, slots=True)
 class RollingCategoryRule:
-    """Named category membership contract without matcher thresholds yet."""
+    """Named category membership contract."""
 
     category_id: str
     priority: int
@@ -104,7 +124,7 @@ class RollingSeedSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class LtfConfirmSnapshot:
-    """First post-seed LTF confirmation candidate supplied to the core."""
+    """Post-seed LTF confirmation candidate supplied to the core."""
 
     confirm_start_ms: int
     confirm_end_ms: int
@@ -123,7 +143,7 @@ class DecisionReject:
 
 @dataclass(frozen=True, slots=True)
 class DecisionSnapshot:
-    """Complete, source-neutral input to the future shared decision evaluator."""
+    """Complete, source-neutral input to the shared decision evaluator."""
 
     symbol: str
     tf_set: str
@@ -157,6 +177,44 @@ class DecisionVerdict:
         return self.verdict == "selected"
 
 
+ROLLING_PROFILE_SPECS: dict[str, RollingProfileSpec] = {
+    "5m_30s": RollingProfileSpec(
+        tf_set="5m_30s",
+        htf_seconds=300,
+        ltf_seconds=30,
+        min_confirm_candles=2,
+        max_confirm_candles=8,
+    ),
+    "3m_30s": RollingProfileSpec(
+        tf_set="3m_30s",
+        htf_seconds=180,
+        ltf_seconds=30,
+        min_confirm_candles=2,
+        max_confirm_candles=6,
+    ),
+}
+
+ROLLING_CATEGORY_RULES: tuple[RollingCategoryRule, ...] = tuple(
+    RollingCategoryRule(category_id=category_id, priority=priority)
+    for priority, category_id in enumerate(ROLLING_CATEGORY_PRIORITY, start=1)
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _AggregateCandle:
+    open_time_ms: int
+    close_time_ms: int
+    open: float
+    high: float
+    low: float
+    close: float
+    quote_volume: float
+    number_of_trades: float
+    taker_buy_quote_volume: float | None = None
+
+
+# ---------------------------------------------------------------------------
+# Numeric helpers
 
 
 def _finite_float(value: object) -> float:
@@ -167,6 +225,63 @@ def _finite_float(value: object) -> float:
     except (TypeError, ValueError):
         return float("nan")
     return number if math.isfinite(number) else float("nan")
+
+
+def _safe_divide(numerator: object, denominator: object) -> float:
+    num = _finite_float(numerator)
+    den = _finite_float(denominator)
+    if not math.isfinite(num) or not math.isfinite(den) or den == 0.0:
+        return float("nan")
+    return num / den
+
+
+def _finite_values(values: Sequence[object]) -> list[float]:
+    return [item for item in (_finite_float(value) for value in values) if math.isfinite(item)]
+
+
+def _positive_values(values: Sequence[object]) -> list[float]:
+    return [item for item in _finite_values(values) if item > 0.0]
+
+
+def _median(values: Sequence[object]) -> float:
+    finite = sorted(_finite_values(values))
+    if not finite:
+        return float("nan")
+    mid = len(finite) // 2
+    if len(finite) % 2:
+        return float(finite[mid])
+    return float((finite[mid - 1] + finite[mid]) / 2.0)
+
+
+def _positive_median(values: Sequence[object]) -> float:
+    return _median(_positive_values(values))
+
+
+def _finite_max(values: Sequence[object]) -> float:
+    finite = _finite_values(values)
+    return float(max(finite)) if finite else float("nan")
+
+
+def _finite_min(values: Sequence[object]) -> float:
+    finite = _finite_values(values)
+    return float(min(finite)) if finite else float("nan")
+
+
+def _finite_sum(values: Sequence[object]) -> float:
+    finite = _finite_values(values)
+    return float(sum(finite)) if finite else float("nan")
+
+
+def _candle_return(candle: DecisionCandle | _AggregateCandle) -> float:
+    return _safe_divide(float(candle.close) - float(candle.open), float(candle.open))
+
+
+def _range_pct(candle: DecisionCandle | _AggregateCandle) -> float:
+    return _safe_divide(float(candle.high) - float(candle.low), float(candle.open))
+
+
+# ---------------------------------------------------------------------------
+# Shared category matcher
 
 
 def rolling_tf_set_from_features(features: Mapping[str, object]) -> str:
@@ -246,12 +361,661 @@ def rolling_category_priority_rank(category_id: str) -> int | None:
         return None
 
 
-ROLLING_PROFILE_SPECS: dict[str, RollingProfileSpec] = {
-    "5m_30s": RollingProfileSpec(tf_set="5m_30s", htf_seconds=300, ltf_seconds=30),
-    "3m_30s": RollingProfileSpec(tf_set="3m_30s", htf_seconds=180, ltf_seconds=30),
-}
+# ---------------------------------------------------------------------------
+# Seed-first core
 
-ROLLING_CATEGORY_RULES: tuple[RollingCategoryRule, ...] = tuple(
-    RollingCategoryRule(category_id=category_id, priority=priority)
-    for priority, category_id in enumerate(ROLLING_CATEGORY_PRIORITY, start=1)
-)
+
+def evaluate_first_ltf_confirm_after_seed(
+    snapshot: DecisionSnapshot,
+    *,
+    post_seed_ltf_candles: Sequence[DecisionCandle],
+) -> DecisionVerdict:
+    """Find the first selected LTF confirmation after the supplied seed.
+
+    The supplied `snapshot` must contain the rolling HTF seed and pre-seed
+    context, but `snapshot.ltf_confirm` is ignored. This helper is the pure
+    source-neutral form of the intended orchestration:
+
+    rolling HTF seed -> first LTF confirm after seed -> selected/rejected.
+    """
+
+    spec = ROLLING_PROFILE_SPECS.get(snapshot.tf_set)
+    if spec is None:
+        return _rejected(snapshot, "rolling_htf_seed", "unsupported_tf_set", {"tf_set": snapshot.tf_set})
+    seed = snapshot.rolling_seed
+    if seed is None:
+        return _dependency_not_ready(snapshot, "rolling_seed_missing", ())
+    ltf_ms = spec.ltf_seconds * 1000
+    ordered = tuple(sorted(post_seed_ltf_candles, key=lambda item: item.open_time_ms))
+    if not ordered:
+        return _dependency_not_ready(snapshot, "post_seed_ltf_missing", ())
+    if int(ordered[0].open_time_ms) != int(seed.seed_close_ms):
+        return _dependency_not_ready(
+            snapshot,
+            "post_seed_ltf_not_contiguous_from_seed_close",
+            (DataDependency(name="post_seed_ltf", status="gap", reason="first_ltf_open_not_seed_close", asof_ms=seed.seed_close_ms),),
+        )
+    continuity = _continuity_dependency("post_seed_ltf", ordered, expected_step_ms=ltf_ms)
+    if continuity is not None:
+        return _dependency_not_ready(snapshot, continuity.reason or "post_seed_ltf_gap", (continuity,))
+
+    collected_rejects: list[DecisionReject] = []
+    max_count = min(spec.max_confirm_candles, len(ordered))
+    for confirm_count in range(spec.min_confirm_candles, max_count + 1):
+        confirm = tuple(ordered[:confirm_count])
+        candidate = DecisionSnapshot(
+            symbol=snapshot.symbol,
+            tf_set=snapshot.tf_set,
+            decision_time_ms=int(confirm[-1].close_time_ms),
+            source=snapshot.source,
+            rolling_seed=seed,
+            ltf_confirm=LtfConfirmSnapshot(
+                confirm_start_ms=int(confirm[0].open_time_ms),
+                confirm_end_ms=int(confirm[-1].close_time_ms),
+                confirm_candles=confirm,
+            ),
+            source_labels=snapshot.source_labels,
+            features=snapshot.features,
+            dependencies=snapshot.dependencies,
+            contract_id=snapshot.contract_id,
+            core_version=snapshot.core_version,
+        )
+        verdict = evaluate_seed_first(candidate)
+        if verdict.verdict == "selected":
+            return verdict
+        if verdict.verdict == "data_dependency_not_ready":
+            return verdict
+        collected_rejects.extend(verdict.rejects)
+
+    return DecisionVerdict(
+        verdict="rejected",
+        snapshot=snapshot,
+        rejects=(DecisionReject(stage="ltf_confirm", reason="rolling_profile_no_category_qualified_confirm"), *tuple(collected_rejects[-8:])),
+        features={"tf_set": snapshot.tf_set, "checked_confirm_candles": max_count},
+    )
+
+
+def evaluate_seed_first(snapshot: DecisionSnapshot) -> DecisionVerdict:
+    """Evaluate one exact rolling-seed + post-seed-confirm snapshot.
+
+    This function is the shared strategy decision boundary. It returns only a
+    signal verdict. Portfolio capacity, exchange position state, market order
+    fills, slippage, fees, and live entry guards belong outside this core.
+    """
+
+    if snapshot.contract_id != ROLLING_DECISION_CONTRACT_ID:
+        return _rejected(snapshot, "unknown", "contract_id_mismatch", {"contract_id": snapshot.contract_id})
+    spec = ROLLING_PROFILE_SPECS.get(snapshot.tf_set)
+    if spec is None:
+        return _rejected(snapshot, "rolling_htf_seed", "unsupported_tf_set", {"tf_set": snapshot.tf_set})
+
+    dependency = _first_bad_dependency(snapshot)
+    if dependency is not None:
+        return _dependency_not_ready(snapshot, dependency.reason or dependency.name, (dependency,))
+
+    seed = snapshot.rolling_seed
+    if seed is None:
+        return _dependency_not_ready(snapshot, "rolling_seed_missing", ())
+    confirm = snapshot.ltf_confirm
+    if confirm is None:
+        return _dependency_not_ready(snapshot, "ltf_confirm_missing", ())
+
+    seed_dependency = _validate_seed(seed, spec)
+    if seed_dependency is not None:
+        return _dependency_not_ready(snapshot, seed_dependency.reason or "rolling_seed_invalid", (seed_dependency,))
+    context_dependency = _validate_pre_seed_context(seed, spec)
+    if context_dependency is not None:
+        return _dependency_not_ready(snapshot, context_dependency.reason or "pre_seed_context_invalid", (context_dependency,))
+    confirm_dependency = _validate_confirm(seed, confirm, spec)
+    if confirm_dependency is not None:
+        return _dependency_not_ready(snapshot, confirm_dependency.reason or "ltf_confirm_invalid", (confirm_dependency,))
+
+    features = _derive_seed_first_features(snapshot, spec)
+
+    seed_reject = _seed_reject_reason(features)
+    if seed_reject is not None:
+        return _rejected(snapshot, "rolling_htf_seed", seed_reject, features)
+
+    confirm_reject = _confirm_reject_reason(features)
+    if confirm_reject is not None:
+        return _rejected(snapshot, "ltf_confirm", confirm_reject, features)
+
+    risk_reject = _risk_reject_reason(features)
+    if risk_reject is not None:
+        return _rejected(snapshot, "risk", risk_reject, features)
+
+    matched = match_rolling_categories(features)
+    if not matched:
+        return _rejected(snapshot, "category", "rolling_category_not_matched", features)
+
+    category_id = matched[0]
+    entry = _finite_float(features.get("signal_entry_price"))
+    stop = _finite_float(features.get("initial_stop_at_decision"))
+    tp1 = _finite_float(features.get("tp1_at_decision"))
+    return DecisionVerdict(
+        verdict="selected",
+        snapshot=snapshot,
+        category_id=category_id,
+        signal_entry_price=entry,
+        initial_stop_price=stop,
+        tp1_price=tp1,
+        features={
+            **features,
+            "rolling_runner_category_id": category_id,
+            "rolling_runner_matched_categories": "|".join(matched),
+            "rolling_runner_category_priority_rank": rolling_category_priority_rank(category_id),
+        },
+    )
+
+
+def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfileSpec) -> dict[str, float | int | str | bool | None]:
+    seed = snapshot.rolling_seed
+    confirm = snapshot.ltf_confirm
+    if seed is None or confirm is None:
+        return dict(snapshot.features)
+
+    htf_ms = spec.htf_seconds * 1000
+    seed_candle = _aggregate_candles(seed.seed_candles)
+    context = tuple(sorted(seed.pre_seed_context_candles, key=lambda item: item.open_time_ms))
+    baseline = context[-ROLLING_BASELINE_WINDOWS:]
+    dormancy = context[-ROLLING_DORMANCY_WINDOWS:]
+    pregrowth = context[-ROLLING_PREGROWTH_WINDOWS:]
+
+    baseline_quote = _positive_median([item.quote_volume for item in baseline])
+    baseline_trades = _positive_median([item.number_of_trades for item in baseline])
+    dormancy_quote = _positive_median([item.quote_volume for item in dormancy])
+    dormancy_trades = _positive_median([item.number_of_trades for item in dormancy])
+    dormancy_range_pct_median = _positive_median([_range_pct(item) for item in dormancy])
+
+    htf_return = _candle_return(seed_candle)
+    htf_quote_ratio = _safe_divide(seed_candle.quote_volume, baseline_quote)
+    htf_trade_ratio = _safe_divide(seed_candle.number_of_trades, baseline_trades)
+    htf_range_pct = _range_pct(seed_candle)
+    dormancy_quote_ratio = _safe_divide(seed_candle.quote_volume, dormancy_quote)
+    dormancy_trade_ratio = _safe_divide(seed_candle.number_of_trades, dormancy_trades)
+
+    pregrowth_return_pct = _safe_divide(float(pregrowth[-1].close) - float(pregrowth[0].open), float(pregrowth[0].open)) if pregrowth else float("nan")
+    pregrowth_max_single = _finite_max([_candle_return(item) for item in pregrowth])
+    positive_steps = [1.0 if float(item.close) > float(item.open) else 0.0 for item in pregrowth]
+    pregrowth_positive_share = _safe_divide(sum(positive_steps), len(positive_steps)) if positive_steps else float("nan")
+
+    ltf_features = _ltf_confirmation_features(confirm.confirm_candles, baseline_quote=baseline_quote, baseline_trades=baseline_trades, htf_ms=htf_ms)
+    prior_spike = _prior_spike_features(context=context, current=seed_candle)
+    htf_ltf_features = _htf_internal_ltf_features(seed.seed_candles, htf_open=seed_candle.open, htf_close=seed_candle.close)
+
+    structural_low = min(seed_candle.low, _finite_min([item.low for item in confirm.confirm_candles]))
+    entry = float(confirm.confirm_candles[-1].close)
+    stop = structural_low * (1.0 - ROLLING_STRUCTURAL_STOP_BUFFER_PCT)
+    initial_risk = entry - stop
+    initial_risk_pct = _safe_divide(initial_risk, entry)
+    tp1 = entry + ROLLING_TP1_R * initial_risk if math.isfinite(initial_risk) else float("nan")
+
+    return {
+        **dict(snapshot.features),
+        "contract_id": snapshot.contract_id,
+        "core_version": snapshot.core_version,
+        "tf_set": snapshot.tf_set,
+        "rolling_runner_tf_set": snapshot.tf_set,
+        "symbol": snapshot.symbol,
+        "decision_time_ms": snapshot.decision_time_ms,
+        "rolling_htf_open_ms": int(seed.seed_open_ms),
+        "rolling_htf_close_ms": int(seed.seed_close_ms),
+        "confirm_start_ms": int(confirm.confirm_start_ms),
+        "confirm_end_ms": int(confirm.confirm_end_ms),
+        "confirmation_candles": int(len(confirm.confirm_candles)),
+        "anomaly_open": seed_candle.open,
+        "anomaly_high": seed_candle.high,
+        "anomaly_low": seed_candle.low,
+        "anomaly_close": seed_candle.close,
+        "anomaly_quote_volume": seed_candle.quote_volume,
+        "anomaly_number_of_trades": seed_candle.number_of_trades,
+        "baseline_quote_volume_median": baseline_quote,
+        "baseline_number_of_trades_median": baseline_trades,
+        "dormancy_quote_volume_median": dormancy_quote,
+        "dormancy_number_of_trades_median": dormancy_trades,
+        "dormancy_range_pct_median": dormancy_range_pct_median,
+        "htf_return_pct": htf_return,
+        "htf_range_pct": htf_range_pct,
+        "htf_quote_ratio": htf_quote_ratio,
+        "htf_trade_ratio": htf_trade_ratio,
+        "dormancy_to_anomaly_quote_ratio": dormancy_quote_ratio,
+        "dormancy_to_anomaly_trade_ratio": dormancy_trade_ratio,
+        "pregrowth_return_pct": pregrowth_return_pct,
+        "pregrowth_max_single_return_pct": pregrowth_max_single,
+        "pregrowth_positive_step_share": pregrowth_positive_share,
+        "signal_entry_price": entry,
+        "initial_stop_at_decision": stop,
+        "initial_risk_pct_at_decision": initial_risk_pct,
+        "tp1_at_decision": tp1,
+        **prior_spike,
+        **htf_ltf_features,
+        **ltf_features,
+    }
+
+
+def _seed_reject_reason(features: Mapping[str, object]) -> str | None:
+    if _finite_float(features.get("htf_return_pct")) < ROLLING_SEED_MIN_HTF_RETURN_PCT:
+        return "seed_htf_return_below_min"
+    if _finite_float(features.get("htf_quote_ratio")) < ROLLING_SEED_MIN_HTF_QUOTE_RATIO:
+        return "seed_htf_quote_ratio_below_min"
+    if _finite_float(features.get("htf_trade_ratio")) < ROLLING_SEED_MIN_HTF_TRADE_RATIO:
+        return "seed_htf_trade_ratio_below_min"
+    return None
+
+
+def _confirm_reject_reason(features: Mapping[str, object]) -> str | None:
+    if _finite_float(features.get("ltf_confirm_return_pct")) < ROLLING_LTF_MIN_CONFIRM_RETURN_PCT:
+        return "ltf_confirm_return_below_min"
+    if _finite_float(features.get("ltf_quote_pace_ratio")) < ROLLING_LTF_MIN_QUOTE_PACE_RATIO:
+        return "ltf_quote_pace_ratio_below_min"
+    if _finite_float(features.get("ltf_trade_pace_ratio")) < ROLLING_LTF_MIN_TRADE_PACE_RATIO:
+        return "ltf_trade_pace_ratio_below_min"
+    if _finite_float(features.get("ltf_second_half_return_pct")) < ROLLING_LTF_MIN_SECOND_HALF_RETURN_PCT:
+        return "ltf_second_half_return_below_min"
+    if _finite_float(features.get("ltf_quote_acceleration")) < ROLLING_LTF_MIN_QUOTE_ACCELERATION:
+        return "ltf_quote_acceleration_below_min"
+    if _finite_float(features.get("ltf_trade_acceleration")) < ROLLING_LTF_MIN_TRADE_ACCELERATION:
+        return "ltf_trade_acceleration_below_min"
+    anomaly_low = _finite_float(features.get("anomaly_low"))
+    confirm_low = _finite_float(features.get("ltf_confirm_low"))
+    if math.isfinite(anomaly_low) and math.isfinite(confirm_low) and confirm_low < anomaly_low:
+        return "ltf_confirm_undercut_seed_low"
+    return None
+
+
+def _risk_reject_reason(features: Mapping[str, object]) -> str | None:
+    risk = _finite_float(features.get("initial_risk_pct_at_decision"))
+    initial_stop = _finite_float(features.get("initial_stop_at_decision"))
+    entry = _finite_float(features.get("signal_entry_price"))
+    if not math.isfinite(initial_stop) or not math.isfinite(entry) or initial_stop >= entry:
+        return "initial_stop_not_below_signal_entry"
+    if not math.isfinite(risk) or risk <= 0.0:
+        return "initial_risk_invalid"
+    if risk > ROLLING_MAX_INITIAL_RISK_PCT:
+        return "initial_risk_above_max"
+    return None
+
+
+def _ltf_confirmation_features(
+    candles: tuple[DecisionCandle, ...],
+    *,
+    baseline_quote: float,
+    baseline_trades: float,
+    htf_ms: int,
+) -> dict[str, float | int | str | bool | None]:
+    duration_ms = max(1, int(candles[-1].close_time_ms) - int(candles[0].open_time_ms)) if candles else 1
+    quote = _finite_sum([item.quote_volume for item in candles])
+    trades = _finite_sum([item.number_of_trades for item in candles])
+    expected_quote = baseline_quote * duration_ms / htf_ms
+    expected_trades = baseline_trades * duration_ms / htf_ms
+    first_open = float(candles[0].open) if candles else float("nan")
+    last_close = float(candles[-1].close) if candles else float("nan")
+    split = max(1, len(candles) // 2)
+    first_half = candles[:split]
+    second_half = candles[split:]
+    if not second_half:
+        second_half = candles[-1:]
+    first_quote = _finite_sum([item.quote_volume for item in first_half])
+    second_quote = _finite_sum([item.quote_volume for item in second_half])
+    first_trades = _finite_sum([item.number_of_trades for item in first_half])
+    second_trades = _finite_sum([item.number_of_trades for item in second_half])
+    taker_values = [item.taker_buy_quote_volume for item in candles if item.taker_buy_quote_volume is not None]
+    taker_quote = _finite_sum(taker_values) if taker_values else float("nan")
+    second_open = float(second_half[0].open) if second_half else float("nan")
+    second_close = float(second_half[-1].close) if second_half else float("nan")
+    return {
+        "ltf_confirm_return_pct": _safe_divide(last_close - first_open, first_open),
+        "ltf_confirm_low": _finite_min([item.low for item in candles]),
+        "ltf_confirm_high": _finite_max([item.high for item in candles]),
+        "ltf_quote_volume": quote,
+        "ltf_number_of_trades": trades,
+        "ltf_quote_pace_ratio": _safe_divide(quote, expected_quote),
+        "ltf_trade_pace_ratio": _safe_divide(trades, expected_trades),
+        "ltf_second_half_return_pct": _safe_divide(second_close - second_open, second_open),
+        "ltf_quote_acceleration": _safe_divide(second_quote, first_quote),
+        "ltf_trade_acceleration": _safe_divide(second_trades, first_trades),
+        "ltf_taker_buy_quote_share": _safe_divide(taker_quote, quote),
+    }
+
+
+def _htf_internal_ltf_features(
+    seed_ltf_candles: tuple[DecisionCandle, ...],
+    *,
+    htf_open: float,
+    htf_close: float,
+) -> dict[str, float | int | str | bool | None]:
+    if not seed_ltf_candles:
+        return {
+            "htf_ltf_status": "missing_ltf_inside_htf",
+            "htf_ltf_candles": 0,
+            "htf_ltf_sustained_flow_ok": False,
+            "htf_ltf_trade_count_status": "missing",
+        }
+    quote_total = _finite_sum([item.quote_volume for item in seed_ltf_candles])
+    trade_total = _finite_sum([item.number_of_trades for item in seed_ltf_candles])
+    quote_top = _finite_max([item.quote_volume for item in seed_ltf_candles])
+    trade_top = _finite_max([item.number_of_trades for item in seed_ltf_candles])
+    split = max(1, len(seed_ltf_candles) // 2)
+    first_half = seed_ltf_candles[:split]
+    second_half = seed_ltf_candles[split:] or seed_ltf_candles[-1:]
+    first_quote = _finite_sum([item.quote_volume for item in first_half])
+    second_quote = _finite_sum([item.quote_volume for item in second_half])
+    first_trades = _finite_sum([item.number_of_trades for item in first_half])
+    second_trades = _finite_sum([item.number_of_trades for item in second_half])
+    midpoint = (float(htf_open) + float(htf_close)) / 2.0
+    green_share = _safe_divide(sum(1 for item in seed_ltf_candles if float(item.close) > float(item.open)), len(seed_ltf_candles))
+    close_above_mid_share = _safe_divide(sum(1 for item in seed_ltf_candles if float(item.close) >= midpoint), len(seed_ltf_candles))
+    second_half_return = _safe_divide(float(second_half[-1].close) - float(second_half[0].open), float(second_half[0].open))
+    quote_acceleration = _safe_divide(second_quote, first_quote)
+    trade_acceleration = _safe_divide(second_trades, first_trades)
+    quote_top1_share = _safe_divide(quote_top, quote_total)
+    trade_top1_share = _safe_divide(trade_top, trade_total)
+    trade_count_status = "ok" if math.isfinite(trade_total) and trade_total > 0.0 else "missing"
+    sustained_flow_ok = (
+        math.isfinite(quote_total)
+        and quote_total > 0.0
+        and trade_count_status == "ok"
+        and math.isfinite(quote_top1_share)
+        and quote_top1_share <= 0.55
+        and math.isfinite(trade_top1_share)
+        and trade_top1_share <= 0.55
+        and math.isfinite(green_share)
+        and green_share >= 0.50
+        and math.isfinite(second_half_return)
+        and second_half_return >= 0.0
+        and math.isfinite(quote_acceleration)
+        and quote_acceleration >= 0.75
+        and math.isfinite(trade_acceleration)
+        and trade_acceleration >= 0.75
+    )
+    return {
+        "htf_ltf_status": "ok",
+        "htf_ltf_candles": int(len(seed_ltf_candles)),
+        "htf_ltf_quote_volume": quote_total,
+        "htf_ltf_number_of_trades": trade_total,
+        "htf_ltf_quote_top1_share": quote_top1_share,
+        "htf_ltf_trade_top1_share": trade_top1_share,
+        "htf_ltf_green_share": green_share,
+        "htf_ltf_close_above_mid_share": close_above_mid_share,
+        "htf_ltf_second_half_return_pct": second_half_return,
+        "htf_ltf_quote_acceleration": quote_acceleration,
+        "htf_ltf_trade_acceleration": trade_acceleration,
+        "htf_ltf_sustained_flow_ok": bool(sustained_flow_ok),
+        "htf_ltf_trade_count_status": trade_count_status,
+    }
+
+
+def _prior_spike_features(*, context: tuple[DecisionCandle, ...], current: _AggregateCandle) -> dict[str, float | int]:
+    ordered = tuple(sorted(context, key=lambda item: item.open_time_ms))
+    lookback_start = int(current.open_time_ms) - ROLLING_PRIOR_SPIKE_LOOKBACK_MS
+    spike_indices: list[int] = []
+    for idx, candle in enumerate(ordered):
+        if int(candle.open_time_ms) < lookback_start:
+            continue
+        prev = ordered[max(0, idx - ROLLING_BASELINE_WINDOWS):idx]
+        baseline_quote = _positive_median([item.quote_volume for item in prev])
+        baseline_trades = _positive_median([item.number_of_trades for item in prev])
+        if baseline_quote <= 0.0 or baseline_trades <= 0.0:
+            continue
+        if (
+            _safe_divide(candle.quote_volume, baseline_quote) >= 3.0
+            and _safe_divide(candle.number_of_trades, baseline_trades) >= 3.0
+            and _candle_return(candle) >= 0.0
+        ):
+            spike_indices.append(idx)
+    if not spike_indices:
+        return {
+            "prior_spike_count_24h": 0,
+            "prior_spike_median_quote": float("nan"),
+            "prior_spike_max_quote": float("nan"),
+            "current_vs_prior_spike_median_quote": float("nan"),
+            "current_vs_prior_spike_max_quote": float("nan"),
+            "prior_spike_next_decay50_share": float("nan"),
+            "prior_spike_median_next_quote_ratio": float("nan"),
+            "prior_spike_median_bars_to_decay50": float("nan"),
+        }
+    prior_quote = [ordered[idx].quote_volume for idx in spike_indices]
+    median_quote = _median(prior_quote)
+    max_quote = _finite_max(prior_quote)
+    next_quote_ratios: list[float] = []
+    bars_to_decay: list[float] = []
+    quote_path = [item.quote_volume for item in ordered] + [current.quote_volume]
+    current_idx = len(quote_path) - 1
+    for spike_idx in spike_indices:
+        prior_quote_value = _finite_float(quote_path[spike_idx])
+        if not math.isfinite(prior_quote_value) or prior_quote_value <= 0.0:
+            continue
+        if spike_idx + 1 < len(quote_path):
+            next_quote_ratios.append(_safe_divide(quote_path[spike_idx + 1], prior_quote_value))
+        found = False
+        for idx in range(spike_idx + 1, min(current_idx, spike_idx + 12) + 1):
+            if _finite_float(quote_path[idx]) < 0.5 * prior_quote_value:
+                bars_to_decay.append(float(idx - spike_idx))
+                found = True
+                break
+        if not found:
+            bars_to_decay.append(float("nan"))
+    finite_next = _finite_values(next_quote_ratios)
+    return {
+        "prior_spike_count_24h": int(len(spike_indices)),
+        "prior_spike_median_quote": median_quote,
+        "prior_spike_max_quote": max_quote,
+        "current_vs_prior_spike_median_quote": _safe_divide(current.quote_volume, median_quote),
+        "current_vs_prior_spike_max_quote": _safe_divide(current.quote_volume, max_quote),
+        "prior_spike_next_decay50_share": _safe_divide(sum(1 for item in finite_next if item < 0.5), len(finite_next)) if finite_next else float("nan"),
+        "prior_spike_median_next_quote_ratio": _median(finite_next),
+        "prior_spike_median_bars_to_decay50": _median(bars_to_decay),
+    }
+
+
+def _aggregate_candles(candles: tuple[DecisionCandle, ...]) -> _AggregateCandle:
+    ordered = tuple(sorted(candles, key=lambda item: item.open_time_ms))
+    taker_values = [item.taker_buy_quote_volume for item in ordered if item.taker_buy_quote_volume is not None]
+    return _AggregateCandle(
+        open_time_ms=int(ordered[0].open_time_ms),
+        close_time_ms=int(ordered[-1].close_time_ms),
+        open=float(ordered[0].open),
+        high=_finite_max([item.high for item in ordered]),
+        low=_finite_min([item.low for item in ordered]),
+        close=float(ordered[-1].close),
+        quote_volume=_finite_sum([item.quote_volume for item in ordered]),
+        number_of_trades=_finite_sum([item.number_of_trades for item in ordered]),
+        taker_buy_quote_volume=_finite_sum(taker_values) if taker_values else None,
+    )
+
+
+def _first_bad_dependency(snapshot: DecisionSnapshot) -> DataDependency | None:
+    deps: list[DataDependency] = list(snapshot.dependencies)
+    if snapshot.rolling_seed is not None:
+        deps.extend(snapshot.rolling_seed.dependencies)
+    if snapshot.ltf_confirm is not None:
+        deps.extend(snapshot.ltf_confirm.dependencies)
+    for dependency in deps:
+        if dependency.status != "ok":
+            return dependency
+    return None
+
+
+def _validate_seed(seed: RollingSeedSnapshot, spec: RollingProfileSpec) -> DataDependency | None:
+    if seed.tf_set != spec.tf_set:
+        return DataDependency(name="rolling_seed", status="error", reason="seed_tf_set_mismatch")
+    expected_step_ms = spec.ltf_seconds * 1000
+    expected_candles = spec.htf_seconds // spec.ltf_seconds
+    if len(seed.seed_candles) != expected_candles:
+        return DataDependency(name="rolling_seed", status="missing", reason="seed_candle_count_mismatch")
+    if int(seed.seed_open_ms) != int(seed.seed_candles[0].open_time_ms) or int(seed.seed_close_ms) != int(seed.seed_candles[-1].close_time_ms):
+        return DataDependency(name="rolling_seed", status="error", reason="seed_bounds_do_not_match_candles")
+    return _continuity_dependency("rolling_seed", seed.seed_candles, expected_step_ms=expected_step_ms)
+
+
+def _validate_pre_seed_context(seed: RollingSeedSnapshot, spec: RollingProfileSpec) -> DataDependency | None:
+    context = tuple(sorted(seed.pre_seed_context_candles, key=lambda item: item.open_time_ms))
+    if len(context) < ROLLING_BASELINE_WINDOWS:
+        return DataDependency(name="pre_seed_context", status="missing", reason="baseline_history_not_ready", asof_ms=seed.seed_open_ms)
+    if context[-1].close_time_ms > seed.seed_open_ms:
+        return DataDependency(name="pre_seed_context", status="error", reason="context_overlaps_seed", asof_ms=seed.seed_open_ms)
+    return _continuity_dependency("pre_seed_context", context, expected_step_ms=spec.htf_seconds * 1000)
+
+
+def _validate_confirm(seed: RollingSeedSnapshot, confirm: LtfConfirmSnapshot, spec: RollingProfileSpec) -> DataDependency | None:
+    if not confirm.confirm_candles:
+        return DataDependency(name="ltf_confirm", status="missing", reason="confirm_candles_missing", asof_ms=seed.seed_close_ms)
+    if int(confirm.confirm_start_ms) != int(seed.seed_close_ms):
+        return DataDependency(name="ltf_confirm", status="gap", reason="confirm_does_not_start_at_seed_close", asof_ms=seed.seed_close_ms)
+    if int(confirm.confirm_start_ms) != int(confirm.confirm_candles[0].open_time_ms) or int(confirm.confirm_end_ms) != int(confirm.confirm_candles[-1].close_time_ms):
+        return DataDependency(name="ltf_confirm", status="error", reason="confirm_bounds_do_not_match_candles")
+    count = len(confirm.confirm_candles)
+    if count < spec.min_confirm_candles:
+        return DataDependency(name="ltf_confirm", status="missing", reason="confirm_candle_count_below_min", asof_ms=seed.seed_close_ms)
+    if count > spec.max_confirm_candles:
+        return DataDependency(name="ltf_confirm", status="error", reason="confirm_candle_count_above_max")
+    return _continuity_dependency("ltf_confirm", confirm.confirm_candles, expected_step_ms=spec.ltf_seconds * 1000)
+
+
+def _continuity_dependency(name: str, candles: tuple[DecisionCandle, ...], *, expected_step_ms: int) -> DataDependency | None:
+    if not candles:
+        return DataDependency(name=name, status="missing", reason="empty_candles")
+    ordered = tuple(sorted(candles, key=lambda item: item.open_time_ms))
+    for idx, candle in enumerate(ordered):
+        if candle.source_status not in ("", "ok"):
+            return DataDependency(name=name, status="degraded", reason=f"source_status:{candle.source_status}", asof_ms=candle.close_time_ms, source=candle.source)
+        if not all(math.isfinite(_finite_float(value)) for value in (candle.open, candle.high, candle.low, candle.close, candle.quote_volume, candle.number_of_trades)):
+            return DataDependency(name=name, status="error", reason="non_finite_candle_value", asof_ms=candle.close_time_ms, source=candle.source)
+        if candle.open <= 0.0 or candle.high <= 0.0 or candle.low <= 0.0 or candle.close <= 0.0:
+            return DataDependency(name=name, status="error", reason="non_positive_ohlc", asof_ms=candle.close_time_ms, source=candle.source)
+        expected_open = int(ordered[0].open_time_ms) + idx * int(expected_step_ms)
+        expected_close = expected_open + int(expected_step_ms)
+        if int(candle.open_time_ms) != expected_open or int(candle.close_time_ms) != expected_close:
+            return DataDependency(name=name, status="gap", reason="non_contiguous_candles", asof_ms=candle.close_time_ms, source=candle.source)
+    return None
+
+
+def _dependency_not_ready(snapshot: DecisionSnapshot, reason: str, dependencies: tuple[DataDependency, ...]) -> DecisionVerdict:
+    return DecisionVerdict(
+        verdict="data_dependency_not_ready",
+        snapshot=snapshot,
+        dependencies=dependencies,
+        rejects=(DecisionReject(stage="data_dependency", reason=reason),),
+    )
+
+
+def _rejected(
+    snapshot: DecisionSnapshot,
+    stage: DecisionStage,
+    reason: str,
+    features: Mapping[str, float | int | str | bool | None],
+) -> DecisionVerdict:
+    return DecisionVerdict(
+        verdict="rejected",
+        snapshot=snapshot,
+        rejects=(DecisionReject(stage=stage, reason=reason, details=dict(features)),),
+        features=dict(features),
+    )
+
+
+def _build_seed_first_core_smoke_snapshot() -> tuple[DecisionSnapshot, tuple[DecisionCandle, ...]]:
+    """Build a deterministic selected-signal smoke fixture for local validation."""
+
+    htf_ms = 300_000
+    ltf_ms = 30_000
+    context: list[DecisionCandle] = []
+    start = 1_700_000_000_000
+    price = 100.0
+    for idx in range(120):
+        ts = start + idx * htf_ms
+        quote = 100.0
+        trades = 100
+        open_price = price
+        close_price = price * 1.0005
+        if idx == 80:
+            quote = 1000.0
+            trades = 1000
+            close_price = price * 1.01
+        if idx == 117:
+            close_price = price * 1.006
+        context.append(
+            DecisionCandle(
+                open_time_ms=ts,
+                close_time_ms=ts + htf_ms,
+                open=open_price,
+                high=max(open_price, close_price) * 1.001,
+                low=min(open_price, close_price) * 0.999,
+                close=close_price,
+                quote_volume=quote,
+                number_of_trades=trades,
+                source="smoke",
+            )
+        )
+        price = close_price
+    seed_open = context[-1].close_time_ms
+    seed: list[DecisionCandle] = []
+    seed_open_price = price
+    for idx in range(10):
+        ts = seed_open + idx * ltf_ms
+        o = seed_open_price * (1.0 + 0.0015 * idx)
+        c = o * (1.004 if idx == 9 else 1.0015)
+        seed.append(
+            DecisionCandle(
+                open_time_ms=ts,
+                close_time_ms=ts + ltf_ms,
+                open=o,
+                high=max(o, c) * 1.001,
+                low=min(o, c) * 0.999,
+                close=c,
+                quote_volume=120.0,
+                number_of_trades=120,
+                source="smoke",
+            )
+        )
+    post_seed: list[DecisionCandle] = []
+    confirm_open = seed[-1].close_time_ms
+    for idx in range(3):
+        ts = confirm_open + idx * ltf_ms
+        o = seed[-1].close * (1.0 + 0.001 * idx)
+        c = o * 1.003
+        post_seed.append(
+            DecisionCandle(
+                open_time_ms=ts,
+                close_time_ms=ts + ltf_ms,
+                open=o,
+                high=max(o, c) * 1.001,
+                low=min(o, c) * 0.9995,
+                close=c,
+                quote_volume=100.0,
+                number_of_trades=100,
+                source="smoke",
+            )
+        )
+    snapshot = DecisionSnapshot(
+        symbol="SMOKEUSDT",
+        tf_set="5m_30s",
+        decision_time_ms=post_seed[1].close_time_ms,
+        source="test",
+        rolling_seed=RollingSeedSnapshot(
+            tf_set="5m_30s",
+            seed_open_ms=seed[0].open_time_ms,
+            seed_close_ms=seed[-1].close_time_ms,
+            seed_candles=tuple(seed),
+            pre_seed_context_candles=tuple(context),
+        ),
+    )
+    return snapshot, tuple(post_seed)
+
+
+def run_seed_first_core_self_smoke() -> None:
+    """Minimal deterministic smoke; useful before adapters are migrated."""
+
+    snapshot, post_seed = _build_seed_first_core_smoke_snapshot()
+    first = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed)
+    second = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed)
+    if first.verdict != "selected":
+        raise AssertionError(f"expected selected verdict, got {first.verdict}: {first.rejects}")
+    if second.verdict != first.verdict or second.category_id != first.category_id:
+        raise AssertionError("seed-first core smoke is not deterministic")
+    for key in ("signal_entry_price", "initial_stop_at_decision", "tp1_at_decision", "htf_quote_ratio", "ltf_quote_pace_ratio"):
+        if second.features.get(key) != first.features.get(key):
+            raise AssertionError(f"seed-first core smoke changed feature {key}")
+
+
+if __name__ == "__main__":
+    run_seed_first_core_self_smoke()

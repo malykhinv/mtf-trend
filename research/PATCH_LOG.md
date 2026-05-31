@@ -1,3 +1,15 @@
+## P467 - seed-first rolling decision core
+
+Status: PROPOSED.
+
+Files: `research_tools/pump_decision_core.py`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/STRATEGY_SPEC.md`.
+
+Purpose: add the first executable shared decision core for `rolling_htf_seed_first_ltf_confirm_v1`. The new pure evaluator accepts normalized seed/context/confirm snapshots, validates typed data dependencies and candle continuity, derives the C/A/S feature set, returns selected/rejected/data-dependency verdicts, and provides a deterministic smoke fixture.
+
+Honesty: no live/backtest adapters are migrated in this patch; no thresholds, execution model, portfolio cap, fill model, exits, or source-specific fallback are changed. This is the clean decision boundary that later patches must call.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; `python research_tools/pump_decision_core.py`.
+
 ## 2026-05-31 - P466 shared rolling C/A/S category matcher
 
 Status: PROPOSED. Current commit: UNKNOWN. Applies after P465.

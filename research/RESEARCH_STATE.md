@@ -1,3 +1,11 @@
+## 2026-05-31 - P467 seed-first rolling decision core
+
+Current commit: UNKNOWN. Status: P467 PROPOSED. P465/P466 expected applied locally / UNKNOWN commit.
+
+P467 adds the first executable shared decision core for the rolling contract. The core evaluates a source-neutral `DecisionSnapshot` as rolling HTF seed -> first post-seed LTF confirmation -> selected/rejected/data_dependency_not_ready. It computes seed, pre-seed context, LTF confirmation, prior-spike, category and signal-risk fields without pandas and without knowing whether the data came from live sockets or backtest REST/aggTrades. Live and backtest are not migrated yet.
+
+Next: P468 should convert HTF/LTF discovery into a snapshot builder that calls `evaluate_first_ltf_confirm_after_seed`, and should write a decision ledger/rejected exact windows from core verdicts instead of maintaining a separate decision path.
+
 ## 2026-05-31 - P466 shared rolling C/A/S category matcher
 
 Current commit: UNKNOWN. Status: P466 PROPOSED. P465 expected applied locally / UNKNOWN commit.
