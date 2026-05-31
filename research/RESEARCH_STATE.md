@@ -3623,3 +3623,7 @@ P464 is PROPOSED / UNKNOWN commit. It fixes live2 operator console hygiene after
 ## 2026-05-31 - P471 proposed
 
 P471 is PROPOSED / UNKNOWN commit. Live/backtest artifacts now separate `signal_verdict` from `portfolio_verdict`. Max positions, cooldown, same-symbol-open, risk-cap, runtime gates, and existing exchange positions are portfolio/allocation outcomes, not signal-quality rejections. Next parity analysis should compare shared-core `signal_verdict` first, then inspect portfolio/execution differences separately.
+
+## 2026-05-31 - P472 proposed
+
+P472 is PROPOSED / UNKNOWN commit. Shared-core decisions now carry a source-neutral `snapshot_hash` and `snapshot_match_key`. Live2 writes `live2_decision_ledger.csv`; discovery writes matching hash/key fields in `htf_ltf_runner_decision_ledger.csv`; `research_tools.decision_parity_join` joins them exactly. Next parity analysis should first check `same_snapshot_hash + different signal_verdict`; any such row is a decision-core bug. Rows with matching signal verdict but different portfolio/execution verdict belong to allocation/execution replay, not signal quality.

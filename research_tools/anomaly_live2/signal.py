@@ -22,6 +22,8 @@ from research_tools.pump_decision_core import (
     DecisionVerdict,
     LtfConfirmSnapshot,
     RollingSeedSnapshot,
+    decision_snapshot_hash,
+    decision_snapshot_match_key,
     evaluate_first_ltf_confirm_after_seed,
     rolling_category_priority_rank,
 )
@@ -243,6 +245,8 @@ class Live2SignalEngine:
             **dict(verdict.features),
         }
         state_snapshot = verdict.snapshot
+        features["snapshot_hash"] = decision_snapshot_hash(state_snapshot)
+        features["snapshot_match_key"] = decision_snapshot_match_key(state_snapshot)
         if state_snapshot.ltf_confirm is not None:
             features["confirm_start_ms"] = int(state_snapshot.ltf_confirm.confirm_start_ms)
             features["confirm_end_ms"] = int(state_snapshot.ltf_confirm.confirm_end_ms)

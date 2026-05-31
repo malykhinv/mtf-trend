@@ -10255,3 +10255,29 @@ Risk:
 ```text
 Artifact schema expands. Existing readers that only use final verdict continue to work, but research should switch to signal_verdict for strategy-quality counts and portfolio_verdict for capacity/allocation counts.
 ```
+
+## 2026-05-31 - P472 decision snapshot hash parity ledger
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Adds source-neutral snapshot hashing and parity ledger artifacts for the shared rolling seed-first decision core. This patch does not change thresholds, signal selection, portfolio constraints, execution, exits, sizing, or order placement.
+
+Changes:
+
+- Adds `decision_snapshot_hash(...)` and `decision_snapshot_match_key(...)` to `research_tools/pump_decision_core.py`.
+- Backtest decision ledger now writes `snapshot_hash` and `snapshot_match_key` for every shared-core verdict row.
+- Live2 writes `live2_decision_ledger.csv` for every shared-core decision row with the same hash/key fields plus signal/portfolio/execution outcomes.
+- Adds `research_tools/decision_parity_join.py` to build exact live-vs-backtest parity comparisons by `snapshot_hash`.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python research_tools/pump_decision_core.py
+```
+
+Risk:
+
+```text
+Artifact schema expands and live2 writes one additional append-only CSV. Same snapshot hash with different signal verdict is now a hard parity bug; same signal verdict with different portfolio/execution verdict is allocation/execution parity, not signal-core parity.
+```

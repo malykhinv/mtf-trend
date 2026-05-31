@@ -679,6 +679,9 @@ class AnomalyLive2Runner:
                     self._hot_path_max_elapsed_ms = max(self._hot_path_max_elapsed_ms, hot_path_elapsed_ms)
                     self._last_deadline_cycle = deadline_result.as_dict()
                 for decision in deadline_result.decisions:
+                    decision_ledger_row = decision.as_decision_ledger_row()
+                    if decision_ledger_row is not None:
+                        writer.write_decision_ledger(decision_ledger_row)
                     writer.write_event(decision.as_event())
                     near_miss_row = decision.as_near_miss_row()
                     if near_miss_row is not None:

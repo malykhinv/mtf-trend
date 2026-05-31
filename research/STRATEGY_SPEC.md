@@ -1026,3 +1026,17 @@ Rolling baseline/dormancy context may be maintained from explicit official Binan
 ## Backtest seed-first decision adapter
 
 P468 note: HTF/LTF discovery selected signals must be produced by `PumpDecisionCore.evaluate_first_ltf_confirm_after_seed(...)`. The backtest may still apply next-LTF-open execution, adverse slippage, fees, portfolio overlap filtering, and exit simulation after the core verdict, but it must not maintain a second LTF confirmation/category decision implementation for selected signals. Core decisions are auditable in `htf_ltf_runner_decision_ledger.csv`; rejected exact seed/confirm attempts and data dependencies must be visible in artifacts.
+
+## Decision parity ledger contract
+
+Every live/backtest call into the rolling seed-first core must be auditable by a source-neutral `snapshot_hash`. The hash is built from the normalized symbol, TF set, contract/core version, exact rolling seed bounds, exact confirmation bounds, seed candles, pre-seed context candles, and confirmation candles. It must not include websocket/REST source labels, portfolio state, entry-guard state, execution fills, or artifact-only labels.
+
+Parity rule:
+
+```text
+same snapshot_hash + different signal_verdict = bug
+same snapshot_hash + same signal_verdict + different portfolio_verdict = allocation/capacity difference
+same signal verdict + different fill/exit = execution/simulation difference
+```
+
+Live writes `live2_decision_ledger.csv`; discovery writes `htf_ltf_runner_decision_ledger.csv`; exact joins are produced by `research_tools/decision_parity_join.py`.

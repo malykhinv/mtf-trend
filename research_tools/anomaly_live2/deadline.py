@@ -300,6 +300,76 @@ class Live2DecisionRecord:
             "event_data_json": json.dumps(self.as_event().data, ensure_ascii=False, sort_keys=True),
         }
 
+    def as_decision_ledger_row(self) -> dict[str, object] | None:
+        """Return one source-neutral decision-core ledger row for parity joins."""
+
+        if not self.signal_features:
+            return None
+        snapshot_hash = str(self.signal_features.get("snapshot_hash") or "")
+        if not snapshot_hash:
+            return None
+        return {
+            "source": "live",
+            "contract_id": self.signal_features.get("contract_id") or self.signal_features.get("rolling_runner_contract", ""),
+            "core_version": self.signal_features.get("core_version") or self.signal_features.get("rolling_runner_core_version", ""),
+            "decision_model": "rolling_htf_seed_first_ltf_confirm_v1",
+            "snapshot_hash": snapshot_hash,
+            "snapshot_match_key": self.signal_features.get("snapshot_match_key", ""),
+            "symbol": self.symbol,
+            "tf_set": self.signal_features.get("tf_set") or self.signal_features.get("rolling_runner_tf_set", ""),
+            "signal_verdict": self.signal_verdict,
+            "signal_reason": self.signal_reason,
+            "portfolio_verdict": self.portfolio_verdict,
+            "portfolio_reason": self.portfolio_reason,
+            "entry_guard_verdict": self.entry_guard_verdict,
+            "entry_guard_reason": self.entry_guard_reason,
+            "execution_verdict": self.execution_verdict,
+            "execution_reason": self.execution_reason,
+            "category_id": self.category_id,
+            "rolling_seed_open_ms": self.signal_features.get("rolling_seed_open_ms") or self.signal_features.get("rolling_htf_open_ms", ""),
+            "rolling_seed_close_ms": self.signal_features.get("rolling_seed_close_ms") or self.signal_features.get("rolling_htf_close_ms", ""),
+            "confirm_start_ms": self.signal_features.get("confirm_start_ms", ""),
+            "confirm_end_ms": self.signal_features.get("confirm_end_ms", ""),
+            "decision_time_ms": self.signal_features.get("decision_time_ms") or self.decision_timestamp_ms,
+            "deadline_decision_timestamp_ms": self.decision_timestamp_ms,
+            "bucket_open_ms": self.bucket_open_ms,
+            "bucket_close_ms": self.bucket_close_ms,
+            "latency_ms": self.latency_ms,
+            "signal_entry_price": self.signal_entry_price,
+            "initial_stop_price": self.initial_stop_at_decision,
+            "tp1_price": self.tp1_at_decision,
+            "entry_guard_live_price": self.entry_guard_live_price,
+            "entry_guard_signal_age_ms": self.entry_guard_signal_age_ms,
+            "entry_guard_price_drift_pct": self.entry_guard_price_drift_pct,
+            "execution_entry_fill_price": self.execution_entry_fill_price,
+            "execution_position_id": self.execution_position_id,
+            "execution_entry_order_id": self.execution_entry_order_id,
+            "signal_reject_reasons": json.dumps(self.signal_reject_reasons, ensure_ascii=False),
+            "signal_dependency_reasons": json.dumps(self.signal_dependency_reasons, ensure_ascii=False),
+            "confirmation_candles": self.signal_features.get("confirmation_candles", ""),
+            "htf_return_pct": self.signal_features.get("htf_return_pct", ""),
+            "htf_quote_ratio": self.signal_features.get("htf_quote_ratio", ""),
+            "htf_trade_ratio": self.signal_features.get("htf_trade_ratio", ""),
+            "dormancy_to_anomaly_quote_ratio": self.signal_features.get("dormancy_to_anomaly_quote_ratio", ""),
+            "dormancy_to_anomaly_trade_ratio": self.signal_features.get("dormancy_to_anomaly_trade_ratio", ""),
+            "current_vs_prior_spike_median_quote": self.signal_features.get("current_vs_prior_spike_median_quote", ""),
+            "current_vs_prior_spike_max_quote": self.signal_features.get("current_vs_prior_spike_max_quote", ""),
+            "pregrowth_return_pct": self.signal_features.get("pregrowth_return_pct", ""),
+            "pregrowth_max_single_return_pct": self.signal_features.get("pregrowth_max_single_return_pct", ""),
+            "pregrowth_positive_step_share": self.signal_features.get("pregrowth_positive_step_share", ""),
+            "ltf_confirm_return_pct": self.signal_features.get("ltf_confirm_return_pct", ""),
+            "ltf_quote_pace_ratio": self.signal_features.get("ltf_quote_pace_ratio", ""),
+            "ltf_trade_pace_ratio": self.signal_features.get("ltf_trade_pace_ratio", ""),
+            "ltf_second_half_return_pct": self.signal_features.get("ltf_second_half_return_pct", ""),
+            "ltf_quote_acceleration": self.signal_features.get("ltf_quote_acceleration", ""),
+            "ltf_trade_acceleration": self.signal_features.get("ltf_trade_acceleration", ""),
+            "ltf_taker_buy_quote_share": self.signal_features.get("ltf_taker_buy_quote_share", ""),
+            "initial_risk_pct_at_decision": self.signal_features.get("initial_risk_pct_at_decision", self.initial_risk_pct_at_decision),
+            "rolling_runner_matched_categories": self.signal_features.get("rolling_runner_matched_categories", ""),
+            "rolling_runner_category_priority_rank": self.signal_features.get("rolling_runner_category_priority_rank", self.category_rank or ""),
+        }
+
+
 
 def _decision_event_data(record: Live2DecisionRecord) -> dict[str, object]:
     if _decision_requires_full_event_payload(record):

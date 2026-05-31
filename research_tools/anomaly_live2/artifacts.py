@@ -16,7 +16,7 @@ from .clock import utc_now_iso, utc_now_ms
 from .contracts import Live2Event, Live2Readiness
 from .state import SymbolStateStore
 
-ArtifactJobKind = Literal["event", "near_miss", "status", "diagnostics_summary", "symbol_state", "stop"]
+ArtifactJobKind = Literal["event", "near_miss", "decision_ledger", "status", "diagnostics_summary", "symbol_state", "stop"]
 
 
 @dataclass(slots=True)
@@ -111,6 +111,68 @@ class Live2ArtifactWriter:
         "message",
         "data_json",
     )
+
+    _DECISION_LEDGER_FIELDS = (
+        "source",
+        "contract_id",
+        "core_version",
+        "decision_model",
+        "snapshot_hash",
+        "snapshot_match_key",
+        "symbol",
+        "tf_set",
+        "signal_verdict",
+        "signal_reason",
+        "portfolio_verdict",
+        "portfolio_reason",
+        "entry_guard_verdict",
+        "entry_guard_reason",
+        "execution_verdict",
+        "execution_reason",
+        "category_id",
+        "rolling_seed_open_ms",
+        "rolling_seed_close_ms",
+        "confirm_start_ms",
+        "confirm_end_ms",
+        "decision_time_ms",
+        "deadline_decision_timestamp_ms",
+        "bucket_open_ms",
+        "bucket_close_ms",
+        "latency_ms",
+        "signal_entry_price",
+        "initial_stop_price",
+        "tp1_price",
+        "entry_guard_live_price",
+        "entry_guard_signal_age_ms",
+        "entry_guard_price_drift_pct",
+        "execution_entry_fill_price",
+        "execution_position_id",
+        "execution_entry_order_id",
+        "signal_reject_reasons",
+        "signal_dependency_reasons",
+        "confirmation_candles",
+        "htf_return_pct",
+        "htf_quote_ratio",
+        "htf_trade_ratio",
+        "dormancy_to_anomaly_quote_ratio",
+        "dormancy_to_anomaly_trade_ratio",
+        "current_vs_prior_spike_median_quote",
+        "current_vs_prior_spike_max_quote",
+        "pregrowth_return_pct",
+        "pregrowth_max_single_return_pct",
+        "pregrowth_positive_step_share",
+        "ltf_confirm_return_pct",
+        "ltf_quote_pace_ratio",
+        "ltf_trade_pace_ratio",
+        "ltf_second_half_return_pct",
+        "ltf_quote_acceleration",
+        "ltf_trade_acceleration",
+        "ltf_taker_buy_quote_share",
+        "initial_risk_pct_at_decision",
+        "rolling_runner_matched_categories",
+        "rolling_runner_category_priority_rank",
+    )
+
     _NEAR_MISS_FIELDS = (
         "timestamp_utc",
         "timestamp_ms",
@@ -319,6 +381,7 @@ class Live2ArtifactWriter:
         self.output_dir = output_dir
         self.events_path = output_dir / "live2_events.csv"
         self.near_misses_path = output_dir / "live2_near_misses.csv"
+        self.decision_ledger_path = output_dir / "live2_decision_ledger.csv"
         self.status_path = output_dir / "live2_status.json"
         self.symbol_state_path = output_dir / "live2_symbol_state.csv"
         self.diagnostics_summary_path = output_dir / "live2_diagnostics_summary.json"
@@ -360,10 +423,16 @@ class Live2ArtifactWriter:
         self._near_misses_writer = csv.DictWriter(self._near_misses_file, fieldnames=self._NEAR_MISS_FIELDS)
         self._near_misses_writer.writeheader()
         self._near_misses_file.flush()
+        self._decision_ledger_file = self.decision_ledger_path.open("w", encoding="utf-8-sig", newline="")
+        self._decision_ledger_writer = csv.DictWriter(self._decision_ledger_file, fieldnames=self._DECISION_LEDGER_FIELDS)
+        self._decision_ledger_writer.writeheader()
+        self._decision_ledger_file.flush()
         self._event_rows_since_flush = 0
         self._near_miss_rows_since_flush = 0
+        self._decision_ledger_rows_since_flush = 0
         self._last_event_flush_monotonic = time.monotonic()
         self._last_near_miss_flush_monotonic = self._last_event_flush_monotonic
+        self._last_decision_ledger_flush_monotonic = self._last_event_flush_monotonic
         self._worker = threading.Thread(
             target=self._run_worker,
             name="live2-artifact-writer",
@@ -395,6 +464,10 @@ class Live2ArtifactWriter:
         if self._should_drop_append_row(kind="near_miss", row=payload):
             return
         self._enqueue(_ArtifactJob(kind="near_miss", payload=payload))
+
+    def write_decision_ledger(self, row: dict[str, Any]) -> None:
+        payload = {field: row.get(field, "") for field in self._DECISION_LEDGER_FIELDS}
+        self._enqueue(_ArtifactJob(kind="decision_ledger", payload=payload))
 
     def write_status(
         self,
@@ -566,8 +639,10 @@ class Live2ArtifactWriter:
             self._write_audit_summary_snapshots()
             self._events_file.flush()
             self._near_misses_file.flush()
+            self._decision_ledger_file.flush()
             self._events_file.close()
             self._near_misses_file.close()
+            self._decision_ledger_file.close()
         except OSError as exc:
             self._mark_error(f"artifact writer close failed: {type(exc).__name__}: {exc}")
 
@@ -619,7 +694,7 @@ class Live2ArtifactWriter:
 
     @staticmethod
     def _is_critical_job(job: _ArtifactJob) -> bool:
-        return job.kind in {"event", "near_miss", "stop"}
+        return job.kind in {"event", "near_miss", "decision_ledger", "stop"}
 
     def _mark_noncritical_error(self, *, kind: str, message: str) -> None:
         with self._lock:
@@ -641,6 +716,11 @@ class Live2ArtifactWriter:
             self._near_misses_writer.writerow(job.payload)
             self._near_miss_rows_since_flush += 1
             self._maybe_flush_append_file(kind="near_miss")
+            return
+        if job.kind == "decision_ledger":
+            self._decision_ledger_writer.writerow(job.payload)
+            self._decision_ledger_rows_since_flush += 1
+            self._maybe_flush_append_file(kind="decision_ledger")
             return
         if job.kind == "status":
             self._atomic_write_text(
@@ -882,6 +962,7 @@ class Live2ArtifactWriter:
     def _output_file_budget_locked(self) -> dict[str, dict[str, int | bool]]:
         event_bytes = self._append_file_tell(self._events_file)
         near_miss_bytes = self._append_file_tell(self._near_misses_file)
+        decision_ledger_bytes = self._append_file_tell(self._decision_ledger_file)
         return {
             "live2_events.csv": {
                 "bytes": event_bytes,
@@ -892,6 +973,11 @@ class Live2ArtifactWriter:
                 "bytes": near_miss_bytes,
                 "max_bytes": self._near_miss_max_bytes,
                 "budget_reached": near_miss_bytes >= self._near_miss_max_bytes,
+            },
+            "live2_decision_ledger.csv": {
+                "bytes": decision_ledger_bytes,
+                "max_bytes": 0,
+                "budget_reached": False,
             },
         }
 
@@ -950,6 +1036,17 @@ class Live2ArtifactWriter:
             self._events_file.flush()
             self._event_rows_since_flush = 0
             self._last_event_flush_monotonic = now
+            return
+        if kind == "decision_ledger":
+            if (
+                not force
+                and self._decision_ledger_rows_since_flush < self._flush_every_rows
+                and now - self._last_decision_ledger_flush_monotonic < self._flush_interval_seconds
+            ):
+                return
+            self._decision_ledger_file.flush()
+            self._decision_ledger_rows_since_flush = 0
+            self._last_decision_ledger_flush_monotonic = now
             return
         if (
             not force

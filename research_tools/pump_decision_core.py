@@ -8,6 +8,8 @@ parity replay.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
@@ -361,6 +363,100 @@ def rolling_category_priority_rank(category_id: str) -> int | None:
         return None
 
 
+def decision_snapshot_match_key(snapshot: DecisionSnapshot) -> str:
+    """Return a stable human-readable join key for live/backtest parity.
+
+    The key identifies the exact source-neutral decision window. It intentionally
+    excludes transport/source labels so websocket-built and REST/aggTrade-built
+    snapshots can be joined when they describe the same normalized candles.
+    """
+
+    seed = snapshot.rolling_seed
+    confirm = snapshot.ltf_confirm
+    return "|".join(
+        str(item)
+        for item in (
+            snapshot.contract_id,
+            snapshot.core_version,
+            snapshot.symbol,
+            snapshot.tf_set,
+            "" if seed is None else int(seed.seed_open_ms),
+            "" if seed is None else int(seed.seed_close_ms),
+            "" if confirm is None else int(confirm.confirm_start_ms),
+            "" if confirm is None else int(confirm.confirm_end_ms),
+        )
+    )
+
+
+def decision_snapshot_hash(snapshot: DecisionSnapshot) -> str:
+    """Hash the source-neutral decision inputs used by the shared core.
+
+    The hash is deliberately based on normalized candle values and exact decision
+    window bounds, not on adapter names, socket/REST source labels, portfolio
+    state, execution state, or artifact-only feature labels. Therefore:
+
+    same normalized seed/context/confirm candles -> same hash;
+    same hash + different core verdict -> bug.
+    """
+
+    payload = _snapshot_hash_payload(snapshot)
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _snapshot_hash_payload(snapshot: DecisionSnapshot) -> dict[str, object]:
+    seed = snapshot.rolling_seed
+    confirm = snapshot.ltf_confirm
+    return {
+        "contract_id": snapshot.contract_id,
+        "core_version": snapshot.core_version,
+        "symbol": snapshot.symbol,
+        "tf_set": snapshot.tf_set,
+        "decision_time_ms": int(snapshot.decision_time_ms),
+        "rolling_seed": None
+        if seed is None
+        else {
+            "tf_set": seed.tf_set,
+            "seed_open_ms": int(seed.seed_open_ms),
+            "seed_close_ms": int(seed.seed_close_ms),
+            "seed_candles": [_candle_hash_payload(item) for item in seed.seed_candles],
+            "pre_seed_context_candles": [_candle_hash_payload(item) for item in seed.pre_seed_context_candles],
+        },
+        "ltf_confirm": None
+        if confirm is None
+        else {
+            "confirm_start_ms": int(confirm.confirm_start_ms),
+            "confirm_end_ms": int(confirm.confirm_end_ms),
+            "confirm_candles": [_candle_hash_payload(item) for item in confirm.confirm_candles],
+        },
+    }
+
+
+def _candle_hash_payload(candle: DecisionCandle) -> dict[str, object]:
+    return {
+        "open_time_ms": int(candle.open_time_ms),
+        "close_time_ms": int(candle.close_time_ms),
+        "open": _canonical_number(candle.open),
+        "high": _canonical_number(candle.high),
+        "low": _canonical_number(candle.low),
+        "close": _canonical_number(candle.close),
+        "quote_volume": _canonical_number(candle.quote_volume),
+        "number_of_trades": int(candle.number_of_trades),
+        "taker_buy_quote_volume": _canonical_number(candle.taker_buy_quote_volume),
+    }
+
+
+def _canonical_number(value: object) -> float | int | None:
+    if value is None:
+        return None
+    number = _finite_float(value)
+    if not math.isfinite(number):
+        return None
+    if float(number).is_integer() and abs(number) < 9_000_000_000_000_000:
+        return int(number)
+    return round(float(number), 12)
+
+
 # ---------------------------------------------------------------------------
 # Seed-first core
 
@@ -431,7 +527,12 @@ def evaluate_first_ltf_confirm_after_seed(
         verdict="rejected",
         snapshot=snapshot,
         rejects=(DecisionReject(stage="ltf_confirm", reason="rolling_profile_no_category_qualified_confirm"), *tuple(collected_rejects[-8:])),
-        features={"tf_set": snapshot.tf_set, "checked_confirm_candles": max_count},
+        features={
+            "tf_set": snapshot.tf_set,
+            "checked_confirm_candles": max_count,
+            "snapshot_hash": decision_snapshot_hash(snapshot),
+            "snapshot_match_key": decision_snapshot_match_key(snapshot),
+        },
     )
 
 
@@ -558,6 +659,8 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
         "rolling_runner_tf_set": snapshot.tf_set,
         "symbol": snapshot.symbol,
         "decision_time_ms": snapshot.decision_time_ms,
+        "snapshot_hash": decision_snapshot_hash(snapshot),
+        "snapshot_match_key": decision_snapshot_match_key(snapshot),
         "rolling_htf_open_ms": int(seed.seed_open_ms),
         "rolling_htf_close_ms": int(seed.seed_close_ms),
         "confirm_start_ms": int(confirm.confirm_start_ms),
@@ -896,6 +999,10 @@ def _dependency_not_ready(snapshot: DecisionSnapshot, reason: str, dependencies:
         snapshot=snapshot,
         dependencies=dependencies,
         rejects=(DecisionReject(stage="data_dependency", reason=reason),),
+        features={
+            "snapshot_hash": decision_snapshot_hash(snapshot),
+            "snapshot_match_key": decision_snapshot_match_key(snapshot),
+        },
     )
 
 
@@ -909,7 +1016,11 @@ def _rejected(
         verdict="rejected",
         snapshot=snapshot,
         rejects=(DecisionReject(stage=stage, reason=reason, details=dict(features)),),
-        features=dict(features),
+        features={
+            **dict(features),
+            "snapshot_hash": decision_snapshot_hash(snapshot),
+            "snapshot_match_key": decision_snapshot_match_key(snapshot),
+        },
     )
 
 
@@ -1012,6 +1123,8 @@ def run_seed_first_core_self_smoke() -> None:
         raise AssertionError(f"expected selected verdict, got {first.verdict}: {first.rejects}")
     if second.verdict != first.verdict or second.category_id != first.category_id:
         raise AssertionError("seed-first core smoke is not deterministic")
+    if decision_snapshot_hash(second.snapshot) != decision_snapshot_hash(first.snapshot):
+        raise AssertionError("seed-first core snapshot hash is not deterministic")
     for key in ("signal_entry_price", "initial_stop_at_decision", "tp1_at_decision", "htf_quote_ratio", "ltf_quote_pace_ratio"):
         if second.features.get(key) != first.features.get(key):
             raise AssertionError(f"seed-first core smoke changed feature {key}")
