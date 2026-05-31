@@ -1,3 +1,11 @@
+## 2026-05-31 - P476 deterministic seed-aligned context contract
+
+Current commit: UNKNOWN. Status: P476 PROPOSED. P465-P472/P474/P475 expected applied locally / UNKNOWN commit.
+
+The shared rolling seed-first contract now requires a deterministic seed-aligned pre-seed context: non-overlapping HTF windows ending exactly at `seed_open_ms`, with fixed per-TF length covering the 24h prior-spike horizon and baseline/dormancy/pregrowth windows. Adapters may retain more history, but the core hashes and derives features only from the exact contract slice. This fixes the P475 risk where live/backtest could pass different amounts of history and get different snapshot hashes for the same seed/confirm.
+
+Next: run a small discovery smoke and a live2 dry smoke to confirm `contract_seed_aligned_context_not_ready` appears when context is genuinely missing, then confirm live/backtest parity join on a controlled overlapping data window.
+
 ## 2026-05-31 - P474 remove legacy duplicate decision paths
 
 Current commit: UNKNOWN. Status: P474 PROPOSED. P465-P472 expected applied locally / UNKNOWN commit. P473 scope-hygiene patch intentionally skipped by operator request.

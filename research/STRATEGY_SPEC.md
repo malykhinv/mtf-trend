@@ -88,6 +88,8 @@ P471 note: artifacts must report signal and portfolio outcomes separately. `sign
 
 P474 note: adapters must not rematch C/A/S categories after the shared core returns a verdict. `runner_candidate_category`, matched categories and priority rank must originate from `PumpDecisionCore` verdict/features. `research_tools/decision_contract_guard.py` is the source-level guard against reintroducing legacy duplicate decision paths.
 
+P476 note: the pre-seed context for this contract is deterministic and seed-aligned. It is not calendar HTF context and not overlapping every LTF step. For each seed, adapters must provide non-overlapping HTF-width context windows ending exactly at `seed_open_ms`; the required count is fixed by the shared core and covers the 24h prior-spike horizon plus baseline/dormancy/pregrowth needs. Extra retained adapter history must not affect `snapshot_hash`, features, or verdict.
+
 P466 note: C/A/S category matching is now a shared pure matcher in `research_tools/pump_decision_core.py`. Live and backtest adapters may still differ in how they discover seed/confirm windows until the seed-first evaluator migration is complete, but they must not carry separate C/A/S threshold copies.
 
 P467 note: `research_tools/pump_decision_core.py` now contains the executable source-neutral seed-first evaluator. It validates normalized candle continuity and data dependencies, computes seed/context/confirm features, applies the shared C/A/S matcher, and returns only the signal verdict. Live/backtest adapters are still pending migration and must become snapshot builders before parity claims are valid.

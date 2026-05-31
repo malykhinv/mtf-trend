@@ -26,6 +26,7 @@ from research_tools.pump_decision_core import (
     decision_snapshot_match_key,
     evaluate_first_ltf_confirm_after_seed,
     rolling_category_priority_rank,
+    rolling_context_windows_for_tf_set,
 )
 
 from .market_data.candles import Live2Candle
@@ -441,7 +442,7 @@ def _build_live_seed_first_snapshot(
     profile = _rolling_profile_by_tf_set(seed.tf_set)
     htf_timeframe_ms = int(profile["htf_timeframe_ms"]) if profile is not None else 0
     context = (
-        _aggregate_ltf_history_to_rolling_htf(closed_ltf=closed_30s, htf_timeframe_ms=htf_timeframe_ms, ltf_timeframe_ms=30_000, before_ms=int(seed.seed_open_ms))
+        _aggregate_ltf_history_to_rolling_htf(closed_ltf=closed_30s, tf_set=seed.tf_set, htf_timeframe_ms=htf_timeframe_ms, ltf_timeframe_ms=30_000, before_ms=int(seed.seed_open_ms))
         if htf_timeframe_ms > 0
         else ()
     )
@@ -451,7 +452,7 @@ def _build_live_seed_first_snapshot(
             DataDependency(
                 name="pre_seed_context",
                 status="missing",
-                reason="live_rolling_ltf_context_not_ready",
+                reason="live_seed_aligned_context_not_ready",
                 asof_ms=int(seed.seed_open_ms),
                 source="live2_30s_candle_ring",
             )
@@ -471,7 +472,7 @@ def _build_live_seed_first_snapshot(
         source_labels={
             "adapter": "live2_seed_first_core_adapter",
             "candle_source": "binance_futures_aggtrade_ws_or_startup_rest_ring",
-            "context_source": "live2_closed_30s_rolling_htf_ring",
+            "context_source": "live2_closed_30s_seed_aligned_htf_context",
         },
         features={
             "live_mark_status": state.mark_status,
@@ -555,26 +556,27 @@ def _aggregate_candles_to_live2_candle(*, candles: tuple[Live2Candle, ...], time
 def _aggregate_ltf_history_to_rolling_htf(
     *,
     closed_ltf: tuple[Live2Candle, ...],
+    tf_set: str,
     htf_timeframe_ms: int,
     ltf_timeframe_ms: int,
     before_ms: int,
 ) -> tuple[Live2Candle, ...]:
-    """Build rolling HTF context from the same closed LTF substrate as seeds."""
+    """Build the exact seed-aligned non-overlapping HTF context contract."""
 
+    required = rolling_context_windows_for_tf_set(tf_set)
     group_size = htf_timeframe_ms // ltf_timeframe_ms
-    if group_size <= 0 or len(closed_ltf) < group_size:
+    if required is None or required <= 0 or group_size <= 0:
         return ()
-    eligible = tuple(item for item in closed_ltf if int(item.close_time_ms) <= int(before_ms))
-    if len(eligible) < group_size:
-        return ()
+    by_open = {int(item.open_time_ms): item for item in closed_ltf}
     windows: list[Live2Candle] = []
-    for end in range(group_size, len(eligible) + 1):
-        chunk = tuple(eligible[end - group_size:end])
-        first_open = int(chunk[0].open_time_ms)
-        expected = tuple(first_open + offset * int(ltf_timeframe_ms) for offset in range(group_size))
-        if tuple(int(item.open_time_ms) for item in chunk) != expected:
-            continue
-        windows.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
+    start_ms = int(before_ms) - int(required) * int(htf_timeframe_ms)
+    for window_start_ms in range(start_ms, int(before_ms), int(htf_timeframe_ms)):
+        expected_opens = tuple(int(window_start_ms) + idx * int(ltf_timeframe_ms) for idx in range(group_size))
+        chunk = tuple(by_open.get(open_ms) for open_ms in expected_opens)
+        if any(item is None for item in chunk):
+            return ()
+        candles = tuple(item for item in chunk if item is not None)
+        windows.append(_aggregate_candles_to_live2_candle(candles=candles, timeframe_ms=htf_timeframe_ms))
     return tuple(windows)
 
 

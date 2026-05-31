@@ -16,7 +16,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 
 ROLLING_DECISION_CONTRACT_ID = "rolling_htf_seed_first_ltf_confirm_v1"
-ROLLING_DECISION_CORE_VERSION = "p475_rolling_context_parity"
+ROLLING_DECISION_CORE_VERSION = "p476_deterministic_seed_aligned_context"
 
 DecisionSource = Literal["live", "backtest", "parity_replay", "test"]
 DecisionVerdictType = Literal["selected", "rejected", "data_dependency_not_ready"]
@@ -43,6 +43,7 @@ ROLLING_BASELINE_WINDOWS = 60
 ROLLING_DORMANCY_WINDOWS = 30
 ROLLING_PREGROWTH_WINDOWS = 5
 ROLLING_PRIOR_SPIKE_LOOKBACK_MS = 24 * 60 * 60 * 1000
+ROLLING_CONTEXT_MIN_WINDOWS = max(ROLLING_BASELINE_WINDOWS, ROLLING_DORMANCY_WINDOWS, ROLLING_PREGROWTH_WINDOWS)
 ROLLING_SEED_MIN_HTF_QUOTE_RATIO = 5.0
 ROLLING_SEED_MIN_HTF_TRADE_RATIO = 5.0
 ROLLING_SEED_MIN_HTF_RETURN_PCT = 0.0100
@@ -200,6 +201,26 @@ ROLLING_CATEGORY_RULES: tuple[RollingCategoryRule, ...] = tuple(
     RollingCategoryRule(category_id=category_id, priority=priority)
     for priority, category_id in enumerate(ROLLING_CATEGORY_PRIORITY, start=1)
 )
+
+
+def rolling_context_windows_for_spec(spec: RollingProfileSpec) -> int:
+    """Return the exact seed-aligned HTF context length required by the contract.
+
+    The context is non-overlapping HTF windows that end exactly at seed_open_ms:
+    context[-1] = [seed_open - htf, seed_open), context[-2] before it, etc.
+    It covers the 24h prior-spike horizon when possible, and at least the
+    baseline/dormancy/pregrowth windows used by the core. Extra adapter history
+    outside this slice is intentionally ignored by hashing and feature derivation.
+    """
+
+    htf_ms = int(spec.htf_seconds) * 1000
+    prior_windows = int(math.ceil(ROLLING_PRIOR_SPIKE_LOOKBACK_MS / htf_ms))
+    return max(ROLLING_CONTEXT_MIN_WINDOWS, prior_windows)
+
+
+def rolling_context_windows_for_tf_set(tf_set: str) -> int | None:
+    spec = ROLLING_PROFILE_SPECS.get(str(tf_set))
+    return None if spec is None else rolling_context_windows_for_spec(spec)
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +428,7 @@ def decision_snapshot_hash(snapshot: DecisionSnapshot) -> str:
 def _snapshot_hash_payload(snapshot: DecisionSnapshot) -> dict[str, object]:
     seed = snapshot.rolling_seed
     confirm = snapshot.ltf_confirm
+    spec = ROLLING_PROFILE_SPECS.get(snapshot.tf_set)
     return {
         "contract_id": snapshot.contract_id,
         "core_version": snapshot.core_version,
@@ -419,7 +441,10 @@ def _snapshot_hash_payload(snapshot: DecisionSnapshot) -> dict[str, object]:
             "seed_open_ms": int(seed.seed_open_ms),
             "seed_close_ms": int(seed.seed_close_ms),
             "seed_candles": [_candle_hash_payload(item) for item in seed.seed_candles],
-            "pre_seed_context_candles": [_candle_hash_payload(item) for item in seed.pre_seed_context_candles],
+            "pre_seed_context_candles": [
+                _candle_hash_payload(item)
+                for item in (_contract_context_candles(seed, spec) if spec is not None else tuple(seed.pre_seed_context_candles))
+            ],
         },
         "ltf_confirm": None
         if confirm is None
@@ -634,7 +659,7 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
 
     htf_ms = spec.htf_seconds * 1000
     seed_candle = _aggregate_candles(seed.seed_candles)
-    context = tuple(sorted(seed.pre_seed_context_candles, key=lambda item: item.open_time_ms))
+    context = _contract_context_candles(seed, spec)
     baseline = context[-ROLLING_BASELINE_WINDOWS:]
     dormancy = context[-ROLLING_DORMANCY_WINDOWS:]
     pregrowth = context[-ROLLING_PREGROWTH_WINDOWS:]
@@ -865,7 +890,7 @@ def _htf_internal_ltf_features(
     }
 
 
-def _prior_spike_features(*, context: tuple[DecisionCandle, ...], current: _AggregateCandle) -> dict[str, float | int]:
+def _prior_spike_features(*, context: tuple[DecisionCandle, ...], current: _AggregateCandle) -> dict[str, float | int | str]:
     ordered = tuple(sorted(context, key=lambda item: item.open_time_ms))
     lookback_start = int(current.open_time_ms) - ROLLING_PRIOR_SPIKE_LOOKBACK_MS
     spike_indices: list[int] = []
@@ -883,8 +908,13 @@ def _prior_spike_features(*, context: tuple[DecisionCandle, ...], current: _Aggr
             and _candle_return(candle) >= 0.0
         ):
             spike_indices.append(idx)
+    lookback_ms = max(0, int(ordered[-1].close_time_ms) - int(ordered[0].open_time_ms)) if ordered else 0
+    lookback_status = "ok" if lookback_ms >= ROLLING_PRIOR_SPIKE_LOOKBACK_MS else "short_context"
     if not spike_indices:
         return {
+            "prior_spike_lookback_ms": int(lookback_ms),
+            "prior_spike_context_windows": int(len(ordered)),
+            "prior_spike_lookback_status": lookback_status,
             "prior_spike_count_24h": 0,
             "prior_spike_median_quote": float("nan"),
             "prior_spike_max_quote": float("nan"),
@@ -917,6 +947,9 @@ def _prior_spike_features(*, context: tuple[DecisionCandle, ...], current: _Aggr
             bars_to_decay.append(float("nan"))
     finite_next = _finite_values(next_quote_ratios)
     return {
+        "prior_spike_lookback_ms": int(lookback_ms),
+        "prior_spike_context_windows": int(len(ordered)),
+        "prior_spike_lookback_status": lookback_status,
         "prior_spike_count_24h": int(len(spike_indices)),
         "prior_spike_median_quote": median_quote,
         "prior_spike_max_quote": max_quote,
@@ -968,15 +1001,48 @@ def _validate_seed(seed: RollingSeedSnapshot, spec: RollingProfileSpec) -> DataD
     return _continuity_dependency("rolling_seed", seed.seed_candles, expected_step_ms=expected_step_ms)
 
 
+def _contract_context_candles(seed: RollingSeedSnapshot, spec: RollingProfileSpec) -> tuple[DecisionCandle, ...]:
+    """Return only the contract-defined seed-aligned context slice.
+
+    Adapters may keep more history for efficiency. The core deliberately ignores
+    extra history outside the deterministic context contract so live/backtest
+    parity hashes do not depend on ring/cache retention length.
+    """
+
+    required = rolling_context_windows_for_spec(spec)
+    ordered = tuple(sorted(seed.pre_seed_context_candles, key=lambda item: item.open_time_ms))
+    eligible = tuple(
+        item
+        for item in ordered
+        if int(item.close_time_ms) <= int(seed.seed_open_ms)
+        and int(item.open_time_ms) >= int(seed.seed_open_ms) - required * int(spec.htf_seconds) * 1000
+    )
+    return eligible[-required:]
+
+
 def _validate_pre_seed_context(seed: RollingSeedSnapshot, spec: RollingProfileSpec) -> DataDependency | None:
-    context = tuple(sorted(seed.pre_seed_context_candles, key=lambda item: item.open_time_ms))
-    if len(context) < ROLLING_BASELINE_WINDOWS:
-        return DataDependency(name="pre_seed_context", status="missing", reason="baseline_history_not_ready", asof_ms=seed.seed_open_ms)
+    context = _contract_context_candles(seed, spec)
+    required = rolling_context_windows_for_spec(spec)
+    if len(context) < required:
+        return DataDependency(
+            name="pre_seed_context",
+            status="missing",
+            reason="contract_seed_aligned_context_not_ready",
+            asof_ms=seed.seed_open_ms,
+        )
     if context[-1].close_time_ms > seed.seed_open_ms:
         return DataDependency(name="pre_seed_context", status="error", reason="context_overlaps_seed", asof_ms=seed.seed_open_ms)
     if context[-1].close_time_ms != seed.seed_open_ms:
-        return DataDependency(name="pre_seed_context", status="gap", reason="rolling_context_does_not_end_at_seed_open", asof_ms=seed.seed_open_ms)
-    return _rolling_context_dependency("pre_seed_context", context, window_width_ms=spec.htf_seconds * 1000, expected_step_ms=spec.ltf_seconds * 1000)
+        return DataDependency(name="pre_seed_context", status="gap", reason="seed_aligned_context_does_not_end_at_seed_open", asof_ms=seed.seed_open_ms)
+    expected_first_open = int(seed.seed_open_ms) - required * int(spec.htf_seconds) * 1000
+    if int(context[0].open_time_ms) != expected_first_open:
+        return DataDependency(name="pre_seed_context", status="gap", reason="seed_aligned_context_wrong_start", asof_ms=seed.seed_open_ms)
+    return _rolling_context_dependency(
+        "pre_seed_context",
+        context,
+        window_width_ms=spec.htf_seconds * 1000,
+        expected_step_ms=spec.htf_seconds * 1000,
+    )
 
 
 def _validate_confirm(seed: RollingSeedSnapshot, confirm: LtfConfirmSnapshot, spec: RollingProfileSpec) -> DataDependency | None:
@@ -1071,22 +1137,24 @@ def _rejected(
 def _build_seed_first_core_smoke_snapshot() -> tuple[DecisionSnapshot, tuple[DecisionCandle, ...]]:
     """Build a deterministic selected-signal smoke fixture for local validation."""
 
-    htf_ms = 300_000
-    ltf_ms = 30_000
+    spec = ROLLING_PROFILE_SPECS["5m_30s"]
+    htf_ms = spec.htf_seconds * 1000
+    ltf_ms = spec.ltf_seconds * 1000
+    required_context = rolling_context_windows_for_spec(spec)
     context: list[DecisionCandle] = []
     start = 1_700_000_000_000
     price = 100.0
-    for idx in range(120):
-        ts = start + idx * ltf_ms
+    for idx in range(required_context):
+        ts = start + idx * htf_ms
         quote = 100.0
         trades = 100
         open_price = price
-        close_price = price * 1.0005
-        if idx == 80:
+        close_price = price * 1.0001
+        if idx == required_context - 80:
             quote = 1000.0
             trades = 1000
             close_price = price * 1.01
-        if idx == 117:
+        if idx == required_context - 3:
             close_price = price * 1.006
         context.append(
             DecisionCandle(
@@ -1105,7 +1173,7 @@ def _build_seed_first_core_smoke_snapshot() -> tuple[DecisionSnapshot, tuple[Dec
     seed_open = context[-1].close_time_ms
     seed: list[DecisionCandle] = []
     seed_open_price = price
-    for idx in range(10):
+    for idx in range(spec.htf_seconds // spec.ltf_seconds):
         ts = seed_open + idx * ltf_ms
         o = seed_open_price * (1.0 + 0.0015 * idx)
         c = o * (1.004 if idx == 9 else 1.0015)
@@ -1156,7 +1224,6 @@ def _build_seed_first_core_smoke_snapshot() -> tuple[DecisionSnapshot, tuple[Dec
     )
     return snapshot, tuple(post_seed)
 
-
 def run_seed_first_core_self_smoke() -> None:
     """Minimal deterministic smoke; useful before adapters are migrated."""
 
@@ -1169,6 +1236,43 @@ def run_seed_first_core_self_smoke() -> None:
         raise AssertionError("seed-first core smoke is not deterministic")
     if decision_snapshot_hash(second.snapshot) != decision_snapshot_hash(first.snapshot):
         raise AssertionError("seed-first core snapshot hash is not deterministic")
+    if snapshot.rolling_seed is None:
+        raise AssertionError("smoke snapshot missing seed")
+    extra_context: list[DecisionCandle] = []
+    first_context = snapshot.rolling_seed.pre_seed_context_candles[0]
+    for idx in range(12, 0, -1):
+        open_ms = int(first_context.open_time_ms) - idx * 300_000
+        extra_context.append(
+            DecisionCandle(
+                open_time_ms=open_ms,
+                close_time_ms=open_ms + 300_000,
+                open=95.0,
+                high=95.2,
+                low=94.8,
+                close=95.1,
+                quote_volume=42.0,
+                number_of_trades=42,
+                source="smoke_extra",
+            )
+        )
+    extra_snapshot = DecisionSnapshot(
+        symbol=snapshot.symbol,
+        tf_set=snapshot.tf_set,
+        decision_time_ms=snapshot.decision_time_ms,
+        source=snapshot.source,
+        rolling_seed=RollingSeedSnapshot(
+            tf_set=snapshot.rolling_seed.tf_set,
+            seed_open_ms=snapshot.rolling_seed.seed_open_ms,
+            seed_close_ms=snapshot.rolling_seed.seed_close_ms,
+            seed_candles=snapshot.rolling_seed.seed_candles,
+            pre_seed_context_candles=tuple(extra_context) + snapshot.rolling_seed.pre_seed_context_candles,
+        ),
+    )
+    extra_first = evaluate_first_ltf_confirm_after_seed(extra_snapshot, post_seed_ltf_candles=post_seed)
+    if decision_snapshot_hash(extra_first.snapshot) != decision_snapshot_hash(first.snapshot):
+        raise AssertionError("extra adapter history changed the contract snapshot hash")
+    if extra_first.verdict != first.verdict or extra_first.category_id != first.category_id:
+        raise AssertionError("extra adapter history changed the core verdict")
     for key in ("signal_entry_price", "initial_stop_at_decision", "tp1_at_decision", "htf_quote_ratio", "ltf_quote_pace_ratio"):
         if second.features.get(key) != first.features.get(key):
             raise AssertionError(f"seed-first core smoke changed feature {key}")

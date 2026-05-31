@@ -13,7 +13,7 @@ from .market_data.candles import Live2AggTradeEvent, Live2CandleBook
 
 
 LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS = (5_000, 15_000, 30_000, 60_000, 300_000)
-LIVE2_DEFAULT_MAX_CLOSED_CANDLES = 360
+LIVE2_DEFAULT_MAX_CLOSED_CANDLES = 3000
 LIVE2_STARTUP_AGGTRADE_REST_SOURCE = "binance_futures_aggTrades_startup_rest"
 LIVE2_AGGTRADE_WS_SOURCE = "binance_futures_aggtrade_ws"
 LIVE2_OPEN_INTEREST_SOURCE = "binance_futures_open_interest_hist_5m_poll"

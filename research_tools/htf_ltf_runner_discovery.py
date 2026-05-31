@@ -42,6 +42,7 @@ from research_tools.pump_decision_core import (
     evaluate_first_ltf_confirm_after_seed,
     evaluate_ltf_confirm_sequence_after_seed,
     rolling_category_priority_rank,
+    rolling_context_windows_for_tf_set,
 )
 
 
@@ -1577,24 +1578,58 @@ def _pre_seed_context_candles_from_ltf(
     ltf: pd.DataFrame,
     *,
     seed_open_ms: int,
+    tf_set: str,
     htf_ms: int,
     ltf_ms: int,
 ) -> tuple[DecisionCandle, ...]:
-    """Build rolling HTF context from the same LTF substrate as the seed.
+    """Build the exact seed-aligned HTF context required by the core contract.
 
-    Calendar HTF context is not parity-safe for rolling seeds because a seed may
-    start between calendar boundaries. The last context window must close exactly
-    at seed_open_ms and every prior context window steps by one LTF candle.
+    These are non-overlapping HTF windows aligned backwards from seed_open_ms:
+    [seed_open-HTF, seed_open), [seed_open-2*HTF, seed_open-HTF), ...
+    Extra cache history is ignored so backtest parity does not depend on how
+    much data happened to be loaded.
     """
 
-    rolling = _rolling_htf_from_ltf(ltf, htf_ms=htf_ms, ltf_ms=ltf_ms)
-    if rolling.empty:
+    required = rolling_context_windows_for_tf_set(tf_set)
+    if required is None or required <= 0:
         return ()
-    frame = rolling.copy()
-    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
-    frame = frame.dropna(subset=["timestamp"]).copy()
-    frame = frame.loc[frame["timestamp"].astype("int64") + int(htf_ms) <= int(seed_open_ms)]
-    return _decision_candles_from_frame(frame, step_ms=htf_ms, source="backtest_cache_rolling_htf_from_ltf_context")
+    frames: list[pd.DataFrame] = []
+    start_ms = int(seed_open_ms) - int(required) * int(htf_ms)
+    for window_start_ms in range(start_ms, int(seed_open_ms), int(htf_ms)):
+        window = _strict_ltf_window(
+            ltf,
+            start_ms=int(window_start_ms),
+            end_exclusive_ms=int(window_start_ms) + int(htf_ms),
+            expected_step_ms=int(ltf_ms),
+        )
+        if not window.status.ok:
+            return ()
+        frame = window.frame.copy()
+        if frame.empty:
+            return ()
+        first = frame.iloc[0]
+        last = frame.iloc[-1]
+        trades = pd.to_numeric(frame.get("number_of_trades"), errors="coerce").fillna(0.0)
+        taker = pd.to_numeric(frame.get("taker_buy_quote_volume"), errors="coerce").fillna(0.0) if "taker_buy_quote_volume" in frame.columns else None
+        frames.append(
+            pd.DataFrame(
+                [
+                    {
+                        "timestamp": int(window_start_ms),
+                        "open": float(first["open"]),
+                        "high": float(pd.to_numeric(frame["high"], errors="coerce").max()),
+                        "low": float(pd.to_numeric(frame["low"], errors="coerce").min()),
+                        "close": float(last["close"]),
+                        "quote_volume": float(pd.to_numeric(frame["quote_volume"], errors="coerce").fillna(0.0).sum()),
+                        "number_of_trades": int(round(float(trades.sum()))),
+                        "taker_buy_quote_volume": float(taker.sum()) if taker is not None else float("nan"),
+                    }
+                ]
+            )
+        )
+    if not frames:
+        return ()
+    return _decision_candles_from_frame(pd.concat(frames, ignore_index=True), step_ms=htf_ms, source="backtest_cache_seed_aligned_htf_context")
 
 
 def _build_seed_first_backtest_snapshot(
@@ -1621,7 +1656,7 @@ def _build_seed_first_backtest_snapshot(
     post_seed_window = _strict_ltf_window(
         ltf,
         start_ms=seed_close_ms,
-        end_exclusive_ms=seed_close_ms + (max_confirm + 1) * ltf_ms,
+        end_exclusive_ms=seed_close_ms + max_confirm * ltf_ms,
         expected_step_ms=ltf_ms,
     )
     post_seed_candles = _decision_candles_from_frame(
@@ -1639,10 +1674,10 @@ def _build_seed_first_backtest_snapshot(
             seed_open_ms=seed_open_ms,
             seed_close_ms=seed_close_ms,
             seed_candles=seed_candles,
-            pre_seed_context_candles=_pre_seed_context_candles_from_ltf(ltf, seed_open_ms=seed_open_ms, htf_ms=htf_ms, ltf_ms=ltf_ms),
+            pre_seed_context_candles=_pre_seed_context_candles_from_ltf(ltf, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms, ltf_ms=ltf_ms),
         ),
         source_labels={
-            "htf_context_source": "backtest_cache_rolling_htf_from_ltf_context",
+            "htf_context_source": "backtest_cache_seed_aligned_htf_context",
             "rolling_seed_source": "backtest_cache_aggtrade_ltf_seed",
             "ltf_confirm_source": "backtest_cache_aggtrade_ltf_confirm",
         },

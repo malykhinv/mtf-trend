@@ -10338,3 +10338,36 @@ Risk:
 ```text
 Backtest candidate/decision ledgers can grow materially because non-anomaly rolling seeds are now passed to the shared core instead of being silently skipped by the adapter. That is intentional for parity/audit, but broad runs may need artifact size monitoring.
 ```
+
+## 2026-05-31 - P476 deterministic seed-aligned context contract
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fix-up patch after P475. It makes the pre-seed context contract deterministic and seed-aligned without changing C/A/S thresholds, execution, portfolio, exits, sizing, or orders.
+
+Changes:
+
+- `PumpDecisionCore` core version becomes `p476_deterministic_seed_aligned_context`.
+- Defines exact contract context length per TF as max(baseline/dormancy/pregrowth windows, 24h prior-spike horizon).
+- Hash and feature derivation ignore adapter-retained history outside the exact contract slice.
+- Pre-seed context is now non-overlapping seed-aligned HTF windows ending exactly at `seed_open_ms`.
+- Backtest builds the same seed-aligned HTF context from LTF cache, not calendar HTF and not overlapping every LTF step.
+- Live2 builds the same seed-aligned context from closed 30s candles.
+- Backtest post-seed strict LTF window now loads exactly `max_confirm` candles, not `max_confirm + 1`.
+- Core smoke validates that extra adapter history before the contract slice does not change `snapshot_hash` or verdict.
+- Live2 default in-memory closed-candle retention is raised to 3000 so a 24h 30s context can fit when the runner uses defaults.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python research_tools/pump_decision_core.py
+python -m research_tools.decision_contract_guard
+python -m research_tools.decision_parity_join --help
+```
+
+Risk:
+
+```text
+Live signal selection now honestly requires enough closed 30s history to build the 24h seed-aligned context. If startup/maintenance has not populated the ring, the core returns `contract_seed_aligned_context_not_ready` instead of using a shorter accidental baseline.
+```
