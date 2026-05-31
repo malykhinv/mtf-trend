@@ -1,3 +1,11 @@
+## 2026-05-31 - P466 shared rolling C/A/S category matcher
+
+Current commit: UNKNOWN. Status: P466 PROPOSED. P465 expected applied locally / UNKNOWN commit.
+
+P466 moves the frozen C/A/S rolling category matcher into `research_tools/pump_decision_core.py` and makes both live2 and HTF/LTF discovery call that shared pure function. It intentionally preserves every threshold, supported TF set, category id, and category priority from the duplicated implementations. This is an architecture/parity patch only; it still does not introduce the seed-first evaluator or change execution/portfolio behavior.
+
+Next: P467 should add the actual seed-first evaluator around the shared matcher, with deterministic snapshot input and typed selected/rejected/data-dependency verdicts.
+
 ## 2026-05-31 - P465 rolling seed-first parity contract
 
 Current commit: UNKNOWN. Status: P465 PROPOSED.

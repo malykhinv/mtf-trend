@@ -7,12 +7,13 @@ sources and, in later patches, pass them into one shared evaluator.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
 
 ROLLING_DECISION_CONTRACT_ID = "rolling_htf_seed_first_ltf_confirm_v1"
-ROLLING_DECISION_CORE_VERSION = "p465_contract_types_only"
+ROLLING_DECISION_CORE_VERSION = "p466_shared_cas_matcher"
 
 DecisionSource = Literal["live", "backtest", "parity_replay", "test"]
 DecisionVerdictType = Literal["selected", "rejected", "data_dependency_not_ready"]
@@ -154,6 +155,95 @@ class DecisionVerdict:
     @property
     def is_selected(self) -> bool:
         return self.verdict == "selected"
+
+
+
+
+def _finite_float(value: object) -> float:
+    """Return a finite float or NaN without depending on pandas/numpy."""
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return number if math.isfinite(number) else float("nan")
+
+
+def rolling_tf_set_from_features(features: Mapping[str, object]) -> str:
+    """Resolve the rolling profile id from live or backtest feature rows."""
+
+    explicit = features.get("rolling_runner_tf_set") or features.get("tf_set")
+    if explicit:
+        return str(explicit)
+    htf = str(features.get("htf_timeframe", "") or "")
+    ltf = str(features.get("ltf_timeframe", "") or "")
+    return f"{htf}_{ltf}" if htf or ltf else ""
+
+
+def match_rolling_categories(features: Mapping[str, object]) -> tuple[str, ...]:
+    """Match the frozen rolling C/A/S category rules.
+
+    P466 intentionally moves the existing live/backtest thresholds into one
+    shared function without changing any threshold, order, or supported TF set.
+    The function is pure and source-neutral; callers are responsible for
+    building the features from known-at-decision-time data.
+    """
+
+    tf_set = rolling_tf_set_from_features(features)
+    if tf_set not in SUPPORTED_ROLLING_TF_SETS:
+        return ()
+
+    htf_trade_ratio = _finite_float(features.get("htf_trade_ratio"))
+    htf_quote_ratio = _finite_float(features.get("htf_quote_ratio"))
+    ltf_trade_pace_ratio = _finite_float(features.get("ltf_trade_pace_ratio"))
+    ltf_quote_pace_ratio = _finite_float(features.get("ltf_quote_pace_ratio"))
+    dormancy_trade_ratio = _finite_float(features.get("dormancy_to_anomaly_trade_ratio"))
+    current_vs_prior_max = _finite_float(features.get("current_vs_prior_spike_max_quote"))
+    second_half_return = _finite_float(features.get("ltf_second_half_return_pct"))
+    pregrowth_max_single = _finite_float(features.get("pregrowth_max_single_return_pct"))
+
+    matches: list[str] = []
+    if (
+        math.isfinite(dormancy_trade_ratio)
+        and dormancy_trade_ratio <= 32.0
+        and math.isfinite(current_vs_prior_max)
+        and current_vs_prior_max > 0.45
+        and math.isfinite(ltf_quote_pace_ratio)
+        and ltf_quote_pace_ratio <= 52.0
+        and math.isfinite(second_half_return)
+        and second_half_return <= 0.0125
+        and math.isfinite(pregrowth_max_single)
+        and pregrowth_max_single > 0.005
+    ):
+        matches.append(CATEGORY_C_BALANCED_FLOW_ACCEPTANCE)
+    if (
+        math.isfinite(htf_trade_ratio)
+        and htf_trade_ratio <= 18.0
+        and math.isfinite(current_vs_prior_max)
+        and current_vs_prior_max > 0.6
+        and current_vs_prior_max <= 1.5
+    ):
+        matches.append(CATEGORY_A_RESONANCE_PRIOR_SPIKE)
+    if (
+        tf_set == "5m_30s"
+        and math.isfinite(htf_trade_ratio)
+        and htf_trade_ratio >= 11.7
+        and math.isfinite(ltf_trade_pace_ratio)
+        and ltf_trade_pace_ratio <= 5.7
+        and math.isfinite(htf_quote_ratio)
+        and htf_quote_ratio <= 47.9
+    ):
+        matches.append(CATEGORY_S_7D_5M30_STRICT)
+    return tuple(matches)
+
+
+def rolling_category_priority_rank(category_id: str) -> int | None:
+    """Return the 1-based shared C/A/S priority rank, if known."""
+
+    try:
+        return ROLLING_CATEGORY_PRIORITY.index(category_id) + 1
+    except ValueError:
+        return None
 
 
 ROLLING_PROFILE_SPECS: dict[str, RollingProfileSpec] = {

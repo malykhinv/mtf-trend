@@ -29,6 +29,10 @@ import pandas as pd
 from constants import DEFAULT_CACHE_DIR, DEFAULT_RESULTS_DIR
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
+from research_tools.pump_decision_core import (
+    match_rolling_categories,
+    rolling_category_priority_rank,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1573,7 +1577,7 @@ def _build_first_ltf_signal(
             continue
         if initial_risk_pct > config.max_initial_risk_pct:
             continue
-        candidate_categories = _runner_candidate_matches({**candidate, **signal_features})
+        candidate_categories = match_rolling_categories({**candidate, **signal_features})
         if not candidate_categories:
             continue
         oi_at_signal = _oi_asof(oi, decision_available_ts)
@@ -1583,7 +1587,7 @@ def _build_first_ltf_signal(
             "signal_model": "first_category_qualified_ltf_signal_after_rolling_htf_seed",
             "runner_candidate_matched_categories": "|".join(candidate_categories),
             "runner_candidate_category": candidate_categories[0],
-            "runner_candidate_priority_rank": float(1 + ["C_balanced_flow_acceptance", "A_resonance_prior_spike", "S_7d_5m30_strict"].index(candidate_categories[0])),
+            "runner_candidate_priority_rank": float(rolling_category_priority_rank(candidate_categories[0]) or float("nan")),
             "decision_timestamp_ms": decision_ts,
             "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
             "decision_available_timestamp_ms": decision_available_ts,
@@ -3205,66 +3209,6 @@ def _entry_window_counts(config: HtfLtfRunnerDiscoveryConfig) -> tuple[int, ...]
 
 
 
-def _tf_set_from_row(row: Mapping[str, object]) -> str:
-    return f"{row.get('htf_timeframe', '')}_{row.get('ltf_timeframe', '')}"
-
-
-def _as_float(value: object) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return float("nan")
-    return number if np.isfinite(number) else float("nan")
-
-
-def _runner_candidate_matches(row: Mapping[str, object]) -> list[str]:
-    tf_set = _tf_set_from_row(row)
-    if tf_set not in {"3m_30s", "5m_30s"}:
-        return []
-    htf_trade_ratio = _as_float(row.get("htf_trade_ratio"))
-    htf_quote_ratio = _as_float(row.get("htf_quote_ratio"))
-    ltf_trade_pace_ratio = _as_float(row.get("ltf_trade_pace_ratio"))
-    ltf_quote_pace_ratio = _as_float(row.get("ltf_quote_pace_ratio"))
-    dormancy_trade_ratio = _as_float(row.get("dormancy_to_anomaly_trade_ratio"))
-    current_vs_prior_max = _as_float(row.get("current_vs_prior_spike_max_quote"))
-    second_half_return = _as_float(row.get("ltf_second_half_return_pct"))
-    pregrowth_max_single = _as_float(row.get("pregrowth_max_single_return_pct"))
-
-    matches: list[str] = []
-    if (
-        np.isfinite(dormancy_trade_ratio)
-        and dormancy_trade_ratio <= 32.0
-        and np.isfinite(current_vs_prior_max)
-        and current_vs_prior_max > 0.45
-        and np.isfinite(ltf_quote_pace_ratio)
-        and ltf_quote_pace_ratio <= 52.0
-        and np.isfinite(second_half_return)
-        and second_half_return <= 0.0125
-        and np.isfinite(pregrowth_max_single)
-        and pregrowth_max_single > 0.005
-    ):
-        matches.append("C_balanced_flow_acceptance")
-    if (
-        np.isfinite(htf_trade_ratio)
-        and htf_trade_ratio <= 18.0
-        and np.isfinite(current_vs_prior_max)
-        and current_vs_prior_max > 0.6
-        and current_vs_prior_max <= 1.5
-    ):
-        matches.append("A_resonance_prior_spike")
-    if (
-        tf_set == "5m_30s"
-        and np.isfinite(htf_trade_ratio)
-        and htf_trade_ratio >= 11.7
-        and np.isfinite(ltf_trade_pace_ratio)
-        and ltf_trade_pace_ratio <= 5.7
-        and np.isfinite(htf_quote_ratio)
-        and htf_quote_ratio <= 47.9
-    ):
-        matches.append("S_7d_5m30_strict")
-    return matches
-
-
 def _with_runner_candidate_categories(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty:
         return trades.copy()
@@ -3272,18 +3216,17 @@ def _with_runner_candidate_categories(trades: pd.DataFrame) -> pd.DataFrame:
     matched_values: list[str] = []
     selected_values: list[str] = []
     priority_values: list[float] = []
-    priority = ["C_balanced_flow_acceptance", "A_resonance_prior_spike", "S_7d_5m30_strict"]
     for row in frame.to_dict("records"):
         existing_category = str(row.get("runner_candidate_category", "") or "")
         existing_matches = str(row.get("runner_candidate_matched_categories", "") or "")
         if existing_category:
             matches = [item for item in existing_matches.split("|") if item] or [existing_category]
         else:
-            matches = _runner_candidate_matches(row)
+            matches = match_rolling_categories(row)
         matched_values.append("|".join(matches))
         selected = matches[0] if matches else ""
         selected_values.append(selected)
-        priority_values.append(float(1 + priority.index(selected)) if selected in priority else float("nan"))
+        priority_values.append(float(rolling_category_priority_rank(selected) or float("nan")))
     frame["runner_candidate_matched_categories"] = matched_values
     frame["runner_candidate_category"] = selected_values
     frame["runner_candidate_priority_rank"] = priority_values

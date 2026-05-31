@@ -20,6 +20,11 @@ from research_tools.anomaly_category_contract import (
     SUPPORTED_PUMP_CATEGORIES,
     PumpCategoryContract,
 )
+from research_tools.pump_decision_core import (
+    ROLLING_CATEGORY_PRIORITY,
+    match_rolling_categories,
+    rolling_category_priority_rank,
+)
 
 from .market_data.candles import Live2Candle
 from .state import SymbolState
@@ -55,11 +60,7 @@ POST_HTF_ACCEPTANCE_OI_DIVERGENCE_WINDOW_CANDLES = 180
 
 
 LIVE2_ROLLING_RUNNER_CONTRACT_ID = "rolling_runner_cas_v1"
-LIVE2_ROLLING_RUNNER_CATEGORY_PRIORITY = (
-    "C_balanced_flow_acceptance",
-    "A_resonance_prior_spike",
-    "S_7d_5m30_strict",
-)
+LIVE2_ROLLING_RUNNER_CATEGORY_PRIORITY = ROLLING_CATEGORY_PRIORITY
 LIVE2_ROLLING_RUNNER_PROFILES = (
     {
         "tf_set": "5m_30s",
@@ -1629,10 +1630,7 @@ def _is_live_flow_hold_candle(
 
 
 def _rolling_category_rank(category_id: str) -> int | None:
-    try:
-        return LIVE2_ROLLING_RUNNER_CATEGORY_PRIORITY.index(category_id) + 1
-    except ValueError:
-        return None
+    return rolling_category_priority_rank(category_id)
 
 
 def _rolling_baseline_free_prefilter_reject_reason(*, state: SymbolState, decision_candle: Live2Candle) -> str:
@@ -2013,7 +2011,7 @@ def _evaluate_rolling_profile(
             **prior_spike,
             **ltf_features,
         }
-        matched = _rolling_runner_matches(features)
+        matched = match_rolling_categories(features)
         if not matched:
             continue
         return {
@@ -2302,43 +2300,6 @@ def _rolling_prior_spike_features(*, history: tuple[Live2Candle, ...], current: 
         "current_vs_prior_spike_median_quote": float(current.quote_volume) / median_quote if median_quote and math.isfinite(median_quote) else float("nan"),
     }
 
-
-def _rolling_runner_matches(row: dict[str, object]) -> list[str]:
-    tf_set = str(row.get("rolling_runner_tf_set", ""))
-    def f(name: str) -> float:
-        value = _float_or_none(row.get(name))
-        return float("nan") if value is None or not math.isfinite(value) else float(value)
-    htf_trade_ratio = f("htf_trade_ratio")
-    htf_quote_ratio = f("htf_quote_ratio")
-    ltf_trade_pace_ratio = f("ltf_trade_pace_ratio")
-    ltf_quote_pace_ratio = f("ltf_quote_pace_ratio")
-    dormancy_trade_ratio = f("dormancy_to_anomaly_trade_ratio")
-    current_vs_prior_max = f("current_vs_prior_spike_max_quote")
-    second_half_return = f("ltf_second_half_return_pct")
-    pregrowth_max_single = f("pregrowth_max_single_return_pct")
-    matches: list[str] = []
-    if (
-        math.isfinite(dormancy_trade_ratio) and dormancy_trade_ratio <= 32.0
-        and math.isfinite(current_vs_prior_max) and current_vs_prior_max > 0.45
-        and math.isfinite(ltf_quote_pace_ratio) and ltf_quote_pace_ratio <= 52.0
-        and math.isfinite(second_half_return) and second_half_return <= 0.0125
-        and math.isfinite(pregrowth_max_single) and pregrowth_max_single > 0.005
-    ):
-        matches.append("C_balanced_flow_acceptance")
-    if (
-        math.isfinite(htf_trade_ratio) and htf_trade_ratio <= 18.0
-        and math.isfinite(current_vs_prior_max) and current_vs_prior_max > 0.6
-        and current_vs_prior_max <= 1.5
-    ):
-        matches.append("A_resonance_prior_spike")
-    if (
-        tf_set == "5m_30s"
-        and math.isfinite(htf_trade_ratio) and htf_trade_ratio >= 11.7
-        and math.isfinite(ltf_trade_pace_ratio) and ltf_trade_pace_ratio <= 5.7
-        and math.isfinite(htf_quote_ratio) and htf_quote_ratio <= 47.9
-    ):
-        matches.append("S_7d_5m30_strict")
-    return matches
 
 def _dependency(reason: str) -> Live2CategoryEvaluation:
     return Live2CategoryEvaluation(False, reason, "data_dependency_not_ready")

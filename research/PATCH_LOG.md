@@ -1,3 +1,30 @@
+## 2026-05-31 - P466 shared rolling C/A/S category matcher
+
+Status: PROPOSED. Current commit: UNKNOWN. Applies after P465.
+
+Moves the existing rolling C/A/S category matching rules out of the separate live2 and HTF/LTF discovery implementations into the source-neutral decision-core module. This is a no-threshold-change parity patch.
+
+Changes:
+
+- Add `match_rolling_categories()`, `rolling_tf_set_from_features()`, and `rolling_category_priority_rank()` to `research_tools/pump_decision_core.py`.
+- Preserve the exact C/A/S thresholds and priority order from the existing duplicate matchers.
+- Make `research_tools/anomaly_live2/signal.py` call the shared matcher and priority helper.
+- Make `research_tools/htf_ltf_runner_discovery.py` call the same shared matcher and priority helper.
+- Remove the duplicated `_rolling_runner_matches()` and `_runner_candidate_matches()` implementations.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+grep -R "def _rolling_runner_matches\|def _runner_candidate_matches" research_tools
+```
+
+Risk:
+
+```text
+Trading behavior should not change. The remaining parity risk is orchestration: live still searches from a closed confirm backward, while discovery is seed-first. P467/P468 must fix that rather than adding more live/backtest exceptions.
+```
+
 ## 2026-05-31 - P465 rolling seed-first decision contract types
 
 Status: PROPOSED. Current commit: UNKNOWN.
