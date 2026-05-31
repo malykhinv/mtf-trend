@@ -1,3 +1,11 @@
+## 2026-05-31 - P465 rolling seed-first parity contract
+
+Current commit: UNKNOWN. Status: P465 PROPOSED.
+
+The next parity work is architectural, not threshold tuning. Live and backtest must both be rolling-based: build a rolling HTF seed first, find the first LTF confirmation after that seed, then pass an equivalent source-neutral snapshot into one shared decision core. P465 adds only the typed contract boundary for that core. It does not change trading behavior.
+
+Next: P466 should move C/A/S category rule matching into `research_tools/pump_decision_core.py` without changing thresholds or profile coverage. After that, backtest should become a snapshot builder before live is migrated to a seed-first state machine.
+
 ## 2026-05-30 - P462 live2 all-symbol baseline-free deadline gate
 
 Current commit: UNKNOWN. Status: P462 PROPOSED. P449 was applied by the user locally / UNKNOWN commit.

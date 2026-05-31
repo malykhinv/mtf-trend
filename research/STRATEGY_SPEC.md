@@ -36,6 +36,31 @@ The first question is the nature of the anomaly. Entry logic is secondary and mu
 
 ---
 
+## 1.1 Rolling seed-first decision contract
+
+Live and backtest must not run separate strategy implementations. They may build data differently, but both must normalize known-at-decision-time data into the same source-neutral contract:
+
+```text
+Live sockets / Backtest REST+aggTrades
+        -> normalization adapter
+        -> rolling HTF seed snapshot
+        -> first LTF confirm snapshot after that seed
+        -> shared decision core
+        -> signal verdict
+        -> portfolio allocator
+        -> live execution / backtest simulation
+```
+
+The current contract id is:
+
+```text
+rolling_htf_seed_first_ltf_confirm_v1
+```
+
+Supported rolling profiles for this contract are `5m_30s` and `3m_30s`. Category priority is `C_balanced_flow_acceptance`, then `A_resonance_prior_spike`, then `S_7d_5m30_strict`. This priority belongs to the shared decision contract, not to live-only or backtest-only code.
+
+If live and backtest produce the same decision snapshot, the signal verdict must be identical. Differences after that point are portfolio/execution differences, not signal-quality differences.
+
 ## 2. Required anomaly evidence
 
 A candidate must show enough live-available evidence:

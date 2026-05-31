@@ -1,3 +1,28 @@
+## 2026-05-31 - P465 rolling seed-first decision contract types
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Introduces the source-neutral typed contract for the required architecture: live and backtest must normalize their own data into the same rolling HTF seed-first / first LTF confirm snapshots, then receive a source-neutral decision verdict from one shared core. This patch is intentionally contract-only: no live path, backtest path, thresholds, portfolio allocation, execution model, or trading behavior is changed.
+
+Changes:
+
+- Add `research_tools/pump_decision_core.py` with immutable dataclass contracts for rolling profiles, category rules, normalized decision candles, seed snapshots, LTF confirm snapshots, data dependencies, rejects, snapshots, and verdicts.
+- Freeze `contract_id=rolling_htf_seed_first_ltf_confirm_v1` and supported rolling profiles `5m_30s` / `3m_30s`.
+- Freeze category priority names `C_balanced_flow_acceptance -> A_resonance_prior_spike -> S_7d_5m30_strict` without moving matcher logic yet.
+- Document that signal decision and portfolio/execution remain separate layers.
+
+Validation:
+
+```bash
+python -m compileall -q research_tools/pump_decision_core.py
+```
+
+Risk:
+
+```text
+None to trading behavior. The risk is only architectural drift if follow-up patches do not migrate live/backtest adapters to this contract and remove duplicate matchers.
+```
+
 ## 2026-05-30 - P462 live2 all-symbol baseline-free deadline gate
 
 Status: PROPOSED. Current commit: UNKNOWN.
