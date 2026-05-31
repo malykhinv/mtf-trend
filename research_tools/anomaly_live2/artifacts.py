@@ -269,6 +269,10 @@ class Live2ArtifactWriter:
         "event_type",
         "verdict",
         "reason",
+        "signal_verdict",
+        "signal_reason",
+        "portfolio_verdict",
+        "portfolio_reason",
         "entry_guard_verdict",
         "entry_guard_reason",
         "execution_verdict",
@@ -683,6 +687,10 @@ class Live2ArtifactWriter:
             event.event_type,
             str(data.get("verdict") or event.message or ""),
             str(data.get("reason") or ""),
+            str(data.get("signal_verdict") or ""),
+            str(data.get("signal_reason") or ""),
+            str(data.get("portfolio_verdict") or ""),
+            str(data.get("portfolio_reason") or ""),
             str(data.get("entry_guard_verdict") or ""),
             str(data.get("entry_guard_reason") or ""),
             str(data.get("execution_verdict") or ""),
@@ -697,10 +705,14 @@ class Live2ArtifactWriter:
                     "event_type": event.event_type,
                     "verdict": key[1],
                     "reason": key[2],
-                    "entry_guard_verdict": key[3],
-                    "entry_guard_reason": key[4],
-                    "execution_verdict": key[5],
-                    "execution_reason": key[6],
+                    "signal_verdict": key[3],
+                    "signal_reason": key[4],
+                    "portfolio_verdict": key[5],
+                    "portfolio_reason": key[6],
+                    "entry_guard_verdict": key[7],
+                    "entry_guard_reason": key[8],
+                    "execution_verdict": key[9],
+                    "execution_reason": key[10],
                     "decision_count": 0,
                     "symbols": set(),
                     "examples": [],
@@ -771,6 +783,10 @@ class Live2ArtifactWriter:
                         "event_type": item.get("event_type", ""),
                         "verdict": item.get("verdict", ""),
                         "reason": item.get("reason", ""),
+                        "signal_verdict": item.get("signal_verdict", ""),
+                        "signal_reason": item.get("signal_reason", ""),
+                        "portfolio_verdict": item.get("portfolio_verdict", ""),
+                        "portfolio_reason": item.get("portfolio_reason", ""),
                         "entry_guard_verdict": item.get("entry_guard_verdict", ""),
                         "entry_guard_reason": item.get("entry_guard_reason", ""),
                         "execution_verdict": item.get("execution_verdict", ""),
@@ -906,6 +922,7 @@ class Live2ArtifactWriter:
         data = self._event_payload_from_row(row)
         verdict = str(data.get("verdict") or "")
         entry_guard_verdict = str(data.get("entry_guard_verdict") or "")
+        portfolio_verdict = str(data.get("portfolio_verdict") or "")
         execution_verdict = str(data.get("execution_verdict") or "")
         has_signal_prices = any(
             data.get(field) not in (None, "")
@@ -917,7 +934,7 @@ class Live2ArtifactWriter:
             return True
         if verdict in {"rejected_runtime_gates_not_ready", "rejected_existing_exchange_position"}:
             return True
-        if entry_guard_verdict or execution_verdict or has_signal_prices:
+        if entry_guard_verdict or portfolio_verdict or execution_verdict or has_signal_prices:
             return True
         return False
 

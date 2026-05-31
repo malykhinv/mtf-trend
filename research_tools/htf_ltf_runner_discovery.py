@@ -1681,6 +1681,9 @@ def _decision_ledger_row(
         "symbol": snapshot.symbol,
         "tf_set": snapshot.tf_set,
         "signal_verdict": verdict.verdict,
+        "signal_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "core_selected",
+        "portfolio_verdict": "not_evaluated_signal_not_selected" if verdict.verdict != "selected" else "not_evaluated_before_portfolio",
+        "portfolio_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "portfolio_layer_runs_after_execution_simulation",
         "signal_reject_stage": _first_reject_stage(verdict),
         "signal_reject_reason": _first_reject_reason(verdict),
         "category_id": verdict.category_id,
@@ -1705,6 +1708,9 @@ def _decision_ledger_row(
         "initial_stop_price": verdict.initial_stop_price if verdict.initial_stop_price is not None else float("nan"),
         "tp1_price": verdict.tp1_price if verdict.tp1_price is not None else float("nan"),
     }
+    if backtest_execution_skip_reason:
+        row["portfolio_verdict"] = "not_evaluated_backtest_execution_guard_skipped"
+        row["portfolio_reason"] = backtest_execution_skip_reason
     for key in (
         "confirmation_candles",
         "htf_return_pct",
@@ -1826,6 +1832,10 @@ def _build_first_ltf_signal(
         **candidate,
         **features,
         "signal_status": "selected",
+        "signal_verdict": "selected",
+        "signal_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "core_selected",
+        "portfolio_verdict": "not_evaluated_before_portfolio",
+        "portfolio_reason": "portfolio_layer_runs_after_execution_simulation",
         "signal_model": "rolling_seed_first_ltf_confirm_shared_core",
         "decision_contract_id": verdict.snapshot.contract_id,
         "decision_core_version": verdict.snapshot.core_version,
@@ -3520,6 +3530,8 @@ def _apply_runner_candidate_portfolio(
             "entry_timestamp_ms": entry_ts,
             "entry_timestamp_utc": row.get("entry_timestamp_utc", ""),
             "exit_timestamp_ms": row.get("exit_timestamp_ms", float("nan")),
+            "signal_verdict": str(row.get("signal_verdict", "selected") or "selected"),
+            "signal_reason": str(row.get("signal_reason", "") or ""),
             "runner_candidate_category": category,
             "runner_candidate_matched_categories": row.get("runner_candidate_matched_categories", ""),
             "risk_per_trade_pct": risk_per_trade,
@@ -3529,31 +3541,34 @@ def _apply_runner_candidate_portfolio(
             "symbol_cooldown_ms": cooldown_ms,
         }
         if not category:
-            events.append({**base_event, "event_type": "rejected_no_runner_candidate_category"})
+            events.append({**base_event, "event_type": "rejected_no_runner_candidate_category", "portfolio_verdict": "not_evaluated_signal_not_selected", "portfolio_reason": "missing_runner_candidate_category"})
             continue
         if str(row.get("status", "")) != "closed":
-            events.append({**base_event, "event_type": "rejected_trade_not_closed", "status": row.get("status", "")})
+            events.append({**base_event, "event_type": "rejected_trade_not_closed", "portfolio_verdict": "not_evaluated_backtest_trade_not_closed", "portfolio_reason": str(row.get("status", "")), "status": row.get("status", "")})
             continue
         if any(str(position.get("symbol", "")) == symbol for position in active):
-            events.append({**base_event, "event_type": "blocked_same_symbol_open"})
+            events.append({**base_event, "event_type": "blocked_same_symbol_open", "portfolio_verdict": "blocked_same_symbol_open", "portfolio_reason": "symbol_already_has_open_backtest_position"})
             continue
         cooldown_until = int(cooldown_until_by_symbol.get(symbol, 0))
         if cooldown_until > entry_ts:
-            events.append({**base_event, "event_type": "blocked_symbol_cooldown", "cooldown_until_ms": cooldown_until, "cooldown_until_utc": _timestamp_to_utc(cooldown_until)})
+            events.append({**base_event, "event_type": "blocked_symbol_cooldown", "portfolio_verdict": "blocked_symbol_cooldown", "portfolio_reason": "symbol_cooldown_until_rolling_htf_window_expires", "cooldown_until_ms": cooldown_until, "cooldown_until_utc": _timestamp_to_utc(cooldown_until)})
             continue
         if (len(active) + 1) * risk_per_trade > max_total_risk + 1e-12:
-            events.append({**base_event, "event_type": "blocked_total_risk_cap"})
+            events.append({**base_event, "event_type": "blocked_total_risk_cap", "portfolio_verdict": "blocked_total_risk_cap", "portfolio_reason": "backtest_max_total_open_risk_reached"})
             continue
         exit_ts_value = row.get("exit_timestamp_ms")
         if not np.isfinite(float(exit_ts_value)):
-            events.append({**base_event, "event_type": "rejected_missing_exit_timestamp"})
+            events.append({**base_event, "event_type": "rejected_missing_exit_timestamp", "portfolio_verdict": "not_evaluated_backtest_trade_not_closed", "portfolio_reason": "missing_exit_timestamp"})
             continue
         exit_ts = int(float(exit_ts_value))
         selected_indices.append(int(idx))
         active.append({"symbol": symbol, "exit_ts": exit_ts, "risk": risk_per_trade})
         cooldown_until_by_symbol[symbol] = max(cooldown_until_by_symbol.get(symbol, 0), exit_ts + cooldown_ms)
-        events.append({**base_event, "event_type": "selected", "open_positions_after": int(len(active)), "open_risk_after_pct": float(len(active) * risk_per_trade), "cooldown_until_ms": int(exit_ts + cooldown_ms), "cooldown_until_utc": _timestamp_to_utc(int(exit_ts + cooldown_ms))})
+        events.append({**base_event, "event_type": "selected", "portfolio_verdict": "accepted_for_execution", "portfolio_reason": "portfolio_constraints_passed", "open_positions_after": int(len(active)), "open_risk_after_pct": float(len(active) * risk_per_trade), "cooldown_until_ms": int(exit_ts + cooldown_ms), "cooldown_until_utc": _timestamp_to_utc(int(exit_ts + cooldown_ms))})
     selected = frame.loc[selected_indices].copy() if selected_indices else frame.iloc[0:0].copy()
+    if not selected.empty:
+        selected["portfolio_verdict"] = "accepted_for_execution"
+        selected["portfolio_reason"] = "portfolio_constraints_passed"
     return selected.reset_index(drop=True), pd.DataFrame(events)
 
 

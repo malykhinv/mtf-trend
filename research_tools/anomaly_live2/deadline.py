@@ -78,6 +78,10 @@ class Live2DecisionRecord:
     candle_last_source: str = ""
     candle_startup_rest_trade_count: int = 0
     candle_live_ws_trade_count: int = 0
+    signal_verdict: str = ""
+    signal_reason: str = ""
+    portfolio_verdict: str = ""
+    portfolio_reason: str = ""
     category_id: str = ""
     category_rank: int | None = None
     signal_entry_price: float | None = None
@@ -381,6 +385,10 @@ def _decision_compact_event_payload(record: Live2DecisionRecord) -> dict[str, ob
         "candle_last_source": record.candle_last_source,
         "candle_startup_rest_trade_count": record.candle_startup_rest_trade_count,
         "candle_live_ws_trade_count": record.candle_live_ws_trade_count,
+        "signal_verdict": record.signal_verdict,
+        "signal_reason": record.signal_reason,
+        "portfolio_verdict": record.portfolio_verdict,
+        "portfolio_reason": record.portfolio_reason,
         "signal_dependency_reasons": record.signal_dependency_reasons,
         "signal_reject_reasons": record.signal_reject_reasons,
     }
@@ -662,6 +670,10 @@ class Live2DeadlineEngine:
         }
         verdict: str
         reason: str
+        signal_verdict = ""
+        signal_reason = ""
+        portfolio_verdict = ""
+        portfolio_reason = ""
         if pre_signal_latency_ms > self.config.backlog_expire_ms:
             verdict = "deadline_expired_backlog"
             reason = "closed_bucket_expired_before_hot_path_reconnect_or_backlog"
@@ -684,11 +696,18 @@ class Live2DeadlineEngine:
                 return None
             verdict = signal_decision.verdict
             reason = signal_decision.reason
+            signal_verdict = signal_decision.verdict
+            signal_reason = signal_decision.reason
+            if signal_decision.verdict != "selected":
+                portfolio_verdict = "not_evaluated_signal_not_selected"
+                portfolio_reason = signal_decision.reason or "signal_verdict_not_selected"
             if signal_finished_at_ms > deadline_ms:
                 verdict = "deadline_missed"
                 reason = "signal_evaluation_finished_after_decision_deadline"
                 entry_attempt_timing["deadline_missed_stage"] = "after_signal_evaluation"
                 entry_attempt_timing["signal_finished_after_deadline_ms"] = max(0, signal_finished_at_ms - deadline_ms)
+                portfolio_verdict = "not_evaluated_decision_deadline_missed"
+                portfolio_reason = reason
             elif signal_decision.verdict == "selected":
                 guard_started_at_ms = utc_now_ms()
                 entry_attempt_timing["entry_guard_started_at_ms"] = guard_started_at_ms
@@ -707,14 +726,20 @@ class Live2DeadlineEngine:
                 if guard_finished_at_ms > deadline_ms:
                     verdict = "deadline_missed"
                     reason = "entry_guard_finished_after_decision_deadline"
+                    portfolio_verdict = "not_evaluated_decision_deadline_missed"
+                    portfolio_reason = reason
                     entry_attempt_timing["deadline_missed_stage"] = "after_entry_guard"
                     entry_attempt_timing["entry_guard_finished_after_deadline_ms"] = max(0, guard_finished_at_ms - deadline_ms)
                 elif entry_guard_result.verdict != "accepted":
                     verdict = entry_guard_result.verdict
                     reason = entry_guard_result.reason
+                    portfolio_verdict = "not_evaluated_entry_guard_rejected"
+                    portfolio_reason = entry_guard_result.reason
                 elif self.execution_engine is None:
                     verdict = "rejected_execution_engine_not_configured"
                     reason = "live2_execution_engine_missing"
+                    portfolio_verdict = "not_evaluated_execution_engine_missing"
+                    portfolio_reason = reason
                 else:
                     runtime_gate_started_at_ms = utc_now_ms()
                     entry_attempt_timing["runtime_gate_check_started_at_ms"] = runtime_gate_started_at_ms
@@ -728,6 +753,8 @@ class Live2DeadlineEngine:
                     if runtime_gate_finished_at_ms > deadline_ms:
                         verdict = "deadline_missed"
                         reason = "runtime_gate_check_finished_after_decision_deadline"
+                        portfolio_verdict = "not_evaluated_decision_deadline_missed"
+                        portfolio_reason = reason
                         entry_attempt_timing["deadline_missed_stage"] = "before_execution_call"
                         entry_attempt_timing["runtime_gate_finished_after_deadline_ms"] = max(0, runtime_gate_finished_at_ms - deadline_ms)
                     elif pre_execution_age_ms > int(self.entry_guard.config.max_signal_age_ms):
@@ -749,9 +776,13 @@ class Live2DeadlineEngine:
                         )
                         verdict = entry_guard_result.verdict
                         reason = entry_guard_result.reason
+                        portfolio_verdict = "not_evaluated_entry_guard_rejected"
+                        portfolio_reason = entry_guard_result.reason
                     elif not runtime_gate_allowed:
                         verdict = "rejected_runtime_gates_not_ready"
                         reason = "live2_runtime_gates_do_not_allow_new_entries"
+                        portfolio_verdict = "blocked_runtime_gates_not_ready"
+                        portfolio_reason = reason
                     else:
                         execution_started_at_ms = utc_now_ms()
                         entry_attempt_timing["execution_call_started_at_ms"] = execution_started_at_ms
@@ -765,6 +796,8 @@ class Live2DeadlineEngine:
                         entry_attempt_timing["execution_call_duration_ms"] = max(0, execution_finished_at_ms - execution_started_at_ms)
                         verdict = execution_result.verdict
                         reason = execution_result.reason
+                        portfolio_verdict = execution_result.portfolio_verdict
+                        portfolio_reason = execution_result.portfolio_reason
         if "entry_guard_started_at_ms" in entry_attempt_timing:
             last_stage_finished = entry_attempt_timing.get("execution_call_finished_at_ms") or entry_attempt_timing.get("runtime_gate_check_finished_at_ms") or entry_attempt_timing.get("entry_guard_finished_at_ms")
             try:
@@ -810,6 +843,10 @@ class Live2DeadlineEngine:
             candle_last_source=candle.last_source,
             candle_startup_rest_trade_count=candle.startup_rest_trade_count,
             candle_live_ws_trade_count=candle.live_ws_trade_count,
+            signal_verdict=signal_verdict,
+            signal_reason=signal_reason,
+            portfolio_verdict=portfolio_verdict,
+            portfolio_reason=portfolio_reason,
             category_id="" if signal_decision is None else signal_decision.category_id,
             category_rank=None if signal_decision is None else signal_decision.category_rank,
             signal_entry_price=None if signal_decision is None else signal_decision.signal_entry_price,

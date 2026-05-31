@@ -315,6 +315,8 @@ class Live2ExecutionResult:
     post_position_amount: float | None = None
     position_delta_amount: float | None = None
     exchange_boundary_status: str = ""
+    portfolio_verdict: str = ""
+    portfolio_reason: str = ""
     order_placement_status: str = "not_attempted"
     entry_order_id: str = ""
     entry_client_order_id: str = ""
@@ -342,6 +344,8 @@ class Live2ExecutionResult:
             "post_position_amount": self.post_position_amount,
             "position_delta_amount": self.position_delta_amount,
             "exchange_boundary_status": self.exchange_boundary_status,
+            "portfolio_verdict": self.portfolio_verdict,
+            "portfolio_reason": self.portfolio_reason,
             "order_placement_status": self.order_placement_status,
             "entry_order_id": self.entry_order_id,
             "entry_client_order_id": self.entry_client_order_id,
@@ -486,6 +490,8 @@ class Live2ExecutionEngine:
                 reason="symbol_already_has_open_live2_position",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="ready",
+                portfolio_verdict="blocked_same_symbol_open",
+                portfolio_reason="symbol_already_has_open_live2_position",
                 ),
                 timing=timing,
             )
@@ -499,6 +505,8 @@ class Live2ExecutionEngine:
                 reason="symbol_cooldown_until_rolling_htf_window_expires",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="ready",
+                portfolio_verdict="blocked_symbol_cooldown",
+                portfolio_reason="symbol_cooldown_until_rolling_htf_window_expires",
                 details={"cooldown_until_ms": cooldown_until_ms, "cooldown_remaining_ms": cooldown_until_ms - checked_at_ms},
                 ),
                 timing=timing,
@@ -513,6 +521,8 @@ class Live2ExecutionEngine:
                 reason="live2_max_open_positions_reached",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="ready",
+                portfolio_verdict="blocked_max_open_positions",
+                portfolio_reason="live2_max_open_positions_reached",
                 details={"max_open_positions": self.config.max_open_positions},
                 ),
                 timing=timing,
@@ -601,6 +611,8 @@ class Live2ExecutionEngine:
                 checked_at_ms=checked_at_ms,
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
+                portfolio_verdict="blocked_trade_risk_budget",
+                portfolio_reason="fixed_notional_stop_risk_exceeds_per_trade_deposit_risk_budget",
                 details={
                     "account_balance_usdt": account_balance_usdt,
                     "position_sizing_model": "fixed_notional_v1",
@@ -626,6 +638,8 @@ class Live2ExecutionEngine:
                 checked_at_ms=checked_at_ms,
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
+                portfolio_verdict="blocked_total_risk_cap",
+                portfolio_reason="live2_max_total_open_risk_reached",
                 details={
                     "account_balance_usdt": account_balance_usdt,
                     "position_sizing_model": "fixed_notional_v1",
@@ -903,6 +917,8 @@ class Live2ExecutionEngine:
             post_position_amount=post_position_amount,
             position_delta_amount=position_delta_amount,
             exchange_boundary_status="ready",
+            portfolio_verdict="accepted_for_execution",
+            portfolio_reason="portfolio_constraints_passed",
             order_placement_status="entry_filled_stop_verified",
             entry_order_id=fill.order_id,
             entry_client_order_id=entry_client_order_id,
@@ -1051,6 +1067,8 @@ class Live2ExecutionEngine:
                 checked_at_ms=checked_at_ms,
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
+                portfolio_verdict="blocked_existing_exchange_position",
+                portfolio_reason="pre_entry_exchange_position_amount_is_not_flat",
             )
         return Live2ExecutionResult(
             verdict="pre_position_flat",
@@ -1170,6 +1188,8 @@ class Live2ExecutionEngine:
             post_position_amount=result.post_position_amount,
             position_delta_amount=result.position_delta_amount,
             exchange_boundary_status=result.exchange_boundary_status,
+            portfolio_verdict=result.portfolio_verdict,
+            portfolio_reason=result.portfolio_reason,
             order_placement_status=result.order_placement_status,
             entry_order_id=result.entry_order_id,
             entry_client_order_id=result.entry_client_order_id,

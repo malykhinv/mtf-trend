@@ -3619,3 +3619,7 @@ Next validation: run live2 without opening/copying current artifact CSVs if poss
 ## 2026-05-30 — P464 proposed
 
 P464 is PROPOSED / UNKNOWN commit. It fixes live2 operator console hygiene after P463: stdout should expose only two repainting surfaces, startup warmup and live grid. Retry warnings, command logger lines, and background thread tracebacks are routed to run artifacts instead of corrupting the terminal UI. No trading logic changed.
+
+## 2026-05-31 - P471 proposed
+
+P471 is PROPOSED / UNKNOWN commit. Live/backtest artifacts now separate `signal_verdict` from `portfolio_verdict`. Max positions, cooldown, same-symbol-open, risk-cap, runtime gates, and existing exchange positions are portfolio/allocation outcomes, not signal-quality rejections. Next parity analysis should compare shared-core `signal_verdict` first, then inspect portfolio/execution differences separately.

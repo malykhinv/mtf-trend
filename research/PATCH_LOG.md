@@ -10229,3 +10229,29 @@ Changes:
 Risk: terminal UI only. Trading logic, signal selection, order placement, and data artifacts are unchanged.
 
 Verification: run `python -m compileall data/exchanges research_tools cli constants.py main.py`; then live-smoke must show only the repainting warmup block before readiness and the repainting grid after readiness. Detailed errors must appear in artifacts only.
+
+## 2026-05-31 - P471 separate signal and portfolio verdicts
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Separates shared-core signal truth from live/backtest portfolio allocation artifacts. The patch does not change thresholds, seed-first logic, execution, exits, risk sizing, or order placement.
+
+Changes:
+
+- Adds `signal_verdict` / `signal_reason` and `portfolio_verdict` / `portfolio_reason` to live2 deadline decisions and summary artifacts.
+- Marks live portfolio blocks explicitly: same-symbol open, symbol cooldown, max open positions, per-trade risk budget, total risk cap, existing exchange position, runtime gates.
+- Keeps final `verdict` for backward compatibility, but it is no longer the only field used to judge signal quality.
+- Adds the same signal/portfolio fields to HTF/LTF discovery decision ledger, raw trades, live-filtered trades, and portfolio events.
+- Marks backtest portfolio-selected trades as `accepted_for_execution`; blocked rows remain visible in `htf_ltf_runner_portfolio_events.csv`.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Artifact schema expands. Existing readers that only use final verdict continue to work, but research should switch to signal_verdict for strategy-quality counts and portfolio_verdict for capacity/allocation counts.
+```
