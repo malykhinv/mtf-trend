@@ -30,6 +30,14 @@ from constants import DEFAULT_CACHE_DIR, DEFAULT_RESULTS_DIR
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
 from research_tools.pump_decision_core import (
+    ROLLING_DECISION_CONTRACT_ID,
+    ROLLING_DECISION_CORE_VERSION,
+    ROLLING_PROFILE_SPECS,
+    DecisionCandle,
+    DecisionSnapshot,
+    DecisionVerdict,
+    RollingSeedSnapshot,
+    evaluate_first_ltf_confirm_after_seed,
     match_rolling_categories,
     rolling_category_priority_rank,
 )
@@ -259,6 +267,8 @@ def run_htf_ltf_runner_discovery(
     entry_window_trade_rows: list[dict[str, object]] = []
     signal_rows: list[dict[str, object]] = []
     trade_rows: list[dict[str, object]] = []
+    decision_rows: list[dict[str, object]] = []
+    rejected_exact_window_rows: list[dict[str, object]] = []
     quality_rows: list[dict[str, object]] = []
     progress = _ProgressLine(
         label=progress_label or f"runner discovery {config.htf_timeframe}/{config.ltf_timeframe}",
@@ -282,6 +292,8 @@ def run_htf_ltf_runner_discovery(
         local_entry_window_trade_rows: list[dict[str, object]] = []
         local_signal_rows: list[dict[str, object]] = []
         local_trade_rows: list[dict[str, object]] = []
+        local_decision_rows: list[dict[str, object]] = []
+        local_rejected_exact_window_rows: list[dict[str, object]] = []
         scanned_rows = 0
         if not htf.empty and not ltf.empty:
             local_candidate_rows, scanned_rows = _collect_symbol_candidates(
@@ -298,7 +310,11 @@ def run_htf_ltf_runner_discovery(
                 for window in windows:
                     if window.get("window_execution_ok") is True:
                         local_entry_window_trade_rows.append(_simulate_no_tp_runner_trade(window, ltf=ltf, config=config))
-                signal = _build_first_ltf_signal(candidate, ltf=ltf, oi=oi, config=config)
+                signal, decision_row = _build_first_ltf_signal(candidate, htf=htf, ltf=ltf, oi=oi, config=config)
+                if decision_row is not None:
+                    local_decision_rows.append(decision_row)
+                    if decision_row.get("signal_verdict") != "selected" or decision_row.get("backtest_execution_skip_reason"):
+                        local_rejected_exact_window_rows.append(decision_row)
                 if signal is None:
                     continue
                 local_signal_rows.append(signal)
@@ -309,6 +325,8 @@ def run_htf_ltf_runner_discovery(
             "entry_window_trades": local_entry_window_trade_rows,
             "signals": local_signal_rows,
             "trades": local_trade_rows,
+            "decisions": local_decision_rows,
+            "rejected_exact_windows": local_rejected_exact_window_rows,
             "quality": local_quality_rows,
             "scanned_rows": scanned_rows,
         }
@@ -344,6 +362,8 @@ def run_htf_ltf_runner_discovery(
         entry_window_trade_rows.extend(result.get("entry_window_trades", []))  # type: ignore[arg-type]
         signal_rows.extend(result.get("signals", []))  # type: ignore[arg-type]
         trade_rows.extend(result.get("trades", []))  # type: ignore[arg-type]
+        decision_rows.extend(result.get("decisions", []))  # type: ignore[arg-type]
+        rejected_exact_window_rows.extend(result.get("rejected_exact_windows", []))  # type: ignore[arg-type]
         quality_rows.extend(result.get("quality", []))  # type: ignore[arg-type]
     scanned_htf_rows = int(sum(int(result.get("scanned_rows", 0)) for result in symbol_results.values()))
 
@@ -352,6 +372,9 @@ def run_htf_ltf_runner_discovery(
     entry_window_trades_frame = pd.DataFrame(entry_window_trade_rows)
     entry_window_trades_live_filtered = _apply_same_symbol_overlap_filter(entry_window_trades_frame)
     signals_frame = pd.DataFrame(signal_rows)
+    decision_ledger_frame = pd.DataFrame(decision_rows)
+    rejected_exact_windows_frame = pd.DataFrame(rejected_exact_window_rows)
+    data_dependencies_frame = _decision_data_dependencies(decision_ledger_frame)
     trades_frame = _with_runner_candidate_categories(pd.DataFrame(trade_rows))
     live_filtered, portfolio_events = _apply_runner_candidate_portfolio(trades_frame, config=config)
     candidate_rule_scores = _score_candidate_rules(candidates_frame)
@@ -390,6 +413,9 @@ def run_htf_ltf_runner_discovery(
             entry_window_rule_scores_live_filtered,
         ),
         (config.output_dir / "htf_ltf_runner_signals.csv", signals_frame),
+        (config.output_dir / "htf_ltf_runner_decision_ledger.csv", decision_ledger_frame),
+        (config.output_dir / "htf_ltf_runner_rejected_exact_windows.csv", rejected_exact_windows_frame),
+        (config.output_dir / "htf_ltf_runner_data_dependencies.csv", data_dependencies_frame),
         (config.output_dir / "htf_ltf_runner_trades_raw.csv", trades_frame),
         (config.output_dir / "htf_ltf_runner_trades_live_filtered.csv", live_filtered),
         (config.output_dir / "htf_ltf_runner_portfolio_events.csv", portfolio_events),
@@ -1512,108 +1538,325 @@ def _collect_symbol_candidates(
     return rows, scanned_rows
 
 
+def _rolling_tf_set_from_config(config: HtfLtfRunnerDiscoveryConfig) -> str:
+    return f"{config.htf_timeframe}_{config.ltf_timeframe}"
+
+
+def _decision_candles_from_frame(frame: pd.DataFrame, *, step_ms: int, source: str) -> tuple[DecisionCandle, ...]:
+    if frame.empty or "timestamp" not in frame.columns:
+        return ()
+    prepared = frame.copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    for column in ("open", "high", "low", "close", "quote_volume", "number_of_trades", "taker_buy_quote_volume"):
+        if column in prepared.columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    required = ["timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"]
+    prepared = prepared.dropna(subset=[column for column in required if column in prepared.columns])
+    if not set(required).issubset(prepared.columns):
+        return ()
+    prepared = prepared.drop_duplicates("timestamp", keep="last").sort_values("timestamp")
+    candles: list[DecisionCandle] = []
+    for _, row in prepared.iterrows():
+        timestamp = int(row["timestamp"])
+        taker_buy_quote: float | None = None
+        if "taker_buy_quote_volume" in prepared.columns:
+            taker_value = float(row.get("taker_buy_quote_volume", float("nan")))
+            taker_buy_quote = taker_value if np.isfinite(taker_value) else None
+        trades = float(row["number_of_trades"])
+        candles.append(
+            DecisionCandle(
+                open_time_ms=timestamp,
+                close_time_ms=timestamp + int(step_ms),
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                quote_volume=float(row["quote_volume"]),
+                number_of_trades=int(round(trades)),
+                taker_buy_quote_volume=taker_buy_quote,
+                source=source,
+                source_status="ok",
+            )
+        )
+    return tuple(candles)
+
+
+def _pre_seed_context_candles(htf: pd.DataFrame, *, seed_open_ms: int, htf_ms: int) -> tuple[DecisionCandle, ...]:
+    if htf.empty or "timestamp" not in htf.columns:
+        return ()
+    frame = htf.copy()
+    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
+    frame = frame.dropna(subset=["timestamp"]).copy()
+    frame = frame.loc[frame["timestamp"].astype("int64") + int(htf_ms) <= int(seed_open_ms)]
+    return _decision_candles_from_frame(frame, step_ms=htf_ms, source="backtest_cache_calendar_htf")
+
+
+def _build_seed_first_backtest_snapshot(
+    candidate: dict[str, object],
+    *,
+    htf: pd.DataFrame,
+    ltf: pd.DataFrame,
+    config: HtfLtfRunnerDiscoveryConfig,
+) -> tuple[DecisionSnapshot, tuple[DecisionCandle, ...], _StrictLtfWindow]:
+    tf_set = _rolling_tf_set_from_config(config)
+    htf_ms = _timeframe_ms(config.htf_timeframe)
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    seed_open_ms = int(candidate["rolling_htf_window_start_ms"])
+    seed_close_ms = int(candidate["rolling_htf_window_end_ms"])
+    spec = ROLLING_PROFILE_SPECS.get(tf_set)
+    max_confirm = int(spec.max_confirm_candles if spec is not None else config.ltf_max_confirm_candles)
+
+    seed_window = _strict_ltf_window(ltf, start_ms=seed_open_ms, end_exclusive_ms=seed_close_ms, expected_step_ms=ltf_ms)
+    seed_candles = _decision_candles_from_frame(
+        seed_window.frame,
+        step_ms=ltf_ms,
+        source="backtest_cache_aggtrade_ltf_seed",
+    )
+    post_seed_window = _strict_ltf_window(
+        ltf,
+        start_ms=seed_close_ms,
+        end_exclusive_ms=seed_close_ms + (max_confirm + 1) * ltf_ms,
+        expected_step_ms=ltf_ms,
+    )
+    post_seed_candles = _decision_candles_from_frame(
+        post_seed_window.frame,
+        step_ms=ltf_ms,
+        source="backtest_cache_aggtrade_ltf_confirm",
+    )
+    snapshot = DecisionSnapshot(
+        symbol=str(candidate["symbol"]),
+        tf_set=tf_set,
+        decision_time_ms=seed_close_ms,
+        source="backtest",
+        rolling_seed=RollingSeedSnapshot(
+            tf_set=tf_set,
+            seed_open_ms=seed_open_ms,
+            seed_close_ms=seed_close_ms,
+            seed_candles=seed_candles,
+            pre_seed_context_candles=_pre_seed_context_candles(htf, seed_open_ms=seed_open_ms, htf_ms=htf_ms),
+        ),
+        source_labels={
+            "htf_context_source": "backtest_cache_calendar_htf",
+            "rolling_seed_source": "backtest_cache_aggtrade_ltf_seed",
+            "ltf_confirm_source": "backtest_cache_aggtrade_ltf_confirm",
+        },
+        features={
+            "entry_price_model": "next_ltf_open_plus_adverse_slippage",
+            "signal_model": "seed_first_shared_core",
+        },
+        contract_id=ROLLING_DECISION_CONTRACT_ID,
+        core_version=ROLLING_DECISION_CORE_VERSION,
+    )
+    return snapshot, post_seed_candles, post_seed_window
+
+
+def _first_reject_stage(verdict: DecisionVerdict) -> str:
+    return str(verdict.rejects[0].stage) if verdict.rejects else ""
+
+
+def _first_reject_reason(verdict: DecisionVerdict) -> str:
+    if verdict.rejects:
+        return str(verdict.rejects[0].reason)
+    if verdict.dependencies:
+        return str(verdict.dependencies[0].reason or verdict.dependencies[0].name)
+    return ""
+
+
+def _decision_ledger_row(
+    *,
+    verdict: DecisionVerdict,
+    post_seed_window: _StrictLtfWindow,
+    candidate: dict[str, object],
+    backtest_execution_skip_reason: str = "",
+) -> dict[str, object]:
+    snapshot = verdict.snapshot
+    seed = snapshot.rolling_seed
+    confirm = snapshot.ltf_confirm
+    features = dict(verdict.features)
+    row: dict[str, object] = {
+        "source": "backtest",
+        "contract_id": snapshot.contract_id,
+        "core_version": snapshot.core_version,
+        "decision_model": "rolling_htf_seed_first_ltf_confirm_v1",
+        "symbol": snapshot.symbol,
+        "tf_set": snapshot.tf_set,
+        "signal_verdict": verdict.verdict,
+        "signal_reject_stage": _first_reject_stage(verdict),
+        "signal_reject_reason": _first_reject_reason(verdict),
+        "category_id": verdict.category_id,
+        "backtest_execution_skip_reason": backtest_execution_skip_reason,
+        "rolling_seed_open_ms": int(seed.seed_open_ms) if seed is not None else float("nan"),
+        "rolling_seed_open_utc": _timestamp_to_utc(seed.seed_open_ms) if seed is not None else "",
+        "rolling_seed_close_ms": int(seed.seed_close_ms) if seed is not None else float("nan"),
+        "rolling_seed_close_utc": _timestamp_to_utc(seed.seed_close_ms) if seed is not None else "",
+        "confirm_start_ms": int(confirm.confirm_start_ms) if confirm is not None else float("nan"),
+        "confirm_start_utc": _timestamp_to_utc(confirm.confirm_start_ms) if confirm is not None else "",
+        "confirm_end_ms": int(confirm.confirm_end_ms) if confirm is not None else float("nan"),
+        "confirm_end_utc": _timestamp_to_utc(confirm.confirm_end_ms) if confirm is not None else "",
+        "decision_time_ms": int(snapshot.decision_time_ms),
+        "decision_time_utc": _timestamp_to_utc(snapshot.decision_time_ms),
+        "candidate_timestamp_ms": candidate.get("timestamp_ms", float("nan")),
+        "candidate_htf_close_ms": candidate.get("htf_close_ms", float("nan")),
+        "post_seed_ltf_path_status": post_seed_window.status,
+        "post_seed_ltf_observed_continuous_candles": int(post_seed_window.observed_candles),
+        "post_seed_ltf_first_gap_start_ms": post_seed_window.first_gap_start_ms if post_seed_window.first_gap_start_ms is not None else float("nan"),
+        "post_seed_ltf_first_gap_end_ms": post_seed_window.first_gap_end_ms if post_seed_window.first_gap_end_ms is not None else float("nan"),
+        "signal_entry_price": verdict.signal_entry_price if verdict.signal_entry_price is not None else float("nan"),
+        "initial_stop_price": verdict.initial_stop_price if verdict.initial_stop_price is not None else float("nan"),
+        "tp1_price": verdict.tp1_price if verdict.tp1_price is not None else float("nan"),
+    }
+    for key in (
+        "confirmation_candles",
+        "htf_return_pct",
+        "htf_quote_ratio",
+        "htf_trade_ratio",
+        "dormancy_to_anomaly_quote_ratio",
+        "dormancy_to_anomaly_trade_ratio",
+        "current_vs_prior_spike_median_quote",
+        "current_vs_prior_spike_max_quote",
+        "pregrowth_return_pct",
+        "pregrowth_max_single_return_pct",
+        "pregrowth_positive_step_share",
+        "ltf_confirm_return_pct",
+        "ltf_quote_pace_ratio",
+        "ltf_trade_pace_ratio",
+        "ltf_second_half_return_pct",
+        "ltf_quote_acceleration",
+        "ltf_trade_acceleration",
+        "ltf_taker_buy_quote_share",
+        "initial_risk_pct_at_decision",
+        "rolling_runner_matched_categories",
+        "rolling_runner_category_priority_rank",
+    ):
+        row[key] = features.get(key, float("nan"))
+    return row
+
+
+def _decision_data_dependencies(decision_ledger: pd.DataFrame) -> pd.DataFrame:
+    if decision_ledger.empty or "signal_verdict" not in decision_ledger.columns:
+        return pd.DataFrame(columns=["symbol", "tf_set", "signal_reject_reason", "count"])
+    deps = decision_ledger.loc[decision_ledger["signal_verdict"].astype(str).eq("data_dependency_not_ready")].copy()
+    if deps.empty:
+        return pd.DataFrame(columns=["symbol", "tf_set", "signal_reject_reason", "count"])
+    return (
+        deps.groupby(["symbol", "tf_set", "signal_reject_reason"], dropna=False)
+        .size()
+        .reset_index(name="count")
+        .sort_values(["count", "symbol"], ascending=[False, True])
+    )
+
+
 def _build_first_ltf_signal(
     candidate: dict[str, object],
     *,
+    htf: pd.DataFrame,
     ltf: pd.DataFrame,
     oi: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
-) -> dict[str, object] | None:
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
     if candidate.get("status") != "ok":
-        return None
+        return None, None
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     htf_ms = _timeframe_ms(config.htf_timeframe)
     start_ms = int(candidate["htf_close_ms"])
     end_ms = start_ms + int(config.runner_horizon_minutes) * 60_000
     entry_window = _strict_ltf_window(ltf, start_ms=start_ms, end_exclusive_ms=end_ms, expected_step_ms=ltf_ms)
-    segment = entry_window.frame
-    if len(segment) <= config.ltf_min_confirm_candles:
-        return None
-    baseline_quote = float(candidate.get("baseline_quote_volume_median") or float("nan"))
-    baseline_trades = float(candidate.get("baseline_number_of_trades_median") or float("nan"))
-    anomaly_low = float(candidate["anomaly_low"])
-    anomaly_close = float(candidate["anomaly_close"])
 
-    for confirm_count in range(config.ltf_min_confirm_candles, min(config.ltf_max_confirm_candles, len(segment) - 1) + 1):
-        closed = segment.head(confirm_count).copy()
-        decision_row = closed.iloc[-1]
-        decision_ts = int(decision_row["timestamp"])
-        decision_available_ts = decision_ts + ltf_ms
-        entry_row = segment.iloc[confirm_count]
-        entry_ts = int(entry_row["timestamp"])
-        if entry_ts < decision_available_ts:
-            continue
-        signal_features = _ltf_confirmation_features(
-            closed,
-            baseline_quote=baseline_quote,
-            baseline_trades=baseline_trades,
-            htf_ms=htf_ms,
-        )
-        ltf_ok = (
-            signal_features["ltf_confirm_return_pct"] >= config.min_ltf_confirm_return_pct
-            and signal_features["ltf_quote_pace_ratio"] >= config.min_ltf_quote_pace_ratio
-            and signal_features["ltf_trade_pace_ratio"] >= config.min_ltf_trade_pace_ratio
-            and signal_features["ltf_second_half_return_pct"] >= config.min_ltf_second_half_return_pct
-            and signal_features["ltf_quote_acceleration"] >= config.min_ltf_quote_acceleration
-            and signal_features["ltf_trade_acceleration"] >= config.min_ltf_trade_acceleration
-            and float(closed["low"].min()) >= anomaly_low
-        )
-        taker_share = signal_features["ltf_taker_buy_quote_share"]
-        if config.min_ltf_taker_buy_share is not None:
-            ltf_ok = ltf_ok and np.isfinite(taker_share) and taker_share >= config.min_ltf_taker_buy_share
-        if not ltf_ok:
-            continue
-        raw_entry_price = float(entry_row["open"])
-        entry_price = raw_entry_price * (1.0 + config.entry_slippage_pct)
-        decision_close = float(decision_row["close"])
-        entry_drift = abs(_safe_divide(entry_price - decision_close, decision_close))
-        structural_low = min(anomaly_low, float(closed["low"].min()))
-        initial_stop = structural_low * (1.0 - config.structural_stop_buffer_pct)
-        initial_risk = entry_price - initial_stop
-        initial_risk_pct = _safe_divide(initial_risk, entry_price)
-        if not np.isfinite(initial_risk) or initial_risk <= 0.0:
-            continue
-        if entry_drift > config.max_entry_drift_pct:
-            continue
-        if initial_risk_pct > config.max_initial_risk_pct:
-            continue
-        candidate_categories = match_rolling_categories({**candidate, **signal_features})
-        if not candidate_categories:
-            continue
-        oi_at_signal = _oi_asof(oi, decision_available_ts)
-        return {
-            **candidate,
-            "signal_status": "selected",
-            "signal_model": "first_category_qualified_ltf_signal_after_rolling_htf_seed",
-            "runner_candidate_matched_categories": "|".join(candidate_categories),
-            "runner_candidate_category": candidate_categories[0],
-            "runner_candidate_priority_rank": float(rolling_category_priority_rank(candidate_categories[0]) or float("nan")),
-            "decision_timestamp_ms": decision_ts,
-            "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
-            "decision_available_timestamp_ms": decision_available_ts,
-            "decision_available_timestamp_utc": _timestamp_to_utc(decision_available_ts),
-            "decision_close": decision_close,
-            "confirmation_candles": confirm_count,
-            "entry_timestamp_ms": entry_ts,
-            "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
-            "raw_entry_price": raw_entry_price,
-            "entry_price": entry_price,
-            "entry_price_model": "next_ltf_open_plus_adverse_slippage",
-            "entry_drift_pct": entry_drift,
-            "initial_stop": initial_stop,
-            "initial_risk": initial_risk,
-            "initial_risk_pct": initial_risk_pct,
-            "structural_stop_model": "min_anomaly_low_and_closed_ltf_lows_before_decision_minus_buffer",
-            "tp_model": "none",
-            "signal_oi_status": oi_at_signal["status"],
-            "signal_oi_timestamp_ms": oi_at_signal["timestamp_ms"],
-            "signal_oi_available_timestamp_ms": oi_at_signal["available_timestamp_ms"],
-            "signal_oi_open_interest": oi_at_signal["open_interest"],
-            **_strict_ltf_window_audit(entry_window, prefix="entry_ltf"),
-            **signal_features,
-        }
-    return None
+    snapshot, post_seed_candles, post_seed_window = _build_seed_first_backtest_snapshot(candidate, htf=htf, ltf=ltf, config=config)
+    verdict = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles)
+    if verdict.verdict != "selected":
+        return None, _decision_ledger_row(verdict=verdict, post_seed_window=post_seed_window, candidate=candidate)
 
+    confirm = verdict.snapshot.ltf_confirm
+    if confirm is None or not confirm.confirm_candles:
+        return None, _decision_ledger_row(
+            verdict=verdict,
+            post_seed_window=post_seed_window,
+            candidate=candidate,
+            backtest_execution_skip_reason="selected_without_confirm_snapshot",
+        )
+    decision_row_candle = confirm.confirm_candles[-1]
+    decision_ts = int(decision_row_candle.open_time_ms)
+    decision_available_ts = int(confirm.confirm_end_ms)
+    entry_rows = entry_window.frame.loc[pd.to_numeric(entry_window.frame.get("timestamp", pd.Series(dtype=float)), errors="coerce").eq(decision_available_ts)]
+    if entry_rows.empty:
+        return None, _decision_ledger_row(
+            verdict=verdict,
+            post_seed_window=post_seed_window,
+            candidate=candidate,
+            backtest_execution_skip_reason="entry_next_open_missing_after_core_selected",
+        )
+    entry_row = entry_rows.iloc[0]
+    entry_ts = int(entry_row["timestamp"])
+    if entry_ts < decision_available_ts:
+        return None, _decision_ledger_row(
+            verdict=verdict,
+            post_seed_window=post_seed_window,
+            candidate=candidate,
+            backtest_execution_skip_reason="entry_before_decision_available",
+        )
+
+    raw_entry_price = float(entry_row["open"])
+    entry_price = raw_entry_price * (1.0 + config.entry_slippage_pct)
+    decision_close = float(verdict.signal_entry_price if verdict.signal_entry_price is not None else decision_row_candle.close)
+    entry_drift = abs(_safe_divide(entry_price - decision_close, decision_close))
+    initial_stop = float(verdict.initial_stop_price if verdict.initial_stop_price is not None else float("nan"))
+    initial_risk = entry_price - initial_stop
+    initial_risk_pct = _safe_divide(initial_risk, entry_price)
+    execution_skip = ""
+    if not np.isfinite(initial_risk) or initial_risk <= 0.0:
+        execution_skip = "invalid_initial_risk"
+    elif entry_drift > config.max_entry_drift_pct:
+        execution_skip = "entry_drift_too_large"
+    elif initial_risk_pct > config.max_initial_risk_pct:
+        execution_skip = "initial_risk_too_large"
+    if execution_skip:
+        return None, _decision_ledger_row(
+            verdict=verdict,
+            post_seed_window=post_seed_window,
+            candidate=candidate,
+            backtest_execution_skip_reason=execution_skip,
+        )
+
+    oi_at_signal = _oi_asof(oi, decision_available_ts)
+    features = dict(verdict.features)
+    matched_categories = str(features.get("rolling_runner_matched_categories") or verdict.category_id)
+    category = verdict.category_id or matched_categories.split("|")[0]
+    signal = {
+        **candidate,
+        **features,
+        "signal_status": "selected",
+        "signal_model": "rolling_seed_first_ltf_confirm_shared_core",
+        "decision_contract_id": verdict.snapshot.contract_id,
+        "decision_core_version": verdict.snapshot.core_version,
+        "runner_candidate_matched_categories": matched_categories,
+        "runner_candidate_category": category,
+        "runner_candidate_priority_rank": float(rolling_category_priority_rank(category) or float("nan")),
+        "decision_timestamp_ms": decision_ts,
+        "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
+        "decision_available_timestamp_ms": decision_available_ts,
+        "decision_available_timestamp_utc": _timestamp_to_utc(decision_available_ts),
+        "decision_close": decision_close,
+        "confirmation_candles": int(features.get("confirmation_candles") or len(confirm.confirm_candles)),
+        "entry_timestamp_ms": entry_ts,
+        "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
+        "raw_entry_price": raw_entry_price,
+        "entry_price": entry_price,
+        "entry_price_model": "next_ltf_open_plus_adverse_slippage",
+        "entry_drift_pct": entry_drift,
+        "initial_stop": initial_stop,
+        "initial_risk": initial_risk,
+        "initial_risk_pct": initial_risk_pct,
+        "structural_stop_model": "shared_core_seed_low_and_closed_ltf_lows_before_decision_minus_buffer",
+        "tp_model": "none",
+        "signal_oi_status": oi_at_signal["status"],
+        "signal_oi_timestamp_ms": oi_at_signal["timestamp_ms"],
+        "signal_oi_available_timestamp_ms": oi_at_signal["available_timestamp_ms"],
+        "signal_oi_open_interest": oi_at_signal["open_interest"],
+        **_strict_ltf_window_audit(entry_window, prefix="entry_ltf"),
+    }
+    ledger = _decision_ledger_row(verdict=verdict, post_seed_window=post_seed_window, candidate=candidate)
+    return signal, ledger
 
 def _build_ltf_entry_windows(
     candidate: dict[str, object],

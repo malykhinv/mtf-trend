@@ -997,3 +997,7 @@ Live 30s decision candles and entry flow remain WS aggTrade-derived. Official Bi
 ## Live rolling 1m context maintenance
 
 Rolling baseline/dormancy context may be maintained from explicit official Binance closed 1m klines, including zero-volume minutes. This context is not a live-flow entry source. Live entry still requires fresh WS aggTrade decision flow, entry guard against current live price, actual fill, and verified stop. A fresh latest 1m candle is not enough for C/A/S readiness; the recent 1m context must be contiguous up to the expected closed minute.
+
+## Backtest seed-first decision adapter
+
+P468 note: HTF/LTF discovery selected signals must be produced by `PumpDecisionCore.evaluate_first_ltf_confirm_after_seed(...)`. The backtest may still apply next-LTF-open execution, adverse slippage, fees, portfolio overlap filtering, and exit simulation after the core verdict, but it must not maintain a second LTF confirmation/category decision implementation for selected signals. Core decisions are auditable in `htf_ltf_runner_decision_ledger.csv`; rejected exact seed/confirm attempts and data dependencies must be visible in artifacts.

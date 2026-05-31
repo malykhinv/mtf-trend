@@ -1,3 +1,26 @@
+## 2026-05-31 - P468 backtest seed-first core adapter
+
+Status: PROPOSED. Current commit: UNKNOWN. Applies after P467.
+
+Changes:
+
+- HTF/LTF runner discovery now builds source-neutral `DecisionSnapshot` objects for selected rolling HTF seed candidates and calls `evaluate_first_ltf_confirm_after_seed(...)` from `research_tools/pump_decision_core.py`.
+- The backtest selected-signal path no longer performs its own LTF confirmation/category decision; it maps a shared-core `selected` verdict into the existing next-open-plus-slippage execution simulation.
+- Adds `htf_ltf_runner_decision_ledger.csv`, `htf_ltf_runner_rejected_exact_windows.csv`, and `htf_ltf_runner_data_dependencies.csv` so core rejects and data-dependency misses are visible instead of disappearing before trade artifacts.
+- Keeps execution, portfolio, TP1/structural trailing, fees, slippage, risk caps, and thresholds unchanged.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+This migrates the backtest selected-signal decision boundary, so selected counts may change if the old duplicate LTF/category logic differed from the shared core. That is intended parity exposure, not threshold tuning. Live still has its own seed/confirm orchestration until P469/P470.
+```
+
 ## P467 - seed-first rolling decision core
 
 Status: PROPOSED.

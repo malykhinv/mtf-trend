@@ -1,3 +1,11 @@
+## 2026-05-31 - P468 backtest adapter to shared seed-first core
+
+Current commit: UNKNOWN. Status: P468 PROPOSED. P465-P467 expected applied locally / UNKNOWN commit.
+
+HTF/LTF discovery now acts as a backtest adapter for the shared rolling decision core on the selected-signal path: it loads/cache-normalizes HTF/LTF candles, builds `DecisionSnapshot`, calls `evaluate_first_ltf_confirm_after_seed`, and writes a decision ledger plus rejected/data-dependency artifacts. Backtest execution remains a separate next-open-plus-slippage simulation layer. Live is not migrated yet, so live/backtest parity is still incomplete until live uses the same seed-first state machine and core call.
+
+Next: P469 should convert live2 from confirm-backward scanning to a rolling seed state machine; P470 should make live2 signal evaluation a thin adapter around the same core.
+
 ## 2026-05-31 - P467 seed-first rolling decision core
 
 Current commit: UNKNOWN. Status: P467 PROPOSED. P465/P466 expected applied locally / UNKNOWN commit.
