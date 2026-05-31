@@ -1,3 +1,11 @@
+## 2026-05-31 - P469 live2 rolling seed state machine
+
+Current commit: UNKNOWN. Status: P469 PROPOSED. P465-P468 expected applied locally / UNKNOWN commit.
+
+Live2 is migrated at the scheduler/orchestration layer from “current confirm candle looks backward for HTF” to “store rolling HTF seed first, then evaluate the first post-seed LTF confirm through the shared decision core.” Execution and portfolio allocation remain outside the core. Live/backtest parity is still incomplete until P470 removes the remaining legacy live decision helpers and P471 separates signal verdicts from portfolio verdicts in artifacts.
+
+Next: P470 should make `Live2SignalEngine` a thin adapter around `PumpDecisionCore` and remove the old confirm-backward `_rolling_runner_category_setup` / `_evaluate_rolling_profile` path from executable code.
+
 ## 2026-05-31 - P468 backtest adapter to shared seed-first core
 
 Current commit: UNKNOWN. Status: P468 PROPOSED. P465-P467 expected applied locally / UNKNOWN commit.

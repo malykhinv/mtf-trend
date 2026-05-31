@@ -29,6 +29,26 @@ LIVE2_STAGE_LABELS: tuple[str, ...] = (
 )
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class Live2RollingSeedState:
+    """One pending rolling HTF seed awaiting its first post-seed LTF confirmation.
+
+    The live adapter stores only immutable, already-closed 30s seed candles here.
+    Post-seed LTF candles are read from the candle ring at decision time so the
+    seed-first contract stays deterministic and auditable.
+    """
+
+    seed_key: str
+    tf_set: str
+    profile_rank: int
+    seed_open_ms: int
+    seed_close_ms: int
+    seed_candles: tuple[Live2Candle, ...]
+    created_ms: int
+    last_evaluated_close_ms: int | None = None
+
 class SymbolLive2Status(StrEnum):
     INACTIVE = "inactive"
     WATCHING = "watching"
@@ -225,6 +245,21 @@ class SymbolState:
     candle_coverage_status: str = "not_ready"
     candle_gap_count: int = 0
     candle_out_of_order_count: int = 0
+    rolling_decision_contract_id: str = "rolling_htf_seed_first_ltf_confirm_v1"
+    rolling_pending_seeds: dict[str, Live2RollingSeedState] = field(default_factory=dict, repr=False)
+    rolling_consumed_seed_keys: set[str] = field(default_factory=set, repr=False)
+    rolling_last_seed_discovery_close_ms: int | None = None
+    rolling_last_seed_key: str = ""
+    rolling_last_seed_open_ms: int | None = None
+    rolling_last_seed_close_ms: int | None = None
+    rolling_last_confirm_start_ms: int | None = None
+    rolling_last_confirm_end_ms: int | None = None
+    rolling_pending_seed_count: int = 0
+    rolling_discovered_seed_count: int = 0
+    rolling_consumed_seed_count: int = 0
+    rolling_selected_seed_count: int = 0
+    rolling_rejected_seed_count: int = 0
+    rolling_dependency_seed_count: int = 0
     candle_timeframes_ms: tuple[int, ...] = LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS
     max_closed_candles: int = LIVE2_DEFAULT_MAX_CLOSED_CANDLES
     candle_book: Live2CandleBook = field(init=False, repr=False)

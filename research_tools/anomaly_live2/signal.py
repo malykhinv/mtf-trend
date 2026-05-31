@@ -22,12 +22,20 @@ from research_tools.anomaly_category_contract import (
 )
 from research_tools.pump_decision_core import (
     ROLLING_CATEGORY_PRIORITY,
+    ROLLING_DECISION_CONTRACT_ID,
+    ROLLING_DECISION_CORE_VERSION,
+    DataDependency,
+    DecisionCandle,
+    DecisionSnapshot,
+    LtfConfirmSnapshot,
+    RollingSeedSnapshot,
+    evaluate_first_ltf_confirm_after_seed,
     match_rolling_categories,
     rolling_category_priority_rank,
 )
 
 from .market_data.candles import Live2Candle
-from .state import SymbolState
+from .state import Live2RollingSeedState, SymbolState
 
 Live2CategoryDecisionKind = Literal["accepted", "rejected", "data_dependency_not_ready"]
 
@@ -157,6 +165,197 @@ class Live2SignalEngine:
         self._hot_path_feature_mode_counts: Counter[str] = Counter()
         self._last_dependency_reasons: tuple[str, ...] = ()
         self._last_reject_reasons: tuple[str, ...] = ()
+
+    def evaluate_seed_first_tick(self, *, state: SymbolState, candle: Live2Candle) -> Live2SignalDecision | None:
+        """Evaluate live2 through the shared seed-first decision contract.
+
+        Live orchestration now mirrors discovery: first discover a rolling HTF
+        seed from closed 30s candles, keep that seed pending, then evaluate the
+        first post-seed LTF confirmation through ``PumpDecisionCore``.  A quiet
+        30s bucket can therefore still advance a pending seed; no live-only
+        "confirm ended now -> look backward for HTF" decision path is used here.
+        """
+
+        self._total_evaluations += 1
+        self._discover_rolling_seeds(state=state, decision_candle=candle)
+        closed_30s = _closed_candles_for_timeframe(state=state, timeframe_ms=30_000)
+        closed_1m = _closed_candles_for_timeframe(state=state, timeframe_ms=60_000)
+        if not state.rolling_pending_seeds:
+            self._last_dependency_reasons = ()
+            self._last_reject_reasons = ()
+            return None
+
+        candidate_verdicts: list[Live2SignalDecision] = []
+        for seed in sorted(state.rolling_pending_seeds.values(), key=lambda item: (item.profile_rank, item.seed_open_ms, item.tf_set)):
+            profile = _rolling_profile_by_tf_set(seed.tf_set)
+            if profile is None:
+                self._consume_rolling_seed(state=state, seed=seed, outcome="rejected")
+                candidate_verdicts.append(
+                    self._reject(
+                        f"{seed.tf_set}:unsupported_rolling_profile",
+                        features=_seed_state_features(seed=seed, decision_candle=candle),
+                        reject_reasons=(f"{seed.tf_set}:unsupported_rolling_profile",),
+                    )
+                )
+                continue
+            max_confirm = int(profile["max_confirm_candles"])
+            min_confirm = int(profile["min_confirm_candles"])
+            post_seed = _post_seed_ltf_candles(closed_30s=closed_30s, seed=seed, max_confirm=max_confirm)
+            if len(post_seed) < min_confirm:
+                continue
+            snapshot = _build_live_seed_first_snapshot(
+                state=state,
+                seed=seed,
+                closed_1m=closed_1m,
+                decision_time_ms=int(candle.close_time_ms),
+            )
+            verdict = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=tuple(_to_decision_candle(item) for item in post_seed))
+            live_decision = self._live_decision_from_core_verdict(
+                verdict=verdict,
+                seed=seed,
+                post_seed=post_seed,
+                decision_candle=candle,
+            )
+            if verdict.verdict == "selected":
+                self._consume_rolling_seed(state=state, seed=seed, outcome="selected")
+                return live_decision
+            if verdict.verdict == "rejected" and len(post_seed) >= max_confirm:
+                self._consume_rolling_seed(state=state, seed=seed, outcome="rejected")
+                candidate_verdicts.append(live_decision)
+                continue
+            if verdict.verdict == "data_dependency_not_ready":
+                state.rolling_dependency_seed_count += 1
+                candidate_verdicts.append(live_decision)
+                continue
+            candidate_verdicts.append(live_decision)
+
+        if not candidate_verdicts:
+            return None
+        # Prefer explicit data dependencies over provisional rejects while a seed
+        # is still within its confirmation horizon.  Otherwise return the latest
+        # final reject so artifacts show why the seed expired.
+        for item in candidate_verdicts:
+            if item.verdict == "data_dependency_not_ready":
+                return item
+        return candidate_verdicts[-1]
+
+    def _discover_rolling_seeds(self, *, state: SymbolState, decision_candle: Live2Candle) -> None:
+        if decision_candle.timeframe_ms != 30_000:
+            return
+        if state.rolling_last_seed_discovery_close_ms == int(decision_candle.close_time_ms):
+            return
+        closed_30s = _closed_candles_for_timeframe(state=state, timeframe_ms=30_000)
+        for profile in LIVE2_ROLLING_RUNNER_PROFILES:
+            tf_set = str(profile["tf_set"])
+            htf_candles = int(profile["htf_candles"])
+            profile_rank = int(profile["profile_rank"])
+            seed_candles = _closed_segment_before(
+                candles=closed_30s,
+                end_open_ms=int(decision_candle.close_time_ms),
+                count=htf_candles,
+                timeframe_ms=30_000,
+            )
+            if seed_candles is None:
+                continue
+            seed_key = f"{tf_set}:{int(seed_candles[0].open_time_ms)}:{int(seed_candles[-1].close_time_ms)}"
+            if seed_key in state.rolling_consumed_seed_keys or seed_key in state.rolling_pending_seeds:
+                continue
+            state.rolling_pending_seeds[seed_key] = Live2RollingSeedState(
+                seed_key=seed_key,
+                tf_set=tf_set,
+                profile_rank=profile_rank,
+                seed_open_ms=int(seed_candles[0].open_time_ms),
+                seed_close_ms=int(seed_candles[-1].close_time_ms),
+                seed_candles=tuple(seed_candles),
+                created_ms=int(decision_candle.close_time_ms),
+            )
+            state.rolling_discovered_seed_count += 1
+            state.rolling_last_seed_key = seed_key
+            state.rolling_last_seed_open_ms = int(seed_candles[0].open_time_ms)
+            state.rolling_last_seed_close_ms = int(seed_candles[-1].close_time_ms)
+        state.rolling_last_seed_discovery_close_ms = int(decision_candle.close_time_ms)
+        state.rolling_pending_seed_count = len(state.rolling_pending_seeds)
+
+    def _consume_rolling_seed(self, *, state: SymbolState, seed: Live2RollingSeedState, outcome: str) -> None:
+        state.rolling_pending_seeds.pop(seed.seed_key, None)
+        state.rolling_consumed_seed_keys.add(seed.seed_key)
+        # Keep the in-memory consumed set bounded.  The key contains timestamps;
+        # old keys are irrelevant once they are outside the closed candle ring.
+        if len(state.rolling_consumed_seed_keys) > 2048:
+            state.rolling_consumed_seed_keys = set(sorted(state.rolling_consumed_seed_keys)[-1024:])
+        state.rolling_consumed_seed_count += 1
+        state.rolling_pending_seed_count = len(state.rolling_pending_seeds)
+        if outcome == "selected":
+            state.rolling_selected_seed_count += 1
+        elif outcome == "rejected":
+            state.rolling_rejected_seed_count += 1
+
+    def _live_decision_from_core_verdict(
+        self,
+        *,
+        verdict,
+        seed: Live2RollingSeedState,
+        post_seed: tuple[Live2Candle, ...],
+        decision_candle: Live2Candle,
+    ) -> Live2SignalDecision:
+        features: dict[str, object] = {
+            "feature_mode": "rolling_seed_first_core",
+            "rolling_runner_contract": ROLLING_DECISION_CONTRACT_ID,
+            "rolling_runner_model": "rolling_htf_seed_first_ltf_confirm_v1",
+            "rolling_runner_core_version": ROLLING_DECISION_CORE_VERSION,
+            "rolling_runner_tf_set": seed.tf_set,
+            "rolling_runner_profile_rank": seed.profile_rank,
+            "rolling_seed_key": seed.seed_key,
+            "rolling_seed_open_ms": seed.seed_open_ms,
+            "rolling_seed_close_ms": seed.seed_close_ms,
+            "rolling_pending_seed_count": len(post_seed),
+            "confirm_start_ms": int(post_seed[0].open_time_ms) if post_seed else None,
+            "confirm_end_ms": int(post_seed[-1].close_time_ms) if post_seed else None,
+            "confirmation_candles": len(post_seed),
+            "decision_time_ms": int(decision_candle.close_time_ms),
+            **dict(verdict.features),
+        }
+        state_snapshot = verdict.snapshot
+        if state_snapshot.ltf_confirm is not None:
+            features["confirm_start_ms"] = int(state_snapshot.ltf_confirm.confirm_start_ms)
+            features["confirm_end_ms"] = int(state_snapshot.ltf_confirm.confirm_end_ms)
+            features["confirmation_candles"] = len(state_snapshot.ltf_confirm.confirm_candles)
+        if verdict.verdict == "selected":
+            category_id = str(verdict.category_id or features.get("rolling_runner_category_id", "") or "")
+            self._total_selected += 1
+            self._selected_by_category[category_id] += 1
+            dependency_reasons = tuple(_dependency_reason(item) for item in verdict.dependencies)
+            reject_reasons = tuple(item.reason for item in verdict.rejects)
+            self._last_dependency_reasons = dependency_reasons
+            self._last_reject_reasons = reject_reasons
+            return Live2SignalDecision(
+                verdict="selected",
+                reason="rolling_seed_first_core_selected",
+                category_id=category_id,
+                category_rank=rolling_category_priority_rank(category_id),
+                signal_entry_price=verdict.signal_entry_price,
+                initial_stop_at_decision=verdict.initial_stop_price,
+                initial_risk_pct_at_decision=_float_or_none(features.get("initial_risk_pct_at_decision")),
+                tp1_at_decision=verdict.tp1_price,
+                features={
+                    **features,
+                    "category_contract": ROLLING_DECISION_CONTRACT_ID,
+                    "category_label": category_id,
+                    "signal_dependency_reasons": dependency_reasons,
+                    "signal_reject_reasons": reject_reasons,
+                },
+                dependency_reasons=dependency_reasons,
+                reject_reasons=reject_reasons,
+            )
+        if verdict.verdict == "data_dependency_not_ready":
+            dependency_reasons = tuple(_dependency_reason(item) for item in verdict.dependencies) or tuple(item.reason for item in verdict.rejects) or ("core_data_dependency_not_ready",)
+            return self._data_dependency_not_ready(
+                dependency_reasons=dependency_reasons,
+                reject_reasons=tuple(item.reason for item in verdict.rejects),
+                features=features,
+            )
+        reject_reasons = tuple(item.reason for item in verdict.rejects) or ("core_rejected",)
+        return self._reject("; ".join(reject_reasons), features=features, reject_reasons=reject_reasons)
 
     def evaluate(self, *, state: SymbolState, candle: Live2Candle, actionable_reason: str) -> Live2SignalDecision:
         self._total_evaluations += 1
@@ -1816,6 +2015,120 @@ def _rolling_runner_category_setup(*, state: SymbolState, decision_candle: Live2
         **selected,
         "rolling_runner_dependency_reasons": tuple(dependency_reasons),
         "rolling_runner_reject_reasons": tuple(reject_reasons),
+    }
+
+
+def _closed_candles_for_timeframe(*, state: SymbolState, timeframe_ms: int) -> tuple[Live2Candle, ...]:
+    ring = state.candle_book.rings.get(int(timeframe_ms))
+    return () if ring is None else ring.closed_snapshot()
+
+
+def _rolling_profile_by_tf_set(tf_set: str) -> dict[str, object] | None:
+    for profile in LIVE2_ROLLING_RUNNER_PROFILES:
+        if str(profile.get("tf_set", "")) == str(tf_set):
+            return profile
+    return None
+
+
+def _post_seed_ltf_candles(
+    *,
+    closed_30s: tuple[Live2Candle, ...],
+    seed: Live2RollingSeedState,
+    max_confirm: int,
+) -> tuple[Live2Candle, ...]:
+    candles = tuple(item for item in closed_30s if int(item.open_time_ms) >= int(seed.seed_close_ms))
+    if not candles:
+        return ()
+    if int(candles[0].open_time_ms) != int(seed.seed_close_ms):
+        return ()
+    limited = candles[: max(0, int(max_confirm))]
+    expected = tuple(int(seed.seed_close_ms) + idx * 30_000 for idx in range(len(limited)))
+    if tuple(int(item.open_time_ms) for item in limited) != expected:
+        return ()
+    return tuple(limited)
+
+
+def _to_decision_candle(candle: Live2Candle) -> DecisionCandle:
+    return DecisionCandle(
+        open_time_ms=int(candle.open_time_ms),
+        close_time_ms=int(candle.close_time_ms),
+        open=float(candle.open),
+        high=float(candle.high),
+        low=float(candle.low),
+        close=float(candle.close),
+        quote_volume=float(candle.quote_volume),
+        number_of_trades=int(candle.number_of_trades),
+        taker_buy_quote_volume=float(candle.taker_buy_quote_volume),
+        source=f"{candle.first_source}->{candle.last_source}" if candle.first_source != candle.last_source else candle.last_source,
+        source_status="ok",
+    )
+
+
+def _build_live_seed_first_snapshot(
+    *,
+    state: SymbolState,
+    seed: Live2RollingSeedState,
+    closed_1m: tuple[Live2Candle, ...],
+    decision_time_ms: int,
+) -> DecisionSnapshot:
+    profile = _rolling_profile_by_tf_set(seed.tf_set)
+    htf_timeframe_ms = int(profile["htf_timeframe_ms"]) if profile is not None else 0
+    context = _aggregate_1m_history_to_htf(closed_1m=closed_1m, htf_timeframe_ms=htf_timeframe_ms, before_ms=int(seed.seed_open_ms)) if htf_timeframe_ms > 0 else ()
+    dependencies: list[DataDependency] = []
+    if not context:
+        dependencies.append(
+            DataDependency(
+                name="pre_seed_context",
+                status="missing",
+                reason="live_rolling_1m_context_not_ready",
+                asof_ms=int(seed.seed_open_ms),
+                source="live2_1m_candle_ring",
+            )
+        )
+    return DecisionSnapshot(
+        symbol=state.symbol,
+        tf_set=seed.tf_set,
+        decision_time_ms=int(decision_time_ms),
+        source="live",
+        rolling_seed=RollingSeedSnapshot(
+            tf_set=seed.tf_set,
+            seed_open_ms=int(seed.seed_open_ms),
+            seed_close_ms=int(seed.seed_close_ms),
+            seed_candles=tuple(_to_decision_candle(item) for item in seed.seed_candles),
+            pre_seed_context_candles=tuple(_to_decision_candle(item) for item in context),
+        ),
+        source_labels={
+            "adapter": "live2_seed_state_machine",
+            "candle_source": "binance_futures_aggtrade_ws_or_startup_rest_ring",
+            "context_source": "live2_closed_1m_ring",
+        },
+        features={
+            "live_mark_status": state.mark_status,
+            "live_oi_status": state.oi_status,
+            "live_current_oi_status": state.current_oi_status,
+            "live_prior_context_status": state.prior_context_status,
+        },
+        dependencies=tuple(dependencies),
+    )
+
+
+def _dependency_reason(dependency: DataDependency) -> str:
+    if dependency.reason:
+        return f"{dependency.name}:{dependency.reason}"
+    return f"{dependency.name}:{dependency.status}"
+
+
+def _seed_state_features(*, seed: Live2RollingSeedState, decision_candle: Live2Candle) -> dict[str, object]:
+    return {
+        "feature_mode": "rolling_seed_first_state_machine",
+        "rolling_runner_contract": ROLLING_DECISION_CONTRACT_ID,
+        "rolling_runner_core_version": ROLLING_DECISION_CORE_VERSION,
+        "rolling_runner_tf_set": seed.tf_set,
+        "rolling_runner_profile_rank": seed.profile_rank,
+        "rolling_seed_key": seed.seed_key,
+        "rolling_seed_open_ms": seed.seed_open_ms,
+        "rolling_seed_close_ms": seed.seed_close_ms,
+        "decision_time_ms": int(decision_candle.close_time_ms),
     }
 
 

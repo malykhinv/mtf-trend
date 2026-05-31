@@ -1,3 +1,26 @@
+## 2026-05-31 - P469 live2 rolling seed state machine
+
+Status: PROPOSED. Current commit: UNKNOWN. Applies after P468.
+
+Changes:
+
+- Live2 now stores pending rolling HTF seeds per symbol and evaluates post-seed 30s candles through the shared `rolling_htf_seed_first_ltf_confirm_v1` core.
+- The live deadline path no longer requires the current 30s bucket to cross the old actionable quote/trade/return gate before a pending seed can be evaluated. Quiet post-seed buckets can advance the first-confirm search.
+- Selected live signals export seed/confirm timestamps from the core (`rolling_seed_open_ms`, `rolling_seed_close_ms`, `confirm_start_ms`, `confirm_end_ms`) and use `confirm_end_ms` as the signal timestamp for entry-guard freshness.
+- Existing execution, entry guard, portfolio/risk gates, TP/SL, thresholds and order placement are unchanged.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+This changes live orchestration from confirm-backward to seed-first. Selected counts can change because live now evaluates the same chronological contract intended for backtest parity. Legacy live signal helpers remain in the file until P470/P471 cleanup, but the deadline hot path calls the new seed-first tick evaluator.
+```
+
 ## 2026-05-31 - P468 backtest seed-first core adapter
 
 Status: PROPOSED. Current commit: UNKNOWN. Applies after P467.

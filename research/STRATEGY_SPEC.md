@@ -1,3 +1,16 @@
+## Rolling live/backtest decision contract - P469 update
+
+Live and backtest must evaluate the same chronological signal contract:
+
+```text
+rolling HTF seed closes
+→ first post-seed LTF confirmation is evaluated
+→ shared core returns selected / rejected / data_dependency_not_ready
+→ portfolio/execution layer decides whether and how to trade
+```
+
+P469 migrates live2 orchestration to this seed-first state machine. The live adapter may still obtain candles from sockets while the backtest adapter obtains them from REST/aggTrades, but both must normalize into the same `DecisionSnapshot` contract before signal verdicts. Current patch does not change thresholds or exits.
+
 ## 2026-05-28 - Targeted subminute data contract for runner discovery
 
 For `run-htf-ltf-runner-discovery`, subminute profiles must not require rebuilding the whole universe at 1s. The valid data path is targeted: identify stricter HTF anomaly seeds from closed HTF candles, fetch true aggTrade 1s only from the HTF anomaly start through the maximum entry-confirmation and position-follow horizon, materialize the requested LTF, and then run strict no-gap replay. This is a data-availability step, not a future-label or entry filter. The default seed gate is cost-control and research hygiene, not a proven live category.

@@ -647,10 +647,6 @@ class Live2DeadlineEngine:
             )
             return None
         return_pct = _candle_return_pct(candle)
-        actionable_reason = self._actionable_reason(candle=candle, return_pct=return_pct)
-        if actionable_reason is None:
-            self._apply_non_actionable(state, candle=candle, now_ms=candidate_started_ms)
-            return None
         deadline_ms = candle.close_time_ms + self.config.decision_deadline_ms
         pre_signal_latency_ms = candidate_started_ms - candle.close_time_ms
         signal_decision: Live2SignalDecision | None = None
@@ -662,6 +658,7 @@ class Live2DeadlineEngine:
             "cycle_now_ms_argument": now_ms,
             "bucket_close_to_candidate_start_ms": max(0, pre_signal_latency_ms),
             "decision_deadline_ms": deadline_ms,
+            "decision_model": "rolling_htf_seed_first_ltf_confirm_v1",
         }
         verdict: str
         reason: str
@@ -675,39 +672,19 @@ class Live2DeadlineEngine:
             verdict = "flow_freshness_reject"
             reason = "latest_closed_bucket_trade_flow_did_not_hold_into_decision_deadline"
         else:
-            prefilter_started_at_ms = utc_now_ms()
-            entry_attempt_timing["baseline_free_prefilter_started_at_ms"] = prefilter_started_at_ms
-            signal_decision = self.signal_engine.evaluate_baseline_free_prefilter(
-                state=state,
-                candle=candle,
-                actionable_reason=actionable_reason,
-            )
-            prefilter_finished_at_ms = utc_now_ms()
-            entry_attempt_timing["baseline_free_prefilter_finished_at_ms"] = prefilter_finished_at_ms
-            entry_attempt_timing["baseline_free_prefilter_duration_ms"] = max(0, prefilter_finished_at_ms - prefilter_started_at_ms)
-            entry_attempt_timing["baseline_free_prefilter_rejected"] = signal_decision is not None
+            signal_started_at_ms = utc_now_ms()
+            entry_attempt_timing["signal_evaluate_started_at_ms"] = signal_started_at_ms
+            signal_decision = self.signal_engine.evaluate_seed_first_tick(state=state, candle=candle)
+            signal_finished_at_ms = utc_now_ms()
+            entry_attempt_timing["signal_evaluate_finished_at_ms"] = signal_finished_at_ms
+            entry_attempt_timing["signal_evaluate_duration_ms"] = max(0, signal_finished_at_ms - signal_started_at_ms)
+            entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
             if signal_decision is None:
-                signal_started_at_ms = utc_now_ms()
-                entry_attempt_timing["signal_evaluate_started_at_ms"] = signal_started_at_ms
-                signal_decision = self.signal_engine.evaluate(
-                    state=state,
-                    candle=candle,
-                    actionable_reason=actionable_reason,
-                )
-                signal_finished_at_ms = utc_now_ms()
-                entry_attempt_timing["signal_evaluate_finished_at_ms"] = signal_finished_at_ms
-                entry_attempt_timing["signal_evaluate_duration_ms"] = max(0, signal_finished_at_ms - signal_started_at_ms)
-                entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
-            else:
-                signal_finished_at_ms = prefilter_finished_at_ms
-                entry_attempt_timing["signal_evaluate_skipped_reason"] = "baseline_free_impossibility_reject"
-                entry_attempt_timing["bucket_close_to_signal_done_ms"] = max(0, signal_finished_at_ms - int(candle.close_time_ms))
+                self._apply_non_actionable(state, candle=candle, now_ms=signal_finished_at_ms)
+                return None
             verdict = signal_decision.verdict
             reason = signal_decision.reason
-            if signal_decision.features.get("feature_mode") != "rolling_baseline_free_prefilter" and signal_finished_at_ms > deadline_ms:
-                # The signal engine may be CPU-heavy.  If it finishes after the live
-                # decision deadline, the result is audit-only: do not pass it to
-                # entry guard/execution as if it were a fresh live signal.
+            if signal_finished_at_ms > deadline_ms:
                 verdict = "deadline_missed"
                 reason = "signal_evaluation_finished_after_decision_deadline"
                 entry_attempt_timing["deadline_missed_stage"] = "after_signal_evaluation"
@@ -715,10 +692,12 @@ class Live2DeadlineEngine:
             elif signal_decision.verdict == "selected":
                 guard_started_at_ms = utc_now_ms()
                 entry_attempt_timing["entry_guard_started_at_ms"] = guard_started_at_ms
+                signal_timestamp_ms = int(signal_decision.features.get("confirm_end_ms") or candle.close_time_ms)
+                entry_attempt_timing["signal_timestamp_ms"] = signal_timestamp_ms
                 entry_guard_result = self.entry_guard.evaluate(
                     state=state,
                     signal_decision=signal_decision,
-                    signal_timestamp_ms=candle.close_time_ms,
+                    signal_timestamp_ms=signal_timestamp_ms,
                     now_ms=guard_started_at_ms,
                 )
                 guard_finished_at_ms = utc_now_ms()
@@ -744,8 +723,8 @@ class Live2DeadlineEngine:
                     entry_attempt_timing["runtime_gate_check_finished_at_ms"] = runtime_gate_finished_at_ms
                     entry_attempt_timing["runtime_gate_check_duration_ms"] = max(0, runtime_gate_finished_at_ms - runtime_gate_started_at_ms)
                     entry_attempt_timing["runtime_gate_allowed"] = runtime_gate_allowed
-                    pre_execution_age_ms = max(0, runtime_gate_finished_at_ms - int(candle.close_time_ms))
-                    entry_attempt_timing["bucket_close_to_pre_execution_ms"] = pre_execution_age_ms
+                    pre_execution_age_ms = max(0, runtime_gate_finished_at_ms - signal_timestamp_ms)
+                    entry_attempt_timing["bucket_close_to_pre_execution_ms"] = max(0, runtime_gate_finished_at_ms - int(candle.close_time_ms))
                     if runtime_gate_finished_at_ms > deadline_ms:
                         verdict = "deadline_missed"
                         reason = "runtime_gate_check_finished_after_decision_deadline"
