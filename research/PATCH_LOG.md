@@ -10308,3 +10308,33 @@ Risk:
 ```text
 If an older intermediate patch stack still creates trade rows without `runner_candidate_category`, portfolio simulation will now fail visibly via missing required columns instead of silently recomputing categories after the fact. That is intentional: signal categories must come from the shared core only.
 ```
+
+## 2026-05-31 - P475 normalize rolling context parity
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Fix-up patch after P465-P472/P474. It makes the shared seed-first contract actually source-neutral by using rolling HTF context from the same LTF substrate on both adapters, removes the remaining backtest pre-core HTF gate, emits per-confirm exact-window verdict rows, expires stale live pending seeds, and removes adapter decision time from `snapshot_hash`.
+
+Changes:
+
+- `PumpDecisionCore` core version becomes `p475_rolling_context_parity`.
+- `snapshot_hash` no longer includes `decision_time_ms`; adapter time remains in ledgers only.
+- Adds `evaluate_ltf_confirm_sequence_after_seed(...)` so every exact confirm window can be written to rejected/decision ledgers.
+- Validates pre-seed context as rolling HTF-width windows stepping by the LTF interval, not calendar HTF candles.
+- HTF/LTF discovery builds pre-seed context from rolling LTF-derived HTF windows and no longer filters seeds by `anomaly_gate` before the core.
+- Live2 builds the same rolling HTF context from closed 30s candles and expires pending seeds after the max confirm window instead of letting dependency seeds linger forever.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python research_tools/pump_decision_core.py
+python -m research_tools.decision_contract_guard
+python -m research_tools.decision_parity_join --help
+```
+
+Risk:
+
+```text
+Backtest candidate/decision ledgers can grow materially because non-anomaly rolling seeds are now passed to the shared core instead of being silently skipped by the adapter. That is intentional for parity/audit, but broad runs may need artifact size monitoring.
+```

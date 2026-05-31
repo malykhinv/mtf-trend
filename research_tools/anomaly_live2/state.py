@@ -259,6 +259,7 @@ class SymbolState:
     rolling_consumed_seed_count: int = 0
     rolling_selected_seed_count: int = 0
     rolling_rejected_seed_count: int = 0
+    rolling_expired_seed_count: int = 0
     rolling_dependency_seed_count: int = 0
     candle_timeframes_ms: tuple[int, ...] = LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS
     max_closed_candles: int = LIVE2_DEFAULT_MAX_CLOSED_CANDLES

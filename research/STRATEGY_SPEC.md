@@ -1002,7 +1002,7 @@ Live entries are based on the same family as the rolling runner discovery backte
 ```text
 closed 30s candle
 -> rolling HTF seed from closed 30s candles, 5m/30s or 3m/30s
--> baseline/dormancy/pregrowth from event-rolling HTF-width chunks built from closed 1m candles fully before the rolling HTF window
+-> baseline/dormancy/pregrowth from rolling HTF-width chunks built from the same closed LTF substrate fully before the rolling HTF seed
 -> first closed 30s confirmation window that matches fixed C/A/S priority
 -> live entry guard
 -> actual exchange fill
@@ -1028,6 +1028,12 @@ Rolling baseline/dormancy context may be maintained from explicit official Binan
 ## Backtest seed-first decision adapter
 
 P468 note: HTF/LTF discovery selected signals must be produced by `PumpDecisionCore.evaluate_first_ltf_confirm_after_seed(...)`. The backtest may still apply next-LTF-open execution, adverse slippage, fees, portfolio overlap filtering, and exit simulation after the core verdict, but it must not maintain a second LTF confirmation/category decision implementation for selected signals. Core decisions are auditable in `htf_ltf_runner_decision_ledger.csv`; rejected exact seed/confirm attempts and data dependencies must be visible in artifacts.
+
+## Rolling context parity contract
+
+For seed-first parity, pre-seed context is rolling-based too. A rolling seed that starts between calendar HTF boundaries must not use calendar HTF context in backtest and event-rolling context in live. Both adapters must build `pre_seed_context_candles` as HTF-width windows stepped by the LTF interval, fully closed before `seed_open_ms`, from their normalized LTF substrate. Insufficient context is a `data_dependency_not_ready` verdict from the shared core, not an adapter-side silent skip.
+
+Backtest adapters must not reject seeds by HTF anomaly thresholds before the shared core. They may use broad mathematical supersets only for data-fetch planning, but the decision ledger must make core-level selected/rejected/dependency outcomes visible.
 
 ## Decision parity ledger contract
 

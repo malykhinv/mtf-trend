@@ -110,7 +110,6 @@ class Live2SignalEngine:
         self._total_evaluations += 1
         self._discover_rolling_seeds(state=state, decision_candle=candle)
         closed_30s = _closed_candles_for_timeframe(state=state, timeframe_ms=30_000)
-        closed_1m = _closed_candles_for_timeframe(state=state, timeframe_ms=60_000)
         if not state.rolling_pending_seeds:
             self._last_dependency_reasons = ()
             self._last_reject_reasons = ()
@@ -132,12 +131,26 @@ class Live2SignalEngine:
             max_confirm = int(profile["max_confirm_candles"])
             min_confirm = int(profile["min_confirm_candles"])
             post_seed = _post_seed_ltf_candles(closed_30s=closed_30s, seed=seed, max_confirm=max_confirm)
+            expiry_ms = int(seed.seed_close_ms) + max_confirm * 30_000
             if len(post_seed) < min_confirm:
+                if int(candle.close_time_ms) >= expiry_ms:
+                    self._consume_rolling_seed(state=state, seed=seed, outcome="expired")
+                    candidate_verdicts.append(
+                        self._data_dependency_not_ready(
+                            dependency_reasons=(f"{seed.tf_set}:post_seed_ltf_expired_before_min_confirm",),
+                            reject_reasons=(),
+                            features={
+                                **_seed_state_features(seed=seed, decision_candle=candle),
+                                "post_seed_ltf_candles_seen": len(post_seed),
+                                "post_seed_ltf_expiry_ms": expiry_ms,
+                            },
+                        )
+                    )
                 continue
             snapshot = _build_live_seed_first_snapshot(
                 state=state,
                 seed=seed,
-                closed_1m=closed_1m,
+                closed_30s=closed_30s,
                 decision_time_ms=int(candle.close_time_ms),
             )
             verdict = evaluate_first_ltf_confirm_after_seed(
@@ -159,6 +172,8 @@ class Live2SignalEngine:
                 continue
             if verdict.verdict == "data_dependency_not_ready":
                 state.rolling_dependency_seed_count += 1
+                if int(candle.close_time_ms) >= expiry_ms:
+                    self._consume_rolling_seed(state=state, seed=seed, outcome="expired")
                 candidate_verdicts.append(live_decision)
                 continue
             candidate_verdicts.append(live_decision)
@@ -218,6 +233,8 @@ class Live2SignalEngine:
             state.rolling_selected_seed_count += 1
         elif outcome == "rejected":
             state.rolling_rejected_seed_count += 1
+        elif outcome == "expired":
+            state.rolling_expired_seed_count += 1
 
     def _live_decision_from_core_verdict(
         self,
@@ -418,13 +435,13 @@ def _build_live_seed_first_snapshot(
     *,
     state: SymbolState,
     seed: Live2RollingSeedState,
-    closed_1m: tuple[Live2Candle, ...],
+    closed_30s: tuple[Live2Candle, ...],
     decision_time_ms: int,
 ) -> DecisionSnapshot:
     profile = _rolling_profile_by_tf_set(seed.tf_set)
     htf_timeframe_ms = int(profile["htf_timeframe_ms"]) if profile is not None else 0
     context = (
-        _aggregate_1m_history_to_htf(closed_1m=closed_1m, htf_timeframe_ms=htf_timeframe_ms, before_ms=int(seed.seed_open_ms))
+        _aggregate_ltf_history_to_rolling_htf(closed_ltf=closed_30s, htf_timeframe_ms=htf_timeframe_ms, ltf_timeframe_ms=30_000, before_ms=int(seed.seed_open_ms))
         if htf_timeframe_ms > 0
         else ()
     )
@@ -434,9 +451,9 @@ def _build_live_seed_first_snapshot(
             DataDependency(
                 name="pre_seed_context",
                 status="missing",
-                reason="live_rolling_1m_context_not_ready",
+                reason="live_rolling_ltf_context_not_ready",
                 asof_ms=int(seed.seed_open_ms),
-                source="live2_1m_candle_ring",
+                source="live2_30s_candle_ring",
             )
         )
     return DecisionSnapshot(
@@ -454,7 +471,7 @@ def _build_live_seed_first_snapshot(
         source_labels={
             "adapter": "live2_seed_first_core_adapter",
             "candle_source": "binance_futures_aggtrade_ws_or_startup_rest_ring",
-            "context_source": "live2_closed_1m_ring",
+            "context_source": "live2_closed_30s_rolling_htf_ring",
         },
         features={
             "live_mark_status": state.mark_status,
@@ -535,28 +552,30 @@ def _aggregate_candles_to_live2_candle(*, candles: tuple[Live2Candle, ...], time
     )
 
 
-def _aggregate_1m_history_to_htf(*, closed_1m: tuple[Live2Candle, ...], htf_timeframe_ms: int, before_ms: int) -> tuple[Live2Candle, ...]:
-    """Build event-rolling HTF context fully closed before rolling HTF."""
+def _aggregate_ltf_history_to_rolling_htf(
+    *,
+    closed_ltf: tuple[Live2Candle, ...],
+    htf_timeframe_ms: int,
+    ltf_timeframe_ms: int,
+    before_ms: int,
+) -> tuple[Live2Candle, ...]:
+    """Build rolling HTF context from the same closed LTF substrate as seeds."""
 
-    group_size = htf_timeframe_ms // 60_000
-    if group_size <= 0 or len(closed_1m) < group_size:
+    group_size = htf_timeframe_ms // ltf_timeframe_ms
+    if group_size <= 0 or len(closed_ltf) < group_size:
         return ()
-    end = 0
-    for idx in range(len(closed_1m) - 1, -1, -1):
-        if int(closed_1m[idx].close_time_ms) <= int(before_ms):
-            end = idx + 1
-            break
-    if end < group_size:
+    eligible = tuple(item for item in closed_ltf if int(item.close_time_ms) <= int(before_ms))
+    if len(eligible) < group_size:
         return ()
-    groups_reversed: list[Live2Candle] = []
-    while end >= group_size:
-        chunk = tuple(closed_1m[end - group_size:end])
+    windows: list[Live2Candle] = []
+    for end in range(group_size, len(eligible) + 1):
+        chunk = tuple(eligible[end - group_size:end])
         first_open = int(chunk[0].open_time_ms)
-        if any(int(item.open_time_ms) != first_open + offset * 60_000 for offset, item in enumerate(chunk)):
-            break
-        groups_reversed.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
-        end -= group_size
-    return tuple(reversed(groups_reversed))
+        expected = tuple(first_open + offset * int(ltf_timeframe_ms) for offset in range(group_size))
+        if tuple(int(item.open_time_ms) for item in chunk) != expected:
+            continue
+        windows.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
+    return tuple(windows)
 
 
 def _float_or_none(value: object) -> float | None:

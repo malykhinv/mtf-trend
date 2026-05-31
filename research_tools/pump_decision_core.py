@@ -16,7 +16,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 
 ROLLING_DECISION_CONTRACT_ID = "rolling_htf_seed_first_ltf_confirm_v1"
-ROLLING_DECISION_CORE_VERSION = "p467_seed_first_core"
+ROLLING_DECISION_CORE_VERSION = "p475_rolling_context_parity"
 
 DecisionSource = Literal["live", "backtest", "parity_replay", "test"]
 DecisionVerdictType = Literal["selected", "rejected", "data_dependency_not_ready"]
@@ -412,7 +412,6 @@ def _snapshot_hash_payload(snapshot: DecisionSnapshot) -> dict[str, object]:
         "core_version": snapshot.core_version,
         "symbol": snapshot.symbol,
         "tf_set": snapshot.tf_set,
-        "decision_time_ms": int(snapshot.decision_time_ms),
         "rolling_seed": None
         if seed is None
         else {
@@ -461,41 +460,42 @@ def _canonical_number(value: object) -> float | int | None:
 # Seed-first core
 
 
-def evaluate_first_ltf_confirm_after_seed(
+def evaluate_ltf_confirm_sequence_after_seed(
     snapshot: DecisionSnapshot,
     *,
     post_seed_ltf_candles: Sequence[DecisionCandle],
-) -> DecisionVerdict:
-    """Find the first selected LTF confirmation after the supplied seed.
+) -> tuple[DecisionVerdict, ...]:
+    """Evaluate each exact post-seed LTF confirm window in order.
 
-    The supplied `snapshot` must contain the rolling HTF seed and pre-seed
-    context, but `snapshot.ltf_confirm` is ignored. This helper is the pure
-    source-neutral form of the intended orchestration:
-
-    rolling HTF seed -> first LTF confirm after seed -> selected/rejected.
+    One returned verdict corresponds to one exact confirm candidate
+    (min_confirm..max_confirm) or to an upfront data dependency before any exact
+    confirm can be built. This is the source-neutral audit primitive used by
+    backtest rejected-exact-window artifacts and live parity debugging.
     """
 
     spec = ROLLING_PROFILE_SPECS.get(snapshot.tf_set)
     if spec is None:
-        return _rejected(snapshot, "rolling_htf_seed", "unsupported_tf_set", {"tf_set": snapshot.tf_set})
+        return (_rejected(snapshot, "rolling_htf_seed", "unsupported_tf_set", {"tf_set": snapshot.tf_set}),)
     seed = snapshot.rolling_seed
     if seed is None:
-        return _dependency_not_ready(snapshot, "rolling_seed_missing", ())
+        return (_dependency_not_ready(snapshot, "rolling_seed_missing", ()),)
     ltf_ms = spec.ltf_seconds * 1000
     ordered = tuple(sorted(post_seed_ltf_candles, key=lambda item: item.open_time_ms))
     if not ordered:
-        return _dependency_not_ready(snapshot, "post_seed_ltf_missing", ())
+        return (_dependency_not_ready(snapshot, "post_seed_ltf_missing", ()),)
     if int(ordered[0].open_time_ms) != int(seed.seed_close_ms):
-        return _dependency_not_ready(
-            snapshot,
-            "post_seed_ltf_not_contiguous_from_seed_close",
-            (DataDependency(name="post_seed_ltf", status="gap", reason="first_ltf_open_not_seed_close", asof_ms=seed.seed_close_ms),),
+        return (
+            _dependency_not_ready(
+                snapshot,
+                "post_seed_ltf_not_contiguous_from_seed_close",
+                (DataDependency(name="post_seed_ltf", status="gap", reason="first_ltf_open_not_seed_close", asof_ms=seed.seed_close_ms),),
+            ),
         )
     continuity = _continuity_dependency("post_seed_ltf", ordered, expected_step_ms=ltf_ms)
     if continuity is not None:
-        return _dependency_not_ready(snapshot, continuity.reason or "post_seed_ltf_gap", (continuity,))
+        return (_dependency_not_ready(snapshot, continuity.reason or "post_seed_ltf_gap", (continuity,)),)
 
-    collected_rejects: list[DecisionReject] = []
+    verdicts: list[DecisionVerdict] = []
     max_count = min(spec.max_confirm_candles, len(ordered))
     for confirm_count in range(spec.min_confirm_candles, max_count + 1):
         confirm = tuple(ordered[:confirm_count])
@@ -517,24 +517,41 @@ def evaluate_first_ltf_confirm_after_seed(
             core_version=snapshot.core_version,
         )
         verdict = evaluate_seed_first(candidate)
-        if verdict.verdict == "selected":
-            return verdict
-        if verdict.verdict == "data_dependency_not_ready":
-            return verdict
-        collected_rejects.extend(verdict.rejects)
+        verdicts.append(verdict)
+        if verdict.verdict in ("selected", "data_dependency_not_ready"):
+            break
+    return tuple(verdicts)
 
+
+def evaluate_first_ltf_confirm_after_seed(
+    snapshot: DecisionSnapshot,
+    *,
+    post_seed_ltf_candles: Sequence[DecisionCandle],
+) -> DecisionVerdict:
+    """Find the first selected LTF confirmation after the supplied seed."""
+
+    verdicts = evaluate_ltf_confirm_sequence_after_seed(snapshot, post_seed_ltf_candles=post_seed_ltf_candles)
+    if not verdicts:
+        return _dependency_not_ready(snapshot, "post_seed_ltf_missing", ())
+    for verdict in verdicts:
+        if verdict.verdict in ("selected", "data_dependency_not_ready"):
+            return verdict
+    last = verdicts[-1]
     return DecisionVerdict(
         verdict="rejected",
         snapshot=snapshot,
-        rejects=(DecisionReject(stage="ltf_confirm", reason="rolling_profile_no_category_qualified_confirm"), *tuple(collected_rejects[-8:])),
+        rejects=(
+            DecisionReject(stage="ltf_confirm", reason="rolling_profile_no_category_qualified_confirm"),
+            *tuple(reject for verdict in verdicts for reject in verdict.rejects)[-8:],
+        ),
         features={
             "tf_set": snapshot.tf_set,
-            "checked_confirm_candles": max_count,
+            "checked_confirm_candles": len(verdicts),
+            "last_confirm_end_ms": last.snapshot.ltf_confirm.confirm_end_ms if last.snapshot.ltf_confirm is not None else None,
             "snapshot_hash": decision_snapshot_hash(snapshot),
             "snapshot_match_key": decision_snapshot_match_key(snapshot),
         },
     )
-
 
 def evaluate_seed_first(snapshot: DecisionSnapshot) -> DecisionVerdict:
     """Evaluate one exact rolling-seed + post-seed-confirm snapshot.
@@ -957,7 +974,9 @@ def _validate_pre_seed_context(seed: RollingSeedSnapshot, spec: RollingProfileSp
         return DataDependency(name="pre_seed_context", status="missing", reason="baseline_history_not_ready", asof_ms=seed.seed_open_ms)
     if context[-1].close_time_ms > seed.seed_open_ms:
         return DataDependency(name="pre_seed_context", status="error", reason="context_overlaps_seed", asof_ms=seed.seed_open_ms)
-    return _continuity_dependency("pre_seed_context", context, expected_step_ms=spec.htf_seconds * 1000)
+    if context[-1].close_time_ms != seed.seed_open_ms:
+        return DataDependency(name="pre_seed_context", status="gap", reason="rolling_context_does_not_end_at_seed_open", asof_ms=seed.seed_open_ms)
+    return _rolling_context_dependency("pre_seed_context", context, window_width_ms=spec.htf_seconds * 1000, expected_step_ms=spec.ltf_seconds * 1000)
 
 
 def _validate_confirm(seed: RollingSeedSnapshot, confirm: LtfConfirmSnapshot, spec: RollingProfileSpec) -> DataDependency | None:
@@ -973,6 +992,31 @@ def _validate_confirm(seed: RollingSeedSnapshot, confirm: LtfConfirmSnapshot, sp
     if count > spec.max_confirm_candles:
         return DataDependency(name="ltf_confirm", status="error", reason="confirm_candle_count_above_max")
     return _continuity_dependency("ltf_confirm", confirm.confirm_candles, expected_step_ms=spec.ltf_seconds * 1000)
+
+
+def _rolling_context_dependency(
+    name: str,
+    candles: tuple[DecisionCandle, ...],
+    *,
+    window_width_ms: int,
+    expected_step_ms: int,
+) -> DataDependency | None:
+    if not candles:
+        return DataDependency(name=name, status="missing", reason="empty_candles")
+    ordered = tuple(sorted(candles, key=lambda item: item.open_time_ms))
+    first_open = int(ordered[0].open_time_ms)
+    for idx, candle in enumerate(ordered):
+        if candle.source_status not in ("", "ok"):
+            return DataDependency(name=name, status="degraded", reason=f"source_status:{candle.source_status}", asof_ms=candle.close_time_ms, source=candle.source)
+        if not all(math.isfinite(_finite_float(value)) for value in (candle.open, candle.high, candle.low, candle.close, candle.quote_volume, candle.number_of_trades)):
+            return DataDependency(name=name, status="error", reason="non_finite_candle_value", asof_ms=candle.close_time_ms, source=candle.source)
+        if candle.open <= 0.0 or candle.high <= 0.0 or candle.low <= 0.0 or candle.close <= 0.0:
+            return DataDependency(name=name, status="error", reason="non_positive_ohlc", asof_ms=candle.close_time_ms, source=candle.source)
+        expected_open = first_open + idx * int(expected_step_ms)
+        expected_close = expected_open + int(window_width_ms)
+        if int(candle.open_time_ms) != expected_open or int(candle.close_time_ms) != expected_close:
+            return DataDependency(name=name, status="gap", reason="non_contiguous_rolling_windows", asof_ms=candle.close_time_ms, source=candle.source)
+    return None
 
 
 def _continuity_dependency(name: str, candles: tuple[DecisionCandle, ...], *, expected_step_ms: int) -> DataDependency | None:
@@ -1033,7 +1077,7 @@ def _build_seed_first_core_smoke_snapshot() -> tuple[DecisionSnapshot, tuple[Dec
     start = 1_700_000_000_000
     price = 100.0
     for idx in range(120):
-        ts = start + idx * htf_ms
+        ts = start + idx * ltf_ms
         quote = 100.0
         trades = 100
         open_price = price

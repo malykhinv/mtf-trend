@@ -40,6 +40,7 @@ from research_tools.pump_decision_core import (
     decision_snapshot_hash,
     decision_snapshot_match_key,
     evaluate_first_ltf_confirm_after_seed,
+    evaluate_ltf_confirm_sequence_after_seed,
     rolling_category_priority_rank,
 )
 
@@ -311,8 +312,8 @@ def run_htf_ltf_runner_discovery(
                 for window in windows:
                     if window.get("window_execution_ok") is True:
                         local_entry_window_trade_rows.append(_simulate_no_tp_runner_trade(window, ltf=ltf, config=config))
-                signal, decision_row = _build_first_ltf_signal(candidate, htf=htf, ltf=ltf, oi=oi, config=config)
-                if decision_row is not None:
+                signal, decision_rows_for_candidate = _build_first_ltf_signal(candidate, htf=htf, ltf=ltf, oi=oi, config=config)
+                for decision_row in decision_rows_for_candidate:
                     local_decision_rows.append(decision_row)
                     if decision_row.get("signal_verdict") != "selected" or decision_row.get("backtest_execution_skip_reason"):
                         local_rejected_exact_window_rows.append(decision_row)
@@ -1322,19 +1323,6 @@ def _collect_symbol_candidates(
     horizon_ms = int(config.runner_horizon_minutes) * 60_000
     rows: list[dict[str, object]] = []
 
-    calendar = htf.copy()
-    calendar["timestamp"] = pd.to_numeric(calendar["timestamp"], errors="coerce")
-    calendar = calendar.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp").reset_index(drop=True)
-    if calendar.empty or "quote_volume" not in calendar.columns or "number_of_trades" not in calendar.columns:
-        return [], 0
-    for column in ("open", "high", "low", "close", "quote_volume", "number_of_trades"):
-        calendar[column] = pd.to_numeric(calendar[column], errors="coerce")
-    calendar = calendar.dropna(subset=["timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"]).reset_index(drop=True)
-    if calendar.empty:
-        return [], 0
-    calendar["_quote_volume"] = _numeric_column(calendar, "quote_volume")
-    calendar["_number_of_trades"] = _numeric_column(calendar, "number_of_trades")
-
     rolling = _rolling_htf_from_ltf(ltf, htf_ms=htf_ms, ltf_ms=ltf_ms)
     if rolling.empty:
         return [], 0
@@ -1342,6 +1330,8 @@ def _collect_symbol_candidates(
     rolling = rolling.dropna(subset=["timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"]).sort_values("timestamp").reset_index(drop=True)
     if rolling.empty:
         return [], 0
+    rolling["_quote_volume"] = _numeric_column(rolling, "quote_volume")
+    rolling["_number_of_trades"] = _numeric_column(rolling, "number_of_trades")
 
     if allowed_timestamps_ms is not None:
         pair_starts = sorted(int(value) for value in allowed_timestamps_ms)
@@ -1355,11 +1345,8 @@ def _collect_symbol_candidates(
         if rolling.empty:
             return [], 0
 
-    calendar_timestamps = pd.to_numeric(calendar["timestamp"], errors="coerce").astype("int64").to_numpy()
-    calendar_end_timestamps = calendar_timestamps + int(htf_ms)
     max_ltf_timestamp = int(pd.to_numeric(ltf.get("timestamp", pd.Series(dtype=float)), errors="coerce").max()) if not ltf.empty and "timestamp" in ltf.columns else 0
     scanned_rows = 0
-    min_history = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles)
 
     for _, rolling_row in rolling.iterrows():
         ts = int(rolling_row["timestamp"])
@@ -1368,17 +1355,13 @@ def _collect_symbol_candidates(
             # The seed may still be valid, but this cache slice cannot honestly label/replay it yet.
             # The post-entry planner will fetch the full window after the exact seed is found.
             pass
-        # Baseline/dormancy/pregrowth must be strictly before the rolling window.
-        # A calendar HTF candle that overlaps the rolling window is known by seed close,
-        # but it already contains anomaly data and must not contaminate pre-seed context.
-        history_end = int(np.searchsorted(calendar_end_timestamps, ts, side="right"))
-        if history_end < min_history:
-            continue
-        baseline = calendar.iloc[history_end - config.baseline_candles : history_end]
-        dormancy = calendar.iloc[history_end - config.dormancy_candles : history_end]
-        pregrowth = calendar.iloc[history_end - config.pregrowth_candles : history_end]
-        if baseline.empty or dormancy.empty or pregrowth.empty:
-            continue
+        # Baseline/dormancy/pregrowth are rolling HTF windows built from the
+        # same LTF substrate as the seed. Insufficient history is not filtered
+        # here; the shared core emits data_dependency_not_ready in the ledger.
+        rolling_history = rolling.loc[rolling["timestamp"].astype("int64") + int(htf_ms) <= ts].copy()
+        baseline = rolling_history.iloc[-config.baseline_candles:]
+        dormancy = rolling_history.iloc[-config.dormancy_candles:]
+        pregrowth = rolling_history.iloc[-config.pregrowth_candles:]
         scanned_rows += 1
 
         anomaly_open = float(rolling_row["open"])
@@ -1404,14 +1387,22 @@ def _collect_symbol_candidates(
             and trade_ratio >= config.min_htf_trade_ratio
             and htf_return >= config.min_htf_return_pct
         )
-        if not anomaly_gate:
-            continue
 
         pregrowth_features = _pregrowth_features(pregrowth)
-        oi_features = _oi_pregrowth_features(
-            oi,
-            start_ms=int(pregrowth.iloc[0]["timestamp"]),
-            decision_ms=close_ts,
+        oi_features = (
+            _oi_pregrowth_features(
+                oi,
+                start_ms=int(pregrowth.iloc[0]["timestamp"]),
+                decision_ms=close_ts,
+            )
+            if not pregrowth.empty
+            else {
+                "pregrowth_oi_status": "missing",
+                "pregrowth_oi_reason": "rolling_pregrowth_history_not_ready",
+                "pregrowth_oi_change_pct": float("nan"),
+                "pregrowth_oi_start_ms": float("nan"),
+                "pregrowth_oi_end_ms": float("nan"),
+            }
         )
         dormancy_ok = (
             dormancy_quote_ratio >= config.min_dormancy_to_anomaly_quote_ratio
@@ -1441,7 +1432,7 @@ def _collect_symbol_candidates(
             "_quote_volume": anomaly_quote,
             "_number_of_trades": anomaly_trades,
         }
-        prior_context_frame = pd.concat([calendar.iloc[:history_end], pd.DataFrame([current_context_row])], ignore_index=True, sort=False)
+        prior_context_frame = pd.concat([rolling_history, pd.DataFrame([current_context_row])], ignore_index=True, sort=False)
         positive_quote = prior_context_frame["_quote_volume"].where(prior_context_frame["_quote_volume"] > 0)
         positive_trades = prior_context_frame["_number_of_trades"].where(prior_context_frame["_number_of_trades"] > 0)
         baseline_quote_fast = positive_quote.shift(1).rolling(config.baseline_candles, min_periods=1).median()
@@ -1504,7 +1495,7 @@ def _collect_symbol_candidates(
                 "rolling_htf_window_end_ms": close_ts,
                 "rolling_htf_window_end_utc": _timestamp_to_utc(close_ts),
                 "rolling_htf_step_ms": ltf_ms,
-                "rolling_baseline_model": "calendar_htf_candles_fully_closed_before_rolling_window_start",
+                "rolling_baseline_model": "rolling_htf_from_ltf_candles_fully_closed_before_seed_open",
                 "htf_timeframe": config.htf_timeframe,
                 "ltf_timeframe": config.ltf_timeframe,
                 "future_label_available_at_entry": False,
@@ -1582,14 +1573,28 @@ def _decision_candles_from_frame(frame: pd.DataFrame, *, step_ms: int, source: s
     return tuple(candles)
 
 
-def _pre_seed_context_candles(htf: pd.DataFrame, *, seed_open_ms: int, htf_ms: int) -> tuple[DecisionCandle, ...]:
-    if htf.empty or "timestamp" not in htf.columns:
+def _pre_seed_context_candles_from_ltf(
+    ltf: pd.DataFrame,
+    *,
+    seed_open_ms: int,
+    htf_ms: int,
+    ltf_ms: int,
+) -> tuple[DecisionCandle, ...]:
+    """Build rolling HTF context from the same LTF substrate as the seed.
+
+    Calendar HTF context is not parity-safe for rolling seeds because a seed may
+    start between calendar boundaries. The last context window must close exactly
+    at seed_open_ms and every prior context window steps by one LTF candle.
+    """
+
+    rolling = _rolling_htf_from_ltf(ltf, htf_ms=htf_ms, ltf_ms=ltf_ms)
+    if rolling.empty:
         return ()
-    frame = htf.copy()
+    frame = rolling.copy()
     frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
     frame = frame.dropna(subset=["timestamp"]).copy()
     frame = frame.loc[frame["timestamp"].astype("int64") + int(htf_ms) <= int(seed_open_ms)]
-    return _decision_candles_from_frame(frame, step_ms=htf_ms, source="backtest_cache_calendar_htf")
+    return _decision_candles_from_frame(frame, step_ms=htf_ms, source="backtest_cache_rolling_htf_from_ltf_context")
 
 
 def _build_seed_first_backtest_snapshot(
@@ -1634,10 +1639,10 @@ def _build_seed_first_backtest_snapshot(
             seed_open_ms=seed_open_ms,
             seed_close_ms=seed_close_ms,
             seed_candles=seed_candles,
-            pre_seed_context_candles=_pre_seed_context_candles(htf, seed_open_ms=seed_open_ms, htf_ms=htf_ms),
+            pre_seed_context_candles=_pre_seed_context_candles_from_ltf(ltf, seed_open_ms=seed_open_ms, htf_ms=htf_ms, ltf_ms=ltf_ms),
         ),
         source_labels={
-            "htf_context_source": "backtest_cache_calendar_htf",
+            "htf_context_source": "backtest_cache_rolling_htf_from_ltf_context",
             "rolling_seed_source": "backtest_cache_aggtrade_ltf_seed",
             "ltf_confirm_source": "backtest_cache_aggtrade_ltf_confirm",
         },
@@ -1762,9 +1767,9 @@ def _build_first_ltf_signal(
     ltf: pd.DataFrame,
     oi: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
-) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+) -> tuple[dict[str, object] | None, list[dict[str, object]]]:
     if candidate.get("status") != "ok":
-        return None, None
+        return None, []
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     htf_ms = _timeframe_ms(config.htf_timeframe)
     start_ms = int(candidate["htf_close_ms"])
@@ -1772,38 +1777,45 @@ def _build_first_ltf_signal(
     entry_window = _strict_ltf_window(ltf, start_ms=start_ms, end_exclusive_ms=end_ms, expected_step_ms=ltf_ms)
 
     snapshot, post_seed_candles, post_seed_window = _build_seed_first_backtest_snapshot(candidate, htf=htf, ltf=ltf, config=config)
-    verdict = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles)
+    exact_verdicts = list(evaluate_ltf_confirm_sequence_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles))
+    decision_rows = [_decision_ledger_row(verdict=item, post_seed_window=post_seed_window, candidate=candidate) for item in exact_verdicts]
+    verdict = next((item for item in exact_verdicts if item.verdict == "selected"), exact_verdicts[-1] if exact_verdicts else evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles))
     if verdict.verdict != "selected":
-        return None, _decision_ledger_row(verdict=verdict, post_seed_window=post_seed_window, candidate=candidate)
+        if not decision_rows:
+            decision_rows.append(_decision_ledger_row(verdict=verdict, post_seed_window=post_seed_window, candidate=candidate))
+        return None, decision_rows
 
     confirm = verdict.snapshot.ltf_confirm
     if confirm is None or not confirm.confirm_candles:
-        return None, _decision_ledger_row(
+        decision_rows.append(_decision_ledger_row(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
             backtest_execution_skip_reason="selected_without_confirm_snapshot",
-        )
+        ))
+        return None, decision_rows
     decision_row_candle = confirm.confirm_candles[-1]
     decision_ts = int(decision_row_candle.open_time_ms)
     decision_available_ts = int(confirm.confirm_end_ms)
     entry_rows = entry_window.frame.loc[pd.to_numeric(entry_window.frame.get("timestamp", pd.Series(dtype=float)), errors="coerce").eq(decision_available_ts)]
     if entry_rows.empty:
-        return None, _decision_ledger_row(
+        decision_rows.append(_decision_ledger_row(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
             backtest_execution_skip_reason="entry_next_open_missing_after_core_selected",
-        )
+        ))
+        return None, decision_rows
     entry_row = entry_rows.iloc[0]
     entry_ts = int(entry_row["timestamp"])
     if entry_ts < decision_available_ts:
-        return None, _decision_ledger_row(
+        decision_rows.append(_decision_ledger_row(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
             backtest_execution_skip_reason="entry_before_decision_available",
-        )
+        ))
+        return None, decision_rows
 
     raw_entry_price = float(entry_row["open"])
     entry_price = raw_entry_price * (1.0 + config.entry_slippage_pct)
@@ -1820,12 +1832,13 @@ def _build_first_ltf_signal(
     elif initial_risk_pct > config.max_initial_risk_pct:
         execution_skip = "initial_risk_too_large"
     if execution_skip:
-        return None, _decision_ledger_row(
+        decision_rows.append(_decision_ledger_row(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
             backtest_execution_skip_reason=execution_skip,
-        )
+        ))
+        return None, decision_rows
 
     oi_at_signal = _oi_asof(oi, decision_available_ts)
     features = dict(verdict.features)
@@ -1868,8 +1881,7 @@ def _build_first_ltf_signal(
         "signal_oi_open_interest": oi_at_signal["open_interest"],
         **_strict_ltf_window_audit(entry_window, prefix="entry_ltf"),
     }
-    ledger = _decision_ledger_row(verdict=verdict, post_seed_window=post_seed_window, candidate=candidate)
-    return signal, ledger
+    return signal, decision_rows
 
 def _build_ltf_entry_windows(
     candidate: dict[str, object],

@@ -3635,3 +3635,9 @@ P471 is PROPOSED / UNKNOWN commit. Live/backtest artifacts now separate `signal_
 ## 2026-05-31 - P472 proposed
 
 P472 is PROPOSED / UNKNOWN commit. Shared-core decisions now carry a source-neutral `snapshot_hash` and `snapshot_match_key`. Live2 writes `live2_decision_ledger.csv`; discovery writes matching hash/key fields in `htf_ltf_runner_decision_ledger.csv`; `research_tools.decision_parity_join` joins them exactly. Next parity analysis should first check `same_snapshot_hash + different signal_verdict`; any such row is a decision-core bug. Rows with matching signal verdict but different portfolio/execution verdict belong to allocation/execution replay, not signal quality.
+
+## 2026-05-31 - P475 proposed
+
+P475 is PROPOSED / UNKNOWN commit. It fixes the remaining parity break after P465-P472/P474: live and backtest now build pre-seed context as rolling HTF-width windows stepped by LTF candles from the same normalized LTF substrate. Backtest no longer drops seeds at the adapter `anomaly_gate` before the shared core, exact confirm rejects are ledgered per window, live pending seeds expire deterministically after max-confirm, and `snapshot_hash` excludes adapter `decision_time_ms`.
+
+Next validation: apply P475 on top of P465-P472/P474, run compile/guard/core smoke, then run a small same-period live/backtest replay and inspect `snapshot_hash` joins before changing any thresholds or exits.
