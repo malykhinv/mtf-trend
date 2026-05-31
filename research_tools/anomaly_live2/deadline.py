@@ -598,12 +598,12 @@ class Live2DeadlineEngine:
                 result.skipped_symbols += len(candidates) - index
                 break
             result.checked_symbols += 1
-            previous_bucket_ms = state.last_decision_bucket_ms
+            previous_bucket_ms = _last_decision_bucket_ms(state, self.config.timeframe_ms)
             decision = self._evaluate_state(state, now_ms=utc_now_ms(), live_watermark_ms=live_watermark_ms)
             if decision is None:
                 if (
-                    state.last_decision_bucket_ms is not None
-                    and state.last_decision_bucket_ms != previous_bucket_ms
+                    _last_decision_bucket_ms(state, self.config.timeframe_ms) is not None
+                    and _last_decision_bucket_ms(state, self.config.timeframe_ms) != previous_bucket_ms
                     and state.last_verdict in {
                         "pre_live_ws_not_ready",
                         "pre_live_warmup_bucket_ignored",
@@ -703,7 +703,7 @@ class Live2DeadlineEngine:
         if candle is None:
             state.decision_dirty_since_ms = None
             return None
-        if state.last_decision_bucket_ms == candle.open_time_ms:
+        if _last_decision_bucket_ms(state, self.config.timeframe_ms) == candle.open_time_ms:
             state.decision_dirty_since_ms = None
             return None
         if live_watermark_ms is None:
@@ -976,7 +976,7 @@ class Live2DeadlineEngine:
         reason: str,
     ) -> None:
         state.status = SymbolLive2Status.WATCHING
-        state.last_decision_bucket_ms = candle.open_time_ms
+        _set_last_decision_bucket_ms(state, self.config.timeframe_ms, candle.open_time_ms)
         state.last_verdict = verdict
         state.last_verdict_reason = reason
         state.last_decision_latency_ms = max(0, now_ms - candle.close_time_ms)
@@ -987,7 +987,7 @@ class Live2DeadlineEngine:
 
     def _apply_non_actionable(self, state: SymbolState, *, candle: Live2Candle, now_ms: int) -> None:
         state.status = SymbolLive2Status.WATCHING
-        state.last_decision_bucket_ms = candle.open_time_ms
+        _set_last_decision_bucket_ms(state, self.config.timeframe_ms, candle.open_time_ms)
         state.last_verdict = "market_quiet_non_actionable"
         state.last_verdict_reason = "no_actionable_quote_trade_or_return_threshold_crossed"
         state.decision_dirty_since_ms = None
@@ -1029,7 +1029,7 @@ class Live2DeadlineEngine:
             if entry_guard_result.verdict == "accepted":
                 state.stage5_passed_ms = candle.close_time_ms
         state.decision_deadline_ms = deadline_ms
-        state.last_decision_bucket_ms = candle.open_time_ms
+        _set_last_decision_bucket_ms(state, self.config.timeframe_ms, candle.open_time_ms)
         state.last_verdict = verdict
         state.last_verdict_reason = reason
         state.last_decision_latency_ms = latency_ms
@@ -1110,3 +1110,16 @@ def _candle_return_pct(candle: Live2Candle) -> float:
 
 def _is_trade_stale(*, candle: Live2Candle, now_ms: int, stale_trade_ms: int) -> bool:
     return now_ms - candle.last_trade_time_ms > stale_trade_ms
+
+
+def _last_decision_bucket_ms(state: SymbolState, timeframe_ms: int) -> int | None:
+    value = state.last_decision_bucket_ms_by_timeframe.get(int(timeframe_ms))
+    if value is None:
+        return None
+    return int(value)
+
+
+def _set_last_decision_bucket_ms(state: SymbolState, timeframe_ms: int, bucket_open_ms: int) -> None:
+    value = int(bucket_open_ms)
+    state.last_decision_bucket_ms_by_timeframe[int(timeframe_ms)] = value
+    state.last_decision_bucket_ms = value

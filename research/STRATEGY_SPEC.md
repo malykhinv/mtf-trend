@@ -80,7 +80,7 @@ The current contract id is:
 rolling_htf_seed_first_ltf_confirm_v1
 ```
 
-Supported rolling profiles for this contract are `5m_30s` and `3m_30s`. Category priority is `C_balanced_flow_acceptance`, then `A_resonance_prior_spike`, then `S_7d_5m30_strict`. This priority and the current C/A/S matcher thresholds belong to the shared decision contract, not to live-only or backtest-only code.
+Supported rolling profiles for this contract are `5m_30s`, `3m_30s`, `5m_15s`, and `3m_15s`. Category priority is `C_balanced_flow_acceptance`, then `A_resonance_prior_spike`, then `S_7d_5m30_strict`. This priority and the current C/A/S matcher thresholds belong to the shared decision contract, not to live-only or backtest-only code.
 
 If live and backtest produce the same decision snapshot, the signal verdict must be identical. Differences after that point are portfolio/execution differences, not signal-quality differences.
 
@@ -89,6 +89,14 @@ P471 note: artifacts must report signal and portfolio outcomes separately. `sign
 P474 note: adapters must not rematch C/A/S categories after the shared core returns a verdict. `runner_candidate_category`, matched categories and priority rank must originate from `PumpDecisionCore` verdict/features. `research_tools/decision_contract_guard.py` is the source-level guard against reintroducing legacy duplicate decision paths.
 
 P476 note: the pre-seed context for this contract is deterministic and seed-aligned. It is not calendar HTF context and not overlapping every LTF step. For each seed, adapters must provide non-overlapping HTF-width context windows ending exactly at `seed_open_ms`; the required count is fixed by the shared core and covers the 24h prior-spike horizon plus baseline/dormancy/pregrowth needs. Extra retained adapter history must not affect `snapshot_hash`, features, or verdict.
+
+P477 note: core version `p477_snapshot_hash_integrity`. `snapshot_hash` must cover every input that can change the shared core's `signal_verdict`: normalized seed/context/confirm candles, candle `source_status`, explicit data dependencies, exact window bounds, contract id, core version, symbol and TF set. It must still exclude adapter labels, websocket/REST names, portfolio state, entry guard state, execution fills and artifact-only fields. Therefore `same snapshot_hash + different signal_verdict` remains a bug, while missing or one-sided snapshots may be caused by the data-availability layer.
+
+P478/P479 note: core version `p478_add_15s_profiles`. The 15s profiles use the same wall-clock confirmation horizon as the 30s profiles: `5m_15s` uses 20 seed candles and 4-16 confirm candles; `3m_15s` uses 12 seed candles and 4-12 confirm candles. Live evaluates both 15s and 30s decision streams independently by default; they share only the downstream portfolio/execution layer. The strict S category remains tied to the original `5m_30s` shape until a separate 15s category study proves otherwise.
+
+Data acquisition parity note: live and backtest do not have to acquire market data through identical mechanics. Backtest may use cheap closed-HTF planning before expensive LTF/1s backfill; live may repair missing context from REST. These mechanisms are acceptable only as data-availability layers. Once they produce a normalized decision snapshot, strategy evaluation must go through the same shared core.
+
+P480 planner note: targeted backfill may use cheap HTF upper bounds to avoid LTF/1s fetch only when a seed/category/confirm requirement is mathematically impossible. Confirm-bound rejects may use only loose HTF maxima for return, quote pace, and trade pace; missing next-HTF data must not be treated as rejection. Planner rejects must remain visible in `htf_ltf_runner_targeted_ltf_plan.csv`.
 
 P466 note: C/A/S category matching is now a shared pure matcher in `research_tools/pump_decision_core.py`. Live and backtest adapters may still differ in how they discover seed/confirm windows until the seed-first evaluator migration is complete, but they must not carry separate C/A/S threshold copies.
 

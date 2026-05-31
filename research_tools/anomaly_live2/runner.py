@@ -178,34 +178,40 @@ class AnomalyLive2Runner:
         self._top_growth_audit_lock = threading.Lock()
         self._top_growth_audit_worker: threading.Thread | None = None
         self._top_growth_completed_events: list[dict[str, object]] = []
-        self.deadline_engine = Live2DeadlineEngine(
-            state_store=self.state_store,
-            config=Live2DeadlineEngineConfig(
-                timeframe_ms=config.decision_timeframe_ms,
-                decision_deadline_ms=config.decision_deadline_ms,
-                backlog_expire_ms=config.decision_backlog_expire_ms,
-                actionable_min_quote_volume=config.actionable_min_quote_volume,
-                actionable_min_trade_count=config.actionable_min_trade_count,
-                actionable_min_abs_return_pct=config.actionable_min_abs_return_pct,
-                stale_trade_ms=config.aggtrade_stale_ms,
-                cycle_budget_ms=config.decision_engine_cycle_budget_ms,
-            ),
-            signal_engine=Live2SignalEngine(
-                mark_stale_ms=config.mark_price_stale_ms,
-                oi_stale_ms=config.oi_stale_ms,
-                prior_context_stale_ms=config.prior_context_stale_ms,
-                rolling_context_repair=self._rolling_context_repair_for_signal,
-            ),
-            entry_guard=Live2EntryGuardEngine(
-                config=Live2EntryGuardConfig(
-                    max_signal_age_ms=config.entry_guard_max_signal_age_ms,
-                    max_entry_price_drift_pct=config.entry_guard_max_price_drift_pct,
-                    min_rr_to_tp1=config.entry_guard_min_rr_to_tp1,
-                )
-            ),
-            execution_engine=self.execution_engine,
-            entries_allowed=lambda: self.readiness.new_entries_allowed,
-            live_decision_watermark_ms=self._live_decision_watermark_ms,
+        self.deadline_engines: dict[int, Live2DeadlineEngine] = {}
+        for timeframe_ms in sorted({int(value) for value in config.decision_timeframes_ms}):
+            self.deadline_engines[timeframe_ms] = Live2DeadlineEngine(
+                state_store=self.state_store,
+                config=Live2DeadlineEngineConfig(
+                    timeframe_ms=timeframe_ms,
+                    decision_deadline_ms=config.decision_deadline_ms,
+                    backlog_expire_ms=config.decision_backlog_expire_ms,
+                    actionable_min_quote_volume=config.actionable_min_quote_volume,
+                    actionable_min_trade_count=config.actionable_min_trade_count,
+                    actionable_min_abs_return_pct=config.actionable_min_abs_return_pct,
+                    stale_trade_ms=config.aggtrade_stale_ms,
+                    cycle_budget_ms=config.decision_engine_cycle_budget_ms,
+                ),
+                signal_engine=Live2SignalEngine(
+                    mark_stale_ms=config.mark_price_stale_ms,
+                    oi_stale_ms=config.oi_stale_ms,
+                    prior_context_stale_ms=config.prior_context_stale_ms,
+                    rolling_context_repair=self._rolling_context_repair_for_signal,
+                ),
+                entry_guard=Live2EntryGuardEngine(
+                    config=Live2EntryGuardConfig(
+                        max_signal_age_ms=config.entry_guard_max_signal_age_ms,
+                        max_entry_price_drift_pct=config.entry_guard_max_price_drift_pct,
+                        min_rr_to_tp1=config.entry_guard_min_rr_to_tp1,
+                    )
+                ),
+                execution_engine=self.execution_engine,
+                entries_allowed=lambda: self.readiness.new_entries_allowed,
+                live_decision_watermark_ms=self._live_decision_watermark_ms,
+            )
+        self.deadline_engine = self.deadline_engines.get(
+            int(config.decision_timeframe_ms),
+            next(iter(self.deadline_engines.values())),
         )
         self._shutdown_requested = False
         self._shutdown_reason = ""
@@ -563,13 +569,13 @@ class AnomalyLive2Runner:
                 status="running",
                 reason="generation_0_ticker_universe_and_aggtrade_ws_started",
                 market_data_status=market_data_status,
-                decision_status=self.deadline_engine.status(),
+                decision_status=self._decision_status(),
                 execution_status=self._execution_status(),
                 runtime_gate_status=runtime_gate_status,
                 diagnostics_summary=self._diagnostics_summary(
                     writer=writer,
                     market_data_status=market_data_status,
-                    decision_status=self.deadline_engine.status(),
+                    decision_status=self._decision_status(),
                     execution_status=self._execution_status(),
                     runtime_gate_status=runtime_gate_status,
                 ),
@@ -578,7 +584,7 @@ class AnomalyLive2Runner:
                 self._diagnostics_summary(
                     writer=writer,
                     market_data_status=market_data_status,
-                    decision_status=self.deadline_engine.status(),
+                    decision_status=self._decision_status(),
                     execution_status=self._execution_status(),
                     runtime_gate_status=runtime_gate_status,
                 )
@@ -645,13 +651,17 @@ class AnomalyLive2Runner:
                         if not stale_hot_path_reason and pre_eval_age_ms > int(self.config.decision_latency_wall_clock_gap_ms):
                             stale_hot_path_reason = "hot_path_stale_before_signal_evaluation"
                         deadline_started = time.perf_counter()
-                        deadline_result = self.deadline_engine.run_cycle(
-                            now_ms=decision_now_ms,
-                            candidates=candidates,
-                            symbols_total=symbols_total,
-                            skip_signal_evaluation_reason=stale_hot_path_reason,
-                        )
+                        deadline_results = [
+                            engine.run_cycle(
+                                now_ms=decision_now_ms,
+                                candidates=candidates,
+                                symbols_total=symbols_total,
+                                skip_signal_evaluation_reason=stale_hot_path_reason,
+                            )
+                            for engine in self.deadline_engines.values()
+                        ]
                         deadline_engine_ms = int(max(0.0, time.perf_counter() - deadline_started) * 1000)
+                        deadline_result = _merge_deadline_cycle_results(deadline_results)
                         deadline_result.close_due_candles_closed_count = closed_count
                         deadline_result.close_due_candles_ms = close_due_ms
                         deadline_result.decision_snapshot_ms = snapshot_ms
@@ -718,7 +728,7 @@ class AnomalyLive2Runner:
                 )
             )
             market_data_status = self._market_data_status()
-            decision_status = self.deadline_engine.status()
+            decision_status = self._decision_status()
             execution_status = self._execution_status()
             runtime_gate_status = self._runtime_gate_status()
             diagnostics_summary = self._diagnostics_summary(
@@ -890,7 +900,7 @@ class AnomalyLive2Runner:
             )
         market_data_status = self._market_data_status(include_symbol_counts=True)
         runtime_gate_status = self._runtime_gate_status()
-        decision_status = self.deadline_engine.status()
+        decision_status = self._decision_status()
         execution_status = self._execution_status()
         artifact_writer_status = writer.status().as_dict()
         grid_decision_status, grid_execution_status, grid_runtime_gate_status = self._session_scoped_grid_status(
@@ -1624,6 +1634,44 @@ class AnomalyLive2Runner:
     def _rolling_context_maintenance_status(self) -> dict[str, object]:
         return self.rolling_context_maintenance_source.status()
 
+    def _decision_status(self) -> dict[str, object]:
+        engine_statuses = {str(timeframe_ms): engine.status() for timeframe_ms, engine in sorted(self.deadline_engines.items())}
+
+        def total(field: str) -> int:
+            return int(sum(int(status.get(field) or 0) for status in engine_statuses.values()))
+
+        def merged_signal_counter(field: str) -> dict[str, int]:
+            counter: Counter[str] = Counter()
+            for status in engine_statuses.values():
+                signal_status = _dict_or_empty(status.get("signal_engine"))
+                values = _dict_or_empty(signal_status.get(field))
+                counter.update({str(key): int(value) for key, value in values.items()})
+            return dict(counter)
+
+        return {
+            "status": "running_multi_timeframe_stream_signal_adapter",
+            "reason": "deadline_engines_active_for_15s_and_30s_streams",
+            "timeframes_ms": tuple(sorted(self.deadline_engines)),
+            "engines": engine_statuses,
+            "total_decisions": total("total_decisions"),
+            "selected_count": total("selected_count"),
+            "total_rejected": total("total_rejected"),
+            "total_data_not_ready": total("total_data_not_ready"),
+            "total_data_dependency_not_ready": total("total_data_dependency_not_ready"),
+            "total_deadline_missed": total("total_deadline_missed"),
+            "total_deadline_expired_backlog": total("total_deadline_expired_backlog"),
+            "total_pre_live_bucket_skipped": total("total_pre_live_bucket_skipped"),
+            "signal_engine": {
+                "status": "multi_timeframe_signal_engines",
+                "by_timeframe_ms": {
+                    str(timeframe_ms): status.get("signal_engine", {})
+                    for timeframe_ms, status in engine_statuses.items()
+                },
+                "dependency_reason_counts": merged_signal_counter("dependency_reason_counts"),
+                "reject_reason_counts": merged_signal_counter("reject_reason_counts"),
+            },
+        }
+
     def _execution_status(self) -> dict[str, object]:
         return {
             **self.execution_engine.status(),
@@ -2040,6 +2088,7 @@ class AnomalyLive2Runner:
                     "universe_min_trade_count_24h": self.config.universe_min_trade_count_24h,
                     "universe_min_auto_symbols": self.config.universe_min_auto_symbols,
                     "decision_timeframe_ms": self.config.decision_timeframe_ms,
+                    "decision_timeframes_ms": self.config.decision_timeframes_ms,
                     "decision_deadline_ms": self.config.decision_deadline_ms,
                     "decision_backlog_expire_ms": self.config.decision_backlog_expire_ms,
                     "top_growth_enabled": self.config.top_growth_enabled,
@@ -2459,6 +2508,35 @@ class AnomalyLive2Runner:
                 },
             )
         )
+
+
+def _merge_deadline_cycle_results(results: list[Live2DeadlineCycleResult]) -> Live2DeadlineCycleResult:
+    if not results:
+        return Live2DeadlineCycleResult()
+    merged = Live2DeadlineCycleResult(
+        cycle_status="ok" if all(item.cycle_status == "ok" for item in results) else "degraded",
+        cycle_reason=";".join(sorted({item.cycle_reason for item in results if item.cycle_reason})),
+        symbols_total=max((int(item.symbols_total) for item in results), default=0),
+        cycle_budget_ms=sum(int(item.cycle_budget_ms) for item in results),
+    )
+    for item in results:
+        merged.checked_symbols += int(item.checked_symbols)
+        merged.skipped_symbols += int(item.skipped_symbols)
+        merged.decisions.extend(item.decisions)
+        merged.selected_count += int(item.selected_count)
+        merged.rejected_count += int(item.rejected_count)
+        merged.data_not_ready_count += int(item.data_not_ready_count)
+        merged.data_dependency_not_ready_count += int(item.data_dependency_not_ready_count)
+        merged.flow_freshness_reject_count += int(item.flow_freshness_reject_count)
+        merged.deadline_missed_count += int(item.deadline_missed_count)
+        merged.deadline_expired_backlog_count += int(item.deadline_expired_backlog_count)
+        merged.pre_live_bucket_skipped_count += int(item.pre_live_bucket_skipped_count)
+        merged.state_store_lock_timeout_count += int(item.state_store_lock_timeout_count)
+        merged.stale_hot_path_skip_count += int(item.stale_hot_path_skip_count)
+        merged.max_latency_ms = max(int(merged.max_latency_ms), int(item.max_latency_ms))
+        merged.budget_exhausted_count += int(item.budget_exhausted_count)
+        merged.cycle_elapsed_ms += int(item.cycle_elapsed_ms)
+    return merged
 
 
 def _dict_or_empty(value: object) -> dict[str, object]:

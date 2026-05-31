@@ -11,12 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Mapping, Sequence
 
 
 ROLLING_DECISION_CONTRACT_ID = "rolling_htf_seed_first_ltf_confirm_v1"
-ROLLING_DECISION_CORE_VERSION = "p476_deterministic_seed_aligned_context"
+ROLLING_DECISION_CORE_VERSION = "p478_add_15s_profiles"
 
 DecisionSource = Literal["live", "backtest", "parity_replay", "test"]
 DecisionVerdictType = Literal["selected", "rejected", "data_dependency_not_ready"]
@@ -37,7 +37,7 @@ ROLLING_CATEGORY_PRIORITY: tuple[str, ...] = (
     CATEGORY_A_RESONANCE_PRIOR_SPIKE,
     CATEGORY_S_7D_5M30_STRICT,
 )
-SUPPORTED_ROLLING_TF_SETS: tuple[str, ...] = ("5m_30s", "3m_30s")
+SUPPORTED_ROLLING_TF_SETS: tuple[str, ...] = ("5m_30s", "3m_30s", "5m_15s", "3m_15s")
 
 ROLLING_BASELINE_WINDOWS = 60
 ROLLING_DORMANCY_WINDOWS = 30
@@ -188,12 +188,26 @@ ROLLING_PROFILE_SPECS: dict[str, RollingProfileSpec] = {
         min_confirm_candles=2,
         max_confirm_candles=8,
     ),
+    "5m_15s": RollingProfileSpec(
+        tf_set="5m_15s",
+        htf_seconds=300,
+        ltf_seconds=15,
+        min_confirm_candles=4,
+        max_confirm_candles=16,
+    ),
     "3m_30s": RollingProfileSpec(
         tf_set="3m_30s",
         htf_seconds=180,
         ltf_seconds=30,
         min_confirm_candles=2,
         max_confirm_candles=6,
+    ),
+    "3m_15s": RollingProfileSpec(
+        tf_set="3m_15s",
+        htf_seconds=180,
+        ltf_seconds=15,
+        min_confirm_candles=4,
+        max_confirm_candles=12,
     ),
 }
 
@@ -445,6 +459,7 @@ def _snapshot_hash_payload(snapshot: DecisionSnapshot) -> dict[str, object]:
                 _candle_hash_payload(item)
                 for item in (_contract_context_candles(seed, spec) if spec is not None else tuple(seed.pre_seed_context_candles))
             ],
+            "dependencies": [_dependency_hash_payload(item) for item in seed.dependencies],
         },
         "ltf_confirm": None
         if confirm is None
@@ -452,7 +467,9 @@ def _snapshot_hash_payload(snapshot: DecisionSnapshot) -> dict[str, object]:
             "confirm_start_ms": int(confirm.confirm_start_ms),
             "confirm_end_ms": int(confirm.confirm_end_ms),
             "confirm_candles": [_candle_hash_payload(item) for item in confirm.confirm_candles],
+            "dependencies": [_dependency_hash_payload(item) for item in confirm.dependencies],
         },
+        "dependencies": [_dependency_hash_payload(item) for item in snapshot.dependencies],
     }
 
 
@@ -467,6 +484,16 @@ def _candle_hash_payload(candle: DecisionCandle) -> dict[str, object]:
         "quote_volume": _canonical_number(candle.quote_volume),
         "number_of_trades": int(candle.number_of_trades),
         "taker_buy_quote_volume": _canonical_number(candle.taker_buy_quote_volume),
+        "source_status": str(candle.source_status or "ok"),
+    }
+
+
+def _dependency_hash_payload(dependency: DataDependency) -> dict[str, object]:
+    return {
+        "name": str(dependency.name),
+        "status": str(dependency.status),
+        "reason": str(dependency.reason or ""),
+        "asof_ms": "" if dependency.asof_ms is None else int(dependency.asof_ms),
     }
 
 
@@ -562,19 +589,12 @@ def evaluate_first_ltf_confirm_after_seed(
         if verdict.verdict in ("selected", "data_dependency_not_ready"):
             return verdict
     last = verdicts[-1]
-    return DecisionVerdict(
-        verdict="rejected",
-        snapshot=snapshot,
-        rejects=(
-            DecisionReject(stage="ltf_confirm", reason="rolling_profile_no_category_qualified_confirm"),
-            *tuple(reject for verdict in verdicts for reject in verdict.rejects)[-8:],
-        ),
+    return replace(
+        last,
         features={
-            "tf_set": snapshot.tf_set,
+            **dict(last.features),
             "checked_confirm_candles": len(verdicts),
             "last_confirm_end_ms": last.snapshot.ltf_confirm.confirm_end_ms if last.snapshot.ltf_confirm is not None else None,
-            "snapshot_hash": decision_snapshot_hash(snapshot),
-            "snapshot_match_key": decision_snapshot_match_key(snapshot),
         },
     )
 
@@ -699,6 +719,8 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
         "core_version": snapshot.core_version,
         "tf_set": snapshot.tf_set,
         "rolling_runner_tf_set": snapshot.tf_set,
+        "rolling_runner_htf_timeframe_ms": htf_ms,
+        "rolling_runner_ltf_timeframe_ms": spec.ltf_seconds * 1000,
         "symbol": snapshot.symbol,
         "decision_time_ms": snapshot.decision_time_ms,
         "snapshot_hash": decision_snapshot_hash(snapshot),

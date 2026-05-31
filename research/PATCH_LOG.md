@@ -1,3 +1,153 @@
+## 2026-05-31 - P481 shared contract unit tests
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P480.
+
+Purpose: add cheap regression tests around the parts most likely to silently break live/backtest parity or data-loading honesty.
+
+Changes:
+
+- Adds `tests/test_pump_decision_contract.py`.
+- Tests that `snapshot_hash` changes for explicit non-ok dependencies and candle `source_status`, while adapter labels/source names do not affect the hash.
+- Tests that `evaluate_first_ltf_confirm_after_seed(...)` returns the last exact rejected confirm snapshot, not a seed-only aggregate reject.
+- Tests that extra adapter-retained pre-context outside the deterministic contract slice does not change verdict/hash.
+- Tests `5m_15s` and `3m_15s` as first-class profile specs.
+- Tests the cheap HTF confirm upper-bound gate rejects only proven impossibility and keeps missing/non-adjacent next-HTF context.
+- Tests 5m OI `asof` timing and live per-timeframe decision bucket independence.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+.venv\Scripts\python.exe -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Known test-suite debt:
+
+```text
+Existing legacy tests/test_htf_ltf_runner_discovery.py and tests/test_live2_market_watch.py still contain stale calls to old signatures and removed live-only helpers. They should be migrated in a separate test-cleanup patch, not made authoritative for the current shared-core path.
+```
+
+## 2026-05-31 - P480 cheap confirm upper-bound planner gate
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P479.
+
+Purpose: reduce expensive targeted LTF/1s backfill without introducing optimistic bias.
+
+Changes:
+
+- Adds `_pair_can_pass_confirm_upper_bounds(...)` to `research_tools/htf_ltf_runner_discovery.py`.
+- The pre-entry LTF planner now rejects a pair only when cheap HTF upper bounds prove the shared core's confirm return, quote pace, or trade pace minimum cannot be reached.
+- If the next HTF candle is missing or non-adjacent, the gate keeps the pair instead of guessing.
+- Adds planner counters `rejected_impossible_confirm_return`, `rejected_impossible_confirm_quote_pace`, and `rejected_impossible_confirm_trade_pace`.
+- Planned rows now expose `confirm_bound_model`, `confirm_bound_reason`, `confirm_quote_volume_upper_bound`, `confirm_number_of_trades_upper_bound`, `confirm_max_possible_return_pct`, `confirm_quote_pace_ratio_upper_bound`, `confirm_trade_pace_ratio_upper_bound`, and confirm duration bounds.
+
+Validation:
+
+```bash
+python -m compileall -q research_tools/htf_ltf_runner_discovery.py
+python -m research_tools.decision_contract_guard
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+The bound is intentionally loose and may keep many windows. That is acceptable. It must not be tightened using runner labels, PnL, realized future path quality, or post-entry outcomes. Any speedup should be judged from planner counters and exact snapshot coverage, not profitability alone.
+```
+
+## 2026-05-31 - P479 live multi-timeframe decision streams
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P478.
+
+Purpose: make live evaluate 15s and 30s independently by default, instead of requiring an operator flag to choose one LTF stream.
+
+Changes:
+
+- `AnomalyLive2Config` adds `decision_timeframes_ms=(15000, 30000)`.
+- `AnomalyLive2Runner` now owns one `Live2DeadlineEngine` per decision timeframe and runs all of them each hot-path cycle.
+- Deadline status aggregates total counts while preserving per-timeframe engine status under `decision_status.engines`.
+- `SymbolState.last_decision_bucket_ms_by_timeframe` prevents the 15s and 30s streams from marking each other's buckets as already processed.
+- `SymbolState.rolling_last_seed_discovery_close_ms_by_timeframe` prevents 15s and 30s seed discovery from suppressing each other at shared close timestamps.
+- Removed the `--decision-timeframe-ms` CLI switch introduced in P478; live default is now both streams.
+
+Validation:
+
+```bash
+python -m compileall -q research_tools/anomaly_live2/runner.py research_tools/anomaly_live2/deadline.py research_tools/anomaly_live2/signal.py research_tools/anomaly_live2/state.py research_tools/anomaly_live2/config.py cli/commands.py cli/parser.py
+python -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Live decision load increases because every selected symbol is evaluated on 15s and 30s streams. The next smoke must inspect deadline_missed, budget_exhausted, duplicate same-symbol blocks, and per-timeframe ledger mix before interpreting signal quality.
+```
+
+## 2026-05-31 - P478 add 15s rolling profiles
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P477.
+
+Purpose: add `5m_15s` and `3m_15s` as first-class shared-core profiles without creating a backtest-only strategy path.
+
+Changes:
+
+- `PumpDecisionCore` core version becomes `p478_add_15s_profiles`.
+- Shared supported TF sets now include `5m_15s` and `3m_15s`.
+- Core profile specs add `5m_15s` with 20 seed candles, min/max confirm `4/16`, and `3m_15s` with 12 seed candles, min/max confirm `4/12`.
+- Live2 signal adapter now builds seed/context/confirm snapshots from the active decision timeframe instead of hard-coded 30s candles.
+- `run-anomaly-live2` initially exposed a `--decision-timeframe-ms` switch in P478, but P479 replaces that with default multi-timeframe 15s+30s live streams.
+- `run-htf-ltf-runner-discovery` now runs `5m_30s`, `3m_30s`, `5m_15s`, and `3m_15s` profiles.
+
+Validation:
+
+```bash
+python -m compileall -q research_tools/pump_decision_core.py research_tools/anomaly_live2/signal.py cli/commands.py cli/parser.py research_tools/htf_ltf_runner_discovery.py
+python -m research_tools.decision_contract_guard
+python research_tools/pump_decision_core.py
+```
+
+Risk:
+
+```text
+15s profiles increase live deadline load and backtest LTF fetch cost. They should be tested on a small symbol/time window first. Category C/A thresholds are reused as source-neutral feature rules; strict S remains the original 5m_30s-specific matcher shape until separately researched.
+```
+
+## 2026-05-31 - P477 snapshot hash integrity and live cooldown parity
+
+Status: APPLIED locally / UNKNOWN commit. Builds on the local P465-P476 shared rolling seed-first contract stack.
+
+Purpose: fix contract-level parity issues without changing thresholds, data planners, execution, order placement, exits, fees, or slippage.
+
+Changes:
+
+- `decision_snapshot_hash(...)` now includes core-affecting explicit dependencies and candle `source_status`. It still excludes adapter source labels, portfolio state, execution state and artifact-only labels.
+- `evaluate_first_ltf_confirm_after_seed(...)` now returns the final exact rejected confirm-window verdict when no selected confirm exists, instead of manufacturing an aggregate reject on the seed-only snapshot. This makes live rejected ledgers join to one of the backtest exact-window rows.
+- `PumpDecisionCore` core version becomes `p477_snapshot_hash_integrity`.
+- Core selected features now include `rolling_runner_htf_timeframe_ms` and `rolling_runner_ltf_timeframe_ms`, allowing live execution cooldown to use the selected rolling profile.
+- Documents that live/backtest data acquisition can differ: HTF-planned expensive LTF/1s backfill in backtest and REST repair in live are data-availability layers, not alternate strategy decision logic.
+
+Validation:
+
+```bash
+python research_tools/pump_decision_core.py
+python -m research_tools.decision_contract_guard
+python -m compileall -q research_tools/pump_decision_core.py research_tools/anomaly_live2/signal.py research_tools/anomaly_live2/execution.py research_tools/htf_ltf_runner_discovery.py research_tools/decision_parity_join.py
+```
+
+Additional synthetic checks:
+
+```text
+same candles + different non-ok dependency now produce different snapshot_hash
+no-selected confirm sequence now returns a rejected verdict with ltf_confirm present
+```
+
+Risk:
+
+```text
+Snapshot hashes change for existing ledgers because source_status and explicit dependencies are now part of the core-affecting hash payload. Old and new parity ledgers should not be joined across this patch without noting the contract version/hash payload change.
+```
+
 ## 2026-05-31 - P470 live2 shared-core-only signal adapter
 
 Status: PROPOSED. Current commit: UNKNOWN. Built on P465-P469 expected applied locally / UNKNOWN commit.

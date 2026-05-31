@@ -32,6 +32,9 @@ from domain.enums.timeframe import Timeframe
 from research_tools.pump_decision_core import (
     ROLLING_DECISION_CONTRACT_ID,
     ROLLING_DECISION_CORE_VERSION,
+    ROLLING_LTF_MIN_CONFIRM_RETURN_PCT,
+    ROLLING_LTF_MIN_QUOTE_PACE_RATIO,
+    ROLLING_LTF_MIN_TRADE_PACE_RATIO,
     ROLLING_PROFILE_SPECS,
     DecisionCandle,
     DecisionSnapshot,
@@ -729,6 +732,76 @@ def _pair_can_match_runner_category_bounds(
     }
 
 
+def _pair_can_pass_confirm_upper_bounds(
+    *,
+    prepared: pd.DataFrame,
+    idx: int,
+    htf_ms: int,
+    ltf_ms: int,
+    max_confirm_candles: int,
+    min_confirm_candles: int,
+    baseline_quote_values: list[float],
+    baseline_trade_values: list[float],
+) -> tuple[bool, dict[str, object]]:
+    """Return false only when cheap HTF bounds prove confirm cannot pass.
+
+    This is deliberately an upper-bound data-loading gate. It may keep too many
+    pairs, but it must not reject a pair unless no exact LTF confirm window
+    inside the pair could satisfy the shared core's minimum price/flow pace.
+    """
+
+    if idx + 2 >= len(prepared):
+        return True, {
+            "confirm_bound_model": "not_checked_missing_next_htf_candle",
+            "confirm_bound_trading_signal": False,
+        }
+    second = prepared.iloc[idx + 1]
+    third = prepared.iloc[idx + 2]
+    second_ts = int(second["timestamp"])
+    third_ts = int(third["timestamp"])
+    if third_ts != second_ts + int(htf_ms):
+        return True, {
+            "confirm_bound_model": "not_checked_non_adjacent_next_htf_candle",
+            "confirm_bound_trading_signal": False,
+        }
+
+    confirm_quote_upper = float(second["quote_volume"]) + float(third["quote_volume"])
+    confirm_trade_upper = float(second["number_of_trades"]) + float(third["number_of_trades"])
+    confirm_high_upper = max(float(second["high"]), float(third["high"]))
+    confirm_open_floor = min(float(second["open"]), float(third["open"]), float(second["low"]), float(third["low"]))
+    max_confirm_return = _safe_divide(confirm_high_upper - confirm_open_floor, confirm_open_floor)
+
+    min_duration_ms = max(1, int(min_confirm_candles) * int(ltf_ms))
+    min_baseline_quote = min((float(value) for value in baseline_quote_values if np.isfinite(value) and float(value) > 0.0), default=float("nan"))
+    min_baseline_trades = min((float(value) for value in baseline_trade_values if np.isfinite(value) and float(value) > 0.0), default=float("nan"))
+    quote_pace_upper = _safe_divide(confirm_quote_upper, min_baseline_quote * min_duration_ms / int(htf_ms))
+    trade_pace_upper = _safe_divide(confirm_trade_upper, min_baseline_trades * min_duration_ms / int(htf_ms))
+
+    impossible_return = np.isfinite(max_confirm_return) and float(max_confirm_return) < float(ROLLING_LTF_MIN_CONFIRM_RETURN_PCT)
+    impossible_quote = np.isfinite(quote_pace_upper) and float(quote_pace_upper) < float(ROLLING_LTF_MIN_QUOTE_PACE_RATIO)
+    impossible_trade = np.isfinite(trade_pace_upper) and float(trade_pace_upper) < float(ROLLING_LTF_MIN_TRADE_PACE_RATIO)
+    possible = not (impossible_return or impossible_quote or impossible_trade)
+    reason = ""
+    if impossible_return:
+        reason = "impossible_confirm_return"
+    elif impossible_quote:
+        reason = "impossible_confirm_quote_pace"
+    elif impossible_trade:
+        reason = "impossible_confirm_trade_pace"
+    return possible, {
+        "confirm_bound_model": "cheap_htf_confirm_upper_bound_data_loading_only",
+        "confirm_bound_trading_signal": False,
+        "confirm_bound_reason": reason,
+        "confirm_quote_volume_upper_bound": float(confirm_quote_upper),
+        "confirm_number_of_trades_upper_bound": float(confirm_trade_upper),
+        "confirm_max_possible_return_pct": float(max_confirm_return),
+        "confirm_quote_pace_ratio_upper_bound": float(quote_pace_upper),
+        "confirm_trade_pace_ratio_upper_bound": float(trade_pace_upper),
+        "confirm_min_duration_ms": int(min_duration_ms),
+        "confirm_max_duration_ms": int(max_confirm_candles) * int(ltf_ms),
+    }
+
+
 def _targeted_ltf_backfill_seeds_for_symbol(
     *,
     symbol: str,
@@ -779,6 +852,9 @@ def _targeted_ltf_backfill_seeds_for_symbol(
         "impossible_quote_ratio": 0,
         "impossible_trade_ratio": 0,
         "impossible_runner_category_family": 0,
+        "impossible_confirm_return": 0,
+        "impossible_confirm_quote_pace": 0,
+        "impossible_confirm_trade_pace": 0,
     }
     total_pairs = max(0, len(prepared) - 1)
 
@@ -814,12 +890,16 @@ def _targeted_ltf_backfill_seeds_for_symbol(
 
         possible_quote_ratios: list[float] = []
         possible_trade_ratios: list[float] = []
+        possible_baseline_quotes: list[float] = []
+        possible_baseline_trades: list[float] = []
         for history_end in possible_history_ends:
             median_index = history_end - 1
             if median_index < 0:
                 continue
             baseline_quote = float(baseline_quote_median[median_index])
             baseline_trades = float(baseline_trade_median[median_index])
+            possible_baseline_quotes.append(baseline_quote)
+            possible_baseline_trades.append(baseline_trades)
             possible_quote_ratios.append(_safe_divide(pair_quote, baseline_quote))
             possible_trade_ratios.append(_safe_divide(pair_trades, baseline_trades))
         max_possible_quote_ratio = max((value for value in possible_quote_ratios if np.isfinite(value)), default=float("nan"))
@@ -855,6 +935,25 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 rejection_counts["impossible_runner_category_family"] += 1
                 continue
 
+        spec = ROLLING_PROFILE_SPECS.get(tf_set)
+        max_confirm_candles = int(spec.max_confirm_candles if spec is not None else config.ltf_max_confirm_candles)
+        min_confirm_candles = int(spec.min_confirm_candles if spec is not None else config.ltf_min_confirm_candles)
+        confirm_possible, confirm_bounds = _pair_can_pass_confirm_upper_bounds(
+            prepared=prepared,
+            idx=idx,
+            htf_ms=htf_ms,
+            ltf_ms=ltf_ms,
+            max_confirm_candles=max_confirm_candles,
+            min_confirm_candles=min_confirm_candles,
+            baseline_quote_values=possible_baseline_quotes,
+            baseline_trade_values=possible_baseline_trades,
+        )
+        if not confirm_possible:
+            reason = str(confirm_bounds.get("confirm_bound_reason") or "")
+            if reason in rejection_counts:
+                rejection_counts[reason] += 1
+            continue
+
         score = (
             float(max_possible_return) * 100.0
             + float(max_possible_range if np.isfinite(max_possible_range) else 0.0) * 25.0
@@ -877,6 +976,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                     "max_possible_trade_ratio": float(max_possible_trade_ratio),
                     "possible_history_ends": "|".join(str(value) for value in possible_history_ends),
                     **category_bounds,
+                    **confirm_bounds,
                 },
             )
         )
@@ -950,6 +1050,16 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "pair_category_S_possible": bool(bounds.get("pair_category_S_possible", False)),
                 "pair_current_vs_prior_spike_max_quote_upper_bound": bounds.get("pair_current_vs_prior_spike_max_quote_upper_bound", float("nan")),
                 "pair_pregrowth_max_single_return_upper_bound": bounds.get("pair_pregrowth_max_single_return_upper_bound", float("nan")),
+                "confirm_bound_model": bounds.get("confirm_bound_model", ""),
+                "confirm_bound_trading_signal": bool(bounds.get("confirm_bound_trading_signal", False)),
+                "confirm_bound_reason": bounds.get("confirm_bound_reason", ""),
+                "confirm_quote_volume_upper_bound": bounds.get("confirm_quote_volume_upper_bound", float("nan")),
+                "confirm_number_of_trades_upper_bound": bounds.get("confirm_number_of_trades_upper_bound", float("nan")),
+                "confirm_max_possible_return_pct": bounds.get("confirm_max_possible_return_pct", float("nan")),
+                "confirm_quote_pace_ratio_upper_bound": bounds.get("confirm_quote_pace_ratio_upper_bound", float("nan")),
+                "confirm_trade_pace_ratio_upper_bound": bounds.get("confirm_trade_pace_ratio_upper_bound", float("nan")),
+                "confirm_min_duration_ms": bounds.get("confirm_min_duration_ms", float("nan")),
+                "confirm_max_duration_ms": bounds.get("confirm_max_duration_ms", float("nan")),
             }
         )
 

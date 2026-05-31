@@ -1,3 +1,82 @@
+## 2026-05-31 - P481 unit-test validation
+
+Patch under test: P481 shared contract unit tests.
+
+Checks run locally:
+
+```text
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+.venv\Scripts\python.exe -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Result: new focused contract tests passed (`8 passed`). The guard and compileall passed. Broader legacy test files are not clean under the current architecture: `tests/test_htf_ltf_runner_discovery.py` has stale helper signatures/expectations and `tests/test_live2_market_watch.py` imports removed live-only signal helpers.
+
+Next validation: migrate those legacy tests to the shared seed-first core instead of tuning strategy thresholds from stale test failures.
+
+## 2026-05-31 - P480 planner speedup validation
+
+Patch under test: P480 cheap confirm upper-bound planner gate.
+
+Next validation:
+
+```text
+1. run a small runner discovery over a short window/symbol subset
+2. inspect htf_ltf_runner_targeted_ltf_plan.csv
+3. compare planned_pairs vs rejected_impossible_confirm_*
+4. confirm exact decision ledger still has selected/rejected/data_dependency rows
+5. do not compare profitability to older runs without noting the planner/hash contract change
+```
+
+Acceptance: planned LTF windows fall only because confirm return/quote pace/trade pace was mathematically impossible under loose HTF upper bounds. Missing next-HTF data must keep pairs rather than reject them.
+
+## 2026-05-31 - P479 multi-timeframe live smoke plan
+
+Patch under test: P479 default live 15s+30s decision streams.
+
+Next runtime validation should verify mechanics before edge:
+
+```text
+1. short live smoke with default config; no timeframe flag
+2. confirm diagnostics expose decision_status.engines for 15000 and 30000
+3. confirm live2_decision_ledger.csv contains 15s and 30s tf_set rows when signals/rejects occur
+4. inspect deadline_missed / budget_exhausted separately by timeframe
+5. inspect portfolio blocks for duplicate same-symbol signals from nearby 15s/30s snapshots
+```
+
+If deadline load rises materially, the next fix is scheduler budgeting/prioritization by active symbols and cheap impossible checks, not threshold tuning.
+
+## 2026-05-31 - P478 15s profile smoke plan
+
+Patch under test: P478 add `5m_15s` and `3m_15s`.
+
+Local validation already run: compile selected changed modules, decision contract guard, and core self-smoke. Next runtime validation should be small and controlled:
+
+```text
+1. live2 dry/small-notional smoke with --decision-timeframe-ms 15000
+2. matching short htf/ltf runner discovery covering the same symbols/window
+3. decision_parity_join by snapshot_hash
+4. inspect deadline_missed and data_dependency_not_ready before any signal-quality conclusion
+```
+
+Do not tune thresholds from the first 15s result. First question is whether 15s produces honest snapshots without deadline overload.
+
+## 2026-05-31 - P477 contract smoke checks
+
+Patch under test: P477 snapshot hash integrity and live cooldown parity.
+
+Checks run locally:
+
+```text
+python research_tools/pump_decision_core.py
+python -m research_tools.decision_contract_guard
+python -m compileall -q research_tools/pump_decision_core.py research_tools/anomaly_live2/signal.py research_tools/anomaly_live2/execution.py research_tools/htf_ltf_runner_discovery.py research_tools/decision_parity_join.py
+```
+
+Synthetic result: adding a non-ok explicit dependency to the same normalized candles now changes `snapshot_hash`, so the previous `same_hash selected vs data_dependency_not_ready` failure is closed. A no-selected confirm sequence now returns a rejected exact confirm snapshot with `ltf_confirm` present.
+
+Next validation: run a small overlapping live/backtest parity smoke and join ledgers by `snapshot_hash`. Do not tune thresholds until `same_snapshot_different_signal_verdict` is zero or explained as a real contract bug.
+
 ## 2026-05-30 - P462 live2 all-symbol deadline-load validation protocol
 
 Hypothesis: live2 deadline misses are dominated by expensive full rolling signal evaluation on candidates that already fail exact baseline-free prerequisites. An all-symbol impossibility gate should reduce `closed_bucket_was_not_evaluated_before_deadline` without hiding symbols or changing the trading contract.

@@ -77,6 +77,7 @@ class AnomalyLive2Config:
     universe_min_trade_count_24h: int = 0
     universe_min_auto_symbols: int = 300
     decision_timeframe_ms: int = 30_000
+    decision_timeframes_ms: tuple[int, ...] = (15_000, 30_000)
     decision_deadline_ms: int = 1_500
     decision_backlog_expire_ms: int = 10_000
     actionable_min_quote_volume: float = 2_500.0
@@ -232,6 +233,10 @@ class AnomalyLive2Config:
             raise ValueError("universe_min_auto_symbols must be <= universe_max_symbols")
         if self.decision_timeframe_ms <= 0:
             raise ValueError("decision_timeframe_ms must be > 0")
+        if not self.decision_timeframes_ms:
+            raise ValueError("decision_timeframes_ms must not be empty")
+        if any(int(value) <= 0 for value in self.decision_timeframes_ms):
+            raise ValueError("decision_timeframes_ms values must be > 0")
         if self.decision_deadline_ms <= 0:
             raise ValueError("decision_deadline_ms must be > 0")
         if self.decision_backlog_expire_ms <= 0:

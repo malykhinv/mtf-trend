@@ -1,7 +1,7 @@
 """Live2 signal adapter for the shared rolling seed-first decision core.
 
 The live adapter owns only orchestration state: it discovers closed rolling HTF
-seeds from in-memory 30s candles, keeps them pending, builds a source-neutral
+seeds from in-memory LTF candles, keeps them pending, builds a source-neutral
 ``DecisionSnapshot`` from closed live candles, and calls ``PumpDecisionCore``.
 It must not maintain a second live-only C/A/S matcher or confirm-backward path.
 """
@@ -38,6 +38,7 @@ LIVE2_ROLLING_RUNNER_PROFILES = (
     {
         "tf_set": "5m_30s",
         "htf_timeframe_ms": 300_000,
+        "ltf_timeframe_ms": 30_000,
         "htf_candles": 10,
         "min_confirm_candles": 2,
         "max_confirm_candles": 8,
@@ -46,10 +47,29 @@ LIVE2_ROLLING_RUNNER_PROFILES = (
     {
         "tf_set": "3m_30s",
         "htf_timeframe_ms": 180_000,
+        "ltf_timeframe_ms": 30_000,
         "htf_candles": 6,
         "min_confirm_candles": 2,
         "max_confirm_candles": 6,
         "profile_rank": 2,
+    },
+    {
+        "tf_set": "5m_15s",
+        "htf_timeframe_ms": 300_000,
+        "ltf_timeframe_ms": 15_000,
+        "htf_candles": 20,
+        "min_confirm_candles": 4,
+        "max_confirm_candles": 16,
+        "profile_rank": 3,
+    },
+    {
+        "tf_set": "3m_15s",
+        "htf_timeframe_ms": 180_000,
+        "ltf_timeframe_ms": 15_000,
+        "htf_candles": 12,
+        "min_confirm_candles": 4,
+        "max_confirm_candles": 12,
+        "profile_rank": 4,
     },
 )
 
@@ -110,7 +130,8 @@ class Live2SignalEngine:
 
         self._total_evaluations += 1
         self._discover_rolling_seeds(state=state, decision_candle=candle)
-        closed_30s = _closed_candles_for_timeframe(state=state, timeframe_ms=30_000)
+        ltf_timeframe_ms = int(candle.timeframe_ms)
+        closed_ltf = _closed_candles_for_timeframe(state=state, timeframe_ms=ltf_timeframe_ms)
         if not state.rolling_pending_seeds:
             self._last_dependency_reasons = ()
             self._last_reject_reasons = ()
@@ -131,8 +152,11 @@ class Live2SignalEngine:
                 continue
             max_confirm = int(profile["max_confirm_candles"])
             min_confirm = int(profile["min_confirm_candles"])
-            post_seed = _post_seed_ltf_candles(closed_30s=closed_30s, seed=seed, max_confirm=max_confirm)
-            expiry_ms = int(seed.seed_close_ms) + max_confirm * 30_000
+            profile_ltf_ms = int(profile["ltf_timeframe_ms"])
+            if profile_ltf_ms != ltf_timeframe_ms:
+                continue
+            post_seed = _post_seed_ltf_candles(closed_ltf=closed_ltf, seed=seed, max_confirm=max_confirm, ltf_timeframe_ms=ltf_timeframe_ms)
+            expiry_ms = int(seed.seed_close_ms) + max_confirm * ltf_timeframe_ms
             if len(post_seed) < min_confirm:
                 if int(candle.close_time_ms) >= expiry_ms:
                     self._consume_rolling_seed(state=state, seed=seed, outcome="expired")
@@ -151,8 +175,9 @@ class Live2SignalEngine:
             snapshot = _build_live_seed_first_snapshot(
                 state=state,
                 seed=seed,
-                closed_30s=closed_30s,
+                closed_ltf=closed_ltf,
                 decision_time_ms=int(candle.close_time_ms),
+                ltf_timeframe_ms=ltf_timeframe_ms,
             )
             verdict = evaluate_first_ltf_confirm_after_seed(
                 snapshot,
@@ -187,20 +212,21 @@ class Live2SignalEngine:
         return candidate_verdicts[-1]
 
     def _discover_rolling_seeds(self, *, state: SymbolState, decision_candle: Live2Candle) -> None:
-        if decision_candle.timeframe_ms != 30_000:
+        ltf_timeframe_ms = int(decision_candle.timeframe_ms)
+        if int(state.rolling_last_seed_discovery_close_ms_by_timeframe.get(ltf_timeframe_ms, 0) or 0) == int(decision_candle.close_time_ms):
             return
-        if state.rolling_last_seed_discovery_close_ms == int(decision_candle.close_time_ms):
-            return
-        closed_30s = _closed_candles_for_timeframe(state=state, timeframe_ms=30_000)
+        closed_ltf = _closed_candles_for_timeframe(state=state, timeframe_ms=ltf_timeframe_ms)
         for profile in LIVE2_ROLLING_RUNNER_PROFILES:
+            if int(profile["ltf_timeframe_ms"]) != ltf_timeframe_ms:
+                continue
             tf_set = str(profile["tf_set"])
             htf_candles = int(profile["htf_candles"])
             profile_rank = int(profile["profile_rank"])
             seed_candles = _closed_segment_before(
-                candles=closed_30s,
+                candles=closed_ltf,
                 end_open_ms=int(decision_candle.close_time_ms),
                 count=htf_candles,
-                timeframe_ms=30_000,
+                timeframe_ms=ltf_timeframe_ms,
             )
             if seed_candles is None:
                 continue
@@ -221,6 +247,7 @@ class Live2SignalEngine:
             state.rolling_last_seed_open_ms = int(seed_candles[0].open_time_ms)
             state.rolling_last_seed_close_ms = int(seed_candles[-1].close_time_ms)
         state.rolling_last_seed_discovery_close_ms = int(decision_candle.close_time_ms)
+        state.rolling_last_seed_discovery_close_ms_by_timeframe[ltf_timeframe_ms] = int(decision_candle.close_time_ms)
         state.rolling_pending_seed_count = len(state.rolling_pending_seeds)
 
     def _consume_rolling_seed(self, *, state: SymbolState, seed: Live2RollingSeedState, outcome: str) -> None:
@@ -400,17 +427,18 @@ def _rolling_profile_by_tf_set(tf_set: str) -> dict[str, object] | None:
 
 def _post_seed_ltf_candles(
     *,
-    closed_30s: tuple[Live2Candle, ...],
+    closed_ltf: tuple[Live2Candle, ...],
     seed: Live2RollingSeedState,
     max_confirm: int,
+    ltf_timeframe_ms: int,
 ) -> tuple[Live2Candle, ...]:
-    candles = tuple(item for item in closed_30s if int(item.open_time_ms) >= int(seed.seed_close_ms))
+    candles = tuple(item for item in closed_ltf if int(item.open_time_ms) >= int(seed.seed_close_ms))
     if not candles:
         return ()
     if int(candles[0].open_time_ms) != int(seed.seed_close_ms):
         return ()
     limited = candles[: max(0, int(max_confirm))]
-    expected = tuple(int(seed.seed_close_ms) + idx * 30_000 for idx in range(len(limited)))
+    expected = tuple(int(seed.seed_close_ms) + idx * int(ltf_timeframe_ms) for idx in range(len(limited)))
     if tuple(int(item.open_time_ms) for item in limited) != expected:
         return ()
     return tuple(limited)
@@ -436,13 +464,20 @@ def _build_live_seed_first_snapshot(
     *,
     state: SymbolState,
     seed: Live2RollingSeedState,
-    closed_30s: tuple[Live2Candle, ...],
+    closed_ltf: tuple[Live2Candle, ...],
     decision_time_ms: int,
+    ltf_timeframe_ms: int,
 ) -> DecisionSnapshot:
     profile = _rolling_profile_by_tf_set(seed.tf_set)
     htf_timeframe_ms = int(profile["htf_timeframe_ms"]) if profile is not None else 0
     context = (
-        _aggregate_ltf_history_to_rolling_htf(closed_ltf=closed_30s, tf_set=seed.tf_set, htf_timeframe_ms=htf_timeframe_ms, ltf_timeframe_ms=30_000, before_ms=int(seed.seed_open_ms))
+        _aggregate_ltf_history_to_rolling_htf(
+            closed_ltf=closed_ltf,
+            tf_set=seed.tf_set,
+            htf_timeframe_ms=htf_timeframe_ms,
+            ltf_timeframe_ms=int(ltf_timeframe_ms),
+            before_ms=int(seed.seed_open_ms),
+        )
         if htf_timeframe_ms > 0
         else ()
     )
@@ -454,7 +489,7 @@ def _build_live_seed_first_snapshot(
                 status="missing",
                 reason="live_seed_aligned_context_not_ready",
                 asof_ms=int(seed.seed_open_ms),
-                source="live2_30s_candle_ring",
+                source=f"live2_{int(ltf_timeframe_ms // 1000)}s_candle_ring",
             )
         )
     return DecisionSnapshot(
@@ -472,7 +507,7 @@ def _build_live_seed_first_snapshot(
         source_labels={
             "adapter": "live2_seed_first_core_adapter",
             "candle_source": "binance_futures_aggtrade_ws_or_startup_rest_ring",
-            "context_source": "live2_closed_30s_seed_aligned_htf_context",
+            "context_source": f"live2_closed_{int(ltf_timeframe_ms // 1000)}s_seed_aligned_htf_context",
         },
         features={
             "live_mark_status": state.mark_status,

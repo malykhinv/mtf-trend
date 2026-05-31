@@ -1,3 +1,51 @@
+## 2026-05-31 - P481 contract unit coverage
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Added focused unit coverage for the current shared-core contract and the fragile data-availability guards: snapshot hash inputs, exact rejected confirm snapshots, deterministic context slicing, 15s profile registration, safe HTF confirm upper-bound behavior, 5m OI availability timing, and independent live 15s/30s decision-bucket state.
+
+Validation: `.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q` passed with 8 tests; `decision_contract_guard` and compileall also passed. Existing legacy `tests/test_htf_ltf_runner_discovery.py` / `tests/test_live2_market_watch.py` still contain stale assertions/imports from older strategy paths and should be migrated separately rather than used as proof against the shared-core path.
+
+Next: migrate or retire legacy tests that still call removed live-only helpers or old discovery signatures, then run a small real runner discovery smoke.
+
+## 2026-05-31 - P480 cheap confirm upper-bound planner gate
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Runner discovery targeted LTF backfill now has an additional safe pre-entry planner gate: after seed/category upper bounds pass, it checks the next cheap HTF candle as a deliberately loose upper bound for the post-seed confirm horizon. It rejects before expensive LTF/1s backfill only when even the optimistic HTF-bound cannot satisfy shared-core minimum confirm return, quote pace, or trade pace. If the next HTF candle is missing or non-adjacent, the gate does not reject. New planner counters: `rejected_impossible_confirm_return`, `rejected_impossible_confirm_quote_pace`, `rejected_impossible_confirm_trade_pace`; planned rows expose `confirm_bound_*` fields.
+
+Honesty: this is a data-loading impossibility gate, not a runner-quality filter. It does not use future labels, exits, PnL, realized trade outcome, or post-entry replay. It may keep too many windows, but should not drop a window that could have produced a valid core confirm snapshot.
+
+Next: rerun a small runner discovery and inspect `htf_ltf_runner_targeted_ltf_plan.csv` before trusting speedup. Acceptance: nonzero confirm-bound rejects reduce planned LTF windows while exact selected snapshots still pass shared-core decision and data-dependency artifacts remain visible.
+
+## 2026-05-31 - P479 live multi-timeframe decision streams
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Live2 no longer treats 15s vs 30s as an operator-selected mode. It now runs independent deadline engines for both `15000` and `30000` ms decision streams by default. Per-symbol processed buckets and rolling seed discovery watermarks are stored per timeframe, so a 15s bucket cannot consume or block a 30s bucket for the same symbol. Both streams still share the same execution/portfolio layer, so selected signals compete honestly for actual capacity, existing-position, cooldown, fill and stop checks.
+
+Next: run a short live smoke and inspect `decision_status.engines` split by timeframe, `live2_decision_ledger.csv` `tf_set` mix, deadline misses, and duplicate same-symbol portfolio blocks before any signal-quality conclusion.
+
+## 2026-05-31 - P478 add 15s rolling profiles
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The shared rolling seed-first contract now supports `5m_15s` and `3m_15s` in addition to `5m_30s` and `3m_30s`; core version is `p478_add_15s_profiles`. The 15s profiles keep the same wall-clock confirmation requirement as 30s profiles: min confirm is 60s (`4x15s`), max confirm is 4m for 5m seed (`16x15s`) and 3m for 3m seed (`12x15s`). Live2 signal adapter is generalized to use the current decision candle timeframe. Backtest runner discovery now includes separate `5m_15s` and `3m_15s` profiles.
+
+Honesty: 15s profiles are parity/research candidates, not a proven edge. They increase live decision load and should be validated with a small controlled parity smoke before any threshold tuning. Category C/A matching is shared across supported profiles; the strict S category remains effectively the original `5m_30s`-specific shape in the matcher.
+
+Next: run a small `--decision-timeframe-ms 15000` live dry smoke and a matching short `run-htf-ltf-runner-discovery` window, then compare ledgers by `snapshot_hash` and inspect deadline misses before judging signal quality.
+
+## 2026-05-31 - P477 snapshot hash integrity and live cooldown parity
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The shared decision contract now treats data dependencies and candle `source_status` as core-affecting snapshot inputs; core version is `p477_snapshot_hash_integrity`. This fixes the P476 parity bug where identical `snapshot_hash` values could produce different `signal_verdict` when one adapter supplied a non-ok dependency and another did not. Rejected live no-category paths now return the final exact confirm-window verdict instead of an aggregate reject snapshot without `ltf_confirm`, improving live/backtest ledger joins for rejected signals. Core selected features now expose rolling HTF/LTF timeframe milliseconds so live cooldown can match the selected rolling profile.
+
+Accepted limitation: live and backtest may still use different data-acquisition mechanisms. Backtest can use cheap HTF planning before expensive LTF/1s backfill, and live can repair context through REST. Those belong to the data-availability layer; parity claims apply once both adapters have built a normalized decision snapshot.
+
+Next: run a controlled small parity smoke with overlapping data and compare `live2_decision_ledger.csv` vs `htf_ltf_runner_decision_ledger.csv` by `snapshot_hash`. Any `same_snapshot_different_signal_verdict` row is now a contract bug; `live_only_snapshot` / `backtest_only_snapshot` rows should first be explained by data-availability/planner coverage.
+
 ## 2026-05-31 - P476 deterministic seed-aligned context contract
 
 Current commit: UNKNOWN. Status: P476 PROPOSED. P465-P472/P474/P475 expected applied locally / UNKNOWN commit.

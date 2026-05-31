@@ -249,6 +249,7 @@ class SymbolState:
     rolling_pending_seeds: dict[str, Live2RollingSeedState] = field(default_factory=dict, repr=False)
     rolling_consumed_seed_keys: set[str] = field(default_factory=set, repr=False)
     rolling_last_seed_discovery_close_ms: int | None = None
+    rolling_last_seed_discovery_close_ms_by_timeframe: dict[int, int] = field(default_factory=dict, repr=False)
     rolling_last_seed_key: str = ""
     rolling_last_seed_open_ms: int | None = None
     rolling_last_seed_close_ms: int | None = None
@@ -264,6 +265,7 @@ class SymbolState:
     candle_timeframes_ms: tuple[int, ...] = LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS
     max_closed_candles: int = LIVE2_DEFAULT_MAX_CLOSED_CANDLES
     candle_book: Live2CandleBook = field(init=False, repr=False)
+    last_decision_bucket_ms_by_timeframe: dict[int, int] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         now_ms = utc_now_ms()
