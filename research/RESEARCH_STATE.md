@@ -1,3 +1,15 @@
+## 2026-06-01 - P491 backtest acceleration investigation
+
+Current commit: UNKNOWN. Status: PROPOSED / investigation only.
+
+The 30d HTF/LTF runner discovery should not be accelerated by filtering for future winners before 1s/LTF backfill. Safe acceleration must stay in the data-availability layer: a cheap planner may reject only when closed HTF/1m bounds prove that no exact 15s/30s `DecisionSnapshot` inside the coarse window could pass `PumpDecisionCore`. Missing data, uncertain bounds, or coarse features that cannot prove impossibility must keep the window and fetch exact LTF.
+
+Current code already has a safe HTF-pair/confirm upper-bound planner gate, but it still fetches long post-entry LTF replay windows for every exact rolling seed candidate before shared-core signal selection. In the 1d artifacts, `3m_30s` planned 7,699 pre-entry windows and 933 post-entry windows; `5m_30s` planned 2,872 pre-entry windows and 1,160 post-entry windows. Post-entry planned minutes were about 134k total, while selected signals were only 178. Deferring post-entry fetch until after core-selected/executable signals is the cleanest first speedup and does not change signal truthfulness.
+
+Second speedup candidate: add a pure coarse minute/HTF impossibility module before aggTrade->15s/30s backfill. It can safely check upper-bound seed return/quote/trade, upper-bound confirm return/quote/trade pace, and category-family necessary bounds. It must not infer P486 sustained internal seed flow, confirm acceleration/second-half shape, exits, PnL, runner labels, top-growth membership, or later highs/lows unless the bound is mathematically one-way and known at decision time.
+
+Next: implement P491a as two-phase exact replay: pre-entry LTF fetch -> exact shared-core selected signals -> post-entry LTF fetch only for selected/executable signals. Then implement P491b as an independent coarse prefilter with artifact-visible reasons and property tests proving selected exact snapshots are never prefiltered out.
+
 ## 2026-06-01 - P490 TP1 full-close dust rounding guard
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

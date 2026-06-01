@@ -1,3 +1,30 @@
+## 2026-06-01 - Backtest acceleration investigation
+
+Question: how to make 30d HTF/LTF runner discovery much faster without lookahead or optimistic bias.
+
+Finding: the safe target is not a winner filter. It is a data-loading impossibility planner. It may reject only when information available at the historical decision time proves no exact 15s/30s shared-core snapshot can pass. Otherwise it must fetch exact aggTrade-derived LTF and let `PumpDecisionCore` decide.
+
+Current bottlenecks from the local 1d artifacts:
+
+```text
+3m_30s: 7,699 pre-entry windows, 46,194 pre-entry minutes; 933 post-entry windows, 59,245.5 post-entry minutes; 954 candidates, 105 signals, 29 live-filtered trades.
+5m_30s: 2,872 pre-entry windows, 28,720 pre-entry minutes; 1,160 post-entry windows, 74,820 post-entry minutes; 1,160 candidates, 73 signals, 16 live-filtered trades.
+```
+
+Implication: post-entry LTF fetch is currently planned for exact rolling seed candidates before core signal selection. Deferring post-entry fetch until after selected/executable signals should cut post-entry minutes by roughly an order of magnitude on these 1d profiles, without changing signal selection or using future outcome.
+
+Proposed experiment sequence:
+
+```text
+1. P491a: split discovery into pre-entry exact replay and post-entry replay fetch after selected/executable signals only.
+2. Validate on 1d: selected signal snapshot hashes and signal verdicts must match the old path; only post-entry fetch volume should fall.
+3. P491b: add independent HTF/1m coarse impossibility prefilter before pre-entry aggTrade fetch.
+4. Validate with synthetic/property tests: any exact selected snapshot must be classified possible by the coarse prefilter.
+5. Run 1d/3d smoke before retrying 30d.
+```
+
+Explicitly forbidden for this acceleration: future top-growth membership, runner labels, post-entry high/low, trade result, PnL, survival to horizon, or any filter that answers "would this have worked" before exact signal selection.
+
 ## 2026-06-01 - live2 20260601_125722 all-position audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_125722`.

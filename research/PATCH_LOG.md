@@ -1,3 +1,28 @@
+## 2026-06-01 - P491 backtest acceleration investigation notes
+
+Status: PROPOSED / docs only. Builds on P480.
+
+Purpose: define a non-biased acceleration path for long HTF/LTF runner discovery runs before implementing code.
+
+Changes:
+
+- Documented that coarse prefilters may reject only mathematically impossible shared-core snapshots; uncertain/missing cases must proceed to exact LTF.
+- Identified the clean first speedup: defer post-entry LTF replay fetch until after exact shared-core signal selection.
+- Documented 1d artifact scale showing post-entry fetch is an order-of-magnitude waste source relative to selected signals.
+- Listed forbidden acceleration inputs: future runner/top-growth labels, exits, PnL, post-entry highs/lows, and result survival.
+
+Validation:
+
+```text
+No code changed. No tests run.
+```
+
+Risk:
+
+```text
+None to live or backtest behavior yet. The implementation risk is false rejection in a future coarse prefilter; acceptance tests must prove exact selected snapshots remain possible.
+```
+
 ## 2026-06-01 - P490 TP1 full-close dust rounding guard
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P489.
