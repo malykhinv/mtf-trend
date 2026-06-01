@@ -1,3 +1,31 @@
+## 2026-06-01 - live2 20260601_064408 post-P482 audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_064408`.
+
+Finding: P482 materially improved data quality visibility but did not yet make the run clean enough for edge conclusions.
+
+Observed during audit:
+
+```text
+market streams: ready; artifact writer: no drops
+selected_count: 0
+data_dependency_not_ready: 0
+signal rejects: visible in live2_decision_ledger.csv
+runtime gate: intermittently decision_latency_degraded
+dominant live failure: thousands of deadline_missed / expired backlog rows
+```
+
+Interpretation: the current live is better than `20260601_055306` because it is no longer mostly a missing-context run. The remaining failure is scheduler load: all-symbol dirty candles still reach deadline accounting before quiet buckets are cheaply drained. P483 addresses this by draining `market_quiet_non_actionable` buckets before candidate sorting.
+
+Next validation after P483 restart:
+
+```text
+1. total_deadline_missed should fall sharply, especially closed_bucket_was_not_evaluated_before_deadline
+2. decision_latency_degraded should stop dominating new-entry gating
+3. live2_decision_ledger.csv should show real rejected_signal_contract / entry_guard rows, not mostly deadline loss
+4. if selected_count remains zero, analyze reject funnel rather than thresholds first
+```
+
 ## 2026-06-01 - live2 20260601_055306 runtime audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_055306`.

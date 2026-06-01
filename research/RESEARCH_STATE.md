@@ -1,3 +1,13 @@
+## 2026-06-01 - P483 live2 quiet-drain deadline fix
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Run `.output/results/live2_anomaly_runs/20260601_064408` improved after P482: market streams were ready, data dependencies were no longer the dominant issue, and shared-core signal rejects became visible. It is still not edge evidence. At audit time live2 still had zero selected signals and thousands of deadline misses, dominated by all-symbol dirty buckets competing for the same 15s/30s decision deadlines.
+
+P483 changes the scheduler hot path only: before deadline sorting, quiet buckets that do not cross quote/trade/return actionability are marked `market_quiet_non_actionable` and removed from deadline competition. Open positions and symbols with pending rolling seeds are preserved. This should reduce routine `closed_bucket_was_not_evaluated_before_deadline` rows without changing shared-core thresholds or execution behavior.
+
+Next: restart live2 after P483 and compare `total_deadline_missed`, `decision_loop_overrun_count`, and the `deadline_decision` mix against run `20260601_064408`. Do not tune thresholds until the runtime gate stays ready long enough to exercise real signal/entry guards.
+
 ## 2026-06-01 - P482 live2 deadline/context root cause
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

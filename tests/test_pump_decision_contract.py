@@ -3,7 +3,12 @@ from dataclasses import replace
 import pandas as pd
 
 from research_tools.anomaly_live2.config import AnomalyLive2Config
-from research_tools.anomaly_live2.deadline import _last_decision_bucket_ms, _set_last_decision_bucket_ms
+from research_tools.anomaly_live2.deadline import (
+    Live2DeadlineEngine,
+    Live2DeadlineEngineConfig,
+    _last_decision_bucket_ms,
+    _set_last_decision_bucket_ms,
+)
 from research_tools.anomaly_live2.market_data.candles import Live2Candle
 from research_tools.anomaly_live2.signal import _pre_seed_context_for_live, _seed_passes_basic_core_gate
 from research_tools.anomaly_live2.state import SymbolStateStore
@@ -333,3 +338,46 @@ def test_live_basic_seed_gate_rejects_quiet_seed_before_pending_storage() -> Non
     )
 
     assert _seed_passes_basic_core_gate(seed_candles=quiet_seed, context=context) is False
+
+
+def test_live_deadline_engine_drains_quiet_buckets_before_deadline_records() -> None:
+    store = SymbolStateStore(("QUIET/USDT:USDT",))
+    close_ms = 30_000
+    candle = Live2Candle(
+        timeframe_ms=15_000,
+        open_time_ms=15_000,
+        close_time_ms=close_ms,
+        open=100.0,
+        high=100.01,
+        low=99.99,
+        close=100.0,
+        base_volume=0.1,
+        quote_volume=10.0,
+        number_of_trades=1,
+        taker_buy_quote_volume=5.0,
+        first_trade_time_ms=15_001,
+        last_trade_time_ms=close_ms - 1,
+        first_source="unit_test",
+        last_source="unit_test",
+    )
+    store.append_closed_candles(symbol="QUIET/USDT:USDT", candles=(candle,))
+    state = store.get_or_create("QUIET/USDT:USDT")
+    engine = Live2DeadlineEngine(
+        state_store=store,
+        config=Live2DeadlineEngineConfig(
+            timeframe_ms=15_000,
+            decision_deadline_ms=500,
+            backlog_expire_ms=30_000,
+            actionable_min_quote_volume=2_500.0,
+            actionable_min_trade_count=20,
+            actionable_min_abs_return_pct=0.003,
+        ),
+        live_decision_watermark_ms=lambda: close_ms,
+    )
+
+    result = engine.run_cycle(now_ms=close_ms + 5_000, candidates=(state,), symbols_total=1)
+
+    assert result.decisions == []
+    assert result.deadline_missed_count == 0
+    assert state.last_verdict == "market_quiet_non_actionable"
+    assert _last_decision_bucket_ms(state, 15_000) == candle.open_time_ms

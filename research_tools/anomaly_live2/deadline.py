@@ -577,8 +577,14 @@ class Live2DeadlineEngine:
         result = Live2DeadlineCycleResult(cycle_budget_ms=int(self.config.cycle_budget_ms))
         if candidates is None:
             candidates = self.state_store.decision_snapshot()
-        candidates = self._fresh_first_candidates(candidates, now_ms=sort_now_ms)
         total_symbols = len(candidates) if symbols_total is None else max(0, int(symbols_total))
+        live_watermark_ms = self.live_decision_watermark_ms()
+        candidates = self._drain_non_actionable_candidates(
+            candidates,
+            now_ms=sort_now_ms,
+            live_watermark_ms=live_watermark_ms,
+        )
+        candidates = self._fresh_first_candidates(candidates, now_ms=sort_now_ms)
         result.symbols_total = total_symbols
         result.skipped_symbols = max(0, total_symbols - len(candidates))
         if skip_signal_evaluation_reason:
@@ -588,7 +594,6 @@ class Live2DeadlineEngine:
             result.cycle_elapsed_ms = max(0, _monotonic_ms() - cycle_started_monotonic)
             self._last_cycle = result
             return result
-        live_watermark_ms = self.live_decision_watermark_ms()
         for index, state in enumerate(candidates):
             elapsed_ms = max(0, _monotonic_ms() - cycle_started_monotonic)
             if elapsed_ms > int(self.config.cycle_budget_ms):
@@ -686,6 +691,40 @@ class Live2DeadlineEngine:
             return (priority, max(0, latency_ms), -int(candle.close_time_ms), state.symbol)
 
         return tuple(sorted(candidates, key=key))
+
+    def _drain_non_actionable_candidates(
+        self,
+        candidates: tuple[SymbolState, ...],
+        *,
+        now_ms: int,
+        live_watermark_ms: int | None,
+    ) -> tuple[SymbolState, ...]:
+        """Mark quiet buckets before they compete for the decision deadline."""
+
+        if live_watermark_ms is None:
+            return candidates
+        kept: list[SymbolState] = []
+        for state in candidates:
+            ring = state.candle_book.rings.get(self.config.timeframe_ms)
+            candle = None if ring is None else ring.latest_closed()
+            if candle is None:
+                kept.append(state)
+                continue
+            if _last_decision_bucket_ms(state, self.config.timeframe_ms) == candle.open_time_ms:
+                state.decision_dirty_since_ms = None
+                continue
+            if candle.close_time_ms < int(live_watermark_ms):
+                kept.append(state)
+                continue
+            if state.status == SymbolLive2Status.IN_POSITION or state.rolling_pending_seeds:
+                kept.append(state)
+                continue
+            return_pct = _candle_return_pct(candle)
+            if self._actionable_reason(candle=candle, return_pct=return_pct) is None:
+                self._apply_non_actionable(state, candle=candle, now_ms=now_ms)
+                continue
+            kept.append(state)
+        return tuple(kept)
 
     def _evaluate_state(
         self,

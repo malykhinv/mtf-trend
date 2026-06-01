@@ -1,3 +1,28 @@
+## 2026-06-01 - P483 live2 quiet-drain before deadline sorting
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P482.
+
+Purpose: stop routine quiet all-symbol buckets from consuming the deadline engine budget before actionable/pending symbols are evaluated.
+
+Changes:
+
+- `Live2DeadlineEngine.run_cycle(...)` now obtains the live watermark before sorting candidates.
+- New `_drain_non_actionable_candidates(...)` marks quiet current buckets as `market_quiet_non_actionable` before `_fresh_first_candidates(...)`.
+- The drain keeps pre-live buckets, open positions, and symbols with pending rolling seeds in the normal evaluation path.
+- Added a unit test proving a late quiet 15s bucket is not emitted as `deadline_missed`.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+```
+
+Risk:
+
+```text
+This is a scheduler/load patch, not a strategy patch. It uses only the same cheap actionability thresholds already used by the deadline engine, and it explicitly does not drain pending-seed or in-position symbols. If deadline misses remain high after restart, the next root cause is likely expensive shared-core evaluation on truly actionable candidates, not quiet-market spam.
+```
+
 ## 2026-06-01 - P482 live2 actionable/context load fix
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P481.
