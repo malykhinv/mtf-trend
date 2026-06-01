@@ -1,3 +1,39 @@
+## 2026-06-01 - live2 20260601_102722 continued stability check
+
+Run: `.output/results/live2_anomaly_runs/20260601_102722`.
+
+Finding: current state is green, but not perfectly stable.
+
+Observed in the later check:
+
+```text
+current runtime gate: all_gates_ready
+session runtime gate: about 3994s allowed / 148s blocked (~96.4% trading uptime)
+current continuous allowed state: about 1874s
+decision_loop_max_elapsed_ms: 1867
+decision_loop_overrun_count: 2
+total_deadline_missed: 5
+selected_count: 0
+orders submitted: 0
+execution / supervisor integrity errors: 0
+market WS current: ticker, aggTrade, mark ready; 4/4 shards connected
+private user-data WS current: ready, but had 7 reconnects / DNS failures earlier
+```
+
+Blocked-time mix:
+
+```text
+all_gates_ready: about 3994s
+entry_stream_not_ready + user_data_stream_not_ready: about 64s
+decision_latency_degraded: about 60s
+entry_stream_not_ready: about 15s
+user_data_stream_not_ready: about 10s
+```
+
+Interpretation: P487 held up. The old all-symbol deadline flood is not back. The run had one real stream reconnect episode around 11:20-11:21 UTC and a few short latency watchdog holds. Top-growth had one Windows PermissionError, then a later top-growth write completed successfully. Still no selected trades, so this is runtime stability evidence only, not execution or edge evidence.
+
+Next: keep live running through the next hour boundary. If uptime remains above 95% and top-growth PermissionError does not repeat, do not patch. If the PermissionError repeats, patch top-growth writes with retry/backoff around atomic replace. If `decision_latency_degraded` keeps growing, profile the remaining JCT/FLNC confirm-return rejects.
+
 ## 2026-06-01 - live2 20260601_102722 post-P487 stability audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_102722`.
