@@ -1,3 +1,13 @@
+## 2026-06-01 - P489 PLTR pre-seed dump/rebound guard
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Run `.output/results/live2_anomaly_runs/20260601_125722` opened PLTR from an `A_resonance_prior_spike` selected snapshot. The entry was technically fresh and protected, but the signal nature was wrong for Pump Awakening: pre-seed pregrowth was about -2.07% with zero positive HTF pregrowth steps. This is not dormant market -> upward flow expansion; it is selloff/noise -> rebound.
+
+P489 makes this a shared-core seed-stage reject: `pre_seed_dump_rebound_pattern`. New ledgers expose pregrowth downside/path/range fields so future runs can show whether a symbol was rejected because the activity came from a dump/rebound prelude.
+
+Next: restart live2 and verify PLTR-like setups show `pre_seed_dump_rebound_pattern` in `live2_decision_ledger.csv`. Separately fix the LITE execution halt from the same run (`tp1_full_reduce_only_close_failed` on below-min precision amount); do not mix that with signal-nature work.
+
 ## 2026-06-01 - P488 Chinese-symbol live trade audit
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

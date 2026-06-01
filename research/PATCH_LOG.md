@@ -1,3 +1,28 @@
+## 2026-06-01 - P489 pre-seed dump/rebound guard
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P488.
+
+Purpose: reject PLTR-like rebounds where quote/trade activity wakes up because the coin just dumped and is being bought back, not because dormant flow is organically expanding upward.
+
+Changes:
+
+- `PumpDecisionCore` now computes pre-seed pregrowth downside features: `pregrowth_min_single_return_pct`, `pregrowth_min_path_return_pct`, `pregrowth_range_pct`, and `pre_seed_dump_rebound_ok`.
+- Mostly-red pregrowth windows with material cumulative, path, single-candle, or noisy dump are rejected at seed stage with `pre_seed_dump_rebound_pattern`.
+- Live2 and backtest decision ledgers expose the new pre-seed fields for audit.
+- Added focused regression coverage proving that the same seed/confirm snapshot is rejected when only the pre-seed context is changed into a dump/rebound prelude.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+```
+
+Risk:
+
+```text
+This intentionally reduces selected signals for rebound-after-dump setups. It can also reject some V-bottom reversals that later run; that is acceptable for the current strategy definition because we are not trying to trade short-cover rebounds after noisy selloffs.
+```
+
 ## 2026-06-01 - P488 stop child-fill PnL recovery
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P487.

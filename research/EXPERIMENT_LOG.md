@@ -1,3 +1,30 @@
+## 2026-06-01 - live2 PLTR dump/rebound trade review
+
+Run: `.output/results/live2_anomaly_runs/20260601_125722`.
+
+Trade: `PLTR/USDT:USDT`.
+
+Finding: PLTR should not be treated as pump-awakening evidence. The selected signal was a rebound after pre-seed downside, not quiet dormancy into growth.
+
+Observed from `live2_decision_ledger.csv`:
+
+```text
+selected snapshots: 3m_15s and 3m_30s
+selected category: A_resonance_prior_spike
+seed: 13:34:00-13:37:00 UTC
+confirm: 13:37:00-13:38:15/13:38:30 UTC
+signal entry: 160.07 / 160.19
+actual fill: 160.10, amount 0.07
+stop: 157.091415
+pregrowth_return_pct: -2.07%
+pregrowth_positive_step_share: 0.0
+htf_ltf_sustained_flow_ok: true
+```
+
+Interpretation: P486 worked on internal seed flow, but PLTR passed because the seed flow itself was sustained. The missing guard was pre-seed nature: the last pregrowth windows were red/down, so the later buy flow was a rebound/short-covering style event. P489 adds `pre_seed_dump_rebound_pattern` to reject this at seed stage.
+
+Additional live issue in the same run: trading was halted by an unrelated LITE integrity error, `tp1_full_reduce_only_close_failed` because the full TP1 close amount was below Binance precision/min amount. That needs a separate execution-sizing patch; it is not the PLTR signal-nature fix.
+
 ## 2026-06-01 - live2 Chinese-symbol trade audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_102722`.

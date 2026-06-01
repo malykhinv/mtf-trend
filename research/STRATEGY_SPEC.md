@@ -102,6 +102,8 @@ P486 note: the rolling seed must show sustained internal LTF flow, not a one-pri
 
 P487 note: seed-stage rejects are terminal for a rolling seed. Later LTF confirmation candles may repair confirm-stage rejects, but they cannot repair invalid seed nature such as `seed_ltf_flow_not_sustained`. Live must consume that pending seed immediately after the shared core returns a `rolling_htf_seed` reject, instead of rechecking it until max-confirm.
 
+P489 note: pre-seed price path is part of seed nature. A valid pump awakening should look like quiet/dormant market then growth, not a dump/noisy short-driven selloff followed by a rebound. The shared core rejects mostly-red pre-seed pregrowth windows with material cumulative/path/single-candle dump as `pre_seed_dump_rebound_pattern` at `rolling_htf_seed` stage. Live/backtest ledgers expose `pregrowth_min_single_return_pct`, `pregrowth_min_path_return_pct`, `pregrowth_range_pct`, and `pre_seed_dump_rebound_ok`.
+
 P466 note: C/A/S category matching is now a shared pure matcher in `research_tools/pump_decision_core.py`. Live and backtest adapters may still differ in how they discover seed/confirm windows until the seed-first evaluator migration is complete, but they must not carry separate C/A/S threshold copies.
 
 P467 note: `research_tools/pump_decision_core.py` now contains the executable source-neutral seed-first evaluator. It validates normalized candle continuity and data dependencies, computes seed/context/confirm features, applies the shared C/A/S matcher, and returns only the signal verdict. Live/backtest adapters are still pending migration and must become snapshot builders before parity claims are valid.

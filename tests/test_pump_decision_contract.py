@@ -171,6 +171,52 @@ def test_seed_ltf_tail_fade_flow_is_rejected_by_core() -> None:
     assert verdict.features["htf_ltf_tail_quote_share"] < 0.20
 
 
+def test_pre_seed_dump_rebound_is_rejected_by_core() -> None:
+    snapshot, post_seed = _build_seed_first_core_smoke_snapshot()
+    assert snapshot.rolling_seed is not None
+    selected = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed)
+    assert selected.verdict == "selected"
+
+    context = list(snapshot.rolling_seed.pre_seed_context_candles)
+    pregrowth = context[-5:]
+    start = float(pregrowth[0].open)
+    dumpy_pregrowth = []
+    for index, candle in enumerate(pregrowth):
+        open_price = start * (1.0 - 0.0042 * index)
+        close_price = start * (1.0 - 0.0042 * (index + 1))
+        dumpy_pregrowth.append(
+            DecisionCandle(
+                open_time_ms=candle.open_time_ms,
+                close_time_ms=candle.close_time_ms,
+                open=open_price,
+                high=max(open_price, close_price) * 1.0005,
+                low=min(open_price, close_price) * 0.9995,
+                close=close_price,
+                quote_volume=candle.quote_volume,
+                number_of_trades=candle.number_of_trades,
+                taker_buy_quote_volume=candle.taker_buy_quote_volume,
+                source=candle.source,
+            )
+        )
+    dumpy_context = tuple(context[:-5] + dumpy_pregrowth)
+    dumpy_snapshot = replace(
+        snapshot,
+        rolling_seed=replace(snapshot.rolling_seed, pre_seed_context_candles=dumpy_context),
+    )
+
+    verdict = evaluate_first_ltf_confirm_after_seed(dumpy_snapshot, post_seed_ltf_candles=post_seed)
+    min_confirm = ROLLING_PROFILE_SPECS[snapshot.tf_set].min_confirm_candles
+
+    assert verdict.verdict == "rejected"
+    assert verdict.rejects[0].reason == "pre_seed_dump_rebound_pattern"
+    assert verdict.rejects[0].stage == "rolling_htf_seed"
+    assert verdict.snapshot.ltf_confirm is not None
+    assert verdict.snapshot.ltf_confirm.confirm_end_ms == post_seed[min_confirm - 1].close_time_ms
+    assert verdict.features["pre_seed_dump_rebound_ok"] is False
+    assert verdict.features["pregrowth_return_pct"] <= -0.012
+    assert verdict.features["pregrowth_positive_step_share"] == 0.0
+
+
 def test_extra_adapter_history_does_not_change_contract_hash() -> None:
     snapshot, post_seed = _build_seed_first_core_smoke_snapshot()
     selected = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed)

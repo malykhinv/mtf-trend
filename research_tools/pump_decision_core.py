@@ -16,7 +16,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 
 ROLLING_DECISION_CONTRACT_ID = "rolling_htf_seed_first_ltf_confirm_v1"
-ROLLING_DECISION_CORE_VERSION = "p478_add_15s_profiles"
+ROLLING_DECISION_CORE_VERSION = "p489_pre_seed_dump_rebound_guard"
 
 DecisionSource = Literal["live", "backtest", "parity_replay", "test"]
 DecisionVerdictType = Literal["selected", "rejected", "data_dependency_not_ready"]
@@ -47,6 +47,11 @@ ROLLING_CONTEXT_MIN_WINDOWS = max(ROLLING_BASELINE_WINDOWS, ROLLING_DORMANCY_WIN
 ROLLING_SEED_MIN_HTF_QUOTE_RATIO = 5.0
 ROLLING_SEED_MIN_HTF_TRADE_RATIO = 5.0
 ROLLING_SEED_MIN_HTF_RETURN_PCT = 0.0100
+ROLLING_PRE_SEED_MAX_DUMP_RETURN_PCT = -0.0120
+ROLLING_PRE_SEED_MAX_DUMP_PATH_RETURN_PCT = -0.0150
+ROLLING_PRE_SEED_MAX_SINGLE_DUMP_RETURN_PCT = -0.0080
+ROLLING_PRE_SEED_MAX_DUMP_POSITIVE_STEP_SHARE = 0.35
+ROLLING_PRE_SEED_MAX_NOISY_DUMP_RANGE_PCT = 0.0250
 ROLLING_LTF_MIN_CONFIRM_RETURN_PCT = 0.004
 ROLLING_LTF_MIN_QUOTE_PACE_RATIO = 3.0
 ROLLING_LTF_MIN_TRADE_PACE_RATIO = 3.0
@@ -708,9 +713,23 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
     dormancy_trade_ratio = _safe_divide(seed_candle.number_of_trades, dormancy_trades)
 
     pregrowth_return_pct = _safe_divide(float(pregrowth[-1].close) - float(pregrowth[0].open), float(pregrowth[0].open)) if pregrowth else float("nan")
-    pregrowth_max_single = _finite_max([_candle_return(item) for item in pregrowth])
+    pregrowth_single_returns = [_candle_return(item) for item in pregrowth]
+    pregrowth_max_single = _finite_max(pregrowth_single_returns)
+    pregrowth_min_single = _finite_min(pregrowth_single_returns)
+    pregrowth_start = float(pregrowth[0].open) if pregrowth else float("nan")
+    pregrowth_min_path_return = _safe_divide(_finite_min([item.low for item in pregrowth]) - pregrowth_start, pregrowth_start) if pregrowth else float("nan")
+    pregrowth_high = _finite_max([item.high for item in pregrowth])
+    pregrowth_low = _finite_min([item.low for item in pregrowth])
+    pregrowth_range_pct = _safe_divide(pregrowth_high - pregrowth_low, pregrowth_start) if pregrowth else float("nan")
     positive_steps = [1.0 if float(item.close) > float(item.open) else 0.0 for item in pregrowth]
     pregrowth_positive_share = _safe_divide(sum(positive_steps), len(positive_steps)) if positive_steps else float("nan")
+    pre_seed_dump_rebound_ok = _pre_seed_dump_rebound_ok(
+        pregrowth_return_pct=pregrowth_return_pct,
+        pregrowth_min_path_return_pct=pregrowth_min_path_return,
+        pregrowth_min_single_return_pct=pregrowth_min_single,
+        pregrowth_positive_step_share=pregrowth_positive_share,
+        pregrowth_range_pct=pregrowth_range_pct,
+    )
 
     ltf_features = _ltf_confirmation_features(confirm.confirm_candles, baseline_quote=baseline_quote, baseline_trades=baseline_trades, htf_ms=htf_ms)
     prior_spike = _prior_spike_features(context=context, current=seed_candle)
@@ -759,7 +778,11 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
         "dormancy_to_anomaly_trade_ratio": dormancy_trade_ratio,
         "pregrowth_return_pct": pregrowth_return_pct,
         "pregrowth_max_single_return_pct": pregrowth_max_single,
+        "pregrowth_min_single_return_pct": pregrowth_min_single,
+        "pregrowth_min_path_return_pct": pregrowth_min_path_return,
+        "pregrowth_range_pct": pregrowth_range_pct,
         "pregrowth_positive_step_share": pregrowth_positive_share,
+        "pre_seed_dump_rebound_ok": pre_seed_dump_rebound_ok,
         "signal_entry_price": entry,
         "initial_stop_at_decision": stop,
         "initial_risk_pct_at_decision": initial_risk_pct,
@@ -777,9 +800,36 @@ def _seed_reject_reason(features: Mapping[str, object]) -> str | None:
         return "seed_htf_quote_ratio_below_min"
     if _finite_float(features.get("htf_trade_ratio")) < ROLLING_SEED_MIN_HTF_TRADE_RATIO:
         return "seed_htf_trade_ratio_below_min"
+    if features.get("pre_seed_dump_rebound_ok") is False:
+        return "pre_seed_dump_rebound_pattern"
     if features.get("htf_ltf_sustained_flow_ok") is False:
         return "seed_ltf_flow_not_sustained"
     return None
+
+
+def _pre_seed_dump_rebound_ok(
+    *,
+    pregrowth_return_pct: object,
+    pregrowth_min_path_return_pct: object,
+    pregrowth_min_single_return_pct: object,
+    pregrowth_positive_step_share: object,
+    pregrowth_range_pct: object,
+) -> bool:
+    """Reject rebound-after-dump seeds; pump awakening should emerge from quiet dormancy."""
+
+    positive_share = _finite_float(pregrowth_positive_step_share)
+    if not math.isfinite(positive_share):
+        return True
+    mostly_red = positive_share <= ROLLING_PRE_SEED_MAX_DUMP_POSITIVE_STEP_SHARE
+    cumulative_drop = _finite_float(pregrowth_return_pct) <= ROLLING_PRE_SEED_MAX_DUMP_RETURN_PCT
+    path_drop = _finite_float(pregrowth_min_path_return_pct) <= ROLLING_PRE_SEED_MAX_DUMP_PATH_RETURN_PCT
+    single_drop = _finite_float(pregrowth_min_single_return_pct) <= ROLLING_PRE_SEED_MAX_SINGLE_DUMP_RETURN_PCT
+    noisy_dump = (
+        _finite_float(pregrowth_range_pct) >= ROLLING_PRE_SEED_MAX_NOISY_DUMP_RANGE_PCT
+        and _finite_float(pregrowth_min_path_return_pct) <= ROLLING_PRE_SEED_MAX_DUMP_RETURN_PCT
+        and positive_share <= 0.50
+    )
+    return not (mostly_red and (cumulative_drop or path_drop or single_drop or noisy_dump))
 
 
 def _confirm_reject_reason(features: Mapping[str, object]) -> str | None:
