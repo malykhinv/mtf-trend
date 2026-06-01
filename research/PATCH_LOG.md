@@ -1,3 +1,27 @@
+## 2026-06-01 - P490 TP1 full-close dust rounding guard
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P489.
+
+Purpose: prevent profitable tiny positions from halting live when exchange-reported position amount is dust-rounded below the symbol's minimum order precision.
+
+Changes:
+
+- `Live2PositionSupervisor` now computes full-TP1 reduce-only close amount as `max(abs(exchange_amount), protected_remaining)` instead of blindly using the fetched exchange amount.
+- Partial TP1 close still uses the exchange amount fraction, preserving the existing contract for runner remainders.
+- Added regression tests for LITE-like `0.009999999` exchange amount with protected remaining `0.01`, and for unchanged partial-close sizing.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_live2_position_supervisor_recovery.py -q
+```
+
+Risk:
+
+```text
+For full close only, the submitted reduce-only amount may be slightly above the fetched exchange amount when local protected state has the precise opened quantity. This is intentional for dust-rounded exchange reads and should be safe with reduce-only semantics. If an exchange rejects over-sized reduce-only closes on another venue, artifacts will still expose the failure.
+```
+
 ## 2026-06-01 - P489 pre-seed dump/rebound guard
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P488.

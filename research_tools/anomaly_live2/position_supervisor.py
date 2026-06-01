@@ -782,7 +782,11 @@ class Live2PositionSupervisor:
         now_ms: int,
     ) -> Live2PositionSupervisorAction:
         close_fraction = float(self.config.tp1_close_fraction)
-        close_amount = float(exchange_amount) if close_fraction >= 1.0 else float(exchange_amount) * close_fraction
+        close_amount = _tp1_reduce_only_close_amount(
+            position=position,
+            exchange_amount=exchange_amount,
+            close_fraction=close_fraction,
+        )
         if close_amount <= self.config.min_remaining_amount:
             return self._integrity_error(
                 position=position,
@@ -1332,6 +1336,19 @@ def _latest_stream_price(state: SymbolState) -> float | None:
     if state.ticker_last_price is not None and state.ticker_last_price > 0:
         return state.ticker_last_price
     return None
+
+
+def _tp1_reduce_only_close_amount(
+    *,
+    position: Live2ProtectedPosition,
+    exchange_amount: float,
+    close_fraction: float,
+) -> float:
+    exchange_abs = abs(float(exchange_amount))
+    protected_remaining = abs(float(position.remaining_amount))
+    if close_fraction >= 1.0:
+        return max(exchange_abs, protected_remaining)
+    return exchange_abs * float(close_fraction)
 
 
 def _post_entry_closed_candles(

@@ -1,7 +1,7 @@
 import pytest
 
 from research_tools.anomaly_live2.execution import Live2ProtectedPosition
-from research_tools.anomaly_live2.position_supervisor import Live2PositionSupervisor
+from research_tools.anomaly_live2.position_supervisor import Live2PositionSupervisor, _tp1_reduce_only_close_amount
 
 
 class _ReadyExecution:
@@ -65,3 +65,65 @@ def test_stop_close_recovery_matches_binance_child_reduce_only_fill() -> None:
     assert recovered["realized_pnl_usdt"] == pytest.approx(0.05)
     assert recovered["exit_fill_price"] == pytest.approx(1.01)
     assert recovered["exit_filled_amount"] == pytest.approx(5.0)
+
+
+def test_tp1_full_close_amount_uses_protected_remaining_when_exchange_amount_is_dust_rounded() -> None:
+    position = Live2ProtectedPosition(
+        position_id="LITE_USDT_USDT_100_1",
+        symbol="LITE/USDT:USDT",
+        opened_at_ms=100,
+        entry_order_id="1",
+        entry_client_order_id="l2e_LITE_USDT_USDT_100",
+        entry_fill_price=853.64,
+        amount=0.01,
+        stop_price=827.23,
+        stop_order_id="stop-order-id",
+        stop_client_order_id="l2s_LITE_USDT_USDT_100",
+        pre_position_amount=0.0,
+        post_position_amount=0.01,
+        category_id="test",
+        signal_entry_price=853.16,
+        initial_risk_pct=0.03,
+        tp1_price=872.60,
+        initial_amount=0.01,
+        remaining_amount=0.01,
+    )
+
+    close_amount = _tp1_reduce_only_close_amount(
+        position=position,
+        exchange_amount=0.009999999,
+        close_fraction=1.0,
+    )
+
+    assert close_amount == pytest.approx(0.01)
+
+
+def test_tp1_partial_close_amount_still_uses_exchange_amount_fraction() -> None:
+    position = Live2ProtectedPosition(
+        position_id="AAA_USDT_USDT_100_1",
+        symbol="AAA/USDT:USDT",
+        opened_at_ms=100,
+        entry_order_id="1",
+        entry_client_order_id="l2e_AAA_USDT_USDT_100",
+        entry_fill_price=1.0,
+        amount=10.0,
+        stop_price=0.99,
+        stop_order_id="stop-order-id",
+        stop_client_order_id="l2s_AAA_USDT_USDT_100",
+        pre_position_amount=0.0,
+        post_position_amount=10.0,
+        category_id="test",
+        signal_entry_price=1.0,
+        initial_risk_pct=0.01,
+        tp1_price=1.02,
+        initial_amount=10.0,
+        remaining_amount=10.0,
+    )
+
+    close_amount = _tp1_reduce_only_close_amount(
+        position=position,
+        exchange_amount=9.8,
+        close_fraction=0.5,
+    )
+
+    assert close_amount == pytest.approx(4.9)

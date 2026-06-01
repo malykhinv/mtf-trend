@@ -1,3 +1,13 @@
+## 2026-06-01 - P490 TP1 full-close dust rounding guard
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The LITE run exposed a live-safety bug, not a strategy bug: a profitable full TP1 close on a tiny position could fail because fetched exchange amount was dust-rounded below Binance's minimum amount precision, then emergency close flattened the position but live remained halted by `position_integrity_error`.
+
+P490 changes full TP1 close sizing to use the larger of exchange amount and locally protected remaining amount. This should let LITE-like `0.009999999`/`0.01` cases close normally and keep supervisor/execution ready after final close verification.
+
+Next: restart live after P489/P490 and verify the next tiny full-TP1 close emits `position_tp1_full_close_verified` or a normal final close, without `tp1_full_reduce_only_close_failed` and without `execution_not_ready`.
+
 ## 2026-06-01 - live2 20260601_125722 position audit state
 
 Current commit: UNKNOWN. Status: analysis only.
