@@ -217,6 +217,19 @@ class Live2SignalEngine:
                 return item
         return candidate_verdicts[-1]
 
+    def prepare_seed_first_tick(self, *, state: SymbolState, candle: Live2Candle) -> bool:
+        """Discover current-tick seeds and report whether this TF can be evaluated."""
+
+        self._discover_rolling_seeds(state=state, decision_candle=candle)
+        return self.has_pending_seed_for_timeframe(state=state, timeframe_ms=int(candle.timeframe_ms))
+
+    def has_pending_seed_for_timeframe(self, *, state: SymbolState, timeframe_ms: int) -> bool:
+        for seed in state.rolling_pending_seeds.values():
+            profile = _rolling_profile_by_tf_set(seed.tf_set)
+            if profile is not None and int(profile["ltf_timeframe_ms"]) == int(timeframe_ms):
+                return True
+        return False
+
     def _discover_rolling_seeds(self, *, state: SymbolState, decision_candle: Live2Candle) -> None:
         ltf_timeframe_ms = int(decision_candle.timeframe_ms)
         if int(state.rolling_last_seed_discovery_close_ms_by_timeframe.get(ltf_timeframe_ms, 0) or 0) == int(decision_candle.close_time_ms):

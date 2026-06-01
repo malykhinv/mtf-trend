@@ -716,12 +716,24 @@ class Live2DeadlineEngine:
             if candle.close_time_ms < int(live_watermark_ms):
                 kept.append(state)
                 continue
-            if state.status == SymbolLive2Status.IN_POSITION or state.rolling_pending_seeds:
+            has_pending_seed = self.signal_engine.has_pending_seed_for_timeframe(
+                state=state,
+                timeframe_ms=self.config.timeframe_ms,
+            )
+            if state.status == SymbolLive2Status.IN_POSITION or has_pending_seed:
                 kept.append(state)
                 continue
             return_pct = _candle_return_pct(candle)
             if self._actionable_reason(candle=candle, return_pct=return_pct) is None:
                 self._apply_non_actionable(state, candle=candle, now_ms=now_ms)
+                continue
+            if not self.signal_engine.prepare_seed_first_tick(state=state, candle=candle):
+                self._apply_non_actionable(
+                    state,
+                    candle=candle,
+                    now_ms=now_ms,
+                    reason="no_pending_or_new_rolling_seed_candidate",
+                )
                 continue
             kept.append(state)
         return tuple(kept)
@@ -1029,11 +1041,18 @@ class Live2DeadlineEngine:
         state.decision_deadline_ms = None
         state.actionable_since_ms = None
 
-    def _apply_non_actionable(self, state: SymbolState, *, candle: Live2Candle, now_ms: int) -> None:
+    def _apply_non_actionable(
+        self,
+        state: SymbolState,
+        *,
+        candle: Live2Candle,
+        now_ms: int,
+        reason: str = "no_actionable_quote_trade_or_return_threshold_crossed",
+    ) -> None:
         state.status = SymbolLive2Status.WATCHING
         _set_last_decision_bucket_ms(state, self.config.timeframe_ms, candle.open_time_ms)
         state.last_verdict = "market_quiet_non_actionable"
-        state.last_verdict_reason = "no_actionable_quote_trade_or_return_threshold_crossed"
+        state.last_verdict_reason = reason
         state.decision_dirty_since_ms = None
         state.updated_ms = now_ms
         state.decision_deadline_ms = None

@@ -1,3 +1,13 @@
+## 2026-06-01 - P484 live2 seed-possible scheduler gate
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Run `.output/results/live2_anomaly_runs/20260601_071606` showed P483 was insufficient. Trading uptime was about half the session and the run accumulated about 12k `closed_bucket_was_not_evaluated_before_deadline` rows. Data streams and artifacts were healthy; the bottleneck was that liquid symbols passed the absolute quote/trade actionability gate even when no pending/new rolling seed existed, so they still flooded the deadline queue.
+
+P484 adds a seed-possible scheduler gate before deadline sorting. For non-position symbols without a pending seed on the current decision timeframe, the live signal adapter now performs only current-tick seed discovery. If no pending/new seed exists, the bucket is marked `market_quiet_non_actionable` with `no_pending_or_new_rolling_seed_candidate` and is not allowed to consume deadline budget. This preserves the seed-first contract: without a rolling seed, the shared core cannot produce a trade.
+
+Next: restart live2 after P484 and inspect whether `closed_bucket_was_not_evaluated_before_deadline`, `decision_loop_overrun_count`, and `decision_latency_degraded` collapse. If misses remain, profile the cost of seed discovery itself or true pending-seed core evaluation; do not change thresholds first.
+
 ## 2026-06-01 - P483 live2 quiet-drain deadline fix
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

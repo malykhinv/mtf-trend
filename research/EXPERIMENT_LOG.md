@@ -1,3 +1,32 @@
+## 2026-06-01 - live2 20260601_071606 post-P483 audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_071606`.
+
+Finding: P483 did not restore acceptable trading uptime. The run is still runtime evidence, not edge evidence.
+
+Observed during audit:
+
+```text
+selected_count: 0
+data_dependency_not_ready: 0
+deadline_missed: ~11k total in status, ~12k grouped in summary
+dominant reason: closed_bucket_was_not_evaluated_before_deadline
+runtime gate: decision_latency_degraded
+session seconds: roughly half allowed / half blocked
+artifact writer: ready, no drops
+```
+
+Interpretation: the absolute quote/trade/return actionability gate is too broad for liquid symbols. Many buckets are "active" in the market-data sense, but impossible for the seed-first strategy because no rolling seed is pending or newly discovered. P484 adds a seed-possible scheduler gate before deadline sorting.
+
+Next validation after P484 restart:
+
+```text
+1. closed_bucket_was_not_evaluated_before_deadline should fall sharply
+2. last_cycle.checked_symbols should track pending/new-seed symbols, not liquid-universe size
+3. trading uptime should recover if seed discovery itself is cheap enough
+4. if degradation remains, measure seed-discovery/core-evaluation cost separately
+```
+
 ## 2026-06-01 - live2 20260601_064408 post-P482 audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_064408`.

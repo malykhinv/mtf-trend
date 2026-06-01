@@ -381,3 +381,47 @@ def test_live_deadline_engine_drains_quiet_buckets_before_deadline_records() -> 
     assert result.deadline_missed_count == 0
     assert state.last_verdict == "market_quiet_non_actionable"
     assert _last_decision_bucket_ms(state, 15_000) == candle.open_time_ms
+
+
+def test_live_deadline_engine_drains_actionable_bucket_without_seed_candidate() -> None:
+    store = SymbolStateStore(("HOT/USDT:USDT",))
+    close_ms = 30_000
+    candle = Live2Candle(
+        timeframe_ms=15_000,
+        open_time_ms=15_000,
+        close_time_ms=close_ms,
+        open=100.0,
+        high=100.5,
+        low=99.9,
+        close=100.4,
+        base_volume=100.0,
+        quote_volume=10_000.0,
+        number_of_trades=100,
+        taker_buy_quote_volume=6_000.0,
+        first_trade_time_ms=15_001,
+        last_trade_time_ms=close_ms - 1,
+        first_source="unit_test",
+        last_source="unit_test",
+    )
+    store.append_closed_candles(symbol="HOT/USDT:USDT", candles=(candle,))
+    state = store.get_or_create("HOT/USDT:USDT")
+    engine = Live2DeadlineEngine(
+        state_store=store,
+        config=Live2DeadlineEngineConfig(
+            timeframe_ms=15_000,
+            decision_deadline_ms=500,
+            backlog_expire_ms=30_000,
+            actionable_min_quote_volume=2_500.0,
+            actionable_min_trade_count=20,
+            actionable_min_abs_return_pct=0.003,
+        ),
+        live_decision_watermark_ms=lambda: close_ms,
+    )
+
+    result = engine.run_cycle(now_ms=close_ms + 5_000, candidates=(state,), symbols_total=1)
+
+    assert result.decisions == []
+    assert result.deadline_missed_count == 0
+    assert state.last_verdict == "market_quiet_non_actionable"
+    assert state.last_verdict_reason == "no_pending_or_new_rolling_seed_candidate"
+    assert _last_decision_bucket_ms(state, 15_000) == candle.open_time_ms

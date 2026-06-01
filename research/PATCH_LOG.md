@@ -1,3 +1,29 @@
+## 2026-06-01 - P484 live2 seed-possible scheduler gate
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P483.
+
+Purpose: keep high-volume but seed-impossible liquid-symbol buckets out of the live deadline queue.
+
+Changes:
+
+- `Live2SignalEngine.prepare_seed_first_tick(...)` discovers current-tick rolling seeds without running full core/entry evaluation.
+- `Live2SignalEngine.has_pending_seed_for_timeframe(...)` checks pending seeds against the active 15s/30s engine timeframe.
+- `Live2DeadlineEngine._drain_non_actionable_candidates(...)` now keeps only positions, current-TF pending seeds, or buckets that create a valid current-TF seed candidate.
+- Actionable quote/trade/return buckets with no pending/new seed are marked `market_quiet_non_actionable` with reason `no_pending_or_new_rolling_seed_candidate`.
+- Added unit coverage for a high-quote/high-trade bucket that would have previously entered the deadline queue despite lacking enough seed context.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+```
+
+Risk:
+
+```text
+This is still a scheduler gate, not a profitability filter. It must stay aligned with the seed-first contract: only buckets that cannot produce a trade because no pending/new rolling seed exists are drained. Pending seeds and in-position symbols remain evaluable.
+```
+
 ## 2026-06-01 - P483 live2 quiet-drain before deadline sorting
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P482.
