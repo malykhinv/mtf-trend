@@ -725,6 +725,10 @@ class Live2DeadlineEngine:
             )
             return None
         return_pct = _candle_return_pct(candle)
+        actionable_reason = self._actionable_reason(candle=candle, return_pct=return_pct)
+        if actionable_reason is None and state.status != SymbolLive2Status.IN_POSITION:
+            self._apply_non_actionable(state, candle=candle, now_ms=candidate_started_ms)
+            return None
         deadline_ms = candle.close_time_ms + self.config.decision_deadline_ms
         pre_signal_latency_ms = candidate_started_ms - candle.close_time_ms
         signal_decision: Live2SignalDecision | None = None
@@ -737,6 +741,7 @@ class Live2DeadlineEngine:
             "bucket_close_to_candidate_start_ms": max(0, pre_signal_latency_ms),
             "decision_deadline_ms": deadline_ms,
             "decision_model": "rolling_htf_seed_first_ltf_confirm_v1",
+            "actionable_reason": actionable_reason or "in_position_supervision",
         }
         verdict: str
         reason: str

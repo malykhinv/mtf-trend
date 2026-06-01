@@ -1,3 +1,22 @@
+## 2026-06-01 - live2 20260601_055306 runtime audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_055306`.
+
+Finding: this run is not edge evidence. It primarily exposed a runtime architecture problem:
+
+```text
+total_decisions ~79k
+total_deadline_missed ~57k
+selected_count 0
+runtime gate: no_new_entries / decision_latency_degraded
+dominant dependency: pre_seed_context:live_seed_aligned_context_not_ready
+market streams: ticker/aggTrade/mark ready, shards connected, no reconnect storm
+```
+
+Interpretation: live2 was evaluating too many all-symbol buckets and generating pending rolling seeds without usable pre-seed context. P482 addresses this with an actionable bucket gate, context-ready seed storage, 1m-backed minute-aligned context, and basic shared-core seed gating.
+
+Next validation after restart: watch `decision_status.engines` for much lower deadline misses, lower dependency spam, and non-degraded runtime gate before interpreting selected/rejected signal quality.
+
 ## 2026-05-31 - P481 unit-test validation
 
 Patch under test: P481 shared contract unit tests.

@@ -13,9 +13,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from research_tools.pump_decision_core import (
+    ROLLING_BASELINE_WINDOWS,
     ROLLING_CATEGORY_PRIORITY,
     ROLLING_DECISION_CONTRACT_ID,
     ROLLING_DECISION_CORE_VERSION,
+    ROLLING_SEED_MIN_HTF_QUOTE_RATIO,
+    ROLLING_SEED_MIN_HTF_RETURN_PCT,
+    ROLLING_SEED_MIN_HTF_TRADE_RATIO,
     DataDependency,
     DecisionCandle,
     DecisionSnapshot,
@@ -119,6 +123,8 @@ class Live2SignalEngine:
         self._total_selected = 0
         self._total_rejected = 0
         self._total_data_dependency_not_ready = 0
+        self._total_seed_context_not_ready_skipped = 0
+        self._total_seed_basic_gate_rejected = 0
         self._selected_by_category: Counter[str] = Counter()
         self._dependency_reason_counts: Counter[str] = Counter()
         self._reject_reason_counts: Counter[str] = Counter()
@@ -221,6 +227,7 @@ class Live2SignalEngine:
                 continue
             tf_set = str(profile["tf_set"])
             htf_candles = int(profile["htf_candles"])
+            htf_timeframe_ms = int(profile["htf_timeframe_ms"])
             profile_rank = int(profile["profile_rank"])
             seed_candles = _closed_segment_before(
                 candles=closed_ltf,
@@ -232,6 +239,20 @@ class Live2SignalEngine:
                 continue
             seed_key = f"{tf_set}:{int(seed_candles[0].open_time_ms)}:{int(seed_candles[-1].close_time_ms)}"
             if seed_key in state.rolling_consumed_seed_keys or seed_key in state.rolling_pending_seeds:
+                continue
+            context = _pre_seed_context_for_live(
+                state=state,
+                closed_ltf=closed_ltf,
+                tf_set=tf_set,
+                htf_timeframe_ms=htf_timeframe_ms,
+                ltf_timeframe_ms=ltf_timeframe_ms,
+                before_ms=int(seed_candles[0].open_time_ms),
+            )
+            if not context:
+                self._total_seed_context_not_ready_skipped += 1
+                continue
+            if not _seed_passes_basic_core_gate(seed_candles=tuple(seed_candles), context=context):
+                self._total_seed_basic_gate_rejected += 1
                 continue
             state.rolling_pending_seeds[seed_key] = Live2RollingSeedState(
                 seed_key=seed_key,
@@ -347,6 +368,8 @@ class Live2SignalEngine:
             "total_selected": self._total_selected,
             "total_rejected": self._total_rejected,
             "total_data_dependency_not_ready": self._total_data_dependency_not_ready,
+            "total_seed_context_not_ready_skipped": self._total_seed_context_not_ready_skipped,
+            "total_seed_basic_gate_rejected": self._total_seed_basic_gate_rejected,
             "selected_by_category": dict(self._selected_by_category),
             "dependency_reason_counts": dict(self._dependency_reason_counts),
             "reject_reason_counts": dict(self._reject_reason_counts),
@@ -470,16 +493,13 @@ def _build_live_seed_first_snapshot(
 ) -> DecisionSnapshot:
     profile = _rolling_profile_by_tf_set(seed.tf_set)
     htf_timeframe_ms = int(profile["htf_timeframe_ms"]) if profile is not None else 0
-    context = (
-        _aggregate_ltf_history_to_rolling_htf(
-            closed_ltf=closed_ltf,
-            tf_set=seed.tf_set,
-            htf_timeframe_ms=htf_timeframe_ms,
-            ltf_timeframe_ms=int(ltf_timeframe_ms),
-            before_ms=int(seed.seed_open_ms),
-        )
-        if htf_timeframe_ms > 0
-        else ()
+    context = _pre_seed_context_for_live(
+        state=state,
+        closed_ltf=closed_ltf,
+        tf_set=seed.tf_set,
+        htf_timeframe_ms=htf_timeframe_ms,
+        ltf_timeframe_ms=int(ltf_timeframe_ms),
+        before_ms=int(seed.seed_open_ms),
     )
     dependencies: list[DataDependency] = []
     if not context:
@@ -489,7 +509,7 @@ def _build_live_seed_first_snapshot(
                 status="missing",
                 reason="live_seed_aligned_context_not_ready",
                 asof_ms=int(seed.seed_open_ms),
-                source=f"live2_{int(ltf_timeframe_ms // 1000)}s_candle_ring",
+                source=f"live2_{int(ltf_timeframe_ms // 1000)}s_or_1m_context_rings",
             )
         )
     return DecisionSnapshot(
@@ -507,7 +527,7 @@ def _build_live_seed_first_snapshot(
         source_labels={
             "adapter": "live2_seed_first_core_adapter",
             "candle_source": "binance_futures_aggtrade_ws_or_startup_rest_ring",
-            "context_source": f"live2_closed_{int(ltf_timeframe_ms // 1000)}s_seed_aligned_htf_context",
+            "context_source": f"live2_closed_{int(ltf_timeframe_ms // 1000)}s_or_1m_seed_aligned_htf_context",
         },
         features={
             "live_mark_status": state.mark_status,
@@ -613,6 +633,84 @@ def _aggregate_ltf_history_to_rolling_htf(
         candles = tuple(item for item in chunk if item is not None)
         windows.append(_aggregate_candles_to_live2_candle(candles=candles, timeframe_ms=htf_timeframe_ms))
     return tuple(windows)
+
+
+def _pre_seed_context_for_live(
+    *,
+    state: SymbolState,
+    closed_ltf: tuple[Live2Candle, ...],
+    tf_set: str,
+    htf_timeframe_ms: int,
+    ltf_timeframe_ms: int,
+    before_ms: int,
+) -> tuple[Live2Candle, ...]:
+    """Build live pre-seed context from exact LTF history or startup 1m context.
+
+    Fresh live 15s/30s rings cannot contain the 24h context immediately after
+    startup. The startup/maintenance 1m ring can honestly supply the same
+    non-overlapping 3m/5m context when the rolling seed boundary is minute
+    aligned. Non-minute-aligned seeds still require true LTF history.
+    """
+
+    if int(htf_timeframe_ms) <= 0:
+        return ()
+    ltf_context = _aggregate_ltf_history_to_rolling_htf(
+        closed_ltf=closed_ltf,
+        tf_set=tf_set,
+        htf_timeframe_ms=int(htf_timeframe_ms),
+        ltf_timeframe_ms=int(ltf_timeframe_ms),
+        before_ms=int(before_ms),
+    )
+    if ltf_context:
+        return ltf_context
+    one_minute = _closed_candles_for_timeframe(state=state, timeframe_ms=60_000)
+    if int(before_ms) % 60_000 != 0:
+        return ()
+    return _aggregate_ltf_history_to_rolling_htf(
+        closed_ltf=one_minute,
+        tf_set=tf_set,
+        htf_timeframe_ms=int(htf_timeframe_ms),
+        ltf_timeframe_ms=60_000,
+        before_ms=int(before_ms),
+    )
+
+
+def _seed_passes_basic_core_gate(
+    *,
+    seed_candles: tuple[Live2Candle, ...],
+    context: tuple[Live2Candle, ...],
+) -> bool:
+    """Cheap exact subset of the shared core seed gate for live seed storage."""
+
+    if not seed_candles or len(context) < ROLLING_BASELINE_WINDOWS:
+        return False
+    seed_open = float(seed_candles[0].open)
+    seed_close = float(seed_candles[-1].close)
+    if seed_open <= 0.0:
+        return False
+    seed_quote = sum(float(item.quote_volume) for item in seed_candles)
+    seed_trades = sum(int(item.number_of_trades) for item in seed_candles)
+    baseline = context[-ROLLING_BASELINE_WINDOWS:]
+    baseline_quote = _positive_median(float(item.quote_volume) for item in baseline)
+    baseline_trades = _positive_median(float(item.number_of_trades) for item in baseline)
+    if baseline_quote <= 0.0 or baseline_trades <= 0.0:
+        return False
+    seed_return = (seed_close / seed_open) - 1.0
+    return (
+        seed_return >= ROLLING_SEED_MIN_HTF_RETURN_PCT
+        and seed_quote / baseline_quote >= ROLLING_SEED_MIN_HTF_QUOTE_RATIO
+        and seed_trades / baseline_trades >= ROLLING_SEED_MIN_HTF_TRADE_RATIO
+    )
+
+
+def _positive_median(values: object) -> float:
+    finite = sorted(float(value) for value in values if _float_or_none(value) is not None and float(value) > 0.0)
+    if not finite:
+        return float("nan")
+    mid = len(finite) // 2
+    if len(finite) % 2:
+        return finite[mid]
+    return (finite[mid - 1] + finite[mid]) / 2.0
 
 
 def _float_or_none(value: object) -> float | None:

@@ -1,3 +1,31 @@
+## 2026-06-01 - P482 live2 actionable/context load fix
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P481.
+
+Purpose: make live2 runtime capable of reaching the shared decision core only for plausible, context-ready buckets instead of flooding the deadline engine with impossible work.
+
+Changes:
+
+- `Live2DeadlineEngine._evaluate_state(...)` now uses the existing `_actionable_reason(...)` before deadline/backlog warning records. Quiet buckets are marked `market_quiet_non_actionable` and do not create high-volume deadline decisions.
+- `Live2SignalEngine._discover_rolling_seeds(...)` now requires pre-seed context before storing a pending seed.
+- Live pre-seed context first uses exact LTF history when available, then uses startup/maintenance 1m candles for minute-aligned 3m/5m context.
+- Pending seed storage now applies the shared core's basic seed gate subset: HTF return, quote ratio and trade ratio against the same baseline length.
+- Added unit coverage for 1m-backed live context and quiet seed rejection.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+.venv\Scripts\python.exe -m compileall data/exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+This reduces live workload and dependency spam, but it also makes the live seed-discovery prefilter meaningful. The prefilter intentionally uses only shared-core seed minima and context readiness; it must not be extended with outcome labels or profitability-derived filters.
+```
+
 ## 2026-05-31 - P481 shared contract unit tests
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P480.

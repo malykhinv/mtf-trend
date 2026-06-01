@@ -4,6 +4,8 @@ import pandas as pd
 
 from research_tools.anomaly_live2.config import AnomalyLive2Config
 from research_tools.anomaly_live2.deadline import _last_decision_bucket_ms, _set_last_decision_bucket_ms
+from research_tools.anomaly_live2.market_data.candles import Live2Candle
+from research_tools.anomaly_live2.signal import _pre_seed_context_for_live, _seed_passes_basic_core_gate
 from research_tools.anomaly_live2.state import SymbolStateStore
 from research_tools.htf_ltf_runner_discovery import _oi_asof, _pair_can_pass_confirm_upper_bounds
 from research_tools.pump_decision_core import (
@@ -246,3 +248,88 @@ def test_live2_default_decision_timeframes_are_independent_streams() -> None:
     assert _last_decision_bucket_ms(state, 15_000) == 150_000
     assert _last_decision_bucket_ms(state, 30_000) == 120_000
     assert state.last_decision_bucket_ms_by_timeframe == {15_000: 150_000, 30_000: 120_000}
+
+
+def test_live_pre_seed_context_can_use_startup_1m_for_minute_aligned_seed() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",), max_closed_candles=2_000)
+    state = store.get_or_create("AAA/USDT:USDT")
+    one_minute = tuple(
+        Live2Candle(
+            timeframe_ms=60_000,
+            open_time_ms=index * 60_000,
+            close_time_ms=(index + 1) * 60_000,
+            open=100.0,
+            high=100.2,
+            low=99.8,
+            close=100.1,
+            base_volume=1.0,
+            quote_volume=100.0,
+            number_of_trades=100,
+            taker_buy_quote_volume=55.0,
+            first_trade_time_ms=index * 60_000,
+            last_trade_time_ms=(index + 1) * 60_000 - 1,
+            first_source="unit_test_1m",
+            last_source="unit_test_1m",
+        )
+        for index in range(1_500)
+    )
+    store.append_closed_candles(symbol="AAA/USDT:USDT", candles=one_minute)
+
+    context = _pre_seed_context_for_live(
+        state=state,
+        closed_ltf=(),
+        tf_set="5m_15s",
+        htf_timeframe_ms=300_000,
+        ltf_timeframe_ms=15_000,
+        before_ms=1_500 * 60_000,
+    )
+
+    assert len(context) == 288
+    assert context[-1].close_time_ms == 1_500 * 60_000
+    assert context[-1].quote_volume == 500.0
+    assert context[-1].number_of_trades == 500
+
+
+def test_live_basic_seed_gate_rejects_quiet_seed_before_pending_storage() -> None:
+    context = tuple(
+        Live2Candle(
+            timeframe_ms=300_000,
+            open_time_ms=index * 300_000,
+            close_time_ms=(index + 1) * 300_000,
+            open=100.0,
+            high=100.1,
+            low=99.9,
+            close=100.0,
+            base_volume=1.0,
+            quote_volume=100.0,
+            number_of_trades=100,
+            taker_buy_quote_volume=55.0,
+            first_trade_time_ms=index * 300_000,
+            last_trade_time_ms=(index + 1) * 300_000 - 1,
+            first_source="unit_test_context",
+            last_source="unit_test_context",
+        )
+        for index in range(288)
+    )
+    quiet_seed = tuple(
+        Live2Candle(
+            timeframe_ms=15_000,
+            open_time_ms=288 * 300_000 + index * 15_000,
+            close_time_ms=288 * 300_000 + (index + 1) * 15_000,
+            open=100.0,
+            high=100.1,
+            low=99.9,
+            close=100.0,
+            base_volume=1.0,
+            quote_volume=10.0,
+            number_of_trades=10,
+            taker_buy_quote_volume=5.0,
+            first_trade_time_ms=288 * 300_000 + index * 15_000,
+            last_trade_time_ms=288 * 300_000 + (index + 1) * 15_000 - 1,
+            first_source="unit_test_seed",
+            last_source="unit_test_seed",
+        )
+        for index in range(20)
+    )
+
+    assert _seed_passes_basic_core_gate(seed_candles=quiet_seed, context=context) is False

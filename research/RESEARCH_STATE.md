@@ -1,3 +1,13 @@
+## 2026-06-01 - P482 live2 deadline/context root cause
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Run `.output/results/live2_anomaly_runs/20260601_055306` showed live2 was not honestly testing edge: entries were blocked by `decision_latency_degraded`. At audit time there were about 79k decisions, 57k deadline misses, zero selected signals, and core dependencies dominated by `pre_seed_context:live_seed_aligned_context_not_ready`. Market data streams were healthy enough; the bug was live orchestration load and context plumbing.
+
+P482 fixes two root causes: the deadline engine now applies its existing cheap `actionable_reason` gate before creating warning decision records, and the live signal adapter no longer stores every rolling seed when pre-seed context is unavailable or the seed cannot pass the shared core's basic seed gate. Minute-aligned live seeds can use startup/maintenance 1m candles to build 3m/5m seed-aligned context; non-minute-aligned seeds still require true LTF history.
+
+Next: restart live2 and inspect whether `total_deadline_missed`, `decision_latency_degraded`, and `live_seed_aligned_context_not_ready` collapse. Do not judge strategy quality from the pre-P482 run.
+
 ## 2026-05-31 - P481 contract unit coverage
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
