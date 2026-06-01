@@ -1,3 +1,28 @@
+## 2026-06-01 - P488 stop child-fill PnL recovery
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P487.
+
+Purpose: recover final stop-trigger PnL when Binance emits the triggered stop as a child reduce-only market fill whose order id/client id differs from the protected conditional stop id.
+
+Changes:
+
+- `Live2PositionSupervisor._recover_stop_close_from_user_data(...)` now still prefers exact stop `client_order_id` / `order_id`, but also accepts a strict fallback:
+  same symbol, `TRADE`, `FILLED`/`PARTIALLY_FILLED`, `SELL`, `MARKET`, `reduce_only`, after the position was opened/last supervised, not the TP1 client id, and quantity not larger than the remaining protected amount.
+- Added focused regression coverage in `tests/test_live2_position_supervisor_recovery.py`.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_live2_position_supervisor_recovery.py -q
+.venv\Scripts\python.exe -m compileall -q research_tools\anomaly_live2\position_supervisor.py tests\test_live2_position_supervisor_recovery.py
+```
+
+Risk:
+
+```text
+The fallback is deliberately narrow and only runs when the exchange position is already flat and the protected stop is gone. It should not treat TP1 fills as stop fills because it excludes the TP1 client id and requires the fill to occur after the current stop supervision/arming point.
+```
+
 ## 2026-06-01 - P487 terminal seed-stage rejects
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P486.

@@ -1,3 +1,15 @@
+## 2026-06-01 - P488 Chinese-symbol live trade audit
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Run `.output/results/live2_anomaly_runs/20260601_102722` produced one complete live lifecycle on `龙虾/USDT:USDT`. The signal was a `3m_15s` `C_balanced_flow_acceptance` setup with sustained seed flow and fresh entry guard. Actual entry fill, initial stop, TP1 partial close, stop resize, structural trail and final flat close were all visible.
+
+The lifecycle was good evidence that execution management works, but it exposed an audit/PnL recovery bug: final `position_final_close_verified` did not add the final stop child-fill realized profit from user-data. Binance reported the triggered stop as a reduce-only child market order with sanitized/different identifiers (`l2sr____...`, order `182715994`) rather than the original conditional stop id. User-data showed +0.062356 USDT on the final fill, while the final position event retained only TP1 realized PnL.
+
+P488 fixes the recovery path with a strict child-fill fallback. Approximate trade result from user-data fills: gross +0.184184 USDT, fees 0.0121019 USDT, net about +0.1720821 USDT.
+
+Next: after restart, verify the next stop-triggered final close reports `realized_pnl_status=recovered_from_user_data_order_trade_update` even when Binance emits a child market order id. Do not use pre-P488 final close PnL totals as complete if `matching_stop_fill_not_found_in_recent_user_data_events` appears.
+
 ## 2026-06-01 - P487 terminal seed reject / live uptime
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

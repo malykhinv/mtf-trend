@@ -972,7 +972,9 @@ class Live2PositionSupervisor:
                 continue
             client_order_id = str(event.get("client_order_id") or "")
             order_id = str(event.get("order_id") or "")
-            if client_order_id != position.stop_client_order_id and order_id != position.stop_order_id:
+            matched_direct_stop_id = client_order_id == position.stop_client_order_id or order_id == position.stop_order_id
+            matched_stop_child_fill = _looks_like_stop_child_fill(event, position)
+            if not matched_direct_stop_id and not matched_stop_child_fill:
                 continue
             realized = _float_or_none(event.get("realized_profit"))
             filled_qty = _float_or_none(event.get("last_filled_quantity"))
@@ -1001,7 +1003,7 @@ class Live2PositionSupervisor:
         last_event = matching[-1]
         return {
             "realized_pnl_status": "recovered_from_user_data_order_trade_update",
-            "realized_pnl_reason": "matched_stop_client_order_id_or_order_id",
+            "realized_pnl_reason": "matched_stop_client_order_id_or_order_id_or_child_reduce_only_fill",
             "realized_pnl_usdt": realized_pnl,
             "realized_pnl_delta_usdt": realized_pnl,
             "exit_fill_price": _float_or_none(last_event.get("last_filled_price")) or _float_or_none(last_event.get("average_price")),
@@ -1393,6 +1395,41 @@ def _same_symbol(left: object, right: object) -> bool:
     left_market_id = symbol_to_market_id(str(left or ""))
     right_market_id = symbol_to_market_id(str(right or ""))
     return bool(left_market_id and right_market_id and left_market_id == right_market_id)
+
+
+def _looks_like_stop_child_fill(event: Mapping[str, object], position: Live2ProtectedPosition) -> bool:
+    """Match Binance stop-market child fills when child order ids differ from the stop order id."""
+
+    execution_type = str(event.get("execution_type") or "").upper()
+    order_status = str(event.get("order_status") or "").upper()
+    side = str(event.get("side") or "").upper()
+    order_type = str(event.get("order_type") or "").upper()
+    client_order_id = str(event.get("client_order_id") or "")
+    if execution_type != "TRADE":
+        return False
+    if order_status not in {"FILLED", "PARTIALLY_FILLED"}:
+        return False
+    if side != "SELL":
+        return False
+    if order_type != "MARKET":
+        return False
+    if not bool(event.get("reduce_only")):
+        return False
+    if position.tp1_client_order_id and client_order_id == position.tp1_client_order_id:
+        return False
+    tx_ms = _float_or_none(event.get("transaction_time_ms")) or _float_or_none(event.get("event_time_ms"))
+    if tx_ms is None:
+        return False
+    lower_bound_ms = max(int(position.opened_at_ms or 0), int(position.last_supervised_ms or 0))
+    if float(tx_ms) < float(lower_bound_ms):
+        return False
+    filled_qty = _float_or_none(event.get("last_filled_quantity"))
+    if filled_qty is None or filled_qty <= 0.0:
+        return False
+    remaining = abs(float(position.remaining_amount or position.amount or 0.0))
+    if remaining > 0.0 and filled_qty > remaining + max(1e-9, remaining * 0.001):
+        return False
+    return _float_or_none(event.get("realized_profit")) is not None
 
 
 def _current_oi_change_pct_from_baseline(

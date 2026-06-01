@@ -1,3 +1,56 @@
+## 2026-06-01 - live2 Chinese-symbol trade audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_102722`.
+
+Trade: `龙虾/USDT:USDT`.
+
+Signal/execution:
+
+```text
+selected snapshot: 3m_15s C_balanced_flow_acceptance
+seed: 12:01:00-12:04:00 UTC
+confirm: 12:04:00-12:05:15 UTC, 5x15s candles
+signal entry: 0.006544
+actual entry fill: 0.006552, 1833 qty, order 182667448
+initial stop verified: 0.006328834
+TP1 target: 0.0067053745
+entry age at guard: 270ms
+price drift at guard: 0
+execution call duration: about 3.2s
+```
+
+Core features:
+
+```text
+seed return: 2.83%
+htf quote ratio: 8.30
+htf trade ratio: 5.09
+dormancy quote ratio: 10.66
+dormancy trade ratio: 6.90
+internal seed flow sustained: true
+tail quote share: 57.6%
+tail trade share: 51.2%
+confirm return: 0.785%
+confirm quote pace: 5.04
+confirm trade pace: 3.37
+confirm second-half return: 0.184%
+confirm trade acceleration: 1.72
+initial risk at decision: 3.29%
+```
+
+Management:
+
+```text
+TP1 partial close: 916 qty at 0.006685, realized +0.121828 USDT
+remaining stop resized, then structurally trailed to 0.006628684
+final stop child fill: 917 qty at 0.00662, realized +0.062356 USDT
+gross realized from user-data fills: +0.184184 USDT
+fees from user-data fills: 0.0121019 USDT
+net approximate realized: +0.1720821 USDT
+```
+
+Verdict: this was a good live lifecycle test. Signal, actual fill, initial stop, TP1 partial close, stop resize, structural trailing and final flat-close were all visible in artifacts/user-data. However, the final `position_final_close_verified` event failed to recover the final stop-fill PnL because Binance reported the triggered stop as a child market order with a different/sanitized `client_order_id` (`l2sr____...`) and a different exchange order id. P488 fixes recovery by matching strict same-symbol reduce-only SELL child fills after the stop was armed.
+
 ## 2026-06-01 - live2 20260601_102722 continued stability check
 
 Run: `.output/results/live2_anomaly_runs/20260601_102722`.
