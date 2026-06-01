@@ -1,3 +1,43 @@
+## 2026-06-01 - live2 20260601_102722 post-P487 stability audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_102722`.
+
+Finding: materially more stable than the prior post-P486 run, but still not edge evidence because there were no selected/executed trades.
+
+Observed during audit:
+
+```text
+current runtime gate: all_gates_ready
+session runtime gate: about 1161s allowed / 15s blocked (~98.7% trading uptime)
+decision_loop_max_elapsed_ms: 1464
+decision_loop_overrun_count: 0
+total_deadline_missed: 1
+selected_count: 0
+orders submitted: 0
+execution / supervisor integrity errors: 0
+market WS: ticker, aggTrade, mark ready; 4/4 shards connected
+private user-data WS: transport ready, no payload yet because no order/account events
+rolling 1m maintenance: running, 713 successes, 0 errors
+```
+
+Reject funnel:
+
+```text
+ltf_confirm_return_below_min: 22-23 rows, mostly MOVR/JCT
+seed_ltf_flow_not_sustained: 11 rows, MOVR/JCT
+deadline_missed after signal evaluation: 1 row, JCT
+```
+
+Residual issues:
+
+```text
+1. One top-growth audit write hit PermissionError on a .tmp -> .csv replace, likely an external file lock or Windows file-access race. It did not block trading, but top-growth artifact durability is not perfectly clean.
+2. Startup remains heavy: about 10 minutes for aggTrade warmup and about 10.5 minutes for HTF baseline warmup. This is startup cost, not current trading-loop instability.
+3. No selected trades, so execution/fill/stop lifecycle was not exercised in this run.
+```
+
+Next: keep this live running long enough to see whether uptime stays near 100% across another hour boundary and whether top-growth write errors repeat. If top-growth PermissionError repeats, patch artifact writes for retry/backoff/atomic replace on Windows.
+
 ## 2026-06-01 - live2 20260601_093452 post-P486 uptime audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_093452`.
