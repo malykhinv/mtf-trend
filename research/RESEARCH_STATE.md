@@ -1,3 +1,13 @@
+## 2026-06-01 - P485 live2 seed return pre-context gate
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Run `.output/results/live2_anomaly_runs/20260601_080623` improved after P484: decision rows dropped to about 152 and the latest gate state was ready, but trading uptime was still only about 70%. Remaining degradation came from rare minute-boundary hot-path spikes: hundreds of candles closed together, the deadline engine spent 4-8s in seed discovery before checking symbols, and selected core signals could become stale before execution.
+
+P485 keeps the seed-first contract but reorders live seed discovery. Before building seed-aligned 24h context or baseline ratios, live now checks the context-free shared seed prerequisite: rolling seed return must be at least `ROLLING_SEED_MIN_HTF_RETURN_PCT`. Seeds failing this cannot pass the core, so skipping context work for them is not a strategy change.
+
+Next: restart live2 after P485 and inspect `total_seed_return_gate_rejected`, `decision_loop_max_elapsed_ms`, `decision_loop_overrun_count`, and stale selected entry-guard rejects. If large spikes remain, the next fix should be cached/incremental rolling context, not threshold tuning.
+
 ## 2026-06-01 - P484 live2 seed-possible scheduler gate
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

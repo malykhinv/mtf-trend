@@ -1,3 +1,28 @@
+## 2026-06-01 - P485 live2 seed return pre-context gate
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P484.
+
+Purpose: reduce minute-boundary hot-path spikes by avoiding expensive seed context construction for rolling windows that already fail the shared core seed return prerequisite.
+
+Changes:
+
+- Added `_seed_passes_return_gate(...)` as a context-free prerequisite check.
+- `Live2SignalEngine._discover_rolling_seeds(...)` now checks seed return before `_pre_seed_context_for_live(...)`.
+- Added `total_seed_return_gate_rejected` to live signal status.
+- Added unit coverage for weak vs strong seed return gating.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+```
+
+Risk:
+
+```text
+This does not change trading thresholds. It only moves an existing mandatory core seed check earlier, before expensive baseline/context work. If a seed fails return, it could not have selected in the shared core.
+```
+
 ## 2026-06-01 - P484 live2 seed-possible scheduler gate
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P483.

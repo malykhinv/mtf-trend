@@ -10,7 +10,7 @@ from research_tools.anomaly_live2.deadline import (
     _set_last_decision_bucket_ms,
 )
 from research_tools.anomaly_live2.market_data.candles import Live2Candle
-from research_tools.anomaly_live2.signal import _pre_seed_context_for_live, _seed_passes_basic_core_gate
+from research_tools.anomaly_live2.signal import _pre_seed_context_for_live, _seed_passes_basic_core_gate, _seed_passes_return_gate
 from research_tools.anomaly_live2.state import SymbolStateStore
 from research_tools.htf_ltf_runner_discovery import _oi_asof, _pair_can_pass_confirm_upper_bounds
 from research_tools.pump_decision_core import (
@@ -338,6 +338,52 @@ def test_live_basic_seed_gate_rejects_quiet_seed_before_pending_storage() -> Non
     )
 
     assert _seed_passes_basic_core_gate(seed_candles=quiet_seed, context=context) is False
+
+
+def test_live_seed_return_gate_rejects_before_context_work() -> None:
+    weak_seed = tuple(
+        Live2Candle(
+            timeframe_ms=15_000,
+            open_time_ms=index * 15_000,
+            close_time_ms=(index + 1) * 15_000,
+            open=100.0,
+            high=100.2,
+            low=99.9,
+            close=100.05,
+            base_volume=100.0,
+            quote_volume=10_000.0,
+            number_of_trades=100,
+            taker_buy_quote_volume=6_000.0,
+            first_trade_time_ms=index * 15_000,
+            last_trade_time_ms=(index + 1) * 15_000 - 1,
+            first_source="unit_test",
+            last_source="unit_test",
+        )
+        for index in range(20)
+    )
+    strong_seed = tuple(
+        Live2Candle(
+            timeframe_ms=item.timeframe_ms,
+            open_time_ms=item.open_time_ms,
+            close_time_ms=item.close_time_ms,
+            open=item.open,
+            high=102.0,
+            low=item.low,
+            close=101.2 if index == 19 else item.close,
+            base_volume=item.base_volume,
+            quote_volume=item.quote_volume,
+            number_of_trades=item.number_of_trades,
+            taker_buy_quote_volume=item.taker_buy_quote_volume,
+            first_trade_time_ms=item.first_trade_time_ms,
+            last_trade_time_ms=item.last_trade_time_ms,
+            first_source=item.first_source,
+            last_source=item.last_source,
+        )
+        for index, item in enumerate(weak_seed)
+    )
+
+    assert _seed_passes_return_gate(seed_candles=weak_seed) is False
+    assert _seed_passes_return_gate(seed_candles=strong_seed) is True
 
 
 def test_live_deadline_engine_drains_quiet_buckets_before_deadline_records() -> None:

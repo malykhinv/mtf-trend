@@ -125,6 +125,7 @@ class Live2SignalEngine:
         self._total_data_dependency_not_ready = 0
         self._total_seed_context_not_ready_skipped = 0
         self._total_seed_basic_gate_rejected = 0
+        self._total_seed_return_gate_rejected = 0
         self._selected_by_category: Counter[str] = Counter()
         self._dependency_reason_counts: Counter[str] = Counter()
         self._reject_reason_counts: Counter[str] = Counter()
@@ -252,6 +253,9 @@ class Live2SignalEngine:
                 continue
             seed_key = f"{tf_set}:{int(seed_candles[0].open_time_ms)}:{int(seed_candles[-1].close_time_ms)}"
             if seed_key in state.rolling_consumed_seed_keys or seed_key in state.rolling_pending_seeds:
+                continue
+            if not _seed_passes_return_gate(seed_candles=tuple(seed_candles)):
+                self._total_seed_return_gate_rejected += 1
                 continue
             context = _pre_seed_context_for_live(
                 state=state,
@@ -383,6 +387,7 @@ class Live2SignalEngine:
             "total_data_dependency_not_ready": self._total_data_dependency_not_ready,
             "total_seed_context_not_ready_skipped": self._total_seed_context_not_ready_skipped,
             "total_seed_basic_gate_rejected": self._total_seed_basic_gate_rejected,
+            "total_seed_return_gate_rejected": self._total_seed_return_gate_rejected,
             "selected_by_category": dict(self._selected_by_category),
             "dependency_reason_counts": dict(self._dependency_reason_counts),
             "reject_reason_counts": dict(self._reject_reason_counts),
@@ -714,6 +719,18 @@ def _seed_passes_basic_core_gate(
         and seed_quote / baseline_quote >= ROLLING_SEED_MIN_HTF_QUOTE_RATIO
         and seed_trades / baseline_trades >= ROLLING_SEED_MIN_HTF_TRADE_RATIO
     )
+
+
+def _seed_passes_return_gate(*, seed_candles: tuple[Live2Candle, ...]) -> bool:
+    """Context-free prerequisite for the shared core seed return gate."""
+
+    if not seed_candles:
+        return False
+    seed_open = float(seed_candles[0].open)
+    seed_close = float(seed_candles[-1].close)
+    if seed_open <= 0.0:
+        return False
+    return (seed_close / seed_open) - 1.0 >= ROLLING_SEED_MIN_HTF_RETURN_PCT
 
 
 def _positive_median(values: object) -> float:

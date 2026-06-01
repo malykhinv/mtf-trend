@@ -1,3 +1,32 @@
+## 2026-06-01 - live2 20260601_080623 post-P484 audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_080623`.
+
+Finding: P484 materially improved runtime, but the run still shows avoidable hot-path spikes.
+
+Observed during audit:
+
+```text
+selected_count: 0 execution positions, but 2 core-selected signals reached entry guard
+entry guard selected rejects: stale_signal_before_execution on QCOM
+total decisions: about 152
+deadline missed: about 59
+dominant remaining spike: deadline engine 4-8s on minute-boundary seed discovery
+latest readiness: all_gates_ready
+session seconds: about 70% allowed / 30% blocked
+```
+
+Interpretation: all-symbol deadline spam is mostly gone. Remaining blocking is caused by expensive seed discovery/context building when many candles close at once. P485 moves the mandatory seed return check before context construction, so most non-runner windows can be discarded cheaply without changing strategy rules.
+
+Next validation after P485 restart:
+
+```text
+1. total_seed_return_gate_rejected should be visible and high during quiet/liquid periods
+2. decision_loop_max_elapsed_ms should fall below the degraded threshold on minute boundaries
+3. selected core signals should reach entry guard before max_signal_age_ms unless truly delayed by exchange/runtime
+4. if overrun persists, cache rolling context/medians incrementally
+```
+
 ## 2026-06-01 - live2 20260601_071606 post-P483 audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_071606`.
