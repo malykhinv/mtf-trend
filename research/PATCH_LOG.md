@@ -1,3 +1,28 @@
+## 2026-06-01 - P487 terminal seed-stage rejects
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P486.
+
+Purpose: improve live trading uptime by stopping repeated evaluation of seeds whose nature is already invalid.
+
+Changes:
+
+- `evaluate_ltf_confirm_sequence_after_seed(...)` now stops immediately when the shared core returns a seed-stage reject.
+- Live2 consumes rejected pending seeds immediately when the core reject stage is `rolling_htf_seed`, instead of waiting until max-confirm.
+- Existing single-print and faded-tail seed tests now assert that `seed_ltf_flow_not_sustained` is terminal at the first minimum confirm window.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+.venv\Scripts\python.exe -m compileall -q research_tools\pump_decision_core.py research_tools\anomaly_live2\signal.py tests\test_pump_decision_contract.py
+```
+
+Risk:
+
+```text
+This changes confirm sequencing for seed-stage rejects only. It should not remove valid later-confirm selections, because a rolling HTF seed reject depends on seed/context nature, not on later LTF confirm candles. Backtest/live parity ledgers may show earlier rejected snapshot hashes for those seeds.
+```
+
 ## 2026-06-01 - P486 internal seed flow-shape guard
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P485.

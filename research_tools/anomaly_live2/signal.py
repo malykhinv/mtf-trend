@@ -199,10 +199,11 @@ class Live2SignalEngine:
             if verdict.verdict == "selected":
                 self._consume_rolling_seed(state=state, seed=seed, outcome="selected")
                 return live_decision
-            if verdict.verdict == "rejected" and len(post_seed) >= max_confirm:
-                self._consume_rolling_seed(state=state, seed=seed, outcome="rejected")
-                candidate_verdicts.append(live_decision)
-                continue
+            if verdict.verdict == "rejected":
+                if _is_terminal_seed_reject(verdict) or len(post_seed) >= max_confirm:
+                    self._consume_rolling_seed(state=state, seed=seed, outcome="rejected")
+                    candidate_verdicts.append(live_decision)
+                    continue
             if verdict.verdict == "data_dependency_not_ready":
                 state.rolling_dependency_seed_count += 1
                 if int(candle.close_time_ms) >= expiry_ms:
@@ -561,6 +562,12 @@ def _dependency_reason(dependency: DataDependency) -> str:
     if dependency.reason:
         return f"{dependency.name}:{dependency.reason}"
     return f"{dependency.name}:{dependency.status}"
+
+
+def _is_terminal_seed_reject(verdict: DecisionVerdict) -> bool:
+    if verdict.verdict != "rejected":
+        return False
+    return any(str(reject.stage) == "rolling_htf_seed" for reject in verdict.rejects)
 
 
 def _seed_state_features(*, seed: Live2RollingSeedState, decision_candle: Live2Candle) -> dict[str, object]:

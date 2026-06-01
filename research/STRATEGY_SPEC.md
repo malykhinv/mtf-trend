@@ -100,6 +100,8 @@ P480 planner note: targeted backfill may use cheap HTF upper bounds to avoid LTF
 
 P486 note: the rolling seed must show sustained internal LTF flow, not a one-print spike. The seed's LTF sub-candles must have distributed quote/trade flow, bounded top-1 concentration, non-negative second-half price behavior, and an active tail (`_____pPPPP` morphology). A seed that passes aggregate return/quote/trade ratios but fails this internal-flow shape is rejected by the shared core with `seed_ltf_flow_not_sustained`.
 
+P487 note: seed-stage rejects are terminal for a rolling seed. Later LTF confirmation candles may repair confirm-stage rejects, but they cannot repair invalid seed nature such as `seed_ltf_flow_not_sustained`. Live must consume that pending seed immediately after the shared core returns a `rolling_htf_seed` reject, instead of rechecking it until max-confirm.
+
 P466 note: C/A/S category matching is now a shared pure matcher in `research_tools/pump_decision_core.py`. Live and backtest adapters may still differ in how they discover seed/confirm windows until the seed-first evaluator migration is complete, but they must not carry separate C/A/S threshold copies.
 
 P467 note: `research_tools/pump_decision_core.py` now contains the executable source-neutral seed-first evaluator. It validates normalized candle continuity and data dependencies, computes seed/context/confirm features, applies the shared C/A/S matcher, and returns only the signal verdict. Live/backtest adapters are still pending migration and must become snapshot builders before parity claims are valid.

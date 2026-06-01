@@ -1,3 +1,15 @@
+## 2026-06-01 - P487 terminal seed reject / live uptime
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Run `.output/results/live2_anomaly_runs/20260601_093452` after P486 shows the main all-symbol deadline flood is mostly gone, but trading uptime is still low. In the sampled session, runtime-gate time was roughly 567s allowed vs 476s blocked. The largest block was private user-data / entry-stream reconnect time, but the avoidable code-side block was latency watchdog holds caused by rare 5-9s hot-path cycles on a few actionable symbols such as JCT/ALPINE.
+
+Root cause: `seed_ltf_flow_not_sustained` is a seed-stage reject, but the confirm-sequence evaluator kept checking later confirm windows until max-confirm. Live also kept the pending seed alive unless max-confirm was reached. That made a seed whose nature was already invalid consume repeated hot-path budget.
+
+P487 makes seed-stage rejects terminal in both the shared core and live adapter. Later confirm candles cannot repair an invalid seed nature. This should reduce repeated evaluation of APR-like one-print/fade seeds and improve trading uptime without changing thresholds.
+
+Next: restart live2 and inspect `decision_loop_max_elapsed_ms`, `decision_loop_overrun_count`, `total_deadline_missed`, `seed_ltf_flow_not_sustained` rows, and runtime-gate seconds. If uptime is still low, separate external stream/DNS downtime from remaining hot-path latency before touching strategy filters.
+
 ## 2026-06-01 - P486 internal seed flow-shape guard
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

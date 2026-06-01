@@ -125,9 +125,13 @@ def test_seed_ltf_single_print_flow_is_rejected_by_core() -> None:
     )
 
     verdict = evaluate_first_ltf_confirm_after_seed(concentrated_snapshot, post_seed_ltf_candles=post_seed)
+    min_confirm = ROLLING_PROFILE_SPECS[snapshot.tf_set].min_confirm_candles
 
     assert verdict.verdict == "rejected"
     assert verdict.rejects[0].reason == "seed_ltf_flow_not_sustained"
+    assert verdict.rejects[0].stage == "rolling_htf_seed"
+    assert verdict.snapshot.ltf_confirm is not None
+    assert verdict.snapshot.ltf_confirm.confirm_end_ms == post_seed[min_confirm - 1].close_time_ms
     assert verdict.features["htf_ltf_sustained_flow_ok"] is False
     assert verdict.features["htf_ltf_quote_top1_share"] > 0.55
 
@@ -156,9 +160,13 @@ def test_seed_ltf_tail_fade_flow_is_rejected_by_core() -> None:
     )
 
     verdict = evaluate_first_ltf_confirm_after_seed(faded_snapshot, post_seed_ltf_candles=post_seed)
+    min_confirm = ROLLING_PROFILE_SPECS[snapshot.tf_set].min_confirm_candles
 
     assert verdict.verdict == "rejected"
     assert verdict.rejects[0].reason == "seed_ltf_flow_not_sustained"
+    assert verdict.rejects[0].stage == "rolling_htf_seed"
+    assert verdict.snapshot.ltf_confirm is not None
+    assert verdict.snapshot.ltf_confirm.confirm_end_ms == post_seed[min_confirm - 1].close_time_ms
     assert verdict.features["htf_ltf_sustained_flow_ok"] is False
     assert verdict.features["htf_ltf_tail_quote_share"] < 0.20
 

@@ -1,3 +1,32 @@
+## 2026-06-01 - live2 20260601_093452 post-P486 uptime audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_093452`.
+
+Finding: P486 improved signal nature filtering, but trading uptime is still constrained by runtime gates.
+
+Observed during audit:
+
+```text
+runtime gate current state: all_gates_ready at audit time
+runtime gate session time: about 567s allowed / 476s blocked
+dominant blocked time: user-data/private stream and entry-stream reconnects, about 342s combined
+avoidable code-side blocked time: decision_latency_degraded, about 133s
+decision loop max: about 9.3s
+deadline misses: single digits, not the old all-symbol flood
+dominant signal reject: seed_ltf_flow_not_sustained
+```
+
+Interpretation: the remaining code-side uptime loss is not threshold tuning. Seeds that already fail at the seed-nature stage were being re-evaluated across later confirm windows, creating rare but large hot-path stalls. P487 makes seed-stage rejects terminal.
+
+Next validation after P487 restart:
+
+```text
+1. decision_loop_max_elapsed_ms should fall materially during JCT/ALPINE-like flow-fade events
+2. decision_loop_overrun_count should stop climbing from repeated seed_ltf_flow_not_sustained evaluations
+3. runtime gate blocked seconds should mostly be external stream/DNS outages, not decision_latency_degraded
+4. if private user-data DNS/reconnect remains the largest block, treat that as an infrastructure/connectivity issue rather than strategy logic
+```
+
 ## 2026-06-01 - live2 APR selected trade review
 
 Run: `.output/results/live2_anomaly_runs/20260601_084401`.

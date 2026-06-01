@@ -572,6 +572,8 @@ def evaluate_ltf_confirm_sequence_after_seed(
         verdicts.append(verdict)
         if verdict.verdict in ("selected", "data_dependency_not_ready"):
             break
+        if _is_terminal_seed_reject(verdict):
+            break
     return tuple(verdicts)
 
 
@@ -669,6 +671,14 @@ def evaluate_seed_first(snapshot: DecisionSnapshot) -> DecisionVerdict:
             "rolling_runner_category_priority_rank": rolling_category_priority_rank(category_id),
         },
     )
+
+
+def _is_terminal_seed_reject(verdict: DecisionVerdict) -> bool:
+    """Return true when later confirm candles cannot repair the rejection."""
+
+    if verdict.verdict != "rejected":
+        return False
+    return any(str(reject.stage) == "rolling_htf_seed" for reject in verdict.rejects)
 
 
 def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfileSpec) -> dict[str, float | int | str | bool | None]:
