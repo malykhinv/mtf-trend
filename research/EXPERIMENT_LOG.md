@@ -1,3 +1,43 @@
+## 2026-06-01 - live2 20260601_125722 all-position audit
+
+Run: `.output/results/live2_anomaly_runs/20260601_125722`.
+
+Real opened positions: `NFP/USDT:USDT`, `LITE/USDT:USDT`, `PLTR/USDT:USDT`.
+
+Summary:
+
+```text
+NFP: 13:32:02 UTC entry fill 0.01227, qty 984.4; final stop fill 0.01157 at 14:10:17; gross realized -0.68908 USDT, fees 0.01173404, net about -0.70081404.
+LITE: 13:38:00 UTC entry fill 853.64, qty 0.01; reduce-only market close 873.05 at 13:40:53; gross realized +0.1941 USDT, fees 0.00690676, net about +0.18719324.
+PLTR: 13:38:32 UTC entry fill 160.10, qty 0.07; still open/protected in the inspected status snapshot with stop 157.091415 and latest artifact price about 159.42.
+```
+
+Verdict by position:
+
+```text
+NFP: execution truthfulness is OK: selected -> actual fill -> stop-trigger child fill -> final close verified. Strategy quality is weak: initial risk was near the 5% cap, pregrowth was already +5.17%, seed was +4.22%, and the trade stopped out. This is more late chase than clean early awakening.
+LITE: trade lifecycle closed profitably and actual user-data fills support the PnL. But the supervisor emitted `position_integrity_error` after close: `tp1_full_reduce_only_close_failed` because the close amount was at/below Binance min precision. That halted new entries even though final close was later verified.
+PLTR: execution entry/fill/stop were truthful, but signal nature was invalid for Pump Awakening. Pregrowth was -2.07% with zero positive pregrowth steps, so this was dump/rebound, not dormancy -> upward expansion. P489 added `pre_seed_dump_rebound_pattern` to reject this class.
+```
+
+Run-level execution status at inspection:
+
+```text
+orders submitted: 3
+positions protected total: 3
+open protected positions: 1 (PLTR)
+integrity errors: 1
+new entries allowed: false
+reason: position_supervisor_not_ready + execution_not_ready
+decision_loop_max_elapsed_ms: 11994
+decision_loop_overrun_count: 113
+artifact writer: ready, no drops/errors
+```
+
+Top-growth mismatch: hourly top movers were H/FLNC for 12:00-13:00 and SIREN for 13:00-14:00. None of the three opened positions were hourly top-growth winners, so this run is not evidence that live is catching the strongest real runners yet.
+
+Next: patch execution sizing/supervisor handling for below-min TP1/full-close amounts before trusting the next live run. Then restart with P489 and verify PLTR-like rebounds are rejected by `pre_seed_dump_rebound_pattern`.
+
 ## 2026-06-01 - live2 PLTR dump/rebound trade review
 
 Run: `.output/results/live2_anomaly_runs/20260601_125722`.

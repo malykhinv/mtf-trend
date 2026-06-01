@@ -1,3 +1,11 @@
+## 2026-06-01 - live2 20260601_125722 position audit state
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The run opened three positions: NFP, LITE, PLTR. NFP is a truthful stop-loss lifecycle but poor strategy evidence: it entered after +5.17% pregrowth and +4.22% seed with near-cap risk, then stopped out. LITE is a truthful profitable lifecycle, but exposed an execution/supervisor bug: after a full reduce-only close at profit, a below-min TP1 close attempt raised `position_integrity_error` and halted new entries. PLTR is a truthful protected entry but invalid signal nature: pre-seed was a -2.07% mostly-red dump/rebound, addressed by P489 for future runs.
+
+Next: fix below-min/precision handling for full TP1 or close-all supervision before using this live process for new entries. After that, restart with P489 and check that PLTR-like snapshots reject as `pre_seed_dump_rebound_pattern`.
+
 ## 2026-06-01 - P489 PLTR pre-seed dump/rebound guard
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
