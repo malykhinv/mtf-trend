@@ -2,6 +2,8 @@
 
 Question: how to make 30d HTF/LTF runner discovery much faster without lookahead or optimistic bias.
 
+Implementation status: P491 applied locally / UNKNOWN commit.
+
 Finding: the safe target is not a winner filter. It is a data-loading impossibility planner. It may reject only when information available at the historical decision time proves no exact 15s/30s shared-core snapshot can pass. Otherwise it must fetch exact aggTrade-derived LTF and let `PumpDecisionCore` decide.
 
 Current bottlenecks from the local 1d artifacts:
@@ -24,6 +26,25 @@ Proposed experiment sequence:
 ```
 
 Explicitly forbidden for this acceleration: future top-growth membership, runner labels, post-entry high/low, trade result, PnL, survival to horizon, or any filter that answers "would this have worked" before exact signal selection.
+
+Implemented changes:
+
+```text
+1. Staged targeted fetch: pre-entry seed windows -> signal-entry confirm/next-open windows -> selected-signal post-entry replay windows.
+2. New independent 1m coarse prefilter module for seed/confirm upper-bound impossibility checks.
+3. Future label assignment for selected trades happens after core signal selection and remains marked as not an entry filter.
+4. Exact pre-seed context status check fixed from invalid `window.status.ok` to string status comparison.
+```
+
+Validation:
+
+```text
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Remaining experiment: run a small 1d/3d discovery smoke and compare selected signal `snapshot_hash`/`signal_verdict` plus targeted LTF plan minutes before retrying 30d.
 
 ## 2026-06-01 - live2 20260601_125722 all-position audit
 

@@ -47,6 +47,12 @@ from research_tools.pump_decision_core import (
     rolling_category_priority_rank,
     rolling_context_windows_for_tf_set,
 )
+from research_tools.runner_coarse_prefilter import (
+    MINUTE_MS,
+    MinuteCoarseFrame,
+    coarse_minute_pair_prefilter,
+    prepare_minute_coarse_frame,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,9 +233,9 @@ def run_htf_ltf_runner_discovery(
     targeted_ltf_plan = pd.DataFrame()
     targeted_ltf_fetch = pd.DataFrame()
     targeted_ltf_materialize = pd.DataFrame()
+    targeted_phase_frames: list[tuple[str, pd.DataFrame, pd.DataFrame, pd.DataFrame]] = []
     pre_entry_seed_timestamps_by_symbol: dict[str, set[int]] = {}
     if _targeted_ltf_backfill_required(config):
-        targeted_phase_frames: list[tuple[str, pd.DataFrame, pd.DataFrame, pd.DataFrame]] = []
         pre_entry_plan, pre_entry_windows_by_symbol = _build_targeted_ltf_backfill_plan(
             storage=storage,
             symbols=selected_symbols,
@@ -247,26 +253,22 @@ def run_htf_ltf_runner_discovery(
         targeted_phase_frames.append(("pre_entry", pre_entry_plan, pre_entry_fetch, pre_entry_materialize))
 
         pre_entry_seed_timestamps_by_symbol = _targeted_ltf_seed_timestamps_by_symbol(pre_entry_plan)
-        post_entry_plan, post_entry_windows_by_symbol = _build_targeted_ltf_post_entry_backfill_plan(
+        signal_entry_plan, signal_entry_windows_by_symbol = _build_targeted_ltf_signal_entry_backfill_plan(
             storage=storage,
             symbols=selected_symbols,
             start_ms=start_ms,
             end_ms=end_ms,
             config=config,
-            progress_label=f"{progress_label or 'runner discovery'} targeted post-entry plan",
+            progress_label=f"{progress_label or 'runner discovery'} targeted signal-entry plan",
             seed_timestamps_by_symbol=pre_entry_seed_timestamps_by_symbol,
         )
-        post_entry_fetch, post_entry_materialize = _ensure_targeted_ltf_backfill(
+        signal_entry_fetch, signal_entry_materialize = _ensure_targeted_ltf_backfill(
             cache_dir=config.cache_dir,
             ltf_timeframe=config.ltf_timeframe,
-            windows_by_symbol=post_entry_windows_by_symbol,
-            progress_label=f"{progress_label or 'runner discovery'} targeted post-entry LTF",
-            max_merged_span_ms=None,
+            windows_by_symbol=signal_entry_windows_by_symbol,
+            progress_label=f"{progress_label or 'runner discovery'} targeted signal-entry LTF",
         )
-        targeted_phase_frames.append(("post_entry", post_entry_plan, post_entry_fetch, post_entry_materialize))
-        targeted_ltf_plan = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=1)
-        targeted_ltf_fetch = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=2)
-        targeted_ltf_materialize = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=3)
+        targeted_phase_frames.append(("signal_entry", signal_entry_plan, signal_entry_fetch, signal_entry_materialize))
 
     candidate_rows: list[dict[str, object]] = []
     entry_window_rows: list[dict[str, object]] = []
@@ -284,12 +286,13 @@ def run_htf_ltf_runner_discovery(
     def _process_symbol(symbol: str) -> dict[str, object]:
         local_storage = ParquetStorage(config.cache_dir)
         htf = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+        ltf_tail_ms = _signal_entry_tail_ms(config, ltf_ms) if _targeted_ltf_backfill_required(config) else int(config.runner_horizon_minutes) * 60_000
         ltf = _load_frame(
             local_storage,
             symbol,
             config.ltf_timeframe,
             start_ms=start_ms - htf_ms * max(config.baseline_candles, config.dormancy_candles),
-            end_ms=end_ms + config.runner_horizon_minutes * 60_000,
+            end_ms=end_ms + ltf_tail_ms,
         )
         oi = _load_oi_frame(local_storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
         local_quality_rows = [_data_quality_row(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)]
@@ -313,9 +316,6 @@ def run_htf_ltf_runner_discovery(
             for candidate in local_candidate_rows:
                 windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
                 local_entry_window_rows.extend(windows)
-                for window in windows:
-                    if window.get("window_execution_ok") is True:
-                        local_entry_window_trade_rows.append(_simulate_no_tp_runner_trade(window, ltf=ltf, config=config))
                 signal, decision_rows_for_candidate = _build_first_ltf_signal(candidate, htf=htf, ltf=ltf, oi=oi, config=config)
                 for decision_row in decision_rows_for_candidate:
                     local_decision_rows.append(decision_row)
@@ -324,7 +324,6 @@ def run_htf_ltf_runner_discovery(
                 if signal is None:
                     continue
                 local_signal_rows.append(signal)
-                local_trade_rows.append(_simulate_no_tp_runner_trade(signal, ltf=ltf, config=config))
         return {
             "candidates": local_candidate_rows,
             "entry_windows": local_entry_window_rows,
@@ -372,6 +371,28 @@ def run_htf_ltf_runner_discovery(
         rejected_exact_window_rows.extend(result.get("rejected_exact_windows", []))  # type: ignore[arg-type]
         quality_rows.extend(result.get("quality", []))  # type: ignore[arg-type]
     scanned_htf_rows = int(sum(int(result.get("scanned_rows", 0)) for result in symbol_results.values()))
+
+    if _targeted_ltf_backfill_required(config):
+        post_entry_plan, post_entry_windows_by_symbol = _build_selected_signal_post_entry_backfill_plan(
+            signal_rows,
+            config=config,
+            ltf_ms=ltf_ms,
+        )
+        post_entry_fetch, post_entry_materialize = _ensure_targeted_ltf_backfill(
+            cache_dir=config.cache_dir,
+            ltf_timeframe=config.ltf_timeframe,
+            windows_by_symbol=post_entry_windows_by_symbol,
+            progress_label=f"{progress_label or 'runner discovery'} targeted post-entry replay LTF",
+            max_merged_span_ms=None,
+        )
+        targeted_phase_frames.append(("post_entry_replay", post_entry_plan, post_entry_fetch, post_entry_materialize))
+    targeted_ltf_plan = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=1)
+    targeted_ltf_fetch = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=2)
+    targeted_ltf_materialize = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=3)
+    trade_rows = _simulate_replay_trades_by_symbol(signal_rows, config=config, selected_symbols=selected_symbols)
+    if not _targeted_ltf_backfill_required(config):
+        executable_entry_windows = [row for row in entry_window_rows if row.get("window_execution_ok") is True]
+        entry_window_trade_rows = _simulate_replay_trades_by_symbol(executable_entry_windows, config=config, selected_symbols=selected_symbols)
 
     candidates_frame = pd.DataFrame(candidate_rows)
     entry_windows_frame = pd.DataFrame(entry_window_rows)
@@ -494,7 +515,7 @@ def run_htf_ltf_runner_discovery(
                         "exit_model": "tp1_0p75r_close_50pct_then_structural_trailing",
                         "future_label_model": "separate_next_hour_10pct_label_not_used_for_entry",
                         "data_access_model": (
-                            "rolling_htf_pair_superset_then_exact_ltf_seed_and_post_entry_replay"
+                            "rolling_htf_pair_superset_then_signal_entry_fetch_then_core_selected_post_entry_replay"
                             if _targeted_ltf_backfill_required(config)
                             else "cache_only_rolling_htf_no_exchange_fetch"
                         ),
@@ -511,6 +532,11 @@ def run_htf_ltf_runner_discovery(
                         "symbol_cooldown_ms": int(_timeframe_ms(config.htf_timeframe)),
                         "entry_window_counts": ",".join(str(value) for value in _entry_window_counts(config)),
                         "entry_window_model": "fixed_closed_ltf_windows_next_open_research",
+                        "entry_window_replay_scope": (
+                            "not_replayed_in_targeted_subminute_mode"
+                            if _targeted_ltf_backfill_required(config)
+                            else "cache_available_replay_for_executable_entry_windows"
+                        ),
                         "post_entry_simulation_model": "strict_wall_clock_ltf_path_no_gap_hops",
                     }
                 ]
@@ -556,10 +582,25 @@ def _build_targeted_ltf_backfill_plan(
     progress = _ProgressLine(label=progress_label, total=len(selected_symbols))
     htf_ms = _timeframe_ms(config.htf_timeframe)
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    tf_set = _rolling_tf_set_from_config(config)
+    spec = ROLLING_PROFILE_SPECS.get(tf_set)
+    max_confirm_candles = int(spec.max_confirm_candles if spec is not None else config.ltf_max_confirm_candles)
+    minute_tail_ms = int(htf_ms) + int(max_confirm_candles) * int(ltf_ms) + MINUTE_MS
     for index, symbol in enumerate(selected_symbols, start=1):
         progress.update(index=index, item=symbol)
         htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
-        symbol_rows, windows = _targeted_ltf_backfill_seeds_for_symbol(symbol=symbol, htf=htf, config=config, htf_ms=htf_ms, ltf_ms=ltf_ms)
+        minute_frame: MinuteCoarseFrame | None = None
+        if htf_ms > MINUTE_MS:
+            minute = _load_frame(storage, symbol, "1m", start_ms=start_ms, end_ms=end_ms + minute_tail_ms)
+            minute_frame = prepare_minute_coarse_frame(minute)
+        symbol_rows, windows = _targeted_ltf_backfill_seeds_for_symbol(
+            symbol=symbol,
+            htf=htf,
+            minute_frame=minute_frame,
+            config=config,
+            htf_ms=htf_ms,
+            ltf_ms=ltf_ms,
+        )
         rows.extend(symbol_rows)
         if windows:
             windows_by_symbol[symbol] = windows
@@ -806,6 +847,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
     *,
     symbol: str,
     htf: pd.DataFrame,
+    minute_frame: MinuteCoarseFrame | None = None,
     config: HtfLtfRunnerDiscoveryConfig,
     htf_ms: int,
     ltf_ms: int,
@@ -855,6 +897,13 @@ def _targeted_ltf_backfill_seeds_for_symbol(
         "impossible_confirm_return": 0,
         "impossible_confirm_quote_pace": 0,
         "impossible_confirm_trade_pace": 0,
+        "impossible_minute_seed_return": 0,
+        "impossible_minute_seed_quote_ratio": 0,
+        "impossible_minute_seed_trade_ratio": 0,
+        "impossible_minute_confirm_return": 0,
+        "impossible_minute_confirm_quote_pace": 0,
+        "impossible_minute_confirm_trade_pace": 0,
+        "impossible_minute_seed_or_confirm_bounds": 0,
     }
     total_pairs = max(0, len(prepared) - 1)
 
@@ -953,6 +1002,26 @@ def _targeted_ltf_backfill_seeds_for_symbol(
             if reason in rejection_counts:
                 rejection_counts[reason] += 1
             continue
+        minute_verdict = coarse_minute_pair_prefilter(
+            minute_frame,
+            pair_start_ms=int(first_ts),
+            htf_ms=int(htf_ms),
+            ltf_ms=int(ltf_ms),
+            min_seed_return_pct=float(config.min_htf_return_pct),
+            min_seed_quote_ratio=float(config.min_htf_quote_ratio),
+            min_seed_trade_ratio=float(config.min_htf_trade_ratio),
+            min_confirm_return_pct=float(ROLLING_LTF_MIN_CONFIRM_RETURN_PCT),
+            min_confirm_quote_pace_ratio=float(ROLLING_LTF_MIN_QUOTE_PACE_RATIO),
+            min_confirm_trade_pace_ratio=float(ROLLING_LTF_MIN_TRADE_PACE_RATIO),
+            min_confirm_candles=min_confirm_candles,
+            max_confirm_candles=max_confirm_candles,
+            baseline_quote_values=possible_baseline_quotes,
+            baseline_trade_values=possible_baseline_trades,
+        )
+        if not minute_verdict.possible:
+            reason = str(minute_verdict.reason or "impossible_minute_seed_or_confirm_bounds")
+            rejection_counts[reason if reason in rejection_counts else "impossible_minute_seed_or_confirm_bounds"] += 1
+            continue
 
         score = (
             float(max_possible_return) * 100.0
@@ -977,6 +1046,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                     "possible_history_ends": "|".join(str(value) for value in possible_history_ends),
                     **category_bounds,
                     **confirm_bounds,
+                    **minute_verdict.bounds,
                 },
             )
         )
@@ -1060,6 +1130,16 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "confirm_trade_pace_ratio_upper_bound": bounds.get("confirm_trade_pace_ratio_upper_bound", float("nan")),
                 "confirm_min_duration_ms": bounds.get("confirm_min_duration_ms", float("nan")),
                 "confirm_max_duration_ms": bounds.get("confirm_max_duration_ms", float("nan")),
+                "coarse_prefilter_model": bounds.get("coarse_prefilter_model", ""),
+                "coarse_prefilter_trading_signal": bool(bounds.get("coarse_prefilter_trading_signal", False)),
+                "coarse_prefilter_reason": bounds.get("coarse_prefilter_reason", ""),
+                "coarse_prefilter_candidate_starts_checked": bounds.get("coarse_prefilter_candidate_starts_checked", float("nan")),
+                "coarse_seed_return_upper_bound": bounds.get("coarse_seed_return_upper_bound", float("nan")),
+                "coarse_seed_quote_ratio_upper_bound": bounds.get("coarse_seed_quote_ratio_upper_bound", float("nan")),
+                "coarse_seed_trade_ratio_upper_bound": bounds.get("coarse_seed_trade_ratio_upper_bound", float("nan")),
+                "coarse_confirm_return_upper_bound": bounds.get("coarse_confirm_return_upper_bound", float("nan")),
+                "coarse_confirm_quote_pace_upper_bound": bounds.get("coarse_confirm_quote_pace_upper_bound", float("nan")),
+                "coarse_confirm_trade_pace_upper_bound": bounds.get("coarse_confirm_trade_pace_upper_bound", float("nan")),
             }
         )
 
@@ -1119,7 +1199,7 @@ def _targeted_ltf_seed_timestamps_by_symbol(plan: pd.DataFrame) -> dict[str, set
     return seeds
 
 
-def _build_targeted_ltf_post_entry_backfill_plan(
+def _build_targeted_ltf_signal_entry_backfill_plan(
     *,
     storage: ParquetStorage,
     symbols: Iterable[str],
@@ -1135,7 +1215,6 @@ def _build_targeted_ltf_post_entry_backfill_plan(
     progress = _ProgressLine(label=progress_label, total=len(selected_symbols))
     htf_ms = _timeframe_ms(config.htf_timeframe)
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
-    horizon_ms = int(config.runner_horizon_minutes) * 60_000
     skipped_no_seed_symbols = 0
     skipped_broad_candidates = 0
     for index, symbol in enumerate(selected_symbols, start=1):
@@ -1152,7 +1231,7 @@ def _build_targeted_ltf_post_entry_backfill_plan(
             symbol,
             config.ltf_timeframe,
             start_ms=start_ms - htf_ms * max(config.baseline_candles, config.dormancy_candles),
-            end_ms=end_ms + horizon_ms,
+            end_ms=end_ms + _signal_entry_tail_ms(config, ltf_ms),
         )
         if ltf.empty:
             continue
@@ -1174,14 +1253,12 @@ def _build_targeted_ltf_post_entry_backfill_plan(
             htf_close_ms = _coerce_int(candidate.get("htf_close_ms"))
             if htf_close_ms is None:
                 continue
-            max_hold_ms = int(config.max_hold_candles) * int(ltf_ms)
-            max_confirm_ms = (int(config.ltf_max_confirm_candles) + 1) * int(ltf_ms)
             window_start = int(htf_close_ms)
-            window_end = int(max(int(htf_close_ms) + horizon_ms, int(htf_close_ms) + max_confirm_ms + max_hold_ms) - 1)
+            window_end = int(htf_close_ms + _signal_entry_tail_ms(config, ltf_ms) - 1)
             symbol_windows.append((window_start, window_end))
             exact_rolling_seed_count += 1
             symbol_rows.append(
-                _post_entry_plan_row_for_candidate(
+                _signal_entry_plan_row_for_candidate(
                     candidate,
                     window_start=window_start,
                     window_end=window_end,
@@ -1194,7 +1271,7 @@ def _build_targeted_ltf_post_entry_backfill_plan(
         if candidate_rows or exact_rolling_seed_count:
             rows.append(
                 {
-                    "targeted_ltf_phase": "post_entry",
+                    "targeted_ltf_phase": "signal_entry",
                     "symbol": symbol,
                     "targeted_ltf_plan_status": "symbol_summary",
                     "htf_timeframe": config.htf_timeframe,
@@ -1202,16 +1279,16 @@ def _build_targeted_ltf_post_entry_backfill_plan(
                     "pre_entry_candidates": int(len(candidate_rows)),
                     "pre_entry_seed_timestamps": int(len(symbol_seed_timestamps)),
                     "exact_rolling_seed_candidates": int(exact_rolling_seed_count),
-                    "post_entry_windows": int(len(symbol_windows)),
+                    "signal_entry_windows": int(len(symbol_windows)),
                     "strict_seed_gate_applied_before_candidate_build": True,
-                    "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
-                    "window_model": "post_entry_fetch_after_exact_rolling_ltf_seed",
+                    "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
+                    "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed",
                 }
             )
     progress.finish()
     plan = pd.DataFrame(rows)
     summary = {
-        "targeted_ltf_phase": "post_entry",
+        "targeted_ltf_phase": "signal_entry",
         "symbol": "__all__",
         "targeted_ltf_plan_status": "summary",
         "htf_timeframe": config.htf_timeframe,
@@ -1224,8 +1301,8 @@ def _build_targeted_ltf_post_entry_backfill_plan(
         "strict_seed_gate_applied_before_candidate_build": True,
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
-        "window_model": "post_entry_fetch_after_exact_rolling_ltf_seed",
-        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
+        "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed",
+        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
     }
     if plan.empty:
         plan = pd.DataFrame([summary])
@@ -1246,15 +1323,70 @@ def _post_entry_fetch_window_for_signal(
         return None
     max_hold_ms = int(config.max_hold_candles) * int(ltf_ms)
     runner_horizon_ms = int(config.runner_horizon_minutes) * 60_000
-    window_start = int(entry_ts)
+    window_start = min(int(htf_close_ms), int(entry_ts))
     window_end_exclusive = max(int(entry_ts) + max_hold_ms, int(htf_close_ms) + runner_horizon_ms)
     if window_end_exclusive <= window_start:
         return None
     return window_start, int(window_end_exclusive - 1)
 
 
+def _build_selected_signal_post_entry_backfill_plan(
+    signals: Iterable[Mapping[str, object]],
+    *,
+    config: HtfLtfRunnerDiscoveryConfig,
+    ltf_ms: int,
+) -> tuple[pd.DataFrame, dict[str, list[tuple[int, int]]]]:
+    rows: list[dict[str, object]] = []
+    windows_by_symbol: dict[str, list[tuple[int, int]]] = {}
+    selected_signals = 0
+    skipped_without_window = 0
+    for signal in signals:
+        if signal.get("signal_verdict") != "selected":
+            continue
+        selected_signals += 1
+        symbol = str(signal.get("symbol") or "")
+        window = _post_entry_fetch_window_for_signal(signal, config=config, ltf_ms=ltf_ms)
+        if not symbol or window is None:
+            skipped_without_window += 1
+            continue
+        window_start, window_end = window
+        windows_by_symbol.setdefault(symbol, []).append((int(window_start), int(window_end)))
+        rows.append(
+            _post_entry_plan_row(
+                signal,
+                signal_scope="core_selected_signal",
+                window_start=int(window_start),
+                window_end=int(window_end),
+                config=config,
+            )
+        )
+    summary = {
+        "targeted_ltf_phase": "post_entry_replay",
+        "symbol": "__all__",
+        "targeted_ltf_plan_status": "summary",
+        "htf_timeframe": config.htf_timeframe,
+        "ltf_timeframe": config.ltf_timeframe,
+        "selected_signals": int(selected_signals),
+        "skipped_without_fetch_window": int(skipped_without_window),
+        "symbols_with_windows": int(len(windows_by_symbol)),
+        "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
+        "window_model": "post_entry_replay_fetch_after_core_selected_signal",
+        "selection_model": "core_selected_signal_only_no_future_label_filter",
+    }
+    if rows:
+        return pd.concat([pd.DataFrame([summary]), pd.DataFrame(rows)], ignore_index=True, sort=False), windows_by_symbol
+    return pd.DataFrame([summary]), windows_by_symbol
 
-def _post_entry_plan_row_for_candidate(
+
+
+def _signal_entry_tail_ms(config: HtfLtfRunnerDiscoveryConfig, ltf_ms: int) -> int:
+    tf_set = _rolling_tf_set_from_config(config)
+    spec = ROLLING_PROFILE_SPECS.get(tf_set)
+    max_confirm_candles = int(spec.max_confirm_candles if spec is not None else config.ltf_max_confirm_candles)
+    return int(max_confirm_candles + 1) * int(ltf_ms)
+
+
+def _signal_entry_plan_row_for_candidate(
     candidate: Mapping[str, object],
     *,
     window_start: int,
@@ -1262,11 +1394,11 @@ def _post_entry_plan_row_for_candidate(
     config: HtfLtfRunnerDiscoveryConfig,
 ) -> dict[str, object]:
     return {
-        "targeted_ltf_phase": "post_entry",
+        "targeted_ltf_phase": "signal_entry",
         "symbol": candidate.get("symbol", ""),
         "targeted_ltf_plan_status": "planned",
         "signal_scope": "exact_rolling_seed_candidate",
-        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
+        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
         "timestamp_ms": candidate.get("timestamp_ms", float("nan")),
         "timestamp_utc": candidate.get("timestamp_utc", ""),
         "htf_close_ms": candidate.get("htf_close_ms", float("nan")),
@@ -1280,7 +1412,8 @@ def _post_entry_plan_row_for_candidate(
         "window_end_ms": int(window_end),
         "window_end_utc": _timestamp_to_utc(window_end),
         "window_ms": int(window_end - window_start + 1),
-        "window_model": "full_confirm_label_exit_fetch_after_exact_rolling_seed",
+        "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed",
+        "known_future_scope": "confirm_candles_and_next_entry_open_only",
         "htf_quote_ratio": candidate.get("htf_quote_ratio", float("nan")),
         "htf_trade_ratio": candidate.get("htf_trade_ratio", float("nan")),
         "dormancy_to_anomaly_quote_ratio": candidate.get("dormancy_to_anomaly_quote_ratio", float("nan")),
@@ -1296,11 +1429,11 @@ def _post_entry_plan_row(
     config: HtfLtfRunnerDiscoveryConfig,
 ) -> dict[str, object]:
     return {
-        "targeted_ltf_phase": "post_entry",
+        "targeted_ltf_phase": "post_entry_replay",
         "symbol": signal.get("symbol", ""),
         "targeted_ltf_plan_status": "planned",
         "signal_scope": signal_scope,
-        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
+        "selection_model": "core_selected_signal_only_no_future_label_filter",
         "timestamp_ms": signal.get("timestamp_ms", float("nan")),
         "timestamp_utc": signal.get("timestamp_utc", ""),
         "htf_close_ms": signal.get("htf_close_ms", float("nan")),
@@ -1317,7 +1450,7 @@ def _post_entry_plan_row(
         "window_end_ms": int(window_end),
         "window_end_utc": _timestamp_to_utc(window_end),
         "window_ms": int(window_end - window_start + 1),
-        "window_model": "post_entry_fetch_after_exact_rolling_ltf_seed",
+        "window_model": "post_entry_replay_fetch_after_core_selected_signal",
         "entry_drift_pct": signal.get("entry_drift_pct", float("nan")),
         "initial_risk_pct": signal.get("initial_risk_pct", float("nan")),
         "window_execution_ok": signal.get("window_execution_ok", True),
@@ -1356,7 +1489,7 @@ def _ensure_targeted_ltf_backfill(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not windows_by_symbol:
         return (
-            pd.DataFrame([{"status": "no_targeted_windows", "reason": "two_htf_pair_superset_selected_zero_windows"}]),
+            pd.DataFrame([{"status": "no_targeted_windows", "reason": "targeted_planner_selected_zero_windows"}]),
             pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}]),
         )
     from research_tools.anomaly_strategy_backtest import ensure_targeted_aggtrade_direct_ltf_cache
@@ -1712,7 +1845,7 @@ def _pre_seed_context_candles_from_ltf(
             end_exclusive_ms=int(window_start_ms) + int(htf_ms),
             expected_step_ms=int(ltf_ms),
         )
-        if not window.status.ok:
+        if window.status != "ok":
             return ()
         frame = window.frame.copy()
         if frame.empty:
@@ -1922,8 +2055,12 @@ def _build_first_ltf_signal(
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     htf_ms = _timeframe_ms(config.htf_timeframe)
     start_ms = int(candidate["htf_close_ms"])
-    end_ms = start_ms + int(config.runner_horizon_minutes) * 60_000
-    entry_window = _strict_ltf_window(ltf, start_ms=start_ms, end_exclusive_ms=end_ms, expected_step_ms=ltf_ms)
+    entry_window = _strict_ltf_window(
+        ltf,
+        start_ms=start_ms,
+        end_exclusive_ms=start_ms + _signal_entry_tail_ms(config, ltf_ms),
+        expected_step_ms=ltf_ms,
+    )
 
     snapshot, post_seed_candles, post_seed_window = _build_seed_first_backtest_snapshot(candidate, htf=htf, ltf=ltf, config=config)
     exact_verdicts = list(evaluate_ltf_confirm_sequence_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles))
@@ -2365,6 +2502,101 @@ def _future_runner_label(
         "anomaly_low_broken_before_runner": low_broken,
         "clean_runner_without_low_break": bool(runner and not low_broken),
         **audit,
+    }
+
+
+def _simulate_replay_trades_by_symbol(
+    rows: Iterable[dict[str, object]],
+    *,
+    config: HtfLtfRunnerDiscoveryConfig,
+    selected_symbols: Iterable[str],
+) -> list[dict[str, object]]:
+    rows_by_symbol: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        if not symbol:
+            continue
+        rows_by_symbol.setdefault(symbol, []).append(dict(row))
+    if not rows_by_symbol:
+        return []
+
+    storage = ParquetStorage(config.cache_dir)
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    trades: list[dict[str, object]] = []
+    ordered_symbols = [symbol for symbol in selected_symbols if symbol in rows_by_symbol]
+    seen_symbols = set(ordered_symbols)
+    ordered_symbols.extend(symbol for symbol in sorted(rows_by_symbol) if symbol not in seen_symbols)
+    for symbol in ordered_symbols:
+        symbol_rows = rows_by_symbol.get(symbol, [])
+        if not symbol_rows:
+            continue
+        window = _replay_load_window_for_rows(symbol_rows, config=config, ltf_ms=ltf_ms)
+        if window is None:
+            for row in symbol_rows:
+                trades.append(_skipped_trade(row, "missing_entry_timestamp_for_replay"))
+            continue
+        load_start_ms, load_end_ms = window
+        ltf = _load_frame(storage, symbol, config.ltf_timeframe, start_ms=load_start_ms, end_ms=load_end_ms)
+        for row in symbol_rows:
+            row_with_label = _attach_future_label_after_selection(row, ltf=ltf, config=config, ltf_ms=ltf_ms)
+            trades.append(_simulate_no_tp_runner_trade(row_with_label, ltf=ltf, config=config))
+    return trades
+
+
+def _replay_load_window_for_rows(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    config: HtfLtfRunnerDiscoveryConfig,
+    ltf_ms: int,
+) -> tuple[int, int] | None:
+    starts: list[int] = []
+    ends: list[int] = []
+    max_hold_ms = int(config.max_hold_candles) * int(ltf_ms)
+    horizon_ms = int(config.runner_horizon_minutes) * 60_000
+    for row in rows:
+        entry_ts = _coerce_int(row.get("entry_timestamp_ms"))
+        htf_close_ms = _coerce_int(row.get("htf_close_ms"))
+        if entry_ts is None:
+            continue
+        starts.append(min(value for value in (entry_ts, htf_close_ms) if value is not None))
+        ends.append(int(entry_ts) + max_hold_ms)
+        if htf_close_ms is not None:
+            ends.append(int(htf_close_ms) + horizon_ms)
+    if not starts or not ends:
+        return None
+    return int(min(starts)), int(max(ends))
+
+
+def _attach_future_label_after_selection(
+    signal: dict[str, object],
+    *,
+    ltf: pd.DataFrame,
+    config: HtfLtfRunnerDiscoveryConfig,
+    ltf_ms: int,
+) -> dict[str, object]:
+    htf_close_ms = _coerce_int(signal.get("htf_close_ms"))
+    try:
+        reference_price = float(signal.get("anomaly_close", float("nan")))
+        anomaly_low = float(signal.get("anomaly_low", float("nan")))
+    except (TypeError, ValueError):
+        reference_price = float("nan")
+        anomaly_low = float("nan")
+    if htf_close_ms is None:
+        return signal
+    label = _future_runner_label(
+        ltf,
+        start_ms=int(htf_close_ms),
+        horizon_ms=int(config.runner_horizon_minutes) * 60_000,
+        reference_price=reference_price,
+        anomaly_low=anomaly_low,
+        target_return_pct=float(config.runner_target_return_pct),
+        expected_step_ms=int(ltf_ms),
+    )
+    return {
+        **signal,
+        **label,
+        "future_label_available_at_entry": False,
+        "future_label_assignment_model": "after_core_signal_selection_not_entry_filter",
     }
 
 
@@ -3975,7 +4207,7 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
             {
                 "check": "data_access",
                 "status": "ok",
-                "detail": "Targeted LTF access is two-stage: a cheap two-closed-HTF-candle safe-superset may fetch only that pair first; full confirm/label/exit LTF is fetched only after an exact rolling LTF seed exists. The strategy seed itself is rolling HTF, not calendar HTF.",
+                "detail": "Targeted LTF access is staged: cheap HTF/1m impossibility gates may fetch seed LTF first; short confirm/next-open LTF is fetched only after an exact rolling seed exists; long label/exit replay LTF is fetched only after the shared core selects a signal. Future labels, exits and PnL are not pre-entry filters.",
             },
         ]
     )

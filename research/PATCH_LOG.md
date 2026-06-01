@@ -1,26 +1,32 @@
-## 2026-06-01 - P491 backtest acceleration investigation notes
+## 2026-06-01 - P491 staged targeted LTF backfill and coarse prefilter
 
-Status: PROPOSED / docs only. Builds on P480.
+Status: APPLIED locally / UNKNOWN commit. Builds on P480.
 
-Purpose: define a non-biased acceleration path for long HTF/LTF runner discovery runs before implementing code.
+Purpose: make long HTF/LTF runner discovery materially faster without using future winners, labels, exits, or PnL as pre-entry filters.
 
 Changes:
 
-- Documented that coarse prefilters may reject only mathematically impossible shared-core snapshots; uncertain/missing cases must proceed to exact LTF.
-- Identified the clean first speedup: defer post-entry LTF replay fetch until after exact shared-core signal selection.
-- Documented 1d artifact scale showing post-entry fetch is an order-of-magnitude waste source relative to selected signals.
-- Listed forbidden acceleration inputs: future runner/top-growth labels, exits, PnL, post-entry highs/lows, and result survival.
+- Split targeted subminute fetch into `pre_entry`, `signal_entry`, and `post_entry_replay` phases.
+- `signal_entry` fetches only the short first-confirm/next-open window after exact rolling seed candidates.
+- `post_entry_replay` fetches long future label/exit replay windows only for core-selected signals.
+- Added `research_tools.runner_coarse_prefilter`, an independent 1m upper-bound impossibility prefilter that keeps uncertain or incomplete windows.
+- Future runner labels for selected trades are attached after core signal selection and marked `future_label_assignment_model=after_core_signal_selection_not_entry_filter`.
+- Fixed `_pre_seed_context_candles_from_ltf` to compare strict window status strings correctly.
+- Added focused acceleration tests.
 
 Validation:
 
-```text
-No code changed. No tests run.
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py -q
+.venv\Scripts\python.exe -m compileall -q research_tools\runner_coarse_prefilter.py research_tools\htf_ltf_runner_discovery.py tests\test_runner_discovery_acceleration.py
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
 ```
 
 Risk:
 
 ```text
-None to live or backtest behavior yet. The implementation risk is false rejection in a future coarse prefilter; acceptance tests must prove exact selected snapshots remain possible.
+The main risk is a false impossible verdict in the new coarse prefilter. The module is intentionally conservative: missing 1m coverage and uncertain bounds return possible, not rejected. A 1d/3d parity smoke must still compare selected snapshot hashes/verdicts before trusting 30d results.
 ```
 
 ## 2026-06-01 - P490 TP1 full-close dust rounding guard

@@ -1,14 +1,16 @@
-## 2026-06-01 - P491 backtest acceleration investigation
+## 2026-06-01 - P491 backtest acceleration implementation
 
-Current commit: UNKNOWN. Status: PROPOSED / investigation only.
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
 
-The 30d HTF/LTF runner discovery should not be accelerated by filtering for future winners before 1s/LTF backfill. Safe acceleration must stay in the data-availability layer: a cheap planner may reject only when closed HTF/1m bounds prove that no exact 15s/30s `DecisionSnapshot` inside the coarse window could pass `PumpDecisionCore`. Missing data, uncertain bounds, or coarse features that cannot prove impossibility must keep the window and fetch exact LTF.
+P491 implements the non-biased acceleration path for subminute HTF/LTF runner discovery. The data path is now staged: cheap HTF plus optional 1m impossibility bounds plan seed LTF; exact rolling seeds get only the short confirm/next-open signal-entry window; long future label/exit replay LTF is fetched only after `PumpDecisionCore` returns selected signals.
 
-Current code already has a safe HTF-pair/confirm upper-bound planner gate, but it still fetches long post-entry LTF replay windows for every exact rolling seed candidate before shared-core signal selection. In the 1d artifacts, `3m_30s` planned 7,699 pre-entry windows and 933 post-entry windows; `5m_30s` planned 2,872 pre-entry windows and 1,160 post-entry windows. Post-entry planned minutes were about 134k total, while selected signals were only 178. Deferring post-entry fetch until after core-selected/executable signals is the cleanest first speedup and does not change signal truthfulness.
+The new `research_tools.runner_coarse_prefilter` module rejects only proven-impossible coarse 1m windows. If 1m coverage or bounds are incomplete, the planner keeps the window and fetches exact LTF. It does not use future labels, top-growth membership, exits, PnL, post-entry highs/lows, or result survival as pre-entry filters.
 
-Second speedup candidate: add a pure coarse minute/HTF impossibility module before aggTrade->15s/30s backfill. It can safely check upper-bound seed return/quote/trade, upper-bound confirm return/quote/trade pace, and category-family necessary bounds. It must not infer P486 sustained internal seed flow, confirm acceleration/second-half shape, exits, PnL, runner labels, top-growth membership, or later highs/lows unless the bound is mathematically one-way and known at decision time.
+Also fixed a latent exact-snapshot bug: `_pre_seed_context_candles_from_ltf` checked `window.status.ok` even though strict LTF window status is a string. It now correctly requires `window.status == "ok"`.
 
-Next: implement P491a as two-phase exact replay: pre-entry LTF fetch -> exact shared-core selected signals -> post-entry LTF fetch only for selected/executable signals. Then implement P491b as an independent coarse prefilter with artifact-visible reasons and property tests proving selected exact snapshots are never prefiltered out.
+Validation: `tests/test_runner_discovery_acceleration.py` and `tests/test_pump_decision_contract.py` passed; compileall for `data/exchanges research_tools cli constants.py main.py` passed; `research_tools.decision_contract_guard` passed. Legacy `tests/test_htf_ltf_runner_discovery.py` still has stale expectations from pre-shared-core signatures and older TP assumptions and is not proof against this patch.
+
+Next: run a 1d/3d targeted discovery smoke and compare selected `snapshot_hash`/`signal_verdict` against the previous path. Acceptance is unchanged selected signal verdicts with materially lower post-entry LTF fetch volume.
 
 ## 2026-06-01 - P490 TP1 full-close dust rounding guard
 
