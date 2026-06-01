@@ -1,3 +1,13 @@
+## 2026-06-01 - P486 internal seed flow-shape guard
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Live APR showed a real weakness in the contract, not just a parameter issue. The bot opened APR after a `3m_15s` C-category signal with fill around `0.18792`, but the chart/volume shape looked like a one-minute impulse followed by fade. The selected features were borderline: `htf_trade_ratio` about 5.74 near the minimum, `dormancy_to_anomaly_trade_ratio` about 2.87, and initial risk about 2.65%. Entry guard checked freshness/price/RR, but the shared core did not make internal seed LTF flow stability mandatory.
+
+P486 rejects aggregate-valid seeds whose LTF sub-candles look like single-print or faded-tail flow. The expected morphology is quiet baseline followed by distributed/held activity (`_____pPPPP`), not one isolated bar. The core now rejects these as `seed_ltf_flow_not_sustained`, and live ledgers expose the internal flow-shape fields.
+
+Next: restart live2 and verify APR-like one-print/fade setups are rejected by `seed_ltf_flow_not_sustained`. Then run a small backtest/live parity sample before changing any C/A/S thresholds.
+
 ## 2026-06-01 - P485 live2 seed return pre-context gate
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

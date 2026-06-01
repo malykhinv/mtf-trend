@@ -1,3 +1,28 @@
+## 2026-06-01 - P486 internal seed flow-shape guard
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P485.
+
+Purpose: reject one-print or faded-tail seed flow by nature, instead of increasing confirmation candle count.
+
+Changes:
+
+- `PumpDecisionCore` now treats `htf_ltf_sustained_flow_ok=False` as a seed-stage reject: `seed_ltf_flow_not_sustained`.
+- Internal seed LTF flow now includes tail-shape features: `htf_ltf_tail_quote_share`, `htf_ltf_tail_trade_share`, and `htf_ltf_tail_green_share`.
+- Live decision ledgers now include internal seed flow-shape fields for audit.
+- Added tests for single-print flow and early-flow-with-empty-tail fade.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py -q
+```
+
+Risk:
+
+```text
+This changes signal logic and will reduce selected signals. It is intentional: aggregate quote/trade ratios are not enough if the flow is concentrated in one bar or has already faded before entry. Backtest/live parity must be rechecked because snapshot verdicts can change.
+```
+
 ## 2026-06-01 - P485 live2 seed return pre-context gate
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P484.

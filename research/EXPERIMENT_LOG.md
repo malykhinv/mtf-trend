@@ -1,3 +1,28 @@
+## 2026-06-01 - live2 APR selected trade review
+
+Run: `.output/results/live2_anomaly_runs/20260601_084401`.
+
+Finding: APR should not be treated as a clean pump-awakening example. It exposed a missing flow-shape guard.
+
+Observed from live artifacts:
+
+```text
+symbol: APR/USDT:USDT
+live state: in_position
+execution fill: 0.18792
+stop: 0.182898505
+signal: 3m_15s C_balanced_flow_acceptance
+seed return: ~2.06%
+htf_trade_ratio: ~5.74
+dormancy_to_anomaly_trade_ratio: ~2.87
+confirm candles: 5
+initial risk: ~2.65%
+```
+
+Interpretation: the signal passed the aggregate shared-core checks, but visually and structurally it looked like one 1m impulse with flow fade, not sustained awakening. The correct fix is not changing `5 confirm candles` to `6`; it is making internal seed LTF flow stability part of the core contract. P486 implements this with `seed_ltf_flow_not_sustained`.
+
+Next validation: after restart, inspect `live2_decision_ledger.csv` for `seed_ltf_flow_not_sustained` and the new `htf_ltf_*` flow-shape fields on APR-like setups.
+
 ## 2026-06-01 - live2 20260601_080623 post-P484 audit
 
 Run: `.output/results/live2_anomaly_runs/20260601_080623`.

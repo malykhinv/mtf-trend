@@ -98,6 +98,8 @@ Data acquisition parity note: live and backtest do not have to acquire market da
 
 P480 planner note: targeted backfill may use cheap HTF upper bounds to avoid LTF/1s fetch only when a seed/category/confirm requirement is mathematically impossible. Confirm-bound rejects may use only loose HTF maxima for return, quote pace, and trade pace; missing next-HTF data must not be treated as rejection. Planner rejects must remain visible in `htf_ltf_runner_targeted_ltf_plan.csv`.
 
+P486 note: the rolling seed must show sustained internal LTF flow, not a one-print spike. The seed's LTF sub-candles must have distributed quote/trade flow, bounded top-1 concentration, non-negative second-half price behavior, and an active tail (`_____pPPPP` morphology). A seed that passes aggregate return/quote/trade ratios but fails this internal-flow shape is rejected by the shared core with `seed_ltf_flow_not_sustained`.
+
 P466 note: C/A/S category matching is now a shared pure matcher in `research_tools/pump_decision_core.py`. Live and backtest adapters may still differ in how they discover seed/confirm windows until the seed-first evaluator migration is complete, but they must not carry separate C/A/S threshold copies.
 
 P467 note: `research_tools/pump_decision_core.py` now contains the executable source-neutral seed-first evaluator. It validates normalized candle continuity and data dependencies, computes seed/context/confirm features, applies the shared C/A/S matcher, and returns only the signal verdict. Live/backtest adapters are still pending migration and must become snapshot builders before parity claims are valid.

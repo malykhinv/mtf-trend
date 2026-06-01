@@ -767,6 +767,8 @@ def _seed_reject_reason(features: Mapping[str, object]) -> str | None:
         return "seed_htf_quote_ratio_below_min"
     if _finite_float(features.get("htf_trade_ratio")) < ROLLING_SEED_MIN_HTF_TRADE_RATIO:
         return "seed_htf_trade_ratio_below_min"
+    if features.get("htf_ltf_sustained_flow_ok") is False:
+        return "seed_ltf_flow_not_sustained"
     return None
 
 
@@ -877,6 +879,13 @@ def _htf_internal_ltf_features(
     trade_acceleration = _safe_divide(second_trades, first_trades)
     quote_top1_share = _safe_divide(quote_top, quote_total)
     trade_top1_share = _safe_divide(trade_top, trade_total)
+    tail_count = min(4, max(2, len(seed_ltf_candles) // 3))
+    tail = seed_ltf_candles[-tail_count:]
+    tail_quote = _finite_sum([item.quote_volume for item in tail])
+    tail_trades = _finite_sum([item.number_of_trades for item in tail])
+    tail_green_share = _safe_divide(sum(1 for item in tail if float(item.close) > float(item.open)), len(tail))
+    tail_quote_share = _safe_divide(tail_quote, quote_total)
+    tail_trade_share = _safe_divide(tail_trades, trade_total)
     trade_count_status = "ok" if math.isfinite(trade_total) and trade_total > 0.0 else "missing"
     sustained_flow_ok = (
         math.isfinite(quote_total)
@@ -894,6 +903,12 @@ def _htf_internal_ltf_features(
         and quote_acceleration >= 0.75
         and math.isfinite(trade_acceleration)
         and trade_acceleration >= 0.75
+        and math.isfinite(tail_quote_share)
+        and tail_quote_share >= 0.20
+        and math.isfinite(tail_trade_share)
+        and tail_trade_share >= 0.20
+        and math.isfinite(tail_green_share)
+        and tail_green_share >= 0.50
     )
     return {
         "htf_ltf_status": "ok",
@@ -907,6 +922,10 @@ def _htf_internal_ltf_features(
         "htf_ltf_second_half_return_pct": second_half_return,
         "htf_ltf_quote_acceleration": quote_acceleration,
         "htf_ltf_trade_acceleration": trade_acceleration,
+        "htf_ltf_tail_candles": int(len(tail)),
+        "htf_ltf_tail_quote_share": tail_quote_share,
+        "htf_ltf_tail_trade_share": tail_trade_share,
+        "htf_ltf_tail_green_share": tail_green_share,
         "htf_ltf_sustained_flow_ok": bool(sustained_flow_ok),
         "htf_ltf_trade_count_status": trade_count_status,
     }

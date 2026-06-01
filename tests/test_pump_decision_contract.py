@@ -101,6 +101,68 @@ def test_first_confirm_returns_final_exact_rejected_confirm_window() -> None:
     assert verdict.features["last_confirm_end_ms"] == flat_confirm[-1].close_time_ms
 
 
+def test_seed_ltf_single_print_flow_is_rejected_by_core() -> None:
+    snapshot, post_seed = _build_seed_first_core_smoke_snapshot()
+    assert snapshot.rolling_seed is not None
+    concentrated_seed = tuple(
+        DecisionCandle(
+            open_time_ms=candle.open_time_ms,
+            close_time_ms=candle.close_time_ms,
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            quote_volume=1_500.0 if index == len(snapshot.rolling_seed.seed_candles) - 1 else 10.0,
+            number_of_trades=1_500 if index == len(snapshot.rolling_seed.seed_candles) - 1 else 10,
+            taker_buy_quote_volume=candle.taker_buy_quote_volume,
+            source=candle.source,
+        )
+        for index, candle in enumerate(snapshot.rolling_seed.seed_candles)
+    )
+    concentrated_snapshot = replace(
+        snapshot,
+        rolling_seed=replace(snapshot.rolling_seed, seed_candles=concentrated_seed),
+    )
+
+    verdict = evaluate_first_ltf_confirm_after_seed(concentrated_snapshot, post_seed_ltf_candles=post_seed)
+
+    assert verdict.verdict == "rejected"
+    assert verdict.rejects[0].reason == "seed_ltf_flow_not_sustained"
+    assert verdict.features["htf_ltf_sustained_flow_ok"] is False
+    assert verdict.features["htf_ltf_quote_top1_share"] > 0.55
+
+
+def test_seed_ltf_tail_fade_flow_is_rejected_by_core() -> None:
+    snapshot, post_seed = _build_seed_first_core_smoke_snapshot()
+    assert snapshot.rolling_seed is not None
+    faded_tail_seed = tuple(
+        DecisionCandle(
+            open_time_ms=candle.open_time_ms,
+            close_time_ms=candle.close_time_ms,
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            quote_volume=200.0 if index < len(snapshot.rolling_seed.seed_candles) - 3 else 10.0,
+            number_of_trades=200 if index < len(snapshot.rolling_seed.seed_candles) - 3 else 10,
+            taker_buy_quote_volume=candle.taker_buy_quote_volume,
+            source=candle.source,
+        )
+        for index, candle in enumerate(snapshot.rolling_seed.seed_candles)
+    )
+    faded_snapshot = replace(
+        snapshot,
+        rolling_seed=replace(snapshot.rolling_seed, seed_candles=faded_tail_seed),
+    )
+
+    verdict = evaluate_first_ltf_confirm_after_seed(faded_snapshot, post_seed_ltf_candles=post_seed)
+
+    assert verdict.verdict == "rejected"
+    assert verdict.rejects[0].reason == "seed_ltf_flow_not_sustained"
+    assert verdict.features["htf_ltf_sustained_flow_ok"] is False
+    assert verdict.features["htf_ltf_tail_quote_share"] < 0.20
+
+
 def test_extra_adapter_history_does_not_change_contract_hash() -> None:
     snapshot, post_seed = _build_seed_first_core_smoke_snapshot()
     selected = evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed)
