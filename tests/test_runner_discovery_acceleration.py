@@ -2,6 +2,8 @@ import pandas as pd
 
 from research_tools.htf_ltf_runner_discovery import (
     HtfLtfRunnerDiscoveryConfig,
+    TRADE_ARTIFACT_COLUMNS,
+    _artifact_frame,
     _build_selected_signal_post_entry_backfill_plan,
     _post_entry_fetch_window_for_signal,
     _signal_entry_tail_ms,
@@ -139,3 +141,11 @@ def test_signal_entry_tail_is_confirm_plus_next_open_only() -> None:
     config = HtfLtfRunnerDiscoveryConfig(htf_timeframe="3m", ltf_timeframe="15s")
 
     assert _signal_entry_tail_ms(config, 15_000) == 195_000
+
+
+def test_empty_trade_artifact_keeps_csv_headers() -> None:
+    frame = _artifact_frame([], columns=TRADE_ARTIFACT_COLUMNS)
+
+    assert frame.empty
+    assert "status" in frame.columns
+    assert "entry_timestamp_ms" in frame.columns

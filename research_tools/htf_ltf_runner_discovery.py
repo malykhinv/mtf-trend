@@ -174,6 +174,46 @@ class _StrictLtfWindow:
     max_gap_ms: int
 
 
+SIGNAL_ARTIFACT_COLUMNS = [
+    "symbol",
+    "signal_status",
+    "signal_verdict",
+    "signal_reason",
+    "portfolio_verdict",
+    "portfolio_reason",
+    "htf_timeframe",
+    "ltf_timeframe",
+    "timestamp_ms",
+    "htf_close_ms",
+    "decision_timestamp_ms",
+    "decision_available_timestamp_ms",
+    "entry_timestamp_ms",
+    "entry_price",
+    "initial_stop",
+    "initial_risk_pct",
+    "runner_candidate_category",
+    "runner_candidate_matched_categories",
+    "snapshot_hash",
+]
+
+TRADE_ARTIFACT_COLUMNS = [
+    *SIGNAL_ARTIFACT_COLUMNS,
+    "status",
+    "skip_reason",
+    "execution_guard",
+    "exit_timestamp_ms",
+    "exit_reason",
+    "tp1_hit",
+    "gross_r",
+    "gross_return",
+    "net_return",
+    "mfe_pct",
+    "mae_pct",
+    "runner_10pct_next_hour",
+    "clean_runner_without_low_break",
+]
+
+
 class _ProgressLine:
     def __init__(self, *, label: str, total: int, min_interval_seconds: float = 0.5) -> None:
         self.label = label
@@ -396,13 +436,13 @@ def run_htf_ltf_runner_discovery(
 
     candidates_frame = pd.DataFrame(candidate_rows)
     entry_windows_frame = pd.DataFrame(entry_window_rows)
-    entry_window_trades_frame = pd.DataFrame(entry_window_trade_rows)
+    entry_window_trades_frame = _artifact_frame(entry_window_trade_rows, columns=TRADE_ARTIFACT_COLUMNS)
     entry_window_trades_live_filtered = _apply_same_symbol_overlap_filter(entry_window_trades_frame)
-    signals_frame = pd.DataFrame(signal_rows)
+    signals_frame = _artifact_frame(signal_rows, columns=SIGNAL_ARTIFACT_COLUMNS)
     decision_ledger_frame = pd.DataFrame(decision_rows)
     rejected_exact_windows_frame = pd.DataFrame(rejected_exact_window_rows)
     data_dependencies_frame = _decision_data_dependencies(decision_ledger_frame)
-    trades_frame = pd.DataFrame(trade_rows)
+    trades_frame = _artifact_frame(trade_rows, columns=TRADE_ARTIFACT_COLUMNS)
     live_filtered, portfolio_events = _apply_runner_candidate_portfolio(trades_frame, config=config)
     candidate_rule_scores = _score_candidate_rules(candidates_frame)
     entry_window_rule_scores = _score_entry_window_rules(
@@ -565,6 +605,13 @@ def _targeted_ltf_backfill_required(config: HtfLtfRunnerDiscoveryConfig) -> bool
         return False
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     return 0 < ltf_ms < 60_000
+
+
+def _artifact_frame(rows: Iterable[dict[str, object]], *, columns: list[str] | None = None) -> pd.DataFrame:
+    frame = pd.DataFrame(list(rows))
+    if not frame.empty or columns is None:
+        return frame
+    return pd.DataFrame(columns=columns)
 
 
 def _build_targeted_ltf_backfill_plan(

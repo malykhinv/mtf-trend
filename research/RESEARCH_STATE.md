@@ -1,3 +1,13 @@
+## 2026-06-02 - P492 zero-trade runner discovery artifact guard
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The 7d/30d runner discovery run exposed a post-processing bug after `5m_30s` finished with `signals=0` and `trades=0`: `htf_ltf_runner_trades_raw.csv` was a BOM-only empty file, and CLI aggregation crashed with `pandas.errors.EmptyDataError: No columns to parse from file`. This is not edge evidence and not a strategy reject issue; zero trades must be a valid analyzable outcome.
+
+P492 makes CLI aggregation treat empty CSV artifacts as empty frames and makes new zero-row signal/trade artifacts write stable headers. This preserves the profile index and lets later profiles continue even when one profile has no selected trades.
+
+Next: rerun the command from the failed profile/output root if possible, or run a short 1d smoke with a deliberately no-trade profile. Acceptance: no `EmptyDataError`, `htf_ltf_runner_discovery_index.csv` is written, and zero-trade profiles remain visible in summaries.
+
 ## 2026-06-01 - P491 backtest acceleration implementation
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

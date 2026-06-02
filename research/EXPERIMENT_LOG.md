@@ -1,3 +1,18 @@
+## 2026-06-02 - Runner discovery zero-trade aggregation failure
+
+Observed failure:
+
+```text
+runner discovery 5m_30s: done candidates=180682 signals=0 closed=0 avg_net=0.0000% win_rate=0.00%
+pandas.errors.EmptyDataError: No columns to parse from file
+```
+
+Interpretation: the long run did finish the `5m_30s` profile, but combined CLI aggregation crashed while reading a zero-row `htf_ltf_runner_trades_raw.csv`. The result is a post-processing/artifact bug, not proof about profitability. The important strategy fact remains: this profile had many candidates but zero selected shared-core signals, so the next analysis should inspect `decision_ledger` reject reasons before changing thresholds.
+
+Patch: P492 makes empty CSV artifacts readable and writes stable headers for new zero-row signal/trade artifacts.
+
+Next experiment: rerun a short smoke or resume the multi-profile command and verify the run writes `htf_ltf_runner_discovery_index.csv` even when one profile has zero trades.
+
 ## 2026-06-01 - Backtest acceleration investigation
 
 Question: how to make 30d HTF/LTF runner discovery much faster without lookahead or optimistic bias.

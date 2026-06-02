@@ -80,6 +80,13 @@ def _normalized_symbol_tuple(symbols: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(sorted(symbol for symbol in normalized if symbol))
 
 
+def _read_csv_or_empty(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
 def _reuse_universe_symbol_scope(symbols: Iterable[str] | None) -> str:
     return "explicit_symbols" if _normalized_symbol_tuple(symbols) else "cache_snapshot_scan"
 
@@ -1912,7 +1919,7 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
             combined_portfolio_config = discovery_config
             raw_trades_path = result_dir / "htf_ltf_runner_trades_raw.csv"
             if raw_trades_path.exists():
-                raw_trades = pd.read_csv(raw_trades_path)
+                raw_trades = _read_csv_or_empty(raw_trades_path)
                 if not raw_trades.empty:
                     raw_trades.insert(0, "profile", str(profile["name"]))
                     combined_trade_frames.append(raw_trades)

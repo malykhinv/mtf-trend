@@ -1,3 +1,29 @@
+## 2026-06-02 - P492 zero-trade runner discovery artifact guard
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P491.
+
+Purpose: prevent long runner discovery runs from failing during combined aggregation when a profile legitimately produces zero selected trades.
+
+Changes:
+
+- Added CLI `_read_csv_or_empty(...)` so BOM-only or empty CSV artifacts are treated as empty frames instead of raising `EmptyDataError`.
+- Runner discovery now writes stable headers for zero-row `signals` and `trades` artifacts.
+- Added regression tests for empty CSV reads and empty trade artifact headers.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_cli_runner_discovery_empty_artifacts.py tests\test_runner_discovery_acceleration.py -q
+.venv\Scripts\python.exe -m compileall -q cli\commands.py research_tools\htf_ltf_runner_discovery.py tests\test_cli_runner_discovery_empty_artifacts.py tests\test_runner_discovery_acceleration.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Low. This does not turn zero trades into success metrics; it only keeps zero-trade artifacts readable and allows the multi-profile run index/aggregation to finish.
+```
+
 ## 2026-06-01 - P491 staged targeted LTF backfill and coarse prefilter
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P480.
