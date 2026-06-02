@@ -1,3 +1,31 @@
+## 2026-06-02 - P497 HTF context warmup for targeted runner discovery
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P496.
+
+Purpose: make short targeted discovery smokes provide the shared core's required pre-seed context without expanding the actual scan period.
+
+Changes:
+
+- Added `_htf_context_warmup_ms(...)` based on the rolling contract context length.
+- Targeted pre-entry planning now loads HTF/1m context from `start_ms - warmup`, while `_targeted_ltf_backfill_seeds_for_symbol(...)` scans only the requested `start_ms..end_ms` range.
+- Signal-entry planning now uses scan HTF for candidate discovery and warmup HTF for seed-stage context checks.
+- Main symbol processing now uses scan HTF for candidate collection and warmup HTF for `_build_seed_first_backtest_snapshot(...)`.
+- Added regression coverage proving warmup history is used for planning while warmup-period pairs are not scanned.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Low. This expands data loading for HTF context only, not the scan/evaluation period. Candidates still originate from the requested run range. If a symbol truly lacks 24h HTF cache before the range, the core still returns an explicit data dependency.
+```
+
 ## 2026-06-02 - P496 pandas FutureWarning cleanup in targeted cache subtraction
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P495.

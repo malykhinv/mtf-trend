@@ -270,6 +270,7 @@ def run_htf_ltf_runner_discovery(
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     end_ms = _resolve_end_timestamp_ms(config, storage, selected_symbols)
     start_ms = int(end_ms) - int(config.days) * 24 * 60 * 60 * 1000
+    htf_context_start_ms = int(start_ms) - _htf_context_warmup_ms(config, htf_ms)
 
     targeted_ltf_plan = pd.DataFrame()
     targeted_ltf_fetch = pd.DataFrame()
@@ -282,6 +283,7 @@ def run_htf_ltf_runner_discovery(
             symbols=selected_symbols,
             start_ms=start_ms,
             end_ms=end_ms,
+            htf_context_start_ms=htf_context_start_ms,
             config=config,
             progress_label=f"{progress_label or 'runner discovery'} targeted pre-entry plan",
         )
@@ -299,6 +301,7 @@ def run_htf_ltf_runner_discovery(
             symbols=selected_symbols,
             start_ms=start_ms,
             end_ms=end_ms,
+            htf_context_start_ms=htf_context_start_ms,
             config=config,
             progress_label=f"{progress_label or 'runner discovery'} targeted signal-entry plan",
             seed_timestamps_by_symbol=pre_entry_seed_timestamps_by_symbol,
@@ -326,7 +329,8 @@ def run_htf_ltf_runner_discovery(
 
     def _process_symbol(symbol: str) -> dict[str, object]:
         local_storage = ParquetStorage(config.cache_dir)
-        htf = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+        htf_scan = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+        htf_context = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
         ltf_tail_ms = _signal_entry_tail_ms(config, ltf_ms) if _targeted_ltf_backfill_required(config) else int(config.runner_horizon_minutes) * 60_000
         ltf = _load_frame(
             local_storage,
@@ -336,7 +340,7 @@ def run_htf_ltf_runner_discovery(
             end_ms=end_ms + ltf_tail_ms,
         )
         oi = _load_oi_frame(local_storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
-        local_quality_rows = [_data_quality_row(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)]
+        local_quality_rows = [_data_quality_row(symbol=symbol, htf=htf_scan, ltf=ltf, oi=oi, config=config)]
         local_candidate_rows: list[dict[str, object]] = []
         local_entry_window_rows: list[dict[str, object]] = []
         local_entry_window_trade_rows: list[dict[str, object]] = []
@@ -345,10 +349,10 @@ def run_htf_ltf_runner_discovery(
         local_decision_rows: list[dict[str, object]] = []
         local_rejected_exact_window_rows: list[dict[str, object]] = []
         scanned_rows = 0
-        if not htf.empty and not ltf.empty:
+        if not htf_scan.empty and not ltf.empty:
             local_candidate_rows, scanned_rows = _collect_symbol_candidates(
                 symbol=symbol,
-                htf=htf,
+                htf=htf_scan,
                 ltf=ltf,
                 oi=oi,
                 config=config,
@@ -357,7 +361,7 @@ def run_htf_ltf_runner_discovery(
             for candidate in local_candidate_rows:
                 windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
                 local_entry_window_rows.extend(windows)
-                signal, decision_rows_for_candidate = _build_first_ltf_signal(candidate, htf=htf, ltf=ltf, oi=oi, config=config)
+                signal, decision_rows_for_candidate = _build_first_ltf_signal(candidate, htf=htf_context, ltf=ltf, oi=oi, config=config)
                 for decision_row in decision_rows_for_candidate:
                     local_decision_rows.append(decision_row)
                     if decision_row.get("signal_verdict") != "selected" or decision_row.get("backtest_execution_skip_reason"):
@@ -608,6 +612,14 @@ def _targeted_ltf_backfill_required(config: HtfLtfRunnerDiscoveryConfig) -> bool
     return 0 < ltf_ms < 60_000
 
 
+def _htf_context_warmup_ms(config: HtfLtfRunnerDiscoveryConfig, htf_ms: int) -> int:
+    tf_set = _rolling_tf_set_from_config(config)
+    required = rolling_context_windows_for_tf_set(tf_set)
+    if required is None or required <= 0:
+        required = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles)
+    return int(required) * int(htf_ms)
+
+
 def _artifact_frame(rows: Iterable[dict[str, object]], *, columns: list[str] | None = None) -> pd.DataFrame:
     frame = pd.DataFrame(list(rows))
     if not frame.empty or columns is None:
@@ -621,6 +633,7 @@ def _build_targeted_ltf_backfill_plan(
     symbols: Iterable[str],
     start_ms: int,
     end_ms: int,
+    htf_context_start_ms: int,
     config: HtfLtfRunnerDiscoveryConfig,
     progress_label: str,
 ) -> tuple[pd.DataFrame, dict[str, list[tuple[int, int]]]]:
@@ -636,10 +649,10 @@ def _build_targeted_ltf_backfill_plan(
     minute_tail_ms = int(htf_ms) + int(max_confirm_candles) * int(ltf_ms) + MINUTE_MS
     for index, symbol in enumerate(selected_symbols, start=1):
         progress.update(index=index, item=symbol)
-        htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+        htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
         minute_frame: MinuteCoarseFrame | None = None
         if htf_ms > MINUTE_MS:
-            minute = _load_frame(storage, symbol, "1m", start_ms=start_ms, end_ms=end_ms + minute_tail_ms)
+            minute = _load_frame(storage, symbol, "1m", start_ms=htf_context_start_ms, end_ms=end_ms + minute_tail_ms)
             minute_frame = prepare_minute_coarse_frame(minute)
         symbol_rows, windows = _targeted_ltf_backfill_seeds_for_symbol(
             symbol=symbol,
@@ -648,6 +661,8 @@ def _build_targeted_ltf_backfill_plan(
             config=config,
             htf_ms=htf_ms,
             ltf_ms=ltf_ms,
+            scan_start_ms=start_ms,
+            scan_end_ms=end_ms,
         )
         rows.extend(symbol_rows)
         if windows:
@@ -899,6 +914,8 @@ def _targeted_ltf_backfill_seeds_for_symbol(
     config: HtfLtfRunnerDiscoveryConfig,
     htf_ms: int,
     ltf_ms: int,
+    scan_start_ms: int | None = None,
+    scan_end_ms: int | None = None,
 ) -> tuple[list[dict[str, object]], list[tuple[int, int]]]:
     """Plan LTF fetch windows as a safe superset for exact rolling HTF seeds.
 
@@ -954,12 +971,18 @@ def _targeted_ltf_backfill_seeds_for_symbol(
         "impossible_minute_seed_or_confirm_bounds": 0,
     }
     total_pairs = max(0, len(prepared) - 1)
+    scan_pair_count = 0
 
     for idx in range(total_pairs):
         first = prepared.iloc[idx]
         second = prepared.iloc[idx + 1]
         first_ts = int(first["timestamp"])
         second_ts = int(second["timestamp"])
+        if scan_start_ms is not None and first_ts < int(scan_start_ms):
+            continue
+        if scan_end_ms is not None and first_ts >= int(scan_end_ms):
+            continue
+        scan_pair_count += 1
         if second_ts != first_ts + int(htf_ms):
             rejection_counts["non_adjacent_pair"] += 1
             continue
@@ -1108,7 +1131,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
             "pair_gate_model": "fetch_pair_unless_exact_rolling_seed_is_mathematically_impossible",
             "htf_timeframe": config.htf_timeframe,
             "ltf_timeframe": config.ltf_timeframe,
-            "total_adjacent_pair_candidates": int(total_pairs),
+            "total_adjacent_pair_candidates": int(scan_pair_count),
             "planned_pairs": 0,
             **{f"rejected_{key}": int(value) for key, value in rejection_counts.items()},
         }
@@ -1200,7 +1223,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
             "pair_gate_model": "fetch_pair_unless_exact_rolling_seed_is_mathematically_impossible",
             "htf_timeframe": config.htf_timeframe,
             "ltf_timeframe": config.ltf_timeframe,
-            "total_adjacent_pair_candidates": int(total_pairs),
+            "total_adjacent_pair_candidates": int(scan_pair_count),
             "planned_pairs": int(len(selected_indices)),
             **{f"rejected_{key}": int(value) for key, value in rejection_counts.items()},
         }
@@ -1253,6 +1276,7 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
     symbols: Iterable[str],
     start_ms: int,
     end_ms: int,
+    htf_context_start_ms: int,
     config: HtfLtfRunnerDiscoveryConfig,
     progress_label: str,
     seed_timestamps_by_symbol: Mapping[str, set[int]],
@@ -1271,8 +1295,9 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
         if not symbol_seed_timestamps:
             skipped_no_seed_symbols += 1
             continue
-        htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
-        if htf.empty:
+        htf_scan = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+        htf_context = _load_frame(storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
+        if htf_scan.empty:
             continue
         ltf = _load_frame(
             storage,
@@ -1286,7 +1311,7 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
         oi = _load_oi_frame(storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
         candidate_rows, _ = _collect_symbol_candidates(
             symbol=symbol,
-            htf=htf,
+            htf=htf_scan,
             ltf=ltf,
             oi=oi,
             config=config,
@@ -1307,7 +1332,7 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
             exact_rolling_seed_count += 1
             seed_snapshot, seed_window = _build_seed_stage_backtest_snapshot(
                 candidate,
-                htf=htf,
+                htf=htf_context,
                 ltf=ltf,
                 config=config,
             )

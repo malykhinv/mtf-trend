@@ -12,9 +12,11 @@ from research_tools.htf_ltf_runner_discovery import (
     TRADE_ARTIFACT_COLUMNS,
     _artifact_frame,
     _build_selected_signal_post_entry_backfill_plan,
+    _htf_context_warmup_ms,
     _pre_seed_context_candles_from_htf,
     _post_entry_fetch_window_for_signal,
     _signal_entry_tail_ms,
+    _targeted_ltf_backfill_seeds_for_symbol,
 )
 from research_tools.runner_coarse_prefilter import (
     coarse_minute_pair_prefilter,
@@ -183,6 +185,72 @@ def test_pre_seed_context_uses_closed_htf_cache_without_subminute_history() -> N
     assert len(context) == 288
     assert context[0].open_time_ms == 0
     assert context[-1].close_time_ms == seed_open_ms
+
+
+def test_targeted_pre_entry_planner_uses_htf_warmup_but_scans_requested_range_only() -> None:
+    htf_ms = 300_000
+    scan_start = 288 * htf_ms
+    config = HtfLtfRunnerDiscoveryConfig(
+        htf_timeframe="5m",
+        ltf_timeframe="30s",
+        targeted_pair_gate_use_category_necessary_bounds=False,
+    )
+    htf = pd.DataFrame(
+        [
+            {
+                "timestamp": index * htf_ms,
+                "open": 100.0,
+                "high": 100.2,
+                "low": 99.8,
+                "close": 100.0,
+                "volume": 1.0,
+                "quote_volume": 1000.0,
+                "number_of_trades": 100,
+            }
+            for index in range(288)
+        ]
+        + [
+            {
+                "timestamp": scan_start,
+                "open": 100.0,
+                "high": 102.0,
+                "low": 99.8,
+                "close": 101.2,
+                "volume": 1.0,
+                "quote_volume": 8_000.0,
+                "number_of_trades": 800,
+            },
+            {
+                "timestamp": scan_start + htf_ms,
+                "open": 101.2,
+                "high": 102.5,
+                "low": 101.0,
+                "close": 101.8,
+                "volume": 1.0,
+                "quote_volume": 7_000.0,
+                "number_of_trades": 700,
+            },
+        ]
+    )
+
+    rows, windows = _targeted_ltf_backfill_seeds_for_symbol(
+        symbol="AAA/USDT:USDT",
+        htf=htf,
+        minute_frame=None,
+        config=config,
+        htf_ms=htf_ms,
+        ltf_ms=30_000,
+        scan_start_ms=scan_start,
+        scan_end_ms=scan_start + 2 * htf_ms,
+    )
+
+    planned = [row for row in rows if row.get("targeted_ltf_plan_status") == "planned"]
+    summary = [row for row in rows if row.get("targeted_ltf_plan_status") == "symbol_summary"][-1]
+    assert _htf_context_warmup_ms(config, htf_ms) == 288 * htf_ms
+    assert len(planned) == 1
+    assert windows == [(scan_start, scan_start + 2 * htf_ms - 1)]
+    assert int(summary["total_adjacent_pair_candidates"]) == 1
+    assert int(summary["planned_pairs"]) == 1
 
 
 def test_targeted_direct_ltf_cache_missing_intervals_subtracts_trusted_buckets(tmp_path) -> None:

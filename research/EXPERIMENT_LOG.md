@@ -1,3 +1,21 @@
+## 2026-06-02 - P497 current-code check after 1d zero diagnosis
+
+Patch: P497 applied locally / UNKNOWN commit.
+
+Follow-up to the old `.output/results/htf_ltf_runner_discovery_1d/5m_30s` zero run: the old artifact was pre-P493, but current-code review found the same class could persist in 1d smokes because HTF was loaded only from scan `start_ms`.
+
+Current-code sample check over 40 old 1d candidates after P497:
+
+```text
+context length 288: 32 candidates
+context length 0: 8 candidates
+real seed rejects: 32 candidates
+remaining context dependencies: 8 candidates with insufficient pre-run HTF cache
+top real reasons: seed_htf_return_below_min, seed_htf_trade_ratio_below_min
+```
+
+Interpretation: adapter range bug is fixed; remaining `contract_seed_aligned_context_not_ready` rows in a fresh run should now mean genuine missing 24h HTF cache for that symbol, not failure to load available warmup.
+
 ## 2026-06-02 - 1d 5m_30s zero run diagnosis
 
 Run artifact: `.output/results/htf_ltf_runner_discovery_1d/5m_30s`.

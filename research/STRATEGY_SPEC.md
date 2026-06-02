@@ -104,6 +104,8 @@ P494 planner note: after exact seed LTF is available, the signal-entry fetch pla
 
 P495 cache note: targeted direct-aggTrades fetch may subtract target-LTF buckets already present in cache only when those buckets carry trusted direct-aggTrades aggregation metadata and verified coverage. Cache subtraction is a transport optimization. It must not treat absent/untrusted cache as market silence, and it must not change the normalized decision snapshot or execution model.
 
+P497 data-loading note: short backtest/discovery runs must still load enough pre-run HTF warmup to satisfy the shared rolling context contract. The scan/evaluation period remains the requested window, but baseline/dormancy/pregrowth/prior-spike context may come from HTF candles before `start_ms` if those candles were already cached and fully closed before the seed.
+
 P486 note: the rolling seed must show sustained internal LTF flow, not a one-print spike. The seed's LTF sub-candles must have distributed quote/trade flow, bounded top-1 concentration, non-negative second-half price behavior, and an active tail (`_____pPPPP` morphology). A seed that passes aggregate return/quote/trade ratios but fails this internal-flow shape is rejected by the shared core with `seed_ltf_flow_not_sustained`.
 
 P487 note: seed-stage rejects are terminal for a rolling seed. Later LTF confirmation candles may repair confirm-stage rejects, but they cannot repair invalid seed nature such as `seed_ltf_flow_not_sustained`. Live must consume that pending seed immediately after the shared core returns a `rolling_htf_seed` reject, instead of rechecking it until max-confirm.

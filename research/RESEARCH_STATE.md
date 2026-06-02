@@ -1,3 +1,13 @@
+## 2026-06-02 - P497 HTF warmup for 1d targeted runner discovery
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The 1d `5m_30s` zero-run diagnosis showed an old pre-P493 artifact, but review found a real remaining bug in current code: processing and targeted planners loaded HTF only from the requested scan `start_ms`, while the shared core requires 24h seed-aligned pre-seed context. On a 1d smoke, this can still make most early candidates `contract_seed_aligned_context_not_ready`.
+
+P497 separates scan range from context range. Candidate discovery still scans only the requested period, but HTF context/baseline frames are loaded with the contract warmup before `start_ms`. A validation sample from the old 1d candidates moved from context dependency to real seed-stage rejects for candidates whose cache has enough 24h history; symbols without sufficient old cache still correctly remain data dependencies.
+
+Next: rerun fresh 1d `5m_30s` smoke. Acceptance: `contract_seed_aligned_context_not_ready` should collapse except for symbols whose HTF cache genuinely lacks the 24h warmup.
+
 ## 2026-06-02 - P496 pandas FutureWarning cleanup in targeted cache subtraction
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
