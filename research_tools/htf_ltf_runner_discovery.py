@@ -3677,7 +3677,7 @@ def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
         return pd.Series(False, index=frame.index)
     values = frame[column]
     if pd.api.types.is_bool_dtype(values):
-        return values.fillna(False).astype(bool)
+        return pd.Series([bool(value) if pd.notna(value) else False for value in values], index=values.index, dtype=bool)
     if pd.api.types.is_numeric_dtype(values):
         return pd.to_numeric(values, errors="coerce").fillna(0).ne(0)
     normalized = values.astype(str).str.strip().str.lower()

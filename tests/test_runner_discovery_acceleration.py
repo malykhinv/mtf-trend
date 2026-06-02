@@ -1,3 +1,5 @@
+import warnings
+
 import pandas as pd
 
 from research_tools.anomaly_strategy_backtest import (
@@ -228,12 +230,14 @@ def test_targeted_direct_ltf_cache_missing_intervals_subtracts_trusted_buckets(t
         ]
     ).to_parquet(path, index=False)
 
-    missing = _trusted_materialized_entry_cache_missing_intervals(
-        tmp_path,
-        symbol,
-        target_timeframe="30s",
-        window_start_ms=0,
-        window_end_ms=119_999,
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        missing = _trusted_materialized_entry_cache_missing_intervals(
+            tmp_path,
+            symbol,
+            target_timeframe="30s",
+            window_start_ms=0,
+            window_end_ms=119_999,
+        )
 
     assert missing == [(60_000, 89_999)]

@@ -1,3 +1,30 @@
+## 2026-06-02 - P496 pandas FutureWarning cleanup in targeted cache subtraction
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P495.
+
+Purpose: remove repeated pandas `FutureWarning` spam from targeted cache subtraction coverage checks.
+
+Changes:
+
+- Replaced `fillna(False).astype(bool)` on `aggtrade_coverage_verified` metadata with explicit truthy-mask normalization.
+- Reused the same warning-safe normalization for related boolean report fields.
+- Removed the same pattern from runner discovery `_bool_series(...)`.
+- Added regression coverage that runs the targeted cache missing-interval check with `FutureWarning` treated as an error.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Low. This is log hygiene and explicit boolean parsing only. It does not change trading thresholds, snapshots, or execution behavior.
+```
+
 ## 2026-06-02 - P495 trusted target-LTF cache interval subtraction
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P494.

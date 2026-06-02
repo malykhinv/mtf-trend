@@ -1,3 +1,11 @@
+## 2026-06-02 - P496 pandas FutureWarning cleanup in targeted cache subtraction
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+P495 introduced noisy repeated pandas `FutureWarning` lines from `fillna(False).astype(bool)` on object-typed `aggtrade_coverage_verified` metadata during targeted cache subtraction. P496 replaces that path with explicit truthy-mask normalization, so cache coverage checks stay strict without warning spam.
+
+No strategy, fetch selection, snapshot, execution, or threshold logic changed.
+
 ## 2026-06-02 - P495 trusted target-LTF cache interval subtraction
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

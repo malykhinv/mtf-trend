@@ -1893,7 +1893,7 @@ def _trusted_materialized_entry_cache_covers_windows(
         verified_rows = verified_rows.loc[verified_rows["timestamp"].isin(expected)]
         if verified_rows.empty:
             return False
-        if not verified_rows["aggtrade_coverage_verified"].fillna(False).astype(bool).all():
+        if not _truthy_mask(verified_rows["aggtrade_coverage_verified"]).all():
             return False
     return True
 
@@ -1936,7 +1936,7 @@ def _trusted_materialized_entry_cache_missing_intervals(
         return _bucket_starts_to_intervals(expected, target_ms=target_ms)
     trusted["timestamp"] = pd.to_numeric(trusted["timestamp"], errors="coerce").astype("int64")
     if "aggtrade_coverage_verified" in trusted.columns:
-        trusted = trusted.loc[trusted["aggtrade_coverage_verified"].fillna(False).astype(bool)]
+        trusted = trusted.loc[_truthy_mask(trusted["aggtrade_coverage_verified"])]
     present = set(int(value) for value in trusted["timestamp"].to_numpy())
     missing = [int(value) for value in expected if int(value) not in present]
     return _bucket_starts_to_intervals(missing, target_ms=target_ms)
@@ -1972,6 +1972,24 @@ def _overlapping_intervals(
         if overlap_start <= overlap_end:
             result.append((overlap_start, overlap_end))
     return result
+
+
+def _truthy_mask(values: pd.Series) -> pd.Series:
+    def _truthy(value: object) -> bool:
+        if value is None:
+            return False
+        try:
+            if pd.isna(value):
+                return False
+        except (TypeError, ValueError):
+            pass
+        if isinstance(value, (bool, np.bool_)):
+            return bool(value)
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return bool(float(value) != 0.0)
+        return str(value).strip().lower() in {"1", "true", "t", "yes", "y", "ok"}
+
+    return pd.Series([_truthy(value) for value in values], index=values.index, dtype=bool)
 
 
 def _candidate_flow_source_mask(candidates: pd.DataFrame) -> pd.Series:
@@ -7973,7 +7991,7 @@ def build_context_parity_report(
     else:
         report["pre_context_intent"] = ""
         report["in_pre_context_universe"] = False
-    report["in_pre_context_universe"] = report["in_pre_context_universe"].astype("boolean").fillna(False).astype(bool)
+    report["in_pre_context_universe"] = _truthy_mask(report["in_pre_context_universe"])
     report["pre_context_intent"] = report["pre_context_intent"].fillna("")
 
     if not signals.empty and set(key_columns).issubset(signals.columns):
@@ -7997,7 +8015,7 @@ def build_context_parity_report(
         report["is_final_signal"] = False
         report["final_pump_category_id"] = ""
         report["final_pump_category_family"] = ""
-    report["is_final_signal"] = report["is_final_signal"].astype("boolean").fillna(False).astype(bool)
+    report["is_final_signal"] = _truthy_mask(report["is_final_signal"])
     for column in ("final_pump_category_id", "final_pump_category_family"):
         if column not in report.columns:
             report[column] = ""

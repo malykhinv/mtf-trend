@@ -1,3 +1,9 @@
+## 2026-06-02 - P496 warning-spam validation
+
+Patch: P496 applied locally / UNKNOWN commit.
+
+Validation target: targeted cache subtraction must not emit pandas `FutureWarning` spam when `aggtrade_coverage_verified` is object-typed or partially missing. Regression test runs the missing-interval helper under `FutureWarning` as error.
+
 ## 2026-06-02 - P495 cache subtraction validation plan
 
 Patch: P495 applied locally / UNKNOWN commit.
