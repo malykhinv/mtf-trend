@@ -1,3 +1,31 @@
+## 2026-06-02 - P495 trusted target-LTF cache interval subtraction
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P494.
+
+Purpose: avoid re-fetching aggTrades for target-LTF buckets already materialized from trusted direct aggTrades coverage.
+
+Changes:
+
+- Added `_trusted_materialized_entry_cache_missing_intervals(...)` to compute missing target-LTF bucket intervals inside a requested window.
+- `ensure_targeted_aggtrade_direct_ltf_cache(...)` now fetches only missing bucket intervals instead of the whole requested merged window when part of the target cache is already trusted.
+- Fetch artifacts expose `fetch_start_timestamp_ms`, `fetch_end_timestamp_ms`, `requested_window_ms`, `fetched_window_ms`, and `cache_subtraction_model`.
+- Materialize artifacts expose requested and materialized interval bounds.
+- Added regression coverage for a partially cached 30s target-LTF window.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Low. This changes fetch volume, not strategy decisions. It only skips network fetch for target-LTF buckets whose existing cache has trusted direct-aggTrades metadata and verified coverage. Untrusted or incomplete cache stays fetch-required.
+```
+
 ## 2026-06-02 - P494 shared-core seed-stage signal-entry prefilter
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P493.

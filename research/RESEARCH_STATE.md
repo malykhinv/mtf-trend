@@ -1,3 +1,13 @@
+## 2026-06-02 - P495 trusted target-LTF cache interval subtraction
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Review result: the proposed "post-entry replay only after executable guard" was already true in current code. `_build_first_ltf_signal(...)` returns `signal_rows` only after selected snapshots pass the backtest execution guard, and post-entry replay is planned from `signal_rows`.
+
+P495 implements the missing safe acceleration instead: direct aggTrade targeted fetch now subtracts already trusted target-LTF cache buckets before network fetch. A bucket is trusted only when the target cache has the direct aggTrades source/version metadata and `aggtrade_coverage_verified=True`. Missing, stale, untrusted, or partial buckets remain fetch-required.
+
+Next: rerun a short smoke or restart a failed long run. Acceptance: `htf_ltf_runner_targeted_ltf_fetch.csv` should expose `cache_subtraction_model=trusted_target_ltf_bucket_interval_subtraction`, `requested_window_ms`, and smaller `fetched_window_ms` on partially cached windows.
+
 ## 2026-06-02 - P494 shared-core seed-stage signal-entry prefilter
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

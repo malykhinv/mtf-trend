@@ -1,3 +1,22 @@
+## 2026-06-02 - P495 cache subtraction validation plan
+
+Patch: P495 applied locally / UNKNOWN commit.
+
+Finding before patch: post-entry replay was already planned after executable selected signals only; no patch was needed there. The remaining safe speedup was repeated network fetch for windows whose target-LTF buckets were already partially materialized from direct aggTrades.
+
+Validation protocol:
+
+```text
+1. Rerun a short targeted discovery over a period with existing partial target-LTF cache.
+2. Inspect htf_ltf_runner_targeted_ltf_fetch.csv:
+   - cache_subtraction_model present;
+   - fetched_window_ms < requested_window_ms for partial-cache rows;
+   - target_ltf_exists_covered_requested_window rows for fully cached windows.
+3. Confirm decision ledger still uses the same shared-core signal path.
+```
+
+Interpretation boundary: cache subtraction reduces IO/network work only. It is not evidence about edge, no-trade outcomes, or market inactivity.
+
 ## 2026-06-02 - P494 seed-stage signal-entry prefilter validation plan
 
 Patch: P494 applied locally / UNKNOWN commit.

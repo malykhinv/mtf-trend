@@ -1897,6 +1897,83 @@ def _trusted_materialized_entry_cache_covers_windows(
             return False
     return True
 
+
+def _trusted_materialized_entry_cache_missing_intervals(
+    cache_dir: Path,
+    symbol: str,
+    *,
+    target_timeframe: str,
+    window_start_ms: int,
+    window_end_ms: int,
+) -> list[tuple[int, int]]:
+    target_ms = _timeframe_to_milliseconds(target_timeframe)
+    if target_ms <= 0:
+        return [(int(window_start_ms), int(window_end_ms))]
+    expected = list(_contained_bucket_starts(int(window_start_ms), int(window_end_ms), timeframe_ms=target_ms))
+    if not expected:
+        return []
+    metadata = _read_parquet_columns(
+        _cache_data_path(cache_dir, symbol, target_timeframe),
+        [
+            "timestamp",
+            "aggregation_source_timeframe",
+            "aggregation_version",
+            "aggtrade_coverage_verified",
+        ],
+    )
+    if metadata.empty:
+        return _bucket_starts_to_intervals(expected, target_ms=target_ms)
+    validation_error = _flow_cache_validation_error(
+        metadata,
+        cache_timeframe=target_timeframe,
+        entry_timeframe=target_timeframe,
+    )
+    if validation_error is not None:
+        return _bucket_starts_to_intervals(expected, target_ms=target_ms)
+    timestamps = pd.to_numeric(metadata.get("timestamp"), errors="coerce")
+    trusted = metadata.loc[timestamps.notna()].copy()
+    if trusted.empty:
+        return _bucket_starts_to_intervals(expected, target_ms=target_ms)
+    trusted["timestamp"] = pd.to_numeric(trusted["timestamp"], errors="coerce").astype("int64")
+    if "aggtrade_coverage_verified" in trusted.columns:
+        trusted = trusted.loc[trusted["aggtrade_coverage_verified"].fillna(False).astype(bool)]
+    present = set(int(value) for value in trusted["timestamp"].to_numpy())
+    missing = [int(value) for value in expected if int(value) not in present]
+    return _bucket_starts_to_intervals(missing, target_ms=target_ms)
+
+
+def _bucket_starts_to_intervals(bucket_starts: Iterable[int], *, target_ms: int) -> list[tuple[int, int]]:
+    ordered = sorted({int(value) for value in bucket_starts})
+    if not ordered:
+        return []
+    intervals: list[tuple[int, int]] = []
+    start = ordered[0]
+    prev = ordered[0]
+    for value in ordered[1:]:
+        if int(value) == int(prev) + int(target_ms):
+            prev = int(value)
+            continue
+        intervals.append((int(start), int(prev) + int(target_ms) - 1))
+        start = int(value)
+        prev = int(value)
+    intervals.append((int(start), int(prev) + int(target_ms) - 1))
+    return intervals
+
+
+def _overlapping_intervals(
+    intervals: Iterable[tuple[int, int]],
+    cover: tuple[int, int],
+) -> list[tuple[int, int]]:
+    cover_start, cover_end = int(cover[0]), int(cover[1])
+    result: list[tuple[int, int]] = []
+    for start, end in intervals:
+        overlap_start = max(int(start), cover_start)
+        overlap_end = min(int(end), cover_end)
+        if overlap_start <= overlap_end:
+            result.append((overlap_start, overlap_end))
+    return result
+
+
 def _candidate_flow_source_mask(candidates: pd.DataFrame) -> pd.Series:
     mask = pd.Series(True, index=candidates.index)
     for column in (
@@ -2464,14 +2541,16 @@ def ensure_targeted_aggtrade_direct_ltf_cache(
     next_progress_pct = 0
     for symbol in sorted(normalized_windows):
         for window_start, window_end in normalized_windows[symbol]:
-            missing_targets: list[str] = []
+            missing_intervals_by_target: dict[str, list[tuple[int, int]]] = {}
             for target in targets:
-                if _trusted_materialized_entry_cache_covers_windows(
+                missing_intervals = _trusted_materialized_entry_cache_missing_intervals(
                     cache_dir,
                     symbol,
                     target_timeframe=target,
-                    windows=[(int(window_start), int(window_end))],
-                ):
+                    window_start_ms=int(window_start),
+                    window_end_ms=int(window_end),
+                )
+                if not missing_intervals:
                     materialize_rows.append(
                         {
                             "symbol": symbol,
@@ -2479,46 +2558,96 @@ def ensure_targeted_aggtrade_direct_ltf_cache(
                             "source_timeframe": "aggTrades",
                             "status": "exists_covered_requested_intervals",
                             "path": str(_cache_data_path(cache_dir, symbol, target)),
+                            "requested_window_start_ms": int(window_start),
+                            "requested_window_end_ms": int(window_end),
                         }
                     )
                 else:
-                    missing_targets.append(target)
-            status = "target_ltf_exists_covered_requested_window" if not missing_targets else "ok"
-            error = ""
-            trades = pd.DataFrame()
-            if missing_targets:
+                    missing_intervals_by_target[target] = missing_intervals
+
+            missing_fetch_intervals = _merge_targeted_timestamp_windows(
+                (
+                    interval
+                    for intervals in missing_intervals_by_target.values()
+                    for interval in intervals
+                ),
+                merge_gap_ms=0,
+                max_merged_span_ms=max_merged_span_ms,
+            )
+            if not missing_fetch_intervals:
+                fetch_rows.append(
+                    {
+                        "symbol": symbol,
+                        "status": "target_ltf_exists_covered_requested_window",
+                        "error": "",
+                        "start_timestamp_ms": int(window_start),
+                        "end_timestamp_ms": int(window_end),
+                        "fetch_start_timestamp_ms": float("nan"),
+                        "fetch_end_timestamp_ms": float("nan"),
+                        "start_timestamp_utc": _timestamp_to_utc(int(window_start)),
+                        "end_timestamp_utc": _timestamp_to_utc(int(window_end)),
+                        "target_timeframes": ",".join(targets),
+                        "aggtrade_rows_fetched": 0,
+                        "cache_subtraction_model": "trusted_target_ltf_bucket_interval_subtraction",
+                        "requested_window_ms": int(window_end - window_start + 1),
+                        "fetched_window_ms": 0,
+                        "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                        "data_source": "binance_futures_aggTrades_direct_to_target_ltf",
+                        "intermediate_1s_cache": False,
+                    }
+                )
+                done_windows += 1
+                if progress_label is not None and total_windows:
+                    next_progress_pct = _emit_progress_1pct(
+                        label=f"{progress_label}: targeted aggTradesâ†’{','.join(targets)}",
+                        done=done_windows,
+                        total=total_windows,
+                        started_at=started_at,
+                        next_progress_pct=next_progress_pct,
+                    )
+                continue
+
+            for fetch_start, fetch_end in missing_fetch_intervals:
+                error = ""
+                trades = pd.DataFrame()
+                status = "ok"
                 try:
                     trades = _fetch_binance_futures_aggtrades_rows(
                         symbol,
-                        start_timestamp_ms=int(window_start),
-                        end_timestamp_ms=int(window_end),
+                        start_timestamp_ms=int(fetch_start),
+                        end_timestamp_ms=int(fetch_end),
                     )
                     if trades.empty:
                         status = "empty_aggtrades"
-                    for target in missing_targets:
-                        write_status, rows_written, path = _write_direct_aggtrade_target_ltf_delta(
-                            cache_dir=cache_dir,
-                            symbol=symbol,
-                            target_timeframe=target,
-                            trades=trades,
-                            start_timestamp_ms=int(window_start),
-                            end_timestamp_ms=int(window_end),
-                        )
-                        materialize_rows.append(
-                            {
-                                "symbol": symbol,
-                                "target_timeframe": target,
-                                "source_timeframe": "aggTrades",
-                                "status": write_status,
-                                "path": path,
-                                "new_rows": int(rows_written),
-                                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
-                            }
-                        )
+                    for target, target_intervals in missing_intervals_by_target.items():
+                        for target_start, target_end in _overlapping_intervals(target_intervals, (int(fetch_start), int(fetch_end))):
+                            write_status, rows_written, path = _write_direct_aggtrade_target_ltf_delta(
+                                cache_dir=cache_dir,
+                                symbol=symbol,
+                                target_timeframe=target,
+                                trades=trades,
+                                start_timestamp_ms=int(target_start),
+                                end_timestamp_ms=int(target_end),
+                            )
+                            materialize_rows.append(
+                                {
+                                    "symbol": symbol,
+                                    "target_timeframe": target,
+                                    "source_timeframe": "aggTrades",
+                                    "status": write_status,
+                                    "path": path,
+                                    "new_rows": int(rows_written),
+                                    "requested_window_start_ms": int(window_start),
+                                    "requested_window_end_ms": int(window_end),
+                                    "materialized_start_ms": int(target_start),
+                                    "materialized_end_ms": int(target_end),
+                                    "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                                }
+                            )
                 except Exception as exc:
                     status = "error"
                     error = f"{type(exc).__name__}: {exc}"
-                    for target in missing_targets:
+                    for target in missing_intervals_by_target:
                         materialize_rows.append(
                             {
                                 "symbol": symbol,
@@ -2526,25 +2655,34 @@ def ensure_targeted_aggtrade_direct_ltf_cache(
                                 "source_timeframe": "aggTrades",
                                 "status": "error",
                                 "error": error,
+                                "requested_window_start_ms": int(window_start),
+                                "requested_window_end_ms": int(window_end),
+                                "fetch_start_timestamp_ms": int(fetch_start),
+                                "fetch_end_timestamp_ms": int(fetch_end),
                                 "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
                             }
                         )
-            fetch_rows.append(
-                {
-                    "symbol": symbol,
-                    "status": status,
-                    "error": error,
-                    "start_timestamp_ms": int(window_start),
-                    "end_timestamp_ms": int(window_end),
-                    "start_timestamp_utc": _timestamp_to_utc(int(window_start)),
-                    "end_timestamp_utc": _timestamp_to_utc(int(window_end)),
-                    "target_timeframes": ",".join(targets),
-                    "aggtrade_rows_fetched": int(len(trades)) if not trades.empty else 0,
-                    "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
-                    "data_source": "binance_futures_aggTrades_direct_to_target_ltf",
-                    "intermediate_1s_cache": False,
-                }
-            )
+                fetch_rows.append(
+                    {
+                        "symbol": symbol,
+                        "status": status,
+                        "error": error,
+                        "start_timestamp_ms": int(window_start),
+                        "end_timestamp_ms": int(window_end),
+                        "fetch_start_timestamp_ms": int(fetch_start),
+                        "fetch_end_timestamp_ms": int(fetch_end),
+                        "start_timestamp_utc": _timestamp_to_utc(int(fetch_start)),
+                        "end_timestamp_utc": _timestamp_to_utc(int(fetch_end)),
+                        "target_timeframes": ",".join(targets),
+                        "aggtrade_rows_fetched": int(len(trades)) if not trades.empty else 0,
+                        "cache_subtraction_model": "trusted_target_ltf_bucket_interval_subtraction",
+                        "requested_window_ms": int(window_end - window_start + 1),
+                        "fetched_window_ms": int(fetch_end - fetch_start + 1),
+                        "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                        "data_source": "binance_futures_aggTrades_direct_to_target_ltf",
+                        "intermediate_1s_cache": False,
+                    }
+                )
             done_windows += 1
             if progress_label is not None and total_windows:
                 next_progress_pct = _emit_progress_1pct(

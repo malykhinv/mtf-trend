@@ -1,5 +1,10 @@
 import pandas as pd
 
+from research_tools.anomaly_strategy_backtest import (
+    DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+    _cache_data_path,
+    _trusted_materialized_entry_cache_missing_intervals,
+)
 from research_tools.htf_ltf_runner_discovery import (
     HtfLtfRunnerDiscoveryConfig,
     TRADE_ARTIFACT_COLUMNS,
@@ -176,3 +181,59 @@ def test_pre_seed_context_uses_closed_htf_cache_without_subminute_history() -> N
     assert len(context) == 288
     assert context[0].open_time_ms == 0
     assert context[-1].close_time_ms == seed_open_ms
+
+
+def test_targeted_direct_ltf_cache_missing_intervals_subtracts_trusted_buckets(tmp_path) -> None:
+    symbol = "AAA/USDT:USDT"
+    path = _cache_data_path(tmp_path, symbol, "30s")
+    path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "timestamp": 0,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "quote_volume": 10.0,
+                "number_of_trades": 1,
+                "aggregation_source_timeframe": "aggTrades",
+                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                "aggtrade_coverage_verified": True,
+            },
+            {
+                "timestamp": 30_000,
+                "open": 100.5,
+                "high": 101.0,
+                "low": 100.0,
+                "close": 100.7,
+                "quote_volume": 10.0,
+                "number_of_trades": 1,
+                "aggregation_source_timeframe": "aggTrades",
+                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                "aggtrade_coverage_verified": True,
+            },
+            {
+                "timestamp": 90_000,
+                "open": 100.7,
+                "high": 101.2,
+                "low": 100.5,
+                "close": 101.0,
+                "quote_volume": 10.0,
+                "number_of_trades": 1,
+                "aggregation_source_timeframe": "aggTrades",
+                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                "aggtrade_coverage_verified": True,
+            },
+        ]
+    ).to_parquet(path, index=False)
+
+    missing = _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="30s",
+        window_start_ms=0,
+        window_end_ms=119_999,
+    )
+
+    assert missing == [(60_000, 89_999)]

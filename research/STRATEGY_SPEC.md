@@ -102,6 +102,8 @@ P491 planner note: backtest acceleration must not use future runner labels, top-
 
 P494 planner note: after exact seed LTF is available, the signal-entry fetch planner may call a seed-only shared-core evaluator to avoid fetching confirm/next-open LTF for terminal seed-stage rejects. This is valid only when the reason is a shared-core `rolling_htf_seed` reject based on seed/context data available at seed close. Dependency/not-ready states, missing seed/context data, and any non-terminal uncertainty must continue to exact signal-entry fetch.
 
+P495 cache note: targeted direct-aggTrades fetch may subtract target-LTF buckets already present in cache only when those buckets carry trusted direct-aggTrades aggregation metadata and verified coverage. Cache subtraction is a transport optimization. It must not treat absent/untrusted cache as market silence, and it must not change the normalized decision snapshot or execution model.
+
 P486 note: the rolling seed must show sustained internal LTF flow, not a one-print spike. The seed's LTF sub-candles must have distributed quote/trade flow, bounded top-1 concentration, non-negative second-half price behavior, and an active tail (`_____pPPPP` morphology). A seed that passes aggregate return/quote/trade ratios but fails this internal-flow shape is rejected by the shared core with `seed_ltf_flow_not_sustained`.
 
 P487 note: seed-stage rejects are terminal for a rolling seed. Later LTF confirmation candles may repair confirm-stage rejects, but they cannot repair invalid seed nature such as `seed_ltf_flow_not_sustained`. Live must consume that pending seed immediately after the shared core returns a `rolling_htf_seed` reject, instead of rechecking it until max-confirm.
