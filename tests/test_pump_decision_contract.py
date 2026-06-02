@@ -23,7 +23,9 @@ from research_tools.pump_decision_core import (
     _build_seed_first_core_smoke_snapshot,
     decision_snapshot_hash,
     evaluate_first_ltf_confirm_after_seed,
+    evaluate_rolling_seed_stage,
 )
+from research_tools.runner_coarse_prefilter import core_seed_stage_prefilter
 
 
 def test_snapshot_hash_changes_for_core_affecting_dependencies_and_source_status() -> None:
@@ -134,6 +136,41 @@ def test_seed_ltf_single_print_flow_is_rejected_by_core() -> None:
     assert verdict.snapshot.ltf_confirm.confirm_end_ms == post_seed[min_confirm - 1].close_time_ms
     assert verdict.features["htf_ltf_sustained_flow_ok"] is False
     assert verdict.features["htf_ltf_quote_top1_share"] > 0.55
+
+
+def test_seed_stage_prefilter_uses_shared_core_terminal_seed_reject() -> None:
+    snapshot, _post_seed = _build_seed_first_core_smoke_snapshot()
+    assert snapshot.rolling_seed is not None
+    concentrated_seed = tuple(
+        DecisionCandle(
+            open_time_ms=candle.open_time_ms,
+            close_time_ms=candle.close_time_ms,
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            quote_volume=1_500.0 if index == len(snapshot.rolling_seed.seed_candles) - 1 else 10.0,
+            number_of_trades=1_500 if index == len(snapshot.rolling_seed.seed_candles) - 1 else 10,
+            taker_buy_quote_volume=candle.taker_buy_quote_volume,
+            source=candle.source,
+        )
+        for index, candle in enumerate(snapshot.rolling_seed.seed_candles)
+    )
+    seed_only_snapshot = replace(
+        snapshot,
+        rolling_seed=replace(snapshot.rolling_seed, seed_candles=concentrated_seed),
+        ltf_confirm=None,
+    )
+
+    seed_verdict = evaluate_rolling_seed_stage(seed_only_snapshot)
+    prefilter = core_seed_stage_prefilter(seed_only_snapshot)
+
+    assert seed_verdict.verdict == "rejected"
+    assert seed_verdict.rejects[0].stage == "rolling_htf_seed"
+    assert seed_verdict.rejects[0].reason == "seed_ltf_flow_not_sustained"
+    assert prefilter.possible is False
+    assert prefilter.reason == "seed_ltf_flow_not_sustained"
+    assert prefilter.bounds["seed_stage_prefilter_trading_signal"] is False
 
 
 def test_seed_ltf_tail_fade_flow_is_rejected_by_core() -> None:

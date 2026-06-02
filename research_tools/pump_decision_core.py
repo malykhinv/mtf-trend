@@ -605,6 +605,49 @@ def evaluate_first_ltf_confirm_after_seed(
         },
     )
 
+
+def evaluate_rolling_seed_stage(snapshot: DecisionSnapshot) -> DecisionVerdict:
+    """Evaluate only the rolling seed/context part of the shared contract.
+
+    A ``selected`` verdict from this function means only "seed stage can still
+    become a signal"; it is not a trade signal and has no category/entry price.
+    """
+
+    if snapshot.contract_id != ROLLING_DECISION_CONTRACT_ID:
+        return _rejected(snapshot, "unknown", "contract_id_mismatch", {"contract_id": snapshot.contract_id})
+    spec = ROLLING_PROFILE_SPECS.get(snapshot.tf_set)
+    if spec is None:
+        return _rejected(snapshot, "rolling_htf_seed", "unsupported_tf_set", {"tf_set": snapshot.tf_set})
+
+    dependency = _first_bad_dependency(snapshot)
+    if dependency is not None:
+        return _dependency_not_ready(snapshot, dependency.reason or dependency.name, (dependency,))
+
+    seed = snapshot.rolling_seed
+    if seed is None:
+        return _dependency_not_ready(snapshot, "rolling_seed_missing", ())
+    seed_dependency = _validate_seed(seed, spec)
+    if seed_dependency is not None:
+        return _dependency_not_ready(snapshot, seed_dependency.reason or "rolling_seed_invalid", (seed_dependency,))
+    context_dependency = _validate_pre_seed_context(seed, spec)
+    if context_dependency is not None:
+        return _dependency_not_ready(snapshot, context_dependency.reason or "pre_seed_context_invalid", (context_dependency,))
+
+    features = _derive_rolling_seed_stage_features(snapshot, spec)
+    seed_reject = _seed_reject_reason(features)
+    if seed_reject is not None:
+        return _rejected(snapshot, "rolling_htf_seed", seed_reject, features)
+    return DecisionVerdict(
+        verdict="selected",
+        snapshot=snapshot,
+        features={
+            **features,
+            "seed_stage_verdict": "passed",
+            "seed_stage_trading_signal": False,
+        },
+    )
+
+
 def evaluate_seed_first(snapshot: DecisionSnapshot) -> DecisionVerdict:
     """Evaluate one exact rolling-seed + post-seed-confirm snapshot.
 
@@ -630,12 +673,10 @@ def evaluate_seed_first(snapshot: DecisionSnapshot) -> DecisionVerdict:
     if confirm is None:
         return _dependency_not_ready(snapshot, "ltf_confirm_missing", ())
 
-    seed_dependency = _validate_seed(seed, spec)
-    if seed_dependency is not None:
-        return _dependency_not_ready(snapshot, seed_dependency.reason or "rolling_seed_invalid", (seed_dependency,))
-    context_dependency = _validate_pre_seed_context(seed, spec)
-    if context_dependency is not None:
-        return _dependency_not_ready(snapshot, context_dependency.reason or "pre_seed_context_invalid", (context_dependency,))
+    seed_stage = evaluate_rolling_seed_stage(snapshot)
+    if seed_stage.verdict != "selected":
+        return seed_stage
+
     confirm_dependency = _validate_confirm(seed, confirm, spec)
     if confirm_dependency is not None:
         return _dependency_not_ready(snapshot, confirm_dependency.reason or "ltf_confirm_invalid", (confirm_dependency,))
@@ -686,10 +727,9 @@ def _is_terminal_seed_reject(verdict: DecisionVerdict) -> bool:
     return any(str(reject.stage) == "rolling_htf_seed" for reject in verdict.rejects)
 
 
-def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfileSpec) -> dict[str, float | int | str | bool | None]:
+def _derive_rolling_seed_stage_features(snapshot: DecisionSnapshot, spec: RollingProfileSpec) -> dict[str, float | int | str | bool | None]:
     seed = snapshot.rolling_seed
-    confirm = snapshot.ltf_confirm
-    if seed is None or confirm is None:
+    if seed is None:
         return dict(snapshot.features)
 
     htf_ms = spec.htf_seconds * 1000
@@ -731,16 +771,8 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
         pregrowth_range_pct=pregrowth_range_pct,
     )
 
-    ltf_features = _ltf_confirmation_features(confirm.confirm_candles, baseline_quote=baseline_quote, baseline_trades=baseline_trades, htf_ms=htf_ms)
     prior_spike = _prior_spike_features(context=context, current=seed_candle)
     htf_ltf_features = _htf_internal_ltf_features(seed.seed_candles, htf_open=seed_candle.open, htf_close=seed_candle.close)
-
-    structural_low = min(seed_candle.low, _finite_min([item.low for item in confirm.confirm_candles]))
-    entry = float(confirm.confirm_candles[-1].close)
-    stop = structural_low * (1.0 - ROLLING_STRUCTURAL_STOP_BUFFER_PCT)
-    initial_risk = entry - stop
-    initial_risk_pct = _safe_divide(initial_risk, entry)
-    tp1 = entry + ROLLING_TP1_R * initial_risk if math.isfinite(initial_risk) else float("nan")
 
     return {
         **dict(snapshot.features),
@@ -756,9 +788,6 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
         "snapshot_match_key": decision_snapshot_match_key(snapshot),
         "rolling_htf_open_ms": int(seed.seed_open_ms),
         "rolling_htf_close_ms": int(seed.seed_close_ms),
-        "confirm_start_ms": int(confirm.confirm_start_ms),
-        "confirm_end_ms": int(confirm.confirm_end_ms),
-        "confirmation_candles": int(len(confirm.confirm_candles)),
         "anomaly_open": seed_candle.open,
         "anomaly_high": seed_candle.high,
         "anomaly_low": seed_candle.low,
@@ -783,12 +812,43 @@ def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfile
         "pregrowth_range_pct": pregrowth_range_pct,
         "pregrowth_positive_step_share": pregrowth_positive_share,
         "pre_seed_dump_rebound_ok": pre_seed_dump_rebound_ok,
+        **prior_spike,
+        **htf_ltf_features,
+    }
+
+
+def _derive_seed_first_features(snapshot: DecisionSnapshot, spec: RollingProfileSpec) -> dict[str, float | int | str | bool | None]:
+    seed = snapshot.rolling_seed
+    confirm = snapshot.ltf_confirm
+    if seed is None or confirm is None:
+        return dict(snapshot.features)
+
+    htf_ms = spec.htf_seconds * 1000
+    seed_candle = _aggregate_candles(seed.seed_candles)
+    seed_features = _derive_rolling_seed_stage_features(snapshot, spec)
+    baseline_quote = _finite_float(seed_features.get("baseline_quote_volume_median"))
+    baseline_trades = _finite_float(seed_features.get("baseline_number_of_trades_median"))
+    ltf_features = _ltf_confirmation_features(confirm.confirm_candles, baseline_quote=baseline_quote, baseline_trades=baseline_trades, htf_ms=htf_ms)
+
+    structural_low = min(seed_candle.low, _finite_min([item.low for item in confirm.confirm_candles]))
+    entry = float(confirm.confirm_candles[-1].close)
+    stop = structural_low * (1.0 - ROLLING_STRUCTURAL_STOP_BUFFER_PCT)
+    initial_risk = entry - stop
+    initial_risk_pct = _safe_divide(initial_risk, entry)
+    tp1 = entry + ROLLING_TP1_R * initial_risk if math.isfinite(initial_risk) else float("nan")
+
+    return {
+        **seed_features,
+        "snapshot_hash": decision_snapshot_hash(snapshot),
+        "snapshot_match_key": decision_snapshot_match_key(snapshot),
+        "decision_time_ms": snapshot.decision_time_ms,
+        "confirm_start_ms": int(confirm.confirm_start_ms),
+        "confirm_end_ms": int(confirm.confirm_end_ms),
+        "confirmation_candles": int(len(confirm.confirm_candles)),
         "signal_entry_price": entry,
         "initial_stop_at_decision": stop,
         "initial_risk_pct_at_decision": initial_risk_pct,
         "tp1_at_decision": tp1,
-        **prior_spike,
-        **htf_ltf_features,
         **ltf_features,
     }
 

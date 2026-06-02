@@ -1,3 +1,32 @@
+## 2026-06-02 - P494 shared-core seed-stage signal-entry prefilter
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P493.
+
+Purpose: reduce expensive confirm/next-open subminute fetch after exact seed replay without introducing a second strategy implementation or optimistic winner filtering.
+
+Changes:
+
+- Added `evaluate_rolling_seed_stage(...)` to `research_tools/pump_decision_core.py`.
+- Refactored seed feature derivation so seed-stage rejects use the same shared-core features and `_seed_reject_reason(...)` as full seed+confirm decisions.
+- Added `core_seed_stage_prefilter(...)` to `research_tools/runner_coarse_prefilter.py`; it rejects only terminal `rolling_htf_seed` core rejects and treats dependency/unknown states as possible.
+- Wired `run-htf-ltf-runner-discovery` signal-entry planning to skip confirm fetch for terminal seed-stage rejects.
+- `htf_ltf_runner_targeted_ltf_plan.csv` now preserves skipped rows as `not_planned_seed_stage_terminal_reject` with seed-stage reason/features.
+- Added regression coverage proving the prefilter uses the shared core for a one-print seed reject.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_pump_decision_contract.py tests\test_runner_discovery_acceleration.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Low-to-medium. The acceleration intentionally changes which exact confirm windows are fetched, but only after the shared core proves the seed itself is terminally invalid. The main residual risk is artifact interpretation: rejected seed rows must be counted as plan rejects, not silently removed from the candidate base.
+```
+
 ## 2026-06-02 - P493 HTF pre-seed context for targeted discovery
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P492.

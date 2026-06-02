@@ -14,6 +14,8 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+from research_tools.pump_decision_core import DecisionSnapshot, evaluate_rolling_seed_stage
+
 
 MINUTE_MS = 60_000
 
@@ -194,6 +196,40 @@ def coarse_minute_pair_prefilter(
     )
 
 
+def core_seed_stage_prefilter(snapshot: DecisionSnapshot) -> CoarsePrefilterVerdict:
+    """Use the shared core to decide whether confirm/entry LTF must be fetched.
+
+    This is a data-loading guard, not a trade signal. It rejects only terminal
+    seed-stage failures computed by the shared decision core from seed/context
+    data already known at seed close. Dependency/unknown states remain possible.
+    """
+
+    model = "shared_core_seed_stage_terminal_reject_data_loading_only"
+    verdict = evaluate_rolling_seed_stage(snapshot)
+    if verdict.rejects:
+        reason = _seed_stage_reason(verdict.rejects[0].reason)
+    elif verdict.dependencies:
+        reason = _seed_stage_reason(verdict.dependencies[0].reason or verdict.dependencies[0].name)
+    else:
+        reason = _seed_stage_reason(verdict.verdict)
+    bounds: dict[str, object] = {
+        "seed_stage_prefilter_model": model,
+        "seed_stage_prefilter_trading_signal": False,
+        "seed_stage_prefilter_signal_verdict": verdict.verdict,
+        "seed_stage_prefilter_reason": reason,
+        "seed_stage_prefilter_stage": str(verdict.rejects[0].stage) if verdict.rejects else "",
+        "seed_stage_snapshot_hash": verdict.features.get("snapshot_hash", ""),
+    }
+    for key, value in verdict.features.items():
+        if str(key).startswith(("htf_", "pregrowth_", "pre_seed_", "dormancy_", "baseline_", "prior_spike_")):
+            bounds[f"seed_stage_{key}"] = value
+    if verdict.verdict == "rejected" and any(str(reject.stage) == "rolling_htf_seed" for reject in verdict.rejects):
+        return CoarsePrefilterVerdict(False, reason, bounds)
+    if verdict.verdict == "data_dependency_not_ready":
+        return CoarsePrefilterVerdict(True, reason, bounds)
+    return CoarsePrefilterVerdict(True, "seed_stage_passed", {**bounds, "seed_stage_prefilter_reason": "seed_stage_passed"})
+
+
 def _window_upper_stats(frame: MinuteCoarseFrame, *, start_ms: int, end_exclusive_ms: int) -> _WindowUpperStats:
     cover_start = _floor_minute(int(start_ms))
     cover_end = _ceil_minute(int(end_exclusive_ms))
@@ -262,3 +298,8 @@ def _dominant_reason(counts: dict[str, int]) -> str:
     if not nonzero:
         return "impossible_minute_seed_or_confirm_bounds"
     return max(nonzero)[1]
+
+
+def _seed_stage_reason(value: object) -> str:
+    text = str(value or "").strip()
+    return text or "seed_stage_unknown"

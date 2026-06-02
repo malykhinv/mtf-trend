@@ -1,3 +1,13 @@
+## 2026-06-02 - P494 shared-core seed-stage signal-entry prefilter
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+P494 adds the next safe acceleration layer for targeted subminute runner discovery. After exact seed LTF has been fetched, the signal-entry planner now calls a seed-only shared-core evaluator before fetching post-seed confirm/next-open LTF. It skips confirm fetch only when the shared core already returns a terminal `rolling_htf_seed` reject from data known at seed close.
+
+Honesty boundary: this is still a data-loading guard, not a trading filter. It does not use confirm candles, future runner labels, post-entry highs/lows, exits, PnL, or selected-trade survival. If seed/context data is missing or degraded, the planner keeps the window and fetches exact LTF instead of guessing.
+
+Next: rerun a short `5m_30s` smoke and inspect `htf_ltf_runner_targeted_ltf_plan.csv`. Acceptance: `not_planned_seed_stage_terminal_reject` rows are visible, `signal_entry` fetch volume drops, and remaining exact decision rows show normal shared-core selected/rejected/dependency verdicts.
+
 ## 2026-06-02 - P493 HTF pre-seed context for targeted discovery
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

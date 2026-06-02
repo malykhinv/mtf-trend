@@ -1,3 +1,25 @@
+## 2026-06-02 - P494 seed-stage signal-entry prefilter validation plan
+
+Patch: P494 applied locally / UNKNOWN commit.
+
+Hypothesis: after P493 restores HTF pre-seed context, many exact rolling seeds can be rejected by the shared core at seed stage before downloading post-seed confirm/next-open subminute data. This should reduce `signal_entry` fetch volume without changing any selected signal that could pass the shared core.
+
+Validation protocol:
+
+```text
+1. Run a short 5m_30s smoke.
+2. Inspect htf_ltf_runner_targeted_ltf_plan.csv:
+   - planned signal_entry windows;
+   - not_planned_seed_stage_terminal_reject count;
+   - seed_stage_prefilter_reason distribution.
+3. Inspect htf_ltf_runner_decision_ledger.csv:
+   - no collapse back to contract_seed_aligned_context_not_ready;
+   - normal seed/confirm/category/risk rejects and any selected signals.
+4. Do not judge profitability from this smoke unless trades are numerous enough; judge data-loading honesty and funnel visibility first.
+```
+
+Forbidden interpretation: lower fetch volume is not edge evidence. It is acceptable only if skipped rows are visible and their reasons are terminal shared-core seed rejects.
+
 ## 2026-06-02 - 5m_30s no-signal run diagnosis
 
 Run artifact: `.output/results/htf_ltf_runner_discovery_7d/5m_30s`.

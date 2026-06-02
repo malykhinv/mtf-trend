@@ -51,6 +51,7 @@ from research_tools.runner_coarse_prefilter import (
     MINUTE_MS,
     MinuteCoarseFrame,
     coarse_minute_pair_prefilter,
+    core_seed_stage_prefilter,
     prepare_minute_coarse_frame,
 )
 
@@ -1296,20 +1297,45 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
         symbol_windows: list[tuple[int, int]] = []
         symbol_rows: list[dict[str, object]] = []
         exact_rolling_seed_count = 0
+        seed_stage_prefilter_rejected = 0
+        seed_stage_prefilter_possible = 0
+        seed_stage_prefilter_not_ready = 0
         for candidate in candidate_rows:
             htf_close_ms = _coerce_int(candidate.get("htf_close_ms"))
             if htf_close_ms is None:
                 continue
+            exact_rolling_seed_count += 1
+            seed_snapshot, seed_window = _build_seed_stage_backtest_snapshot(
+                candidate,
+                htf=htf,
+                ltf=ltf,
+                config=config,
+            )
+            seed_prefilter = core_seed_stage_prefilter(seed_snapshot)
+            if str(seed_prefilter.bounds.get("seed_stage_prefilter_signal_verdict", "")) == "data_dependency_not_ready":
+                seed_stage_prefilter_not_ready += 1
+            if not seed_prefilter.possible:
+                seed_stage_prefilter_rejected += 1
+                symbol_rows.append(
+                    _signal_entry_seed_rejected_plan_row_for_candidate(
+                        candidate,
+                        config=config,
+                        seed_window_status=seed_window.status,
+                        prefilter_bounds=seed_prefilter.bounds,
+                    )
+                )
+                continue
+            seed_stage_prefilter_possible += 1
             window_start = int(htf_close_ms)
             window_end = int(htf_close_ms + _signal_entry_tail_ms(config, ltf_ms) - 1)
             symbol_windows.append((window_start, window_end))
-            exact_rolling_seed_count += 1
             symbol_rows.append(
                 _signal_entry_plan_row_for_candidate(
                     candidate,
                     window_start=window_start,
                     window_end=window_end,
                     config=config,
+                    prefilter_bounds=seed_prefilter.bounds,
                 )
             )
         if symbol_windows:
@@ -1327,13 +1353,18 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
                     "pre_entry_seed_timestamps": int(len(symbol_seed_timestamps)),
                     "exact_rolling_seed_candidates": int(exact_rolling_seed_count),
                     "signal_entry_windows": int(len(symbol_windows)),
+                    "seed_stage_prefilter_possible": int(seed_stage_prefilter_possible),
+                    "seed_stage_prefilter_rejected": int(seed_stage_prefilter_rejected),
+                    "seed_stage_prefilter_not_ready": int(seed_stage_prefilter_not_ready),
+                    "seed_stage_prefilter_model": "shared_core_seed_stage_terminal_reject_data_loading_only",
                     "strict_seed_gate_applied_before_candidate_build": True,
                     "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
-                    "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed",
+                    "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed_stage_possible",
                 }
             )
     progress.finish()
     plan = pd.DataFrame(rows)
+    status_series = plan.get("targeted_ltf_plan_status", pd.Series(dtype=str)).astype(str) if not plan.empty else pd.Series(dtype=str)
     summary = {
         "targeted_ltf_phase": "signal_entry",
         "symbol": "__all__",
@@ -1341,14 +1372,16 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
         "htf_timeframe": config.htf_timeframe,
         "ltf_timeframe": config.ltf_timeframe,
         "symbols": len(selected_symbols),
-        "candidate_seed_rows": int(len(plan.loc[plan.get("targeted_ltf_plan_status", pd.Series(dtype=str)).astype(str).eq("planned")])) if not plan.empty else 0,
+        "candidate_seed_rows": int(status_series.eq("planned").sum()) if not plan.empty else 0,
+        "seed_stage_prefilter_rejected": int(status_series.eq("not_planned_seed_stage_terminal_reject").sum()) if not plan.empty else 0,
         "symbols_with_pre_entry_seeds": int(sum(1 for seeds in seed_timestamps_by_symbol.values() if seeds)),
         "skipped_no_seed_symbols": int(skipped_no_seed_symbols),
         "skipped_broad_htf_candidates_not_in_strict_seed_gate": int(skipped_broad_candidates),
         "strict_seed_gate_applied_before_candidate_build": True,
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
-        "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed",
+        "seed_stage_prefilter_model": "shared_core_seed_stage_terminal_reject_data_loading_only",
+        "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed_stage_possible",
         "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
     }
     if plan.empty:
@@ -1439,7 +1472,9 @@ def _signal_entry_plan_row_for_candidate(
     window_start: int,
     window_end: int,
     config: HtfLtfRunnerDiscoveryConfig,
+    prefilter_bounds: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    bounds = dict(prefilter_bounds or {})
     return {
         "targeted_ltf_phase": "signal_entry",
         "symbol": candidate.get("symbol", ""),
@@ -1465,6 +1500,46 @@ def _signal_entry_plan_row_for_candidate(
         "htf_trade_ratio": candidate.get("htf_trade_ratio", float("nan")),
         "dormancy_to_anomaly_quote_ratio": candidate.get("dormancy_to_anomaly_quote_ratio", float("nan")),
         "dormancy_to_anomaly_trade_ratio": candidate.get("dormancy_to_anomaly_trade_ratio", float("nan")),
+        **bounds,
+    }
+
+
+def _signal_entry_seed_rejected_plan_row_for_candidate(
+    candidate: Mapping[str, object],
+    *,
+    config: HtfLtfRunnerDiscoveryConfig,
+    seed_window_status: str,
+    prefilter_bounds: Mapping[str, object],
+) -> dict[str, object]:
+    htf_close_ms = _coerce_int(candidate.get("htf_close_ms"))
+    window_start = int(htf_close_ms or 0)
+    return {
+        "targeted_ltf_phase": "signal_entry",
+        "symbol": candidate.get("symbol", ""),
+        "targeted_ltf_plan_status": "not_planned_seed_stage_terminal_reject",
+        "signal_scope": "exact_rolling_seed_candidate",
+        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
+        "timestamp_ms": candidate.get("timestamp_ms", float("nan")),
+        "timestamp_utc": candidate.get("timestamp_utc", ""),
+        "htf_close_ms": candidate.get("htf_close_ms", float("nan")),
+        "htf_close_utc": candidate.get("htf_close_utc", ""),
+        "rolling_htf_window_start_ms": candidate.get("rolling_htf_window_start_ms", float("nan")),
+        "rolling_htf_window_end_ms": candidate.get("rolling_htf_window_end_ms", float("nan")),
+        "htf_timeframe": config.htf_timeframe,
+        "ltf_timeframe": config.ltf_timeframe,
+        "window_start_ms": window_start,
+        "window_start_utc": _timestamp_to_utc(window_start) if window_start else "",
+        "window_end_ms": float("nan"),
+        "window_end_utc": "",
+        "window_ms": 0,
+        "window_model": "signal_confirm_fetch_skipped_by_shared_core_seed_stage_terminal_reject",
+        "known_future_scope": "none_seed_close_data_only",
+        "seed_window_status": seed_window_status,
+        "htf_quote_ratio": candidate.get("htf_quote_ratio", float("nan")),
+        "htf_trade_ratio": candidate.get("htf_trade_ratio", float("nan")),
+        "dormancy_to_anomaly_quote_ratio": candidate.get("dormancy_to_anomaly_quote_ratio", float("nan")),
+        "dormancy_to_anomaly_trade_ratio": candidate.get("dormancy_to_anomaly_trade_ratio", float("nan")),
+        **dict(prefilter_bounds),
     }
 
 def _post_entry_plan_row(
@@ -2006,6 +2081,51 @@ def _build_seed_first_backtest_snapshot(
         core_version=ROLLING_DECISION_CORE_VERSION,
     )
     return snapshot, post_seed_candles, post_seed_window
+
+
+def _build_seed_stage_backtest_snapshot(
+    candidate: Mapping[str, object],
+    *,
+    htf: pd.DataFrame,
+    ltf: pd.DataFrame,
+    config: HtfLtfRunnerDiscoveryConfig,
+) -> tuple[DecisionSnapshot, _StrictLtfWindow]:
+    tf_set = _rolling_tf_set_from_config(config)
+    htf_ms = _timeframe_ms(config.htf_timeframe)
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    seed_open_ms = int(candidate["rolling_htf_window_start_ms"])
+    seed_close_ms = int(candidate["rolling_htf_window_end_ms"])
+    seed_window = _strict_ltf_window(ltf, start_ms=seed_open_ms, end_exclusive_ms=seed_close_ms, expected_step_ms=ltf_ms)
+    seed_candles = _decision_candles_from_frame(
+        seed_window.frame,
+        step_ms=ltf_ms,
+        source="backtest_cache_aggtrade_ltf_seed",
+    )
+    snapshot = DecisionSnapshot(
+        symbol=str(candidate["symbol"]),
+        tf_set=tf_set,
+        decision_time_ms=seed_close_ms,
+        source="backtest",
+        rolling_seed=RollingSeedSnapshot(
+            tf_set=tf_set,
+            seed_open_ms=seed_open_ms,
+            seed_close_ms=seed_close_ms,
+            seed_candles=seed_candles,
+            pre_seed_context_candles=_pre_seed_context_candles_from_htf(htf, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms),
+        ),
+        source_labels={
+            "htf_context_source": "backtest_cache_htf_seed_aligned_context",
+            "rolling_seed_source": "backtest_cache_aggtrade_ltf_seed",
+            "prefilter_source": "shared_core_seed_stage",
+        },
+        features={
+            "entry_price_model": "not_evaluated_seed_stage_prefilter_only",
+            "signal_model": "seed_first_shared_core",
+        },
+        contract_id=ROLLING_DECISION_CONTRACT_ID,
+        core_version=ROLLING_DECISION_CORE_VERSION,
+    )
+    return snapshot, seed_window
 
 
 def _first_reject_stage(verdict: DecisionVerdict) -> str:
