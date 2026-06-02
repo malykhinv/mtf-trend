@@ -1,3 +1,15 @@
+## 2026-06-02 - P493 HTF pre-seed context for targeted discovery
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The failed long run did not prove "no entries". It reached exact decision evaluation, but every one of the 180,682 `5m_30s` decision rows was `data_dependency_not_ready` with `contract_seed_aligned_context_not_ready`. The final `EmptyDataError` did not erase selected trades; there were no selected trades because the shared core never received the required pre-seed context.
+
+Root cause: after P491, targeted subminute fetch correctly avoided long LTF replay, but `_build_seed_first_backtest_snapshot` still tried to reconstruct the full 24h seed-aligned HTF context from targeted subminute LTF. Those targeted windows contain seed/confirm data, not 24h of 30s/15s history, so the shared core rejected all candidates as missing context.
+
+P493 changes the backtest adapter to build `pre_seed_context_candles` from the cheap closed HTF cache. Exact subminute LTF is still used for seed internal flow and LTF confirmation. This matches the contract: pre-seed context is HTF-width closed candles ending at seed open.
+
+Next: rerun a short `5m_30s` smoke. Acceptance: `data_dependency_not_ready:contract_seed_aligned_context_not_ready` should collapse, and the ledger should show real seed/confirm/category reject reasons or selected signals.
+
 ## 2026-06-02 - P492 zero-trade runner discovery artifact guard
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

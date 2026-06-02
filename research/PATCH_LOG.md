@@ -1,3 +1,29 @@
+## 2026-06-02 - P493 HTF pre-seed context for targeted discovery
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P492.
+
+Purpose: ensure targeted subminute runner discovery can actually reach shared-core strategy verdicts after P491 acceleration.
+
+Changes:
+
+- Added `_pre_seed_context_candles_from_htf(...)` to build seed-aligned context from cheap closed HTF cache.
+- `_build_seed_first_backtest_snapshot(...)` now uses HTF cache for `pre_seed_context_candles` and keeps exact LTF for seed internal flow and confirm.
+- Added regression coverage proving `5m_30s` can build the required 288 HTF context candles without 24h of subminute LTF.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_cli_runner_discovery_empty_artifacts.py tests\test_pump_decision_contract.py -q
+.venv\Scripts\python.exe -m compileall -q research_tools\htf_ltf_runner_discovery.py tests\test_runner_discovery_acceleration.py cli\commands.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Low and intentional. The shared contract defines pre-seed context as HTF-width closed candles; reconstructing it from HTF cache avoids unnecessary 15s/30s history and should restore parity with live's minute/HTF context repair model.
+```
+
 ## 2026-06-02 - P492 zero-trade runner discovery artifact guard
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P491.

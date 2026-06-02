@@ -1922,6 +1922,33 @@ def _pre_seed_context_candles_from_ltf(
     return _decision_candles_from_frame(pd.concat(frames, ignore_index=True), step_ms=htf_ms, source="backtest_cache_seed_aligned_htf_context")
 
 
+def _pre_seed_context_candles_from_htf(
+    htf: pd.DataFrame,
+    *,
+    seed_open_ms: int,
+    tf_set: str,
+    htf_ms: int,
+) -> tuple[DecisionCandle, ...]:
+    """Build seed-aligned context from cheap closed HTF cache."""
+
+    required = rolling_context_windows_for_tf_set(tf_set)
+    if required is None or required <= 0 or htf.empty or "timestamp" not in htf.columns:
+        return ()
+    start_ms = int(seed_open_ms) - int(required) * int(htf_ms)
+    frame = htf.copy()
+    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
+    frame = frame.dropna(subset=["timestamp"]).drop_duplicates("timestamp", keep="last").sort_values("timestamp")
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+    selected = frame.loc[timestamps.ge(int(start_ms)) & timestamps.lt(int(seed_open_ms))].copy()
+    if len(selected) != int(required):
+        return ()
+    actual = selected["timestamp"].astype("int64").to_numpy()
+    expected = int(start_ms) + np.arange(int(required), dtype=np.int64) * int(htf_ms)
+    if not np.array_equal(actual, expected):
+        return ()
+    return _decision_candles_from_frame(selected, step_ms=htf_ms, source="backtest_cache_htf_seed_aligned_context")
+
+
 def _build_seed_first_backtest_snapshot(
     candidate: dict[str, object],
     *,
@@ -1964,10 +1991,10 @@ def _build_seed_first_backtest_snapshot(
             seed_open_ms=seed_open_ms,
             seed_close_ms=seed_close_ms,
             seed_candles=seed_candles,
-            pre_seed_context_candles=_pre_seed_context_candles_from_ltf(ltf, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms, ltf_ms=ltf_ms),
+            pre_seed_context_candles=_pre_seed_context_candles_from_htf(htf, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms),
         ),
         source_labels={
-            "htf_context_source": "backtest_cache_seed_aligned_htf_context",
+            "htf_context_source": "backtest_cache_htf_seed_aligned_context",
             "rolling_seed_source": "backtest_cache_aggtrade_ltf_seed",
             "ltf_confirm_source": "backtest_cache_aggtrade_ltf_confirm",
         },

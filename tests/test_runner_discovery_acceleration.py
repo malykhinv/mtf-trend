@@ -5,6 +5,7 @@ from research_tools.htf_ltf_runner_discovery import (
     TRADE_ARTIFACT_COLUMNS,
     _artifact_frame,
     _build_selected_signal_post_entry_backfill_plan,
+    _pre_seed_context_candles_from_htf,
     _post_entry_fetch_window_for_signal,
     _signal_entry_tail_ms,
 )
@@ -149,3 +150,29 @@ def test_empty_trade_artifact_keeps_csv_headers() -> None:
     assert frame.empty
     assert "status" in frame.columns
     assert "entry_timestamp_ms" in frame.columns
+
+
+def test_pre_seed_context_uses_closed_htf_cache_without_subminute_history() -> None:
+    htf_ms = 300_000
+    seed_open_ms = 288 * htf_ms
+    htf = pd.DataFrame(
+        [
+            {
+                "timestamp": index * htf_ms,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 1.0,
+                "quote_volume": 1000.0 + index,
+                "number_of_trades": 100 + index,
+            }
+            for index in range(288)
+        ]
+    )
+
+    context = _pre_seed_context_candles_from_htf(htf, seed_open_ms=seed_open_ms, tf_set="5m_30s", htf_ms=htf_ms)
+
+    assert len(context) == 288
+    assert context[0].open_time_ms == 0
+    assert context[-1].close_time_ms == seed_open_ms

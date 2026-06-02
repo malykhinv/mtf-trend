@@ -1,3 +1,22 @@
+## 2026-06-02 - 5m_30s no-signal run diagnosis
+
+Run artifact: `.output/results/htf_ltf_runner_discovery_7d/5m_30s`.
+
+Finding:
+
+```text
+htf_rows_after_scan: 180682
+entry_window_rows: 722728
+entry_window_execution_ok: 492779
+ltf_signals_selected: 0
+decision_ledger signal_verdict: 180682 data_dependency_not_ready
+top dependency reason: contract_seed_aligned_context_not_ready
+```
+
+Interpretation: the run did reach exact decision ledger generation, but it did not reach meaningful strategy rejects/selects. This was a data adapter/context bug introduced by targeted acceleration, not evidence that `5m_30s` had no possible entries. P493 fixes the adapter by sourcing pre-seed context from cheap HTF cache.
+
+Next experiment: rerun a short `5m_30s` smoke and inspect `htf_ltf_runner_data_dependencies.csv` plus reject reasons before restarting a multi-hour run.
+
 ## 2026-06-02 - Runner discovery zero-trade aggregation failure
 
 Observed failure:
