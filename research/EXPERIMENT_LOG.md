@@ -1,3 +1,29 @@
+## 2026-06-02 - 1d 5m_30s zero run diagnosis
+
+Run artifact: `.output/results/htf_ltf_runner_discovery_1d/5m_30s`.
+
+Finding:
+
+```text
+run timestamp: 2026-05-31 artifact, pre-P493/P494/P495/P496
+days: 1
+scanned_htf_rows: 37156
+candidates: 37156 ok
+entry_window_rows: 148624 ok
+signals: 0
+raw trades: 0
+live-filtered trades: 0
+decision_ledger rows: 37156
+decision_ledger signal_verdict: 37156 data_dependency_not_ready
+top dependency: 36778 contract_seed_aligned_context_not_ready
+secondary dependency: 378 post_seed_ltf_missing
+targeted fetch errors: 843 total, dominated by DNS getaddrinfo and Binance 429
+```
+
+Interpretation: this 1d run is not evidence that `5m_30s` found no trades. It is an old adapter/data run. The shared core never received valid seed-aligned pre-seed context for almost all exact candidates, and a smaller subset lacked post-seed LTF due targeted fetch failures. The 148,624 `entry_windows` are diagnostic windows, not replayed selected trades in targeted subminute mode.
+
+Required next check: rerun a fresh 1d `5m_30s` smoke on current code. Acceptance is not profit; acceptance is collapse of `contract_seed_aligned_context_not_ready` and visible real seed/confirm/category/risk reject reasons or selected signals.
+
 ## 2026-06-02 - P496 warning-spam validation
 
 Patch: P496 applied locally / UNKNOWN commit.
