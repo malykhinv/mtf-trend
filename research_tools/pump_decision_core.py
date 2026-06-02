@@ -16,7 +16,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 
 ROLLING_DECISION_CONTRACT_ID = "rolling_htf_seed_first_ltf_confirm_v1"
-ROLLING_DECISION_CORE_VERSION = "p489_pre_seed_dump_rebound_guard"
+ROLLING_DECISION_CORE_VERSION = "p498_closed_baseline_context"
 
 DecisionSource = Literal["live", "backtest", "parity_replay", "test"]
 DecisionVerdictType = Literal["selected", "rejected", "data_dependency_not_ready"]
@@ -43,6 +43,7 @@ ROLLING_BASELINE_WINDOWS = 60
 ROLLING_DORMANCY_WINDOWS = 30
 ROLLING_PREGROWTH_WINDOWS = 5
 ROLLING_PRIOR_SPIKE_LOOKBACK_MS = 24 * 60 * 60 * 1000
+ROLLING_MAX_PRE_SEED_CONTEXT_GAP_MS = 60 * 1000
 ROLLING_CONTEXT_MIN_WINDOWS = max(ROLLING_BASELINE_WINDOWS, ROLLING_DORMANCY_WINDOWS, ROLLING_PREGROWTH_WINDOWS)
 ROLLING_SEED_MIN_HTF_QUOTE_RATIO = 5.0
 ROLLING_SEED_MIN_HTF_TRADE_RATIO = 5.0
@@ -1163,11 +1164,13 @@ def _validate_seed(seed: RollingSeedSnapshot, spec: RollingProfileSpec) -> DataD
 
 
 def _contract_context_candles(seed: RollingSeedSnapshot, spec: RollingProfileSpec) -> tuple[DecisionCandle, ...]:
-    """Return only the contract-defined seed-aligned context slice.
+    """Return only the contract-defined closed pre-seed context slice.
 
     Adapters may keep more history for efficiency. The core deliberately ignores
     extra history outside the deterministic context contract so live/backtest
-    parity hashes do not depend on ring/cache retention length.
+    parity hashes do not depend on ring/cache retention length. The long context
+    is allowed to end shortly before a rolling seed when the cheap baseline
+    source is minute/HTF candles rather than the exact LTF grid.
     """
 
     required = rolling_context_windows_for_spec(spec)
@@ -1176,7 +1179,6 @@ def _contract_context_candles(seed: RollingSeedSnapshot, spec: RollingProfileSpe
         item
         for item in ordered
         if int(item.close_time_ms) <= int(seed.seed_open_ms)
-        and int(item.open_time_ms) >= int(seed.seed_open_ms) - required * int(spec.htf_seconds) * 1000
     )
     return eligible[-required:]
 
@@ -1193,11 +1195,12 @@ def _validate_pre_seed_context(seed: RollingSeedSnapshot, spec: RollingProfileSp
         )
     if context[-1].close_time_ms > seed.seed_open_ms:
         return DataDependency(name="pre_seed_context", status="error", reason="context_overlaps_seed", asof_ms=seed.seed_open_ms)
-    if context[-1].close_time_ms != seed.seed_open_ms:
-        return DataDependency(name="pre_seed_context", status="gap", reason="seed_aligned_context_does_not_end_at_seed_open", asof_ms=seed.seed_open_ms)
-    expected_first_open = int(seed.seed_open_ms) - required * int(spec.htf_seconds) * 1000
+    context_gap_ms = int(seed.seed_open_ms) - int(context[-1].close_time_ms)
+    if context_gap_ms > ROLLING_MAX_PRE_SEED_CONTEXT_GAP_MS:
+        return DataDependency(name="pre_seed_context", status="stale", reason="closed_context_too_stale_for_seed_open", asof_ms=seed.seed_open_ms)
+    expected_first_open = int(context[-1].close_time_ms) - required * int(spec.htf_seconds) * 1000
     if int(context[0].open_time_ms) != expected_first_open:
-        return DataDependency(name="pre_seed_context", status="gap", reason="seed_aligned_context_wrong_start", asof_ms=seed.seed_open_ms)
+        return DataDependency(name="pre_seed_context", status="gap", reason="closed_context_wrong_start", asof_ms=seed.seed_open_ms)
     return _rolling_context_dependency(
         "pre_seed_context",
         context,

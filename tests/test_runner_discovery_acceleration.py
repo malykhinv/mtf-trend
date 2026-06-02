@@ -2,6 +2,7 @@ import warnings
 
 import pandas as pd
 
+from data.storage.parquet_storage import ParquetStorage
 from research_tools.anomaly_strategy_backtest import (
     DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
     _cache_data_path,
@@ -12,7 +13,9 @@ from research_tools.htf_ltf_runner_discovery import (
     TRADE_ARTIFACT_COLUMNS,
     _artifact_frame,
     _build_selected_signal_post_entry_backfill_plan,
+    _build_targeted_ltf_signal_entry_backfill_plan,
     _htf_context_warmup_ms,
+    _pre_seed_context_candles_for_backtest,
     _pre_seed_context_candles_from_htf,
     _post_entry_fetch_window_for_signal,
     _signal_entry_tail_ms,
@@ -187,6 +190,24 @@ def test_pre_seed_context_uses_closed_htf_cache_without_subminute_history() -> N
     assert context[-1].close_time_ms == seed_open_ms
 
 
+def test_pre_seed_context_uses_cheap_1m_context_for_offset_rolling_seed() -> None:
+    htf_ms = 300_000
+    seed_open_ms = 288 * htf_ms + 30_000
+    minute = _minute_frame(0, 288 * 5 + 1, quote=1000.0, trades=100.0)
+
+    context = _pre_seed_context_candles_for_backtest(
+        htf=pd.DataFrame(),
+        minute=minute,
+        seed_open_ms=seed_open_ms,
+        tf_set="5m_30s",
+        htf_ms=htf_ms,
+    )
+
+    assert len(context) == 288
+    assert context[-1].close_time_ms == seed_open_ms - 30_000
+    assert context[-1].source == "backtest_cache_1m_closed_htf_context"
+
+
 def test_targeted_pre_entry_planner_uses_htf_warmup_but_scans_requested_range_only() -> None:
     htf_ms = 300_000
     scan_start = 288 * htf_ms
@@ -251,6 +272,68 @@ def test_targeted_pre_entry_planner_uses_htf_warmup_but_scans_requested_range_on
     assert windows == [(scan_start, scan_start + 2 * htf_ms - 1)]
     assert int(summary["total_adjacent_pair_candidates"]) == 1
     assert int(summary["planned_pairs"]) == 1
+
+
+def test_signal_entry_plan_keeps_seed_stage_reject_rows_without_fetch_windows(tmp_path) -> None:
+    symbol = "AAA/USDT:USDT"
+    htf_ms = 300_000
+    ltf_ms = 30_000
+    scan_start = 288 * htf_ms
+    scan_end = scan_start + htf_ms
+    config = HtfLtfRunnerDiscoveryConfig(
+        cache_dir=tmp_path,
+        output_dir=tmp_path / "out",
+        htf_timeframe="5m",
+        ltf_timeframe="30s",
+    )
+    htf_rows = [
+        {
+            "timestamp": index * htf_ms,
+            "open": 100.0,
+            "high": 100.1,
+            "low": 99.9,
+            "close": 100.0,
+            "volume": 1.0,
+            "quote_volume": 1000.0,
+            "number_of_trades": 100,
+        }
+        for index in range(289)
+    ]
+    ltf_rows = [
+        {
+            "timestamp": scan_start + index * ltf_ms,
+            "open": 100.0,
+            "high": 100.1,
+            "low": 99.9,
+            "close": 100.0,
+            "volume": 1.0,
+            "quote_volume": 100.0,
+            "number_of_trades": 10,
+        }
+        for index in range(10)
+    ]
+    htf_path = _cache_data_path(tmp_path, symbol, "5m")
+    ltf_path = _cache_data_path(tmp_path, symbol, "30s")
+    htf_path.parent.mkdir(parents=True)
+    ltf_path.parent.mkdir(parents=True)
+    pd.DataFrame(htf_rows).to_parquet(htf_path, index=False)
+    pd.DataFrame(ltf_rows).to_parquet(ltf_path, index=False)
+
+    plan, windows = _build_targeted_ltf_signal_entry_backfill_plan(
+        storage=ParquetStorage(tmp_path),
+        symbols=(symbol,),
+        start_ms=scan_start,
+        end_ms=scan_end,
+        htf_context_start_ms=scan_start - _htf_context_warmup_ms(config, htf_ms),
+        config=config,
+        progress_label="test signal-entry plan",
+        seed_timestamps_by_symbol={symbol: {scan_start}},
+    )
+
+    statuses = plan["targeted_ltf_plan_status"].astype(str).tolist()
+    assert windows == {}
+    assert "not_planned_seed_stage_terminal_reject" in statuses
+    assert int(plan.iloc[0]["seed_stage_prefilter_rejected"]) >= 1
 
 
 def test_targeted_direct_ltf_cache_missing_intervals_subtracts_trusted_buckets(tmp_path) -> None:

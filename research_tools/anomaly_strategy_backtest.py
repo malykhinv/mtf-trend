@@ -2617,7 +2617,7 @@ def ensure_targeted_aggtrade_direct_ltf_cache(
                 done_windows += 1
                 if progress_label is not None and total_windows:
                     next_progress_pct = _emit_progress_1pct(
-                        label=f"{progress_label}: targeted aggTradesâ†’{','.join(targets)}",
+                        label=f"{progress_label}: targeted aggTrades->{','.join(targets)}",
                         done=done_windows,
                         total=total_windows,
                         started_at=started_at,
@@ -2704,7 +2704,7 @@ def ensure_targeted_aggtrade_direct_ltf_cache(
             done_windows += 1
             if progress_label is not None and total_windows:
                 next_progress_pct = _emit_progress_1pct(
-                    label=f"{progress_label}: targeted aggTrades→{','.join(targets)}",
+                    label=f"{progress_label}: targeted aggTrades->{','.join(targets)}",
                     done=done_windows,
                     total=total_windows,
                     started_at=started_at,

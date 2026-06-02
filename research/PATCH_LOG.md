@@ -1,3 +1,39 @@
+## 2026-06-02 - P498 closed cheap baseline context and visible seed-stage rejects
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P497 and supersedes its exact seed-aligned HTF-context assumption for rolling offsets.
+
+Purpose: keep targeted rolling discovery honest and fast before retrying long `5m_30s`/`3m_30s` backtests.
+
+Changes:
+
+- `PumpDecisionCore` version is now `p498_closed_baseline_context`.
+- Pre-seed context validation accepts a fully closed HTF-width baseline context ending up to 60s before rolling `seed_open_ms`, instead of requiring the long context to end exactly at every 30s/15s rolling seed start.
+- Backtest discovery builds long context from cheap fully closed 1m candles when rolling seeds are offset from calendar HTF boundaries; exact aggTrade LTF is still used for seed and confirm candles only.
+- Signal-entry targeted fetch remains the short confirm/next-open window. It does not fetch 24h of 30s/15s context.
+- Seed-stage terminal reject rows are preserved in `htf_ltf_runner_targeted_ltf_plan.csv` even when they produce zero signal-entry fetch windows.
+- Progress output uses ASCII `aggTrades->30s` to avoid Windows console encoding crashes.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+```
+
+Additional actual smoke:
+
+```text
+1 symbol JCT/USDT:USDT, 1d, 5m_30s, max_events_per_symbol=5
+decision ledger: 89 rejected, 0 data_dependency_not_ready
+top reasons: seed_htf_return_below_min, ltf_confirm_return_below_min, seed_ltf_flow_not_sustained
+targeted fetch windows: short 420s-900s windows, not 24h LTF context
+```
+
+Risk:
+
+```text
+Medium but explicit. The long baseline context may lag rolling seed open by up to 60s when built from cheap 1m candles. This avoids impossible 24h subminute downloads and does not use future data, but it is no longer exact LTF-seed-aligned context. Snapshot hashes change through the core version.
+```
+
 ## 2026-06-02 - P497 HTF context warmup for targeted runner discovery
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P496.

@@ -1,3 +1,40 @@
+## 2026-06-02 - P498 pre-start smoke after context correction
+
+Patch: P498 applied locally / UNKNOWN commit.
+
+A focused actual smoke was run before retrying a long backtest:
+
+```text
+output: .output/results/htf_ltf_runner_discovery_smoke_p498_jct
+symbol: JCT/USDT:USDT
+period: 1d ending 1780329000000
+profile: 5m_30s
+targeted_backfill_max_events_per_symbol: 5
+```
+
+Result:
+
+```text
+candidates: 53
+decision ledger rows: 89
+signal_verdict: 89 rejected, 0 data_dependency_not_ready
+top reasons:
+  seed_htf_return_below_min: 39
+  ltf_confirm_return_below_min: 30
+  seed_ltf_flow_not_sustained: 7
+  ltf_second_half_return_below_min: 6
+targeted plan statuses:
+  not_planned_seed_stage_terminal_reject: 47
+  planned: 11
+targeted fetch windows:
+  4 ok fetch rows
+  requested/fetched windows: 420s to 900s
+```
+
+Interpretation: the old context-contract failure is fixed for this sample without downloading 24h of 30s context. This is not edge evidence and not proof of no trades. It is a pre-start health check showing that the current path can reach real shared-core rejects and that seed-stage terminal rejects remain visible in targeted plan artifacts.
+
+Next experiment: fresh full-universe 1d `5m_30s` smoke. Acceptance is a visible funnel with few/no context-contract dependencies, not profitability.
+
 ## 2026-06-02 - P497 current-code check after 1d zero diagnosis
 
 Patch: P497 applied locally / UNKNOWN commit.

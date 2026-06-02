@@ -331,6 +331,7 @@ def run_htf_ltf_runner_discovery(
         local_storage = ParquetStorage(config.cache_dir)
         htf_scan = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         htf_context = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
+        minute_context = _load_frame(local_storage, symbol, "1m", start_ms=htf_context_start_ms, end_ms=end_ms)
         ltf_tail_ms = _signal_entry_tail_ms(config, ltf_ms) if _targeted_ltf_backfill_required(config) else int(config.runner_horizon_minutes) * 60_000
         ltf = _load_frame(
             local_storage,
@@ -361,7 +362,7 @@ def run_htf_ltf_runner_discovery(
             for candidate in local_candidate_rows:
                 windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
                 local_entry_window_rows.extend(windows)
-                signal, decision_rows_for_candidate = _build_first_ltf_signal(candidate, htf=htf_context, ltf=ltf, oi=oi, config=config)
+                signal, decision_rows_for_candidate = _build_first_ltf_signal(candidate, htf=htf_context, minute=minute_context, ltf=ltf, oi=oi, config=config)
                 for decision_row in decision_rows_for_candidate:
                     local_decision_rows.append(decision_row)
                     if decision_row.get("signal_verdict") != "selected" or decision_row.get("backtest_execution_skip_reason"):
@@ -1297,6 +1298,7 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
             continue
         htf_scan = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         htf_context = _load_frame(storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
+        minute_context = _load_frame(storage, symbol, "1m", start_ms=htf_context_start_ms, end_ms=end_ms)
         if htf_scan.empty:
             continue
         ltf = _load_frame(
@@ -1333,6 +1335,7 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
             seed_snapshot, seed_window = _build_seed_stage_backtest_snapshot(
                 candidate,
                 htf=htf_context,
+                minute=minute_context,
                 ltf=ltf,
                 config=config,
             )
@@ -1363,9 +1366,10 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
                     prefilter_bounds=seed_prefilter.bounds,
                 )
             )
+        if symbol_rows:
+            rows.extend(symbol_rows)
         if symbol_windows:
             windows_by_symbol[symbol] = symbol_windows
-            rows.extend(symbol_rows)
         if candidate_rows or exact_rolling_seed_count:
             rows.append(
                 {
@@ -1520,6 +1524,7 @@ def _signal_entry_plan_row_for_candidate(
         "window_end_utc": _timestamp_to_utc(window_end),
         "window_ms": int(window_end - window_start + 1),
         "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed",
+        "window_includes_ltf_context_warmup": False,
         "known_future_scope": "confirm_candles_and_next_entry_open_only",
         "htf_quote_ratio": candidate.get("htf_quote_ratio", float("nan")),
         "htf_trade_ratio": candidate.get("htf_trade_ratio", float("nan")),
@@ -1971,11 +1976,13 @@ def _pre_seed_context_candles_from_ltf(
     tf_set: str,
     htf_ms: int,
     ltf_ms: int,
+    context_end_ms: int | None = None,
 ) -> tuple[DecisionCandle, ...]:
-    """Build the exact seed-aligned HTF context required by the core contract.
+    """Build the closed HTF-width context required by the core contract.
 
-    These are non-overlapping HTF windows aligned backwards from seed_open_ms:
-    [seed_open-HTF, seed_open), [seed_open-2*HTF, seed_open-HTF), ...
+    These are non-overlapping HTF windows aligned backwards from the latest
+    cheap context close before the seed:
+    [context_end-HTF, context_end), [context_end-2*HTF, context_end-HTF), ...
     Extra cache history is ignored so backtest parity does not depend on how
     much data happened to be loaded.
     """
@@ -1984,8 +1991,11 @@ def _pre_seed_context_candles_from_ltf(
     if required is None or required <= 0:
         return ()
     frames: list[pd.DataFrame] = []
-    start_ms = int(seed_open_ms) - int(required) * int(htf_ms)
-    for window_start_ms in range(start_ms, int(seed_open_ms), int(htf_ms)):
+    end_ms = int(context_end_ms) if context_end_ms is not None else int(seed_open_ms)
+    if end_ms > int(seed_open_ms):
+        return ()
+    start_ms = int(end_ms) - int(required) * int(htf_ms)
+    for window_start_ms in range(start_ms, int(end_ms), int(htf_ms)):
         window = _strict_ltf_window(
             ltf,
             start_ms=int(window_start_ms),
@@ -2022,6 +2032,44 @@ def _pre_seed_context_candles_from_ltf(
     return _decision_candles_from_frame(pd.concat(frames, ignore_index=True), step_ms=htf_ms, source="backtest_cache_seed_aligned_htf_context")
 
 
+def _pre_seed_context_candles_for_backtest(
+    *,
+    htf: pd.DataFrame,
+    minute: pd.DataFrame,
+    seed_open_ms: int,
+    tf_set: str,
+    htf_ms: int,
+) -> tuple[DecisionCandle, ...]:
+    minute_end_ms = (int(seed_open_ms) // MINUTE_MS) * MINUTE_MS
+    if minute_end_ms <= int(seed_open_ms):
+        context = _pre_seed_context_candles_from_ltf(
+            minute,
+            seed_open_ms=int(seed_open_ms),
+            tf_set=tf_set,
+            htf_ms=int(htf_ms),
+            ltf_ms=MINUTE_MS,
+            context_end_ms=int(minute_end_ms),
+        )
+        if context:
+            return tuple(
+                DecisionCandle(
+                    open_time_ms=item.open_time_ms,
+                    close_time_ms=item.close_time_ms,
+                    open=item.open,
+                    high=item.high,
+                    low=item.low,
+                    close=item.close,
+                    quote_volume=item.quote_volume,
+                    number_of_trades=item.number_of_trades,
+                    taker_buy_quote_volume=item.taker_buy_quote_volume,
+                    source="backtest_cache_1m_closed_htf_context",
+                    source_status=item.source_status,
+                )
+                for item in context
+            )
+    return _pre_seed_context_candles_from_htf(htf, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms)
+
+
 def _pre_seed_context_candles_from_htf(
     htf: pd.DataFrame,
     *,
@@ -2053,6 +2101,7 @@ def _build_seed_first_backtest_snapshot(
     candidate: dict[str, object],
     *,
     htf: pd.DataFrame,
+    minute: pd.DataFrame,
     ltf: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
 ) -> tuple[DecisionSnapshot, tuple[DecisionCandle, ...], _StrictLtfWindow]:
@@ -2091,10 +2140,10 @@ def _build_seed_first_backtest_snapshot(
             seed_open_ms=seed_open_ms,
             seed_close_ms=seed_close_ms,
             seed_candles=seed_candles,
-            pre_seed_context_candles=_pre_seed_context_candles_from_htf(htf, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms),
+            pre_seed_context_candles=_pre_seed_context_candles_for_backtest(htf=htf, minute=minute, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms),
         ),
         source_labels={
-            "htf_context_source": "backtest_cache_htf_seed_aligned_context",
+            "htf_context_source": "backtest_cache_1m_closed_htf_context_or_htf_fallback",
             "rolling_seed_source": "backtest_cache_aggtrade_ltf_seed",
             "ltf_confirm_source": "backtest_cache_aggtrade_ltf_confirm",
         },
@@ -2112,6 +2161,7 @@ def _build_seed_stage_backtest_snapshot(
     candidate: Mapping[str, object],
     *,
     htf: pd.DataFrame,
+    minute: pd.DataFrame,
     ltf: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
 ) -> tuple[DecisionSnapshot, _StrictLtfWindow]:
@@ -2136,10 +2186,10 @@ def _build_seed_stage_backtest_snapshot(
             seed_open_ms=seed_open_ms,
             seed_close_ms=seed_close_ms,
             seed_candles=seed_candles,
-            pre_seed_context_candles=_pre_seed_context_candles_from_htf(htf, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms),
+            pre_seed_context_candles=_pre_seed_context_candles_for_backtest(htf=htf, minute=minute, seed_open_ms=seed_open_ms, tf_set=tf_set, htf_ms=htf_ms),
         ),
         source_labels={
-            "htf_context_source": "backtest_cache_htf_seed_aligned_context",
+            "htf_context_source": "backtest_cache_1m_closed_htf_context_or_htf_fallback",
             "rolling_seed_source": "backtest_cache_aggtrade_ltf_seed",
             "prefilter_source": "shared_core_seed_stage",
         },
@@ -2265,6 +2315,7 @@ def _build_first_ltf_signal(
     candidate: dict[str, object],
     *,
     htf: pd.DataFrame,
+    minute: pd.DataFrame,
     ltf: pd.DataFrame,
     oi: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
@@ -2281,7 +2332,7 @@ def _build_first_ltf_signal(
         expected_step_ms=ltf_ms,
     )
 
-    snapshot, post_seed_candles, post_seed_window = _build_seed_first_backtest_snapshot(candidate, htf=htf, ltf=ltf, config=config)
+    snapshot, post_seed_candles, post_seed_window = _build_seed_first_backtest_snapshot(candidate, htf=htf, minute=minute, ltf=ltf, config=config)
     exact_verdicts = list(evaluate_ltf_confirm_sequence_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles))
     decision_rows = [_decision_ledger_row(verdict=item, post_seed_window=post_seed_window, candidate=candidate) for item in exact_verdicts]
     verdict = next((item for item in exact_verdicts if item.verdict == "selected"), exact_verdicts[-1] if exact_verdicts else evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles))

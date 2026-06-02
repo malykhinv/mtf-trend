@@ -1,6 +1,18 @@
+## 2026-06-02 - P498 closed cheap baseline context for rolling discovery
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Pre-start audit found two blockers before retrying a long `5m_30s` backtest. First, progress output used a unicode arrow in `targeted aggTrades→30s`, which can crash Windows cp1252 consoles before artifacts are written. Second, P497 did not fully solve rolling seed context: a rolling 5m seed can start on a 30s offset, so exact seed-aligned 24h context would require downloading 24h of 30s candles per exact seed. That is not an acceptable acceleration path.
+
+P498 changes the long pre-seed context contract to closed cheap baseline context: adapters may provide HTF-width context aggregated from fully closed 1m/HTF candles ending no more than 60s before the rolling seed open. Exact aggTrade-derived 30s/15s remains required for the rolling seed and post-seed confirmation morphology. The JCT 1d smoke after P498 produced real rejects only (`seed_htf_return_below_min`, `ltf_confirm_return_below_min`, `seed_ltf_flow_not_sustained`, etc.) and zero `contract_seed_aligned_context_not_ready`.
+
+Next: run a fresh 1d full-universe `5m_30s` smoke before any 30d run. Acceptance: dependency reasons should be dominated by genuine missing 1m/seed/confirm cache or network failures, not context-contract misses; signal-entry fetch windows should remain short confirm/next-open windows, not 24h 30s context downloads.
+
 ## 2026-06-02 - P497 HTF warmup for 1d targeted runner discovery
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Superseded by P498 for rolling offset seeds. P497's HTF warmup is still useful for cheap context availability, but the old seed-aligned interpretation is not enough for `5m_30s`/`3m_15s` rolling offsets without forcing 24h LTF downloads.
 
 The 1d `5m_30s` zero-run diagnosis showed an old pre-P493 artifact, but review found a real remaining bug in current code: processing and targeted planners loaded HTF only from the requested scan `start_ms`, while the shared core requires 24h seed-aligned pre-seed context. On a 1d smoke, this can still make most early candidates `contract_seed_aligned_context_not_ready`.
 
