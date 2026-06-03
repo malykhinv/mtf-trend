@@ -1,3 +1,45 @@
+## 2026-06-03 - P500 1d runner discovery bottleneck investigation
+
+User observation:
+
+```text
+1d run started about 08:00; near noon the first TF had still not finished.
+```
+
+Findings:
+
+```text
+active process stack #1: _collect_symbol_candidates -> _pregrowth_features
+active process stack #2: _decision_ledger_row -> decision_snapshot_hash
+active process stack #3: _fetch_binance_futures_aggtrades_rows
+planner profile: _resolve_end_timestamp_ms -> ParquetStorage.get_last_timestamp -> full load/concat
+cache coverage bug: direct target-LTF writes went to 30s/delta, but trusted coverage checked only 30s/data.parquet
+empty aggTrades bug: empty verified windows were not marked covered and were fetched repeatedly
+```
+
+Quantitative diagnostics:
+
+```text
+pre-entry plan: 3831 windows / 490 symbols
+coverage before delta/index fix: 0 covered, 3831 missing intervals, 638.5h fetch
+coverage after indexing existing delta: 3491 covered, 523 missing intervals, 4.93h fetch
+coverage index migration: 587 symbols written, ~1,010,702 rows, 156s
+limited fetch smoke: 12 windows, ~2.5s fetch, empty-window coverage index rows written
+fast end timestamp lookup: 594 symbols in ~14.2s
+```
+
+Interpretation:
+
+```text
+The long run was mostly infrastructure waste, not evidence that the strategy needs thresholds changed. The biggest issue was broken cache reuse: already downloaded direct aggTrades LTF deltas were invisible to cache subtraction, so reruns kept redownloading and recomputing.
+```
+
+Next experiment:
+
+```text
+Run only 5m_30s / 1d first. Accept if targeted pre-entry LTF starts mostly from covered cache and any remaining Binance failures are visible fetch rows, not silent hangs or repeated hundreds-of-hours missing coverage.
+```
+
 ## 2026-06-03 - P499 signal-entry planning bottleneck
 
 Patch: P499 applied locally / UNKNOWN commit.

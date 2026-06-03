@@ -101,6 +101,8 @@ class HtfLtfRunnerDiscoveryConfig:
     entry_slippage_pct: float = 0.0005
     exit_slippage_pct: float = 0.0005
     symbol_workers: int = 1
+    targeted_plan_workers: int = 8
+    targeted_fetch_workers: int = 4
     auto_targeted_ltf_backfill: bool = True
     targeted_backfill_min_htf_quote_ratio: float = 20.0
     targeted_backfill_min_htf_trade_ratio: float = 20.0
@@ -131,6 +133,8 @@ class HtfLtfRunnerDiscoveryConfig:
             "ltf_max_confirm_candles",
             "trail_lookback_candles",
             "max_hold_candles",
+            "targeted_plan_workers",
+            "targeted_fetch_workers",
         ):
             if int(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} must be > 0")
@@ -288,6 +292,7 @@ def run_htf_ltf_runner_discovery(
     targeted_ltf_materialize = pd.DataFrame()
     targeted_phase_frames: list[tuple[str, pd.DataFrame, pd.DataFrame, pd.DataFrame]] = []
     pre_entry_seed_timestamps_by_symbol: dict[str, set[int]] = {}
+    decision_seed_timestamps_by_symbol: dict[str, set[int]] = {}
     if _targeted_ltf_backfill_required(config):
         pre_entry_plan, pre_entry_windows_by_symbol = _build_targeted_ltf_backfill_plan(
             storage=storage,
@@ -303,6 +308,7 @@ def run_htf_ltf_runner_discovery(
             ltf_timeframe=config.ltf_timeframe,
             windows_by_symbol=pre_entry_windows_by_symbol,
             progress_label=f"{progress_label or 'runner discovery'} targeted pre-entry LTF",
+            workers=config.targeted_fetch_workers,
         )
         targeted_phase_frames.append(("pre_entry", pre_entry_plan, pre_entry_fetch, pre_entry_materialize))
 
@@ -322,8 +328,10 @@ def run_htf_ltf_runner_discovery(
             ltf_timeframe=config.ltf_timeframe,
             windows_by_symbol=signal_entry_windows_by_symbol,
             progress_label=f"{progress_label or 'runner discovery'} targeted signal-entry LTF",
+            workers=config.targeted_fetch_workers,
         )
         targeted_phase_frames.append(("signal_entry", signal_entry_plan, signal_entry_fetch, signal_entry_materialize))
+        decision_seed_timestamps_by_symbol = _targeted_ltf_seed_timestamps_by_symbol(signal_entry_plan, phase_name="signal_entry")
 
     candidate_rows: list[dict[str, object]] = []
     entry_window_rows: list[dict[str, object]] = []
@@ -362,18 +370,29 @@ def run_htf_ltf_runner_discovery(
         local_rejected_exact_window_rows: list[dict[str, object]] = []
         local_context_cache: dict[tuple[str, int], tuple[DecisionCandle, ...]] = {}
         scanned_rows = 0
+        targeted_mode = _targeted_ltf_backfill_required(config)
         if not htf_scan.empty and not ltf.empty:
-            local_candidate_rows, scanned_rows = _collect_symbol_candidates(
-                symbol=symbol,
-                htf=htf_scan,
-                ltf=ltf,
-                oi=oi,
-                config=config,
-                allowed_timestamps_ms=pre_entry_seed_timestamps_by_symbol.get(symbol) if _targeted_ltf_backfill_required(config) else None,
-            )
+            if targeted_mode:
+                local_candidate_rows = _collect_symbol_seed_candidates_for_signal_entry_plan(
+                    symbol=symbol,
+                    ltf=ltf,
+                    config=config,
+                    allowed_timestamps_ms=decision_seed_timestamps_by_symbol.get(symbol, set()),
+                    expand_pair_starts=False,
+                )
+                scanned_rows = int(len(local_candidate_rows))
+            else:
+                local_candidate_rows, scanned_rows = _collect_symbol_candidates(
+                    symbol=symbol,
+                    htf=htf_scan,
+                    ltf=ltf,
+                    oi=oi,
+                    config=config,
+                )
             for candidate in local_candidate_rows:
-                windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
-                local_entry_window_rows.extend(windows)
+                if not targeted_mode:
+                    windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
+                    local_entry_window_rows.extend(windows)
                 signal, decision_rows_for_candidate = _build_first_ltf_signal(
                     candidate,
                     htf=htf_context,
@@ -450,6 +469,7 @@ def run_htf_ltf_runner_discovery(
             windows_by_symbol=post_entry_windows_by_symbol,
             progress_label=f"{progress_label or 'runner discovery'} targeted post-entry replay LTF",
             max_merged_span_ms=None,
+            workers=config.targeted_fetch_workers,
         )
         targeted_phase_frames.append(("post_entry_replay", post_entry_plan, post_entry_fetch, post_entry_materialize))
     targeted_ltf_plan = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=1)
@@ -668,14 +688,15 @@ def _build_targeted_ltf_backfill_plan(
     spec = ROLLING_PROFILE_SPECS.get(tf_set)
     max_confirm_candles = int(spec.max_confirm_candles if spec is not None else config.ltf_max_confirm_candles)
     minute_tail_ms = int(htf_ms) + int(max_confirm_candles) * int(ltf_ms) + MINUTE_MS
-    for index, symbol in enumerate(selected_symbols, start=1):
-        progress.update(index=index, item=symbol)
-        htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
+
+    def _plan_symbol(symbol: str) -> tuple[list[dict[str, object]], list[tuple[int, int]]]:
+        local_storage = ParquetStorage(config.cache_dir)
+        htf = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
         minute_frame: MinuteCoarseFrame | None = None
         if htf_ms > MINUTE_MS:
-            minute = _load_frame(storage, symbol, "1m", start_ms=htf_context_start_ms, end_ms=end_ms + minute_tail_ms)
+            minute = _load_frame(local_storage, symbol, "1m", start_ms=htf_context_start_ms, end_ms=end_ms + minute_tail_ms)
             minute_frame = prepare_minute_coarse_frame(minute)
-        symbol_rows, windows = _targeted_ltf_backfill_seeds_for_symbol(
+        return _targeted_ltf_backfill_seeds_for_symbol(
             symbol=symbol,
             htf=htf,
             minute_frame=minute_frame,
@@ -685,10 +706,35 @@ def _build_targeted_ltf_backfill_plan(
             scan_start_ms=start_ms,
             scan_end_ms=end_ms,
         )
+
+    symbol_results: dict[str, tuple[list[dict[str, object]], list[tuple[int, int]]]] = {}
+    workers = _effective_symbol_workers(config.targeted_plan_workers, total_items=len(selected_symbols))
+    if workers <= 1:
+        for index, symbol in enumerate(selected_symbols, start=1):
+            progress.update(index=index, item=symbol)
+            symbol_results[symbol] = _plan_symbol(symbol)
+    else:
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="runner-pre-entry-plan")
+        futures = {executor.submit(_plan_symbol, symbol): symbol for symbol in selected_symbols}
+        try:
+            for index, future in enumerate(as_completed(futures), start=1):
+                symbol = futures[future]
+                progress.update(index=index, item=symbol)
+                symbol_results[symbol] = future.result()
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            progress.finish()
+            raise
+        else:
+            executor.shutdown(wait=True)
+    progress.finish()
+    for symbol in selected_symbols:
+        symbol_rows, windows = symbol_results.get(symbol, ([], []))
         rows.extend(symbol_rows)
         if windows:
             windows_by_symbol[symbol] = windows
-    progress.finish()
     plan = pd.DataFrame(rows)
     summary = {
         "symbol": "__all__",
@@ -1270,13 +1316,13 @@ def _concat_targeted_phase_frames(
     return pd.concat(frames, ignore_index=True, sort=False)
 
 
-def _targeted_ltf_seed_timestamps_by_symbol(plan: pd.DataFrame) -> dict[str, set[int]]:
+def _targeted_ltf_seed_timestamps_by_symbol(plan: pd.DataFrame, *, phase_name: str = "pre_entry") -> dict[str, set[int]]:
     """Returns HTF seed timestamps selected before any LTF/post-entry data is inspected."""
     if plan.empty or "symbol" not in plan.columns or "timestamp_ms" not in plan.columns:
         return {}
     status = plan.get("targeted_ltf_plan_status", pd.Series(index=plan.index, dtype=object)).astype(str)
     phase = plan.get("targeted_ltf_phase", pd.Series(index=plan.index, dtype=object)).astype(str)
-    selected = plan.loc[status.eq("planned") & phase.eq("pre_entry"), ["symbol", "timestamp_ms"]].copy()
+    selected = plan.loc[status.eq("planned") & phase.eq(str(phase_name)), ["symbol", "timestamp_ms"]].copy()
     if selected.empty:
         return {}
     selected["timestamp_ms"] = pd.to_numeric(selected["timestamp_ms"], errors="coerce")
@@ -1310,33 +1356,32 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     skipped_no_seed_symbols = 0
     skipped_broad_candidates = 0
-    for index, symbol in enumerate(selected_symbols, start=1):
-        progress.update(index=index, item=symbol)
+
+    def _plan_symbol(symbol: str) -> tuple[list[dict[str, object]], list[tuple[int, int]], int, int]:
         symbol_seed_timestamps = seed_timestamps_by_symbol.get(symbol, set())
         if not symbol_seed_timestamps:
-            skipped_no_seed_symbols += 1
-            continue
-        htf_scan = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+            return [], [], 1, 0
+        local_storage = ParquetStorage(config.cache_dir)
+        htf_scan = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         if htf_scan.empty:
-            continue
+            return [], [], 0, 0
         ltf = _load_frame(
-            storage,
+            local_storage,
             symbol,
             config.ltf_timeframe,
             start_ms=start_ms - htf_ms * max(config.baseline_candles, config.dormancy_candles),
             end_ms=end_ms + _signal_entry_tail_ms(config, ltf_ms),
         )
         if ltf.empty:
-            continue
-        oi = _load_oi_frame(storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
+            return [], [], 0, 0
         candidate_rows = _collect_symbol_seed_candidates_for_signal_entry_plan(
             symbol=symbol,
             ltf=ltf,
             config=config,
             allowed_timestamps_ms=symbol_seed_timestamps,
-        )
+            )
         broad_candidate_count = int(len(candidate_rows))
-        skipped_broad_candidates += max(0, int(len(symbol_seed_timestamps)) - broad_candidate_count)
+        skipped_broad = max(0, int(len(symbol_seed_timestamps)) - broad_candidate_count)
         symbol_windows: list[tuple[int, int]] = []
         symbol_rows: list[dict[str, object]] = []
         exact_rolling_seed_count = 0
@@ -1386,12 +1431,8 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
                     },
                 )
             )
-        if symbol_rows:
-            rows.extend(symbol_rows)
-        if symbol_windows:
-            windows_by_symbol[symbol] = symbol_windows
         if candidate_rows or exact_rolling_seed_count:
-            rows.append(
+            symbol_rows.append(
                 {
                     "targeted_ltf_phase": "signal_entry",
                     "symbol": symbol,
@@ -1411,7 +1452,39 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
                     "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed_stage_possible",
                 }
             )
+        return symbol_rows, symbol_windows, 0, skipped_broad
+
+    symbol_results: dict[str, tuple[list[dict[str, object]], list[tuple[int, int]], int, int]] = {}
+    workers = _effective_symbol_workers(config.targeted_plan_workers, total_items=len(selected_symbols))
+    if workers <= 1:
+        for index, symbol in enumerate(selected_symbols, start=1):
+            progress.update(index=index, item=symbol)
+            symbol_results[symbol] = _plan_symbol(symbol)
+    else:
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="runner-signal-entry-plan")
+        futures = {executor.submit(_plan_symbol, symbol): symbol for symbol in selected_symbols}
+        try:
+            for index, future in enumerate(as_completed(futures), start=1):
+                symbol = futures[future]
+                progress.update(index=index, item=symbol)
+                symbol_results[symbol] = future.result()
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            progress.finish()
+            raise
+        else:
+            executor.shutdown(wait=True)
     progress.finish()
+    for symbol in selected_symbols:
+        symbol_rows, symbol_windows, no_seed_count, skipped_broad = symbol_results.get(symbol, ([], [], 0, 0))
+        skipped_no_seed_symbols += int(no_seed_count)
+        skipped_broad_candidates += int(skipped_broad)
+        if symbol_rows:
+            rows.extend(symbol_rows)
+        if symbol_windows:
+            windows_by_symbol[symbol] = symbol_windows
     plan = pd.DataFrame(rows)
     status_series = plan.get("targeted_ltf_plan_status", pd.Series(dtype=str)).astype(str) if not plan.empty else pd.Series(dtype=str)
     summary = {
@@ -1667,6 +1740,7 @@ def _ensure_targeted_ltf_backfill(
     windows_by_symbol: Mapping[str, Iterable[tuple[int, int]]],
     progress_label: str,
     max_merged_span_ms: int | None = 60 * 60_000,
+    workers: int = 1,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not windows_by_symbol:
         return (
@@ -1675,13 +1749,73 @@ def _ensure_targeted_ltf_backfill(
         )
     from research_tools.anomaly_strategy_backtest import ensure_targeted_aggtrade_direct_ltf_cache
 
-    return ensure_targeted_aggtrade_direct_ltf_cache(
-        cache_dir=cache_dir,
-        windows_by_symbol=windows_by_symbol,
-        target_timeframes=(str(ltf_timeframe),),
-        progress_label=progress_label,
-        max_merged_span_ms=max_merged_span_ms,
+    selected: dict[str, list[tuple[int, int]]] = {}
+    for raw_symbol, raw_windows in windows_by_symbol.items():
+        symbol = str(raw_symbol).strip()
+        windows = list(raw_windows)
+        if symbol and windows:
+            selected[symbol] = windows
+    effective_workers = _effective_symbol_workers(workers, total_items=len(selected))
+    if effective_workers <= 1:
+        return ensure_targeted_aggtrade_direct_ltf_cache(
+            cache_dir=cache_dir,
+            windows_by_symbol=selected,
+            target_timeframes=(str(ltf_timeframe),),
+            progress_label=progress_label,
+            max_merged_span_ms=max_merged_span_ms,
+        )
+
+    progress = _ProgressLine(label=f"{progress_label}: symbols", total=len(selected))
+
+    def _fetch_symbol(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        return ensure_targeted_aggtrade_direct_ltf_cache(
+            cache_dir=cache_dir,
+            windows_by_symbol={symbol: selected[symbol]},
+            target_timeframes=(str(ltf_timeframe),),
+            progress_label=None,
+            max_merged_span_ms=max_merged_span_ms,
+        )
+
+    fetch_frames: list[pd.DataFrame] = []
+    materialize_frames: list[pd.DataFrame] = []
+    executor = ThreadPoolExecutor(max_workers=effective_workers, thread_name_prefix="runner-targeted-fetch")
+    futures = {executor.submit(_fetch_symbol, symbol): symbol for symbol in sorted(selected)}
+    try:
+        for index, future in enumerate(as_completed(futures), start=1):
+            symbol = futures[future]
+            progress.update(index=index, item=symbol)
+            fetch, materialize = future.result()
+            if not fetch.empty:
+                fetch_frames.append(fetch)
+            if not materialize.empty:
+                materialize_frames.append(materialize)
+    except KeyboardInterrupt:
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        progress.finish()
+        raise
+    else:
+        executor.shutdown(wait=True)
+    progress.finish()
+
+    summary = pd.DataFrame(
+        [
+            {
+                "symbol": "__all__",
+                "status": "parallel_window_plan",
+                "target_timeframes": str(ltf_timeframe),
+                "symbols_with_windows": int(len(selected)),
+                "raw_targeted_windows": int(sum(len(windows) for windows in selected.values())),
+                "targeted_fetch_workers": int(effective_workers),
+                "max_merged_span_ms": "unbounded" if max_merged_span_ms is None else int(max_merged_span_ms),
+                "row_type": "plan",
+            }
+        ]
     )
+    fetch_result = pd.concat([summary, *fetch_frames], ignore_index=True, sort=False) if fetch_frames else summary
+    materialize_result = pd.concat(materialize_frames, ignore_index=True, sort=False) if materialize_frames else pd.DataFrame()
+    return fetch_result, materialize_result
 
 
 def _rolling_htf_from_ltf(ltf: pd.DataFrame, *, htf_ms: int, ltf_ms: int) -> pd.DataFrame:
@@ -1741,6 +1875,7 @@ def _collect_symbol_seed_candidates_for_signal_entry_plan(
     ltf: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
     allowed_timestamps_ms: set[int],
+    expand_pair_starts: bool = True,
 ) -> list[dict[str, object]]:
     """Build only exact rolling seed candidates needed by signal-entry planning.
 
@@ -1758,9 +1893,12 @@ def _collect_symbol_seed_candidates_for_signal_entry_plan(
     required = {"timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"}
     if ltf.empty or not required.issubset(ltf.columns):
         return []
-    allowed_starts: set[int] = set()
-    for pair_start in sorted(int(value) for value in allowed_timestamps_ms):
-        allowed_starts.update(range(int(pair_start), int(pair_start) + int(htf_ms) + 1, int(ltf_ms)))
+    if expand_pair_starts:
+        allowed_starts: set[int] = set()
+        for pair_start in sorted(int(value) for value in allowed_timestamps_ms):
+            allowed_starts.update(range(int(pair_start), int(pair_start) + int(htf_ms) + 1, int(ltf_ms)))
+    else:
+        allowed_starts = {int(value) for value in allowed_timestamps_ms}
     frame = ltf.copy()
     for column in ("timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
@@ -3891,17 +4029,52 @@ def _resolve_end_timestamp_ms(
     if config.end_timestamp_ms is not None:
         return int(config.end_timestamp_ms)
     max_ts = 0
-    timeframe = Timeframe(str(config.htf_timeframe))
     for symbol in symbols:
-        try:
-            last_ts = storage.get_last_timestamp(symbol, timeframe)
-        except Exception:
-            last_ts = None
+        last_ts = _last_cached_timestamp_fast(config.cache_dir, symbol, str(config.htf_timeframe))
         if last_ts is not None:
             max_ts = max(max_ts, int(last_ts))
     if max_ts <= 0:
         raise ValueError("no cached HTF data found")
     return max_ts
+
+
+def _last_cached_timestamp_fast(cache_dir: Path, symbol: str, timeframe: str) -> int | None:
+    path = cache_dir / ParquetStorage.encode_symbol_for_path(symbol) / str(timeframe) / "data.parquet"
+    values: list[int] = []
+
+    def _max_timestamp(frame: pd.DataFrame) -> int | None:
+        if frame.empty or "timestamp" not in frame.columns:
+            return None
+        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+        if timestamps.empty:
+            return None
+        return int(timestamps.max())
+
+    if path.exists():
+        try:
+            value = _max_timestamp(pd.read_parquet(path, columns=["timestamp"]))
+        except Exception:
+            value = None
+        if value is not None:
+            values.append(value)
+    delta_dir = path.parent / "delta"
+    if delta_dir.exists():
+        delta_files = [delta_path for delta_path in sorted(delta_dir.glob("*.parquet")) if delta_path.is_file()]
+        if delta_files:
+            try:
+                value = _max_timestamp(pd.read_parquet(delta_dir, columns=["timestamp"]))
+            except Exception:
+                value = None
+                for delta_path in delta_files:
+                    try:
+                        delta_value = _max_timestamp(pd.read_parquet(delta_path, columns=["timestamp"]))
+                    except Exception:
+                        delta_value = None
+                    if delta_value is not None:
+                        values.append(delta_value)
+            if value is not None:
+                values.append(value)
+    return max(values) if values else None
 
 
 def _numeric_column(frame: pd.DataFrame, column: str, *, fallback: pd.Series | None = None) -> pd.Series:

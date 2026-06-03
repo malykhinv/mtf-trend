@@ -1,3 +1,15 @@
+## 2026-06-03 - P500 runner discovery cache reuse and staged-path acceleration
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The user's 1d run was not slow because the strategy core needed more threshold tuning. Profiling showed several infrastructure bottlenecks: the live process spent CPU in legacy `_collect_symbol_candidates`/snapshot hashing for seeds that `signal_entry_plan` had already rejected; targeted cache subtraction ignored `30s/delta/*.parquet`; empty aggTrades windows were never marked covered; and `_resolve_end_timestamp_ms` loaded full HTF cache frames just to find the last timestamp.
+
+P500 fixes the path without changing decision thresholds. Final targeted decisions now use only exact `signal_entry planned` seed timestamps, not all `pre_entry` pair starts. Targeted planning/fetch can run in bounded parallel workers. Direct aggTrades target-LTF writes maintain a compact coverage sidecar, and empty aggTrades windows write verified coverage index rows so they are not fetched forever. End timestamp resolution now reads timestamp columns only.
+
+Observed diagnostics: before the coverage fix, 3831 pre-entry windows looked fully missing (`638.5h` of aggTrades) even after hours of running. After building coverage indexes for existing delta files, the same plan showed 3491 covered windows and about `4.93h` missing. A 12-window fetch smoke completed in ~2.5s and wrote empty-window coverage index rows.
+
+Next: rerun only `5m_30s`/1d first, not all four profiles. Acceptance is that pre-entry LTF does not restart from hundreds of missing hours and `targeted_ltf_fetch.csv` shows cache-covered windows plus bounded fetch errors instead of an endless black hole.
+
 ## 2026-06-03 - P499 signal-entry planner no longer runs full seed-stage core
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

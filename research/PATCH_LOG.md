@@ -1,3 +1,43 @@
+## 2026-06-03 - P500 runner discovery cache reuse and staged acceleration
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P499.
+
+Purpose: stop 1d `5m_30s` runner discovery from re-downloading/recomputing the same targeted LTF work for hours.
+
+Changes:
+
+- Final targeted decision pass now consumes exact seed timestamps from `signal_entry planned` rows, not all broad `pre_entry` pair timestamps.
+- Targeted mode skips legacy entry-window research artifact generation for every rejected seed; selected-signal post-entry replay remains separate.
+- Added bounded `targeted_plan_workers` and `targeted_fetch_workers`; targeted aggTrades fetch is parallel by symbol while preserving sequential writes inside each symbol.
+- Fixed trusted target-LTF cache subtraction to see direct aggTrades `delta/*.parquet`.
+- Added compact `aggtrade_direct_target_ltf_coverage.parquet` sidecar indexes so coverage checks do not repeatedly scan many small delta parquet files.
+- Empty aggTrades windows now write verified coverage index buckets instead of being fetched forever.
+- `_resolve_end_timestamp_ms` now reads only timestamp columns from HTF base/delta cache.
+- Reduced aggTrades HTTP timeout from 30s to 10s so network stalls become visible fetch errors instead of hanging the run.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Diagnostics:
+
+```text
+old repeated coverage view: 3831/3831 pre-entry windows missing, 638.5h fetch required
+after indexing existing delta: 3491 covered, 523 missing intervals, about 4.93h fetch required
+empty-window fetch smoke: 12 windows, ~2.5s fetch, empty coverage index rows written
+fast end timestamp lookup: 594 symbols in ~14.2s
+```
+
+Risk:
+
+```text
+Medium operational risk, low strategy-bias risk. The patch changes data-loading/cache bookkeeping and removes redundant targeted-mode diagnostics, not PumpDecisionCore thresholds. Empty aggTrades windows are marked covered in the coverage index but no synthetic OHLCV candles are created; this is conservative for flow signals because no-trade windows cannot create real flow.
+```
+
 ## 2026-06-03 - P499 fast conservative signal-entry planner
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P498 and supersedes P494's expensive shared-core seed-stage prefilter inside the fetch planner.

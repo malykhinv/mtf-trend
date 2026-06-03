@@ -5,8 +5,10 @@ import pandas as pd
 from data.storage.parquet_storage import ParquetStorage
 from research_tools.anomaly_strategy_backtest import (
     DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+    DIRECT_TARGET_AGGTRADE_COVERAGE_INDEX_FILE,
     _cache_data_path,
     _trusted_materialized_entry_cache_missing_intervals,
+    _write_direct_aggtrade_target_ltf_delta,
 )
 from research_tools.htf_ltf_runner_discovery import (
     HtfLtfRunnerDiscoveryConfig,
@@ -21,6 +23,7 @@ from research_tools.htf_ltf_runner_discovery import (
     _post_entry_fetch_window_for_signal,
     _signal_entry_tail_ms,
     _targeted_ltf_backfill_seeds_for_symbol,
+    _targeted_ltf_seed_timestamps_by_symbol,
 )
 from research_tools.runner_coarse_prefilter import (
     coarse_minute_pair_prefilter,
@@ -371,6 +374,61 @@ def test_signal_entry_plan_lightweight_seed_collector_avoids_future_label_fields
     assert not any("runner_10pct_next_hour" in row for row in rows)
 
 
+def test_final_targeted_decision_uses_signal_entry_exact_seed_timestamps_only() -> None:
+    htf_ms = 300_000
+    ltf_ms = 30_000
+    ltf = pd.DataFrame(
+        [
+            {
+                "timestamp": index * ltf_ms,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 1.0,
+                "quote_volume": 100.0,
+                "number_of_trades": 10,
+            }
+            for index in range(30)
+        ]
+    )
+    plan = pd.DataFrame(
+        [
+            {
+                "targeted_ltf_phase": "pre_entry",
+                "targeted_ltf_plan_status": "planned",
+                "symbol": "AAA/USDT:USDT",
+                "timestamp_ms": 0,
+            },
+            {
+                "targeted_ltf_phase": "signal_entry",
+                "targeted_ltf_plan_status": "not_planned_seed_stage_terminal_reject",
+                "symbol": "AAA/USDT:USDT",
+                "timestamp_ms": 0,
+            },
+            {
+                "targeted_ltf_phase": "signal_entry",
+                "targeted_ltf_plan_status": "planned",
+                "symbol": "AAA/USDT:USDT",
+                "timestamp_ms": htf_ms,
+            },
+        ]
+    )
+    config = HtfLtfRunnerDiscoveryConfig(htf_timeframe="5m", ltf_timeframe="30s")
+
+    exact = _targeted_ltf_seed_timestamps_by_symbol(plan, phase_name="signal_entry")
+    rows = _collect_symbol_seed_candidates_for_signal_entry_plan(
+        symbol="AAA/USDT:USDT",
+        ltf=ltf,
+        config=config,
+        allowed_timestamps_ms=exact["AAA/USDT:USDT"],
+        expand_pair_starts=False,
+    )
+
+    assert exact == {"AAA/USDT:USDT": {htf_ms}}
+    assert [row["timestamp_ms"] for row in rows] == [htf_ms]
+
+
 def test_targeted_direct_ltf_cache_missing_intervals_subtracts_trusted_buckets(tmp_path) -> None:
     symbol = "AAA/USDT:USDT"
     path = _cache_data_path(tmp_path, symbol, "30s")
@@ -427,3 +485,105 @@ def test_targeted_direct_ltf_cache_missing_intervals_subtracts_trusted_buckets(t
         )
 
     assert missing == [(60_000, 89_999)]
+
+
+def test_targeted_direct_ltf_cache_subtraction_reads_delta_files(tmp_path) -> None:
+    symbol = "AAA/USDT:USDT"
+    path = _cache_data_path(tmp_path, symbol, "30s")
+    delta_dir = path.parent / "delta"
+    delta_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "timestamp": 0,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "quote_volume": 10.0,
+                "number_of_trades": 1,
+                "aggregation_source_timeframe": "aggTrades",
+                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                "aggtrade_coverage_verified": True,
+            },
+            {
+                "timestamp": 30_000,
+                "open": 100.5,
+                "high": 101.0,
+                "low": 100.0,
+                "close": 100.7,
+                "quote_volume": 10.0,
+                "number_of_trades": 1,
+                "aggregation_source_timeframe": "aggTrades",
+                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                "aggtrade_coverage_verified": True,
+            },
+        ]
+    ).to_parquet(delta_dir / "000.parquet", index=False)
+
+    missing = _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="30s",
+        window_start_ms=0,
+        window_end_ms=59_999,
+    )
+
+    assert missing == []
+
+
+def test_targeted_direct_ltf_cache_subtraction_reads_coverage_index(tmp_path) -> None:
+    symbol = "AAA/USDT:USDT"
+    path = _cache_data_path(tmp_path, symbol, "30s")
+    path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "timestamp": 0,
+                "aggregation_source_timeframe": "aggTrades",
+                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                "aggtrade_coverage_verified": True,
+            },
+            {
+                "timestamp": 30_000,
+                "aggregation_source_timeframe": "aggTrades",
+                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                "aggtrade_coverage_verified": True,
+            },
+        ]
+    ).to_parquet(path.parent / DIRECT_TARGET_AGGTRADE_COVERAGE_INDEX_FILE, index=False)
+
+    missing = _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="30s",
+        window_start_ms=0,
+        window_end_ms=59_999,
+    )
+
+    assert missing == []
+
+
+def test_empty_aggtrade_window_writes_coverage_index(tmp_path) -> None:
+    symbol = "AAA/USDT:USDT"
+
+    status, rows, path = _write_direct_aggtrade_target_ltf_delta(
+        cache_dir=tmp_path,
+        symbol=symbol,
+        target_timeframe="30s",
+        trades=pd.DataFrame(),
+        start_timestamp_ms=0,
+        end_timestamp_ms=59_999,
+    )
+    missing = _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="30s",
+        window_start_ms=0,
+        window_end_ms=59_999,
+    )
+
+    assert status == "empty_aggtrades_coverage_index_written"
+    assert rows == 2
+    assert path.endswith(DIRECT_TARGET_AGGTRADE_COVERAGE_INDEX_FILE)
+    assert missing == []

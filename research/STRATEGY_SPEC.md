@@ -1,3 +1,15 @@
+## 2026-06-03 - P500 targeted backtest data-loading contract
+
+Targeted runner discovery remains a staged data-loading process, not a trading filter:
+
+1. Cheap HTF/1m gates may select a conservative pair-level superset.
+2. Exact aggTrades-derived LTF is fetched only for selected seed/confirm windows.
+3. The final shared-core decision pass runs only on exact seed timestamps that survived the `signal_entry` data-loading gate.
+4. Direct target-LTF cache coverage is tracked by verified aggTrades coverage metadata, including compact sidecar indexes for delta cache.
+5. Empty aggTrades windows may be marked as covered in the coverage index, but no synthetic OHLCV candles are created from them.
+
+This preserves the decision invariant: cache acceleration can reduce repeated fetch/processing, but it must not change `PumpDecisionCore` verdicts for the same real snapshot.
+
 ## Live2 shared-core-only signal adapter - P470 update
 
 After P470, live2 signal selection must not have a live-only C/A/S matcher, confirm-backward scanner, or baseline-free prefilter outside the shared decision core. The only signal-decision path is:

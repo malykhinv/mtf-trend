@@ -295,6 +295,7 @@ def _record_stage_timing(
 
 LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
 DIRECT_TARGET_AGGTRADE_CACHE_VERSION = "aggtrade_direct_target_ltf_v1"
+DIRECT_TARGET_AGGTRADE_COVERAGE_INDEX_FILE = "aggtrade_direct_target_ltf_coverage.parquet"
 TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
 TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
 TARGETED_FLOW_MERGE_GAP_MS = 60_000
@@ -1549,7 +1550,7 @@ def _ensure_latency_1s_cache(
                     "limit": 1000,
                 }
             )
-            with urllib.request.urlopen(f"{endpoint}?{params}", timeout=30) as response:
+            with urllib.request.urlopen(f"{endpoint}?{params}", timeout=10) as response:
                 batch = json.loads(response.read().decode("utf-8"))
             if not batch:
                 break
@@ -1782,6 +1783,10 @@ def _cache_data_path(cache_dir: Path, symbol: str, timeframe: str) -> Path:
     return cache_dir / _cache_symbol_dir_name(symbol) / str(timeframe) / "data.parquet"
 
 
+def _target_ltf_coverage_index_path(cache_dir: Path, symbol: str, timeframe: str) -> Path:
+    return _cache_data_path(cache_dir, symbol, timeframe).parent / DIRECT_TARGET_AGGTRADE_COVERAGE_INDEX_FILE
+
+
 def _read_parquet_columns(path: Path, columns: Iterable[str]) -> pd.DataFrame:
     """Read a narrow parquet projection for cache coverage checks."""
 
@@ -1791,6 +1796,112 @@ def _read_parquet_columns(path: Path, columns: Iterable[str]) -> pd.DataFrame:
         return pd.read_parquet(path, columns=list(dict.fromkeys(str(column) for column in columns)))
     except Exception:
         return pd.DataFrame()
+
+
+def _read_entry_cache_metadata_with_delta(
+    cache_dir: Path,
+    symbol: str,
+    *,
+    target_timeframe: str,
+    columns: Iterable[str],
+) -> pd.DataFrame:
+    path = _cache_data_path(cache_dir, symbol, target_timeframe)
+    frames: list[pd.DataFrame] = []
+    base = _read_parquet_columns(path, columns)
+    if not base.empty:
+        frames.append(base)
+    index = _read_parquet_columns(_target_ltf_coverage_index_path(cache_dir, symbol, target_timeframe), columns)
+    if not index.empty:
+        frames.append(index)
+        delta_dir = None
+    else:
+        delta_dir = path.parent / "delta"
+    if delta_dir is not None and delta_dir.exists():
+        delta_files = [delta_path for delta_path in sorted(delta_dir.glob("*.parquet")) if delta_path.is_file()]
+        if delta_files:
+            try:
+                delta_dataset = pd.read_parquet(delta_dir, columns=list(dict.fromkeys(str(column) for column in columns)))
+            except Exception:
+                delta_dataset = pd.DataFrame()
+                for delta_path in delta_files:
+                    delta = _read_parquet_columns(delta_path, columns)
+                    if not delta.empty:
+                        frames.append(delta)
+            else:
+                if not delta_dataset.empty:
+                    frames.append(delta_dataset)
+    if not frames:
+        return pd.DataFrame()
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+    if "timestamp" not in merged.columns:
+        return merged
+    timestamps = pd.to_numeric(merged["timestamp"], errors="coerce")
+    merged = merged.loc[timestamps.notna()].copy()
+    if merged.empty:
+        return merged
+    merged["timestamp"] = pd.to_numeric(merged["timestamp"], errors="coerce").astype("int64")
+    return merged.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
+
+
+def _write_direct_target_ltf_coverage_index(
+    cache_dir: Path,
+    symbol: str,
+    target_timeframe: str,
+    frame: pd.DataFrame,
+) -> None:
+    if frame.empty or "timestamp" not in frame.columns:
+        return
+    columns = ["timestamp", "aggregation_source_timeframe", "aggregation_version", "aggtrade_coverage_verified"]
+    available = [column for column in columns if column in frame.columns]
+    if "timestamp" not in available:
+        return
+    incoming = frame.loc[:, available].copy()
+    incoming["timestamp"] = pd.to_numeric(incoming["timestamp"], errors="coerce")
+    incoming = incoming.loc[incoming["timestamp"].notna()].copy()
+    if incoming.empty:
+        return
+    incoming["timestamp"] = incoming["timestamp"].astype("int64")
+    index_path = _target_ltf_coverage_index_path(cache_dir, symbol, target_timeframe)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _read_parquet_columns(index_path, columns)
+    frames = [existing, incoming] if not existing.empty else [incoming]
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+    merged["timestamp"] = pd.to_numeric(merged["timestamp"], errors="coerce")
+    merged = (
+        merged.loc[merged["timestamp"].notna()]
+        .copy()
+        .astype({"timestamp": "int64"})
+        .drop_duplicates("timestamp", keep="last")
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+    tmp_path = index_path.with_suffix(index_path.suffix + ".tmp")
+    merged.to_parquet(tmp_path, index=False)
+    tmp_path.replace(index_path)
+
+
+def _write_empty_direct_target_ltf_coverage_index(
+    cache_dir: Path,
+    symbol: str,
+    target_timeframe: str,
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> int:
+    target_ms = _timeframe_to_milliseconds(target_timeframe)
+    buckets = list(_contained_bucket_starts(int(start_timestamp_ms), int(end_timestamp_ms), timeframe_ms=target_ms))
+    if not buckets:
+        return 0
+    frame = pd.DataFrame(
+        {
+            "timestamp": buckets,
+            "aggregation_source_timeframe": "aggTrades",
+            "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+            "aggtrade_coverage_verified": True,
+        }
+    )
+    _write_direct_target_ltf_coverage_index(cache_dir, symbol, target_timeframe, frame)
+    return int(len(frame))
 
 
 def _cached_timestamp_row_count(path: Path) -> int:
@@ -1854,6 +1965,7 @@ def _trusted_materialized_entry_cache_covers_windows(
     *,
     target_timeframe: str,
     windows: Iterable[tuple[int, int]],
+    metadata: pd.DataFrame | None = None,
 ) -> bool:
     target_ms = _timeframe_to_milliseconds(target_timeframe)
     if target_ms <= 0:
@@ -1863,15 +1975,18 @@ def _trusted_materialized_entry_cache_covers_windows(
         expected.update(_contained_bucket_starts(int(start_ms), int(end_ms), timeframe_ms=target_ms))
     if not expected:
         return False
-    metadata = _read_parquet_columns(
-        _cache_data_path(cache_dir, symbol, target_timeframe),
-        [
-            "timestamp",
-            "aggregation_source_timeframe",
-            "aggregation_version",
-            "aggtrade_coverage_verified",
-        ],
-    )
+    if metadata is None:
+        metadata = _read_entry_cache_metadata_with_delta(
+            cache_dir,
+            symbol,
+            target_timeframe=target_timeframe,
+            columns=[
+                "timestamp",
+                "aggregation_source_timeframe",
+                "aggregation_version",
+                "aggtrade_coverage_verified",
+            ],
+        )
     if metadata.empty:
         return False
     validation_error = _flow_cache_validation_error(
@@ -1905,6 +2020,7 @@ def _trusted_materialized_entry_cache_missing_intervals(
     target_timeframe: str,
     window_start_ms: int,
     window_end_ms: int,
+    metadata: pd.DataFrame | None = None,
 ) -> list[tuple[int, int]]:
     target_ms = _timeframe_to_milliseconds(target_timeframe)
     if target_ms <= 0:
@@ -1912,15 +2028,18 @@ def _trusted_materialized_entry_cache_missing_intervals(
     expected = list(_contained_bucket_starts(int(window_start_ms), int(window_end_ms), timeframe_ms=target_ms))
     if not expected:
         return []
-    metadata = _read_parquet_columns(
-        _cache_data_path(cache_dir, symbol, target_timeframe),
-        [
-            "timestamp",
-            "aggregation_source_timeframe",
-            "aggregation_version",
-            "aggtrade_coverage_verified",
-        ],
-    )
+    if metadata is None:
+        metadata = _read_entry_cache_metadata_with_delta(
+            cache_dir,
+            symbol,
+            target_timeframe=target_timeframe,
+            columns=[
+                "timestamp",
+                "aggregation_source_timeframe",
+                "aggregation_version",
+                "aggtrade_coverage_verified",
+            ],
+        )
     if metadata.empty:
         return _bucket_starts_to_intervals(expected, target_ms=target_ms)
     validation_error = _flow_cache_validation_error(
@@ -2472,7 +2591,14 @@ def _write_direct_aggtrade_target_ltf_delta(
     end_timestamp_ms: int,
 ) -> tuple[str, int, str]:
     if trades.empty:
-        return "empty_aggtrades", 0, ""
+        coverage_rows = _write_empty_direct_target_ltf_coverage_index(
+            cache_dir,
+            symbol,
+            target_timeframe,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+        return "empty_aggtrades_coverage_index_written", int(coverage_rows), str(_target_ltf_coverage_index_path(cache_dir, symbol, str(target_timeframe)))
     from data.storage.parquet_storage import ParquetStorage
     from domain.enums.timeframe import Timeframe
     from research_tools.anomaly_aggtrade_cache import aggregate_aggtrades_to_ohlcv_frame
@@ -2494,6 +2620,7 @@ def _write_direct_aggtrade_target_ltf_delta(
     aggregated["aggtrade_coverage_verified"] = True
     aggregated["aggtrade_materialization_model"] = "direct_aggtrades_to_target_ltf_no_1s_cache"
     ParquetStorage(cache_dir).save_incremental_delta(symbol, Timeframe(str(target_timeframe)), aggregated)
+    _write_direct_target_ltf_coverage_index(cache_dir, symbol, str(target_timeframe), aggregated)
     return "written_interval", int(len(aggregated)), str(_cache_data_path(cache_dir, symbol, str(target_timeframe)))
 
 
@@ -2558,6 +2685,20 @@ def ensure_targeted_aggtrade_direct_ltf_cache(
     started_at = time.monotonic()
     next_progress_pct = 0
     for symbol in sorted(normalized_windows):
+        metadata_by_target = {
+            target: _read_entry_cache_metadata_with_delta(
+                cache_dir,
+                symbol,
+                target_timeframe=target,
+                columns=[
+                    "timestamp",
+                    "aggregation_source_timeframe",
+                    "aggregation_version",
+                    "aggtrade_coverage_verified",
+                ],
+            )
+            for target in targets
+        }
         for window_start, window_end in normalized_windows[symbol]:
             missing_intervals_by_target: dict[str, list[tuple[int, int]]] = {}
             for target in targets:
@@ -2567,6 +2708,7 @@ def ensure_targeted_aggtrade_direct_ltf_cache(
                     target_timeframe=target,
                     window_start_ms=int(window_start),
                     window_end_ms=int(window_end),
+                    metadata=metadata_by_target.get(target),
                 )
                 if not missing_intervals:
                     materialize_rows.append(
