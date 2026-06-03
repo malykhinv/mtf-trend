@@ -10,6 +10,8 @@ Observed diagnostics: before the coverage fix, 3831 pre-entry windows looked ful
 
 Next: rerun only `5m_30s`/1d first, not all four profiles. Acceptance is that pre-entry LTF does not restart from hundreds of missing hours and `targeted_ltf_fetch.csv` shows cache-covered windows plus bounded fetch errors instead of an endless black hole.
 
+Follow-up artifact audit of `.output/results/htf_ltf_runner_discovery_1d`: all four profile artifact sets and combined CSVs are present, and failures are visible. However, the run is not data-complete. `5m_30s` has 283 pre-entry fetch errors, `3m_30s` has 238 fetch errors, and the 15s profiles have mass fetch errors (`HTTP 418`/`HTTP 429`). Do not launch 30d from this state; first fix/throttle/resume targeted fetch so 1d completes with near-zero fetch errors or explicit unavailable-data accounting.
+
 ## 2026-06-03 - P499 signal-entry planner no longer runs full seed-stage core
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

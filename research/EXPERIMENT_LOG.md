@@ -40,6 +40,62 @@ Next experiment:
 Run only 5m_30s / 1d first. Accept if targeted pre-entry LTF starts mostly from covered cache and any remaining Binance failures are visible fetch rows, not silent hangs or repeated hundreds-of-hours missing coverage.
 ```
 
+## 2026-06-03 - 1d runner discovery artifact audit after P500
+
+Input artifacts:
+
+```text
+.output/results/htf_ltf_runner_discovery_1d
+profiles present: 5m_30s, 3m_30s, 5m_15s, 3m_15s
+combined artifacts present: yes
+```
+
+Result:
+
+```text
+The artifact set is structurally complete, but the run is not data-complete enough to launch 30d.
+Failures are visible rather than hidden, so the artifacts are honest about incompleteness.
+```
+
+Profile health:
+
+```text
+5m_30s: runtime 1561.953s, signals 49, closed 49, data deps 17 post_seed_ltf_missing, fetch errors 283 pre_entry
+3m_30s: runtime 1353.484s, signals 54, closed 50, skipped 4, data deps 30 post_seed_ltf_missing, fetch errors 238
+5m_15s: runtime 939.359s, signals 3, closed 0, skipped 3, fetch errors 1386
+3m_15s: runtime 1064.235s, signals 2, closed 0, skipped 2, fetch errors 1748+
+```
+
+Fetch failure pattern:
+
+```text
+HTTP 418 Client Error and HTTP 429 Too Many Requests dominate targeted fetch errors.
+This means a 30d run now would mostly test Binance throttling/ban behavior, not strategy edge.
+```
+
+Combined live-filtered readout:
+
+```text
+closed trades: 33
+win rate: 33.33%
+avg net return: -0.3077%
+sum net return: -10.154%
+top 20% positive share: 92.17%
+```
+
+Interpretation:
+
+```text
+Do not treat profitability as conclusive because data coverage is incomplete and the run is only 1d.
+The useful conclusion is operational: P500 made failures visible and avoided silent success, but rate-limit/backoff/resume behavior must be fixed before 30d.
+```
+
+Next experiment:
+
+```text
+Do not start 30d yet. First implement or run with a throttled/resumable targeted fetch path, then rerun 1d until fetch errors are near zero or explicitly accepted as unavailable data.
+```
+
 ## 2026-06-03 - P499 signal-entry planning bottleneck
 
 Patch: P499 applied locally / UNKNOWN commit.
