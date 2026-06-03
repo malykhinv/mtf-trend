@@ -634,7 +634,7 @@ def evaluate_rolling_seed_stage(snapshot: DecisionSnapshot) -> DecisionVerdict:
     if context_dependency is not None:
         return _dependency_not_ready(snapshot, context_dependency.reason or "pre_seed_context_invalid", (context_dependency,))
 
-    features = _derive_rolling_seed_stage_features(snapshot, spec)
+    features = _derive_rolling_seed_stage_features(snapshot, spec, include_prior_spike=False, include_snapshot_hash=False)
     seed_reject = _seed_reject_reason(features)
     if seed_reject is not None:
         return _rejected(snapshot, "rolling_htf_seed", seed_reject, features)
@@ -728,7 +728,13 @@ def _is_terminal_seed_reject(verdict: DecisionVerdict) -> bool:
     return any(str(reject.stage) == "rolling_htf_seed" for reject in verdict.rejects)
 
 
-def _derive_rolling_seed_stage_features(snapshot: DecisionSnapshot, spec: RollingProfileSpec) -> dict[str, float | int | str | bool | None]:
+def _derive_rolling_seed_stage_features(
+    snapshot: DecisionSnapshot,
+    spec: RollingProfileSpec,
+    *,
+    include_prior_spike: bool = True,
+    include_snapshot_hash: bool = True,
+) -> dict[str, float | int | str | bool | None]:
     seed = snapshot.rolling_seed
     if seed is None:
         return dict(snapshot.features)
@@ -772,8 +778,19 @@ def _derive_rolling_seed_stage_features(snapshot: DecisionSnapshot, spec: Rollin
         pregrowth_range_pct=pregrowth_range_pct,
     )
 
-    prior_spike = _prior_spike_features(context=context, current=seed_candle)
+    prior_spike = _prior_spike_features(context=context, current=seed_candle) if include_prior_spike else {}
     htf_ltf_features = _htf_internal_ltf_features(seed.seed_candles, htf_open=seed_candle.open, htf_close=seed_candle.close)
+    hash_features = (
+        {
+            "snapshot_hash": decision_snapshot_hash(snapshot),
+            "snapshot_match_key": decision_snapshot_match_key(snapshot),
+        }
+        if include_snapshot_hash
+        else {
+            "snapshot_hash": "",
+            "snapshot_match_key": "",
+        }
+    )
 
     return {
         **dict(snapshot.features),
@@ -785,8 +802,7 @@ def _derive_rolling_seed_stage_features(snapshot: DecisionSnapshot, spec: Rollin
         "rolling_runner_ltf_timeframe_ms": spec.ltf_seconds * 1000,
         "symbol": snapshot.symbol,
         "decision_time_ms": snapshot.decision_time_ms,
-        "snapshot_hash": decision_snapshot_hash(snapshot),
-        "snapshot_match_key": decision_snapshot_match_key(snapshot),
+        **hash_features,
         "rolling_htf_open_ms": int(seed.seed_open_ms),
         "rolling_htf_close_ms": int(seed.seed_close_ms),
         "anomaly_open": seed_candle.open,

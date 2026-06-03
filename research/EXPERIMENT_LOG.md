@@ -1,3 +1,38 @@
+## 2026-06-03 - P499 signal-entry planning bottleneck
+
+Patch: P499 applied locally / UNKNOWN commit.
+
+Observed user run:
+
+```text
+command: .\.venv\Scripts\python.exe main.py run-htf-ltf-runner-discovery --days 1
+stage: runner discovery 5m_30s targeted signal-entry plan
+progress: 277/594 symbols
+ETA: about 7h18m
+```
+
+Finding: the slow stage was not aggTrades network fetch. It was CPU/IO inside signal-entry planning. The planner used `_collect_symbol_candidates(...)` and then ran full `core_seed_stage_prefilter(...)` for every exact rolling seed candidate. Profiling JCT showed expensive repeated context/prior-spike/hash work before any short confirm fetch.
+
+Fix/benchmark:
+
+```text
+JCT 1d 5m_30s:
+  pre-entry plan: ~0.6s
+  signal-entry plan after P499: ~1.5s normal timing, ~6s in later runs with IO/cache overhead
+
+First 50 cached symbols:
+  pre-entry plan: 16.5s
+  signal-entry plan: 54.4s
+  seed symbols: 40
+  pre-entry seeds: 331
+  planned short confirm windows: 595
+  return-gate terminal rejects: 2780
+```
+
+Interpretation: this is now minutes-scale for a 1d full-universe smoke, not a multi-hour planning black hole. Planned confirm windows increase because the planner is deliberately conservative; the normal shared core still decides signal quality after data is loaded.
+
+Next experiment: rerun the original 1d command and inspect `htf_ltf_runner_targeted_ltf_plan.csv`, `targeted_ltf_fetch.csv`, and `decision_ledger.csv` before attempting 30d.
+
 ## 2026-06-02 - P498 pre-start smoke after context correction
 
 Patch: P498 applied locally / UNKNOWN commit.

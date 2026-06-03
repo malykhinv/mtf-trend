@@ -1,3 +1,15 @@
+## 2026-06-03 - P499 signal-entry planner no longer runs full seed-stage core
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The fresh 1d run exposed a new bottleneck: `5m_30s targeted signal-entry plan` reached only 277/594 symbols with ETA about 7h18m. This was not network fetch. The planner was running the full seed-stage shared core for every exact rolling seed candidate, including 24h context hashing/prior-spike/median work, just to decide whether to fetch a short confirm/next-open LTF window.
+
+P499 changes signal-entry planning to a conservative data-loading superset. It keeps only the context-free mandatory seed-return gate before confirm fetch. Seeds with return below the shared core minimum are terminally impossible and remain visible as `not_planned_seed_stage_terminal_reject`; all other exact seeds get a short confirm/next-open fetch window and are decided later by the normal shared core. This may fetch more short LTF windows than P494, but it avoids hours of CPU prefiltering and cannot drop a valid signal.
+
+Benchmarks on cached 1d `5m_30s`: JCT signal-entry plan fell from about 29.6s before the fix path to 1.5-6.6s during intermediate patches and then full 50-symbol benchmark completed in 54.4s for signal planning. Full universe should now be minutes-scale rather than a 7h planning black hole.
+
+Next: rerun `run-htf-ltf-runner-discovery --days 1`. Acceptance: signal-entry planning progresses steadily; planned confirm windows increase versus P494, but decision ledger must show real shared-core reasons after processing.
+
 ## 2026-06-02 - P498 closed cheap baseline context for rolling discovery
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

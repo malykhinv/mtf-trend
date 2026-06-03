@@ -1,3 +1,40 @@
+## 2026-06-03 - P499 fast conservative signal-entry planner
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P498 and supersedes P494's expensive shared-core seed-stage prefilter inside the fetch planner.
+
+Purpose: stop 1d `5m_30s` discovery from spending hours in `targeted signal-entry plan`.
+
+Changes:
+
+- Replaced full `_collect_symbol_candidates(...)` in signal-entry planning with a lightweight exact rolling seed collector that does not compute future labels, OI, prior-spike diagnostics, setup nature, exits, or PnL fields.
+- Replaced full seed-stage core prefilter in the signal-entry planner with a context-free mandatory seed-return gate only.
+- Seeds below `ROLLING_SEED_MIN_HTF_RETURN_PCT` remain visible as `not_planned_seed_stage_terminal_reject`.
+- Seeds that pass return are treated as possible and get short confirm/next-open LTF fetch; the real shared core still decides them in the normal decision pass.
+- Made runner discovery progress output encoding-safe for Windows/non-ASCII symbols.
+- Optimized closed 1m context construction by avoiding repeated strict-window DataFrame scans and adding per-symbol context cache for the later decision pass.
+- Seed-stage core no longer computes prior-spike/hash payloads for seed-stage-only checks; full seed+confirm decisions still compute snapshot hashes and category features.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Benchmark:
+
+```text
+JCT/USDT:USDT 1d 5m_30s signal-entry plan: about 29.6s before planner simplification -> about 1.5s after return-only planner in normal timing.
+First 50 cached symbols: pre-entry plan 16.5s, signal-entry plan 54.4s, 595 planned short confirm windows.
+```
+
+Risk:
+
+```text
+Low-to-medium and conservative. The planner now fetches more short confirm windows than P494 because it no longer runs the full seed-stage core before fetch. This increases LTF fetch volume, but does not create optimistic bias: exact shared-core decisions still happen after data is loaded, and no future labels/exits/PnL are used for fetch selection.
+```
+
 ## 2026-06-02 - P498 closed cheap baseline context and visible seed-stage rejects
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P497 and supersedes its exact seed-aligned HTF-context assumption for rolling offsets.

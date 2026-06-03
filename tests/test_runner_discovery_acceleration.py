@@ -14,6 +14,7 @@ from research_tools.htf_ltf_runner_discovery import (
     _artifact_frame,
     _build_selected_signal_post_entry_backfill_plan,
     _build_targeted_ltf_signal_entry_backfill_plan,
+    _collect_symbol_seed_candidates_for_signal_entry_plan,
     _htf_context_warmup_ms,
     _pre_seed_context_candles_for_backtest,
     _pre_seed_context_candles_from_htf,
@@ -334,6 +335,40 @@ def test_signal_entry_plan_keeps_seed_stage_reject_rows_without_fetch_windows(tm
     assert windows == {}
     assert "not_planned_seed_stage_terminal_reject" in statuses
     assert int(plan.iloc[0]["seed_stage_prefilter_rejected"]) >= 1
+
+
+def test_signal_entry_plan_lightweight_seed_collector_avoids_future_label_fields() -> None:
+    htf_ms = 300_000
+    ltf_ms = 30_000
+    ltf = pd.DataFrame(
+        [
+            {
+                "timestamp": index * ltf_ms,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 1.0,
+                "quote_volume": 100.0,
+                "number_of_trades": 10,
+            }
+            for index in range(20)
+        ]
+    )
+    config = HtfLtfRunnerDiscoveryConfig(htf_timeframe="5m", ltf_timeframe="30s")
+
+    rows = _collect_symbol_seed_candidates_for_signal_entry_plan(
+        symbol="AAA/USDT:USDT",
+        ltf=ltf,
+        config=config,
+        allowed_timestamps_ms={0},
+    )
+
+    assert len(rows) == 11
+    assert rows[0]["timestamp_ms"] == 0
+    assert rows[-1]["timestamp_ms"] == htf_ms
+    assert {row["signal_entry_plan_candidate_model"] for row in rows} == {"lightweight_exact_rolling_seed_no_future_label"}
+    assert not any("runner_10pct_next_hour" in row for row in rows)
 
 
 def test_targeted_direct_ltf_cache_missing_intervals_subtracts_trusted_buckets(tmp_path) -> None:
