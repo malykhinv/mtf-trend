@@ -102,7 +102,7 @@ class HtfLtfRunnerDiscoveryConfig:
     exit_slippage_pct: float = 0.0005
     symbol_workers: int = 1
     targeted_plan_workers: int = 8
-    targeted_fetch_workers: int = 4
+    targeted_fetch_workers: int = 2
     auto_targeted_ltf_backfill: bool = True
     targeted_backfill_min_htf_quote_ratio: float = 20.0
     targeted_backfill_min_htf_trade_ratio: float = 20.0

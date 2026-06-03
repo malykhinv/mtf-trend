@@ -1,3 +1,33 @@
+## 2026-06-03 - P502 rate-limit fix before 30d runner discovery
+
+Patch: P502 applied locally / UNKNOWN commit.
+
+Reason:
+
+```text
+The previous 1d artifact audit was structurally complete but data-incomplete. Targeted fetch errors were dominated by Binance HTTP 418/429, especially in 15s profiles. Starting 30d from that state would create a slow partial-data experiment, not an edge test.
+```
+
+Fix:
+
+```text
+Direct aggTrades target-LTF fetch and legacy 1s aggTrades backfill now share a process-wide request limiter, bounded retry/backoff, and a shorter timeout. Default targeted_fetch_workers is 2 instead of 4.
+```
+
+Validation:
+
+```text
+35 targeted/contract/empty-artifact tests passed.
+compileall passed.
+decision_contract_guard passed.
+```
+
+Next experiment:
+
+```text
+Rerun 1d runner discovery before 30d. Acceptance: targeted_ltf_fetch.csv has near-zero HTTP 418/429 errors and any remaining missing data is explicit. If throttling persists, run with targeted_fetch_workers=1 or switch to prebuilt aggTrades data; do not interpret partial-data profitability.
+```
+
 ## 2026-06-03 - P500 1d runner discovery bottleneck investigation
 
 User observation:

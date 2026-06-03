@@ -1,3 +1,13 @@
+## 2026-06-03 - P502 targeted aggTrades rate-limit repair
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The P500 artifact audit showed structurally complete but data-incomplete 1d runner discovery artifacts: targeted fetch errors were dominated by Binance `HTTP 418` and `HTTP 429`. That made a 30d run unsafe because it would mostly test exchange throttling/ban behavior, not Pump Awakening edge.
+
+P502 adds a process-wide Binance aggTrades request limiter and retry/backoff policy shared by the direct target-LTF fetch and the legacy 1s aggTrades backfill. Targeted fetch workers default from 4 to 2 so the planner can remain parallel while network requests are globally paced. This changes data-loading reliability, not PumpDecisionCore thresholds, snapshots, execution model, or strategy verdicts.
+
+Next: rerun a 1d runner discovery smoke before 30d. Acceptance is near-zero `targeted_ltf_fetch.csv` errors, or explicit remaining unavailable-data rows. If `HTTP 418/429` remains common, reduce fetch workers to 1 or use a prebuilt aggTrades source; do not launch 30d from a throttled/partial data state.
+
 ## 2026-06-03 - P500 runner discovery cache reuse and staged-path acceleration
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

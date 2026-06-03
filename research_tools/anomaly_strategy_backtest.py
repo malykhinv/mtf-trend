@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import threading
 import time
 from dataclasses import asdict
 from dataclasses import replace
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping, Iterable
+import urllib.error
 import urllib.parse
 import urllib.request
 from urllib.parse import quote
@@ -300,6 +302,74 @@ TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
 TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
 TARGETED_FLOW_MERGE_GAP_MS = 60_000
 TARGETED_FLOW_MAX_MERGED_SPAN_MS = 10 * 60_000
+BINANCE_AGGTRADES_REQUEST_TIMEOUT_SECONDS = 10.0
+BINANCE_AGGTRADES_MIN_REQUEST_INTERVAL_SECONDS = 0.35
+BINANCE_AGGTRADES_MAX_HTTP_ATTEMPTS = 4
+BINANCE_AGGTRADES_HTTP_BACKOFF_SECONDS = {429: 20.0, 418: 120.0}
+BINANCE_AGGTRADES_MAX_BACKOFF_SECONDS = 180.0
+_BINANCE_AGGTRADES_RATE_LIMIT_LOCK = threading.Lock()
+_BINANCE_AGGTRADES_NEXT_REQUEST_AT = 0.0
+
+
+def _wait_for_binance_aggtrades_request_slot() -> None:
+    global _BINANCE_AGGTRADES_NEXT_REQUEST_AT
+    while True:
+        with _BINANCE_AGGTRADES_RATE_LIMIT_LOCK:
+            now = time.monotonic()
+            wait_seconds = _BINANCE_AGGTRADES_NEXT_REQUEST_AT - now
+            if wait_seconds <= 0:
+                _BINANCE_AGGTRADES_NEXT_REQUEST_AT = now + float(BINANCE_AGGTRADES_MIN_REQUEST_INTERVAL_SECONDS)
+                return
+        time.sleep(min(float(wait_seconds), 5.0))
+
+
+def _register_binance_aggtrades_backoff(seconds: float) -> None:
+    global _BINANCE_AGGTRADES_NEXT_REQUEST_AT
+    delay = max(0.0, min(float(seconds), float(BINANCE_AGGTRADES_MAX_BACKOFF_SECONDS)))
+    if delay <= 0.0:
+        return
+    with _BINANCE_AGGTRADES_RATE_LIMIT_LOCK:
+        _BINANCE_AGGTRADES_NEXT_REQUEST_AT = max(_BINANCE_AGGTRADES_NEXT_REQUEST_AT, time.monotonic() + delay)
+
+
+def _binance_aggtrades_retry_after_seconds(exc: urllib.error.HTTPError, fallback_seconds: float) -> float:
+    retry_after = ""
+    headers = getattr(exc, "headers", None)
+    if headers is not None:
+        retry_after = str(headers.get("Retry-After", "") or "").strip()
+    if retry_after:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass
+    return float(fallback_seconds)
+
+
+def _fetch_binance_aggtrades_json(url: str) -> list[dict[str, object]]:
+    last_exc: BaseException | None = None
+    for attempt in range(1, int(BINANCE_AGGTRADES_MAX_HTTP_ATTEMPTS) + 1):
+        try:
+            _wait_for_binance_aggtrades_request_slot()
+            with urllib.request.urlopen(url, timeout=float(BINANCE_AGGTRADES_REQUEST_TIMEOUT_SECONDS)) as response:
+                batch = json.loads(response.read().decode("utf-8"))
+            if isinstance(batch, list):
+                return batch
+            raise RuntimeError(f"Binance aggTrades returned non-list payload: {type(batch).__name__}")
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if int(getattr(exc, "code", 0)) in BINANCE_AGGTRADES_HTTP_BACKOFF_SECONDS and attempt < int(BINANCE_AGGTRADES_MAX_HTTP_ATTEMPTS):
+                base = float(BINANCE_AGGTRADES_HTTP_BACKOFF_SECONDS[int(exc.code)])
+                delay = _binance_aggtrades_retry_after_seconds(exc, base * attempt)
+                _register_binance_aggtrades_backoff(delay)
+                continue
+            raise RuntimeError(f"Binance aggTrades HTTP {getattr(exc, 'code', '?')} after {attempt} attempts") from exc
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            last_exc = exc
+            if attempt < int(BINANCE_AGGTRADES_MAX_HTTP_ATTEMPTS):
+                _register_binance_aggtrades_backoff(min(2.0 * attempt, 15.0))
+                continue
+            raise RuntimeError(f"Binance aggTrades request failed after {attempt} attempts: {exc}") from exc
+    raise RuntimeError(f"Binance aggTrades request failed: {last_exc}")
 PAIR_COLLECTION_MODE_FORMING = "forming"
 PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION = "post_htf_close_ltf_confirmation"
 PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION = "post_htf_close_ltf_forward_confirmation"
@@ -1550,8 +1620,7 @@ def _ensure_latency_1s_cache(
                     "limit": 1000,
                 }
             )
-            with urllib.request.urlopen(f"{endpoint}?{params}", timeout=10) as response:
-                batch = json.loads(response.read().decode("utf-8"))
+            batch = _fetch_binance_aggtrades_json(f"{endpoint}?{params}")
             if not batch:
                 break
             all_rows.extend(dict(row) for row in batch)
@@ -2567,8 +2636,7 @@ def _fetch_binance_futures_aggtrades_rows(
                     "limit": 1000,
                 }
             )
-            with urllib.request.urlopen(f"{endpoint}?{params}", timeout=30) as response:
-                batch = json.loads(response.read().decode("utf-8"))
+            batch = _fetch_binance_aggtrades_json(f"{endpoint}?{params}")
             if not batch:
                 break
             rows.extend(dict(row) for row in batch)

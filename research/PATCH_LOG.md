@@ -1,3 +1,31 @@
+## 2026-06-03 - P502 throttled Binance aggTrades targeted fetch
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P501/P500.
+
+Purpose: make targeted runner discovery data loading usable after the 1d audit exposed mass `HTTP 418`/`HTTP 429` fetch failures.
+
+Changes:
+
+- Added a process-wide Binance aggTrades request limiter shared by direct target-LTF fetch and legacy 1s aggTrades backfill.
+- Added bounded retry/backoff for Binance `HTTP 429` and `HTTP 418`, respecting `Retry-After` when present and surfacing a clear error after bounded attempts.
+- Kept fetch failures visible in `targeted_ltf_fetch.csv`/materialize rows instead of converting unavailable data into fake empty candles.
+- Reduced default `targeted_fetch_workers` from 4 to 2; planning remains parallel, but network requests are globally paced.
+- Added regression coverage proving a rate-limit response is retried before a targeted aggTrades fetch fails.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Risk:
+
+```text
+Low strategy-bias risk, medium operational risk. The patch slows network fetch enough to avoid bans and retries transient throttles; it does not alter selection thresholds or hide missing data. A 30d run still requires a fresh 1d smoke proving fetch errors are near zero.
+```
+
 ## 2026-06-03 - P500 runner discovery cache reuse and staged acceleration
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P499.

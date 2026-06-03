@@ -1,12 +1,16 @@
+import json
+import urllib.error
 import warnings
 
 import pandas as pd
 
 from data.storage.parquet_storage import ParquetStorage
+import research_tools.anomaly_strategy_backtest as backtest
 from research_tools.anomaly_strategy_backtest import (
     DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
     DIRECT_TARGET_AGGTRADE_COVERAGE_INDEX_FILE,
     _cache_data_path,
+    _fetch_binance_futures_aggtrades_rows,
     _trusted_materialized_entry_cache_missing_intervals,
     _write_direct_aggtrade_target_ltf_delta,
 )
@@ -53,6 +57,20 @@ def _minute_frame(start_ms: int, rows: int, *, quote: float, trades: float, clos
         )
         price = close_price
     return pd.DataFrame(data)
+
+
+class _JsonResponse:
+    def __init__(self, payload: list[dict[str, object]]) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> "_JsonResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
 
 def test_coarse_minute_prefilter_rejects_only_proven_impossible_window() -> None:
@@ -125,6 +143,42 @@ def test_coarse_minute_prefilter_keeps_uncertain_or_possible_window() -> None:
 
     assert uncertain.possible is True
     assert uncertain.reason == "not_checked_incomplete_1m_coverage"
+
+
+def test_binance_aggtrades_fetch_retries_rate_limit_response(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_urlopen(url: str, *, timeout: float) -> _JsonResponse:
+        calls.append(url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+        return _JsonResponse(
+            [
+                {
+                    "a": 1,
+                    "p": "100.0",
+                    "q": "2.0",
+                    "T": 123,
+                    "m": False,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(backtest.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(backtest, "BINANCE_AGGTRADES_MIN_REQUEST_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(backtest, "BINANCE_AGGTRADES_HTTP_BACKOFF_SECONDS", {429: 0.0, 418: 0.0})
+    monkeypatch.setattr(backtest, "BINANCE_AGGTRADES_MAX_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr(backtest, "_BINANCE_AGGTRADES_NEXT_REQUEST_AT", 0.0)
+
+    frame = _fetch_binance_futures_aggtrades_rows(
+        "AAA/USDT:USDT",
+        start_timestamp_ms=0,
+        end_timestamp_ms=999,
+    )
+
+    assert len(calls) == 2
+    assert len(frame) == 1
+    assert int(frame.iloc[0]["T"]) == 123
 
 
 def test_targeted_post_entry_replay_plan_uses_only_selected_signals() -> None:
