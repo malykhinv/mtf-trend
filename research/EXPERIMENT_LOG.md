@@ -1,3 +1,57 @@
+## 2026-06-04 - P504 proposed unified targeted LTF accelerator
+
+Status: PROPOSED.
+
+Design goal:
+
+```text
+Reduce 30d runner discovery time by 10x+ without lookahead, optimistic bias, code duplication, or live/backtest parity break.
+```
+
+Boundary:
+
+```text
+One module should own targeted aggTrades acceleration. Runner discovery should plan windows; PumpDecisionCore should decide signals; the accelerator should only fetch/cache/materialize known-at-window data.
+```
+
+Proposed module:
+
+```text
+research_tools/targeted_ltf_accelerator.py
+```
+
+Contract:
+
+```text
+input: windows_by_symbol, target_timeframes, cache_dir, phase label, source policy
+output: fetch artifact frame, materialize artifact frame, coverage index updates
+forbidden: future labels, exits, PnL, selected-trade survival, category decisions, threshold tuning
+```
+
+Main speed levers:
+
+```text
+1. global cross-profile/phase interval union by symbol before fetch;
+2. source priority: trusted target-LTF cache -> trusted raw aggTrades cache -> bulk daily aggTrades file/source -> REST fallback;
+3. one trade stream materializes all targets together, especially 15s and 30s;
+4. one coverage ledger for raw aggTrades intervals and target-LTF buckets;
+5. artifact-light long mode keeps summaries and rejects, but can omit huge duplicated exact-window debug CSVs unless explicitly requested.
+```
+
+Honesty checks:
+
+```text
+No missing interval can be marked covered unless raw aggTrades coverage or target-LTF bucket coverage is verified.
+No empty interval can be marked covered unless source confirms an empty aggTrades result for that interval.
+No decision path changes: same cache candles -> same snapshot_hash -> same signal_verdict.
+```
+
+Acceptance test:
+
+```text
+Run 2d twice: old P503 path and accelerator path from warm/empty cache. For overlapping non-missing snapshots, snapshot_hash and signal_verdict must match exactly. Runtime target for 2d full profiles should move from ~7.2h toward <=45-60min before attempting 30d.
+```
+
 ## 2026-06-04 - 2d runner discovery artifact and bottleneck audit
 
 Input:

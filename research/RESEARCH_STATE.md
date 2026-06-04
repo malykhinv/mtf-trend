@@ -1,3 +1,19 @@
+## 2026-06-04 - P504 proposed unified targeted LTF accelerator
+
+Current commit: UNKNOWN. Status: PROPOSED.
+
+Next acceleration should be a single module around targeted aggTrades data loading, not more strategy filters in runner discovery. The module should accept requested `(symbol, start_ms, end_ms, target_timeframes, phase)` windows and return the same fetch/materialize artifacts plus trusted target-LTF cache coverage. It must not call `PumpDecisionCore`, choose categories, inspect future labels, inspect exits, use PnL, or decide trade validity.
+
+The honest 10x path is:
+
+1. merge all profile/phase windows by symbol before network;
+2. fetch each missing aggTrade interval once from bulk/prebuilt source or REST fallback;
+3. materialize all needed target timeframes from the same trades in one pass (`15s` and `30s` together);
+4. write the same direct target-LTF cache/version/coverage sidecars;
+5. expose artifacts that prove whether data came from trusted cache, bulk source, REST fallback, or unavailable source.
+
+This preserves live/backtest parity because the decision core still reads the same normalized closed LTF candles from cache and emits the same snapshot/verdict contract. The accelerator changes only transport and cache materialization.
+
 ## 2026-06-04 - P503 2d runner discovery audit and partial planner pruning
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
