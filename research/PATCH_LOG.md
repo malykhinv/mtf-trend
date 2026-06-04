@@ -11202,3 +11202,28 @@ Risk:
 ```text
 Users can no longer run ad-hoc runner-discovery threshold variants from the shell. That is intentional: threshold/profile changes should be deliberate code/research patches so live/backtest parity and experiment identity remain auditable.
 ```
+
+## 2026-06-04 - P508 unsupported Binance market id data-source rejection
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Fixes a 3d readiness-run data-source hygiene issue before broad 30d discovery. Some cached symbols had non-ASCII pseudo market ids such as Chinese-name tokens; the targeted LTF accelerator attempted public archive/REST aggTrade loading and produced `UnicodeEncodeError` rows. The errors were visible, but broad 30d would multiply useless retries and noisy artifacts.
+
+Changes:
+
+- Adds an explicit `unsupported_binance_market_id` status in `research_tools/targeted_ltf_accelerator.py`.
+- Non-ASCII/non-alphanumeric Binance market ids no longer call public archive or REST aggTrades.
+- Fetch/materialize artifacts still retain the rejected windows with `unsupported_binance_market_id`; this is a visible data-source rejection, not a silent skip.
+- Adds a regression test covering a Unicode symbol and proving REST is not called.
+
+Validation:
+
+```bash
+python -m pytest tests/test_runner_discovery_acceleration.py -q
+```
+
+Risk:
+
+```text
+If Binance ever lists a symbol requiring non-ASCII market ids, this guard would reject it. Current Binance futures market ids are ASCII, and rejecting unsupported pseudo-symbols is safer than emitting runtime encoding errors during 30d discovery.
+```

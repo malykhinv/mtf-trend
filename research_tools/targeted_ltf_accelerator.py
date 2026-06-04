@@ -43,6 +43,7 @@ BINANCE_PUBLIC_DATA_UM_FUTURES_BASE_URL = "https://data.binance.vision/data/futu
 BINANCE_PUBLIC_ARCHIVE_TIMEOUT_SECONDS = 60.0
 BINANCE_PUBLIC_ARCHIVE_SOURCE = "binance_public_data_futures_um_daily_aggTrades_archive"
 BINANCE_REST_SOURCE = "binance_futures_aggTrades_rest"
+UNSUPPORTED_BINANCE_MARKET_ID_STATUS = "unsupported_binance_market_id"
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,11 @@ def _archive_day_strings(start_timestamp_ms: int, end_timestamp_ms: int) -> tupl
         days.append(current.isoformat())
         current += timedelta(days=1)
     return tuple(days)
+
+
+def _is_supported_binance_market_id(market_id: str) -> bool:
+    text = str(market_id).strip()
+    return bool(text) and text.isascii() and text.replace("_", "").isalnum()
 
 
 def _raw_archive_dir(cache_dir: Path, market_id: str) -> Path:
@@ -176,6 +182,13 @@ def _load_binance_public_archive_aggtrades_rows(
     end_timestamp_ms: int,
 ) -> RawAggTradeLoad:
     market_id = _binance_futures_market_id(symbol)
+    if not _is_supported_binance_market_id(market_id):
+        return RawAggTradeLoad(
+            frame=pd.DataFrame(),
+            status=UNSUPPORTED_BINANCE_MARKET_ID_STATUS,
+            source=BINANCE_PUBLIC_ARCHIVE_SOURCE,
+            error=f"unsupported Binance market id for public archive/REST aggTrades: {market_id}",
+        )
     frames: list[pd.DataFrame] = []
     urls: list[str] = []
     files = 0
@@ -404,6 +417,10 @@ def ensure_targeted_ltf_accelerated_cache(
                     if archive.usable:
                         trades = archive.frame
                         raw_source = archive.source
+                    elif archive.status == UNSUPPORTED_BINANCE_MARKET_ID_STATUS:
+                        status = UNSUPPORTED_BINANCE_MARKET_ID_STATUS
+                        error = archive.error
+                        raw_source = archive.source
                     else:
                         rest_fallback_used = True
                         trades = _fetch_binance_futures_aggtrades_rows(
@@ -411,42 +428,66 @@ def ensure_targeted_ltf_accelerated_cache(
                             start_timestamp_ms=int(fetch_start),
                             end_timestamp_ms=int(fetch_end),
                         )
-                    if trades.empty:
+                    if trades.empty and status == "ok":
                         status = "empty_aggtrades"
-                    for target, target_intervals in missing_intervals_by_target.items():
-                        overlapping = _overlapping_intervals(
-                            target_intervals,
-                            (int(fetch_start), int(fetch_end)),
-                        )
-                        for target_start, target_end in overlapping:
-                            write_status, rows_written, path = _write_direct_aggtrade_target_ltf_delta(
-                                cache_dir=cache_dir,
-                                symbol=symbol,
-                                target_timeframe=target,
-                                trades=trades,
-                                start_timestamp_ms=int(target_start),
-                                end_timestamp_ms=int(target_end),
-                            )
+                    if status == UNSUPPORTED_BINANCE_MARKET_ID_STATUS:
+                        for target in missing_intervals_by_target:
                             materialize_rows.append(
                                 {
                                     "symbol": symbol,
                                     "target_timeframe": target,
                                     "source_timeframe": "aggTrades",
-                                    "status": write_status,
-                                    "path": path,
-                                    "new_rows": int(rows_written),
+                                    "status": UNSUPPORTED_BINANCE_MARKET_ID_STATUS,
+                                    "error": error,
                                     "requested_window_start_ms": int(window_start),
                                     "requested_window_end_ms": int(window_end),
-                                    "materialized_start_ms": int(target_start),
-                                    "materialized_end_ms": int(target_end),
+                                    "fetch_start_timestamp_ms": int(fetch_start),
+                                    "fetch_end_timestamp_ms": int(fetch_end),
                                     "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
                                     "data_source": ACCELERATOR_DATA_SOURCE,
                                     "raw_aggtrade_source": raw_source,
                                     "archive_status": archive.status,
+                                    "archive_error": archive.error,
+                                    "rest_fallback_used": False,
                                     "source_priority": ACCELERATOR_SOURCE_PRIORITY,
                                     "accelerator_model": ACCELERATOR_MODEL,
                                 }
                             )
+                    else:
+                        for target, target_intervals in missing_intervals_by_target.items():
+                            overlapping = _overlapping_intervals(
+                                target_intervals,
+                                (int(fetch_start), int(fetch_end)),
+                            )
+                            for target_start, target_end in overlapping:
+                                write_status, rows_written, path = _write_direct_aggtrade_target_ltf_delta(
+                                    cache_dir=cache_dir,
+                                    symbol=symbol,
+                                    target_timeframe=target,
+                                    trades=trades,
+                                    start_timestamp_ms=int(target_start),
+                                    end_timestamp_ms=int(target_end),
+                                )
+                                materialize_rows.append(
+                                    {
+                                        "symbol": symbol,
+                                        "target_timeframe": target,
+                                        "source_timeframe": "aggTrades",
+                                        "status": write_status,
+                                        "path": path,
+                                        "new_rows": int(rows_written),
+                                        "requested_window_start_ms": int(window_start),
+                                        "requested_window_end_ms": int(window_end),
+                                        "materialized_start_ms": int(target_start),
+                                        "materialized_end_ms": int(target_end),
+                                        "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                                        "data_source": ACCELERATOR_DATA_SOURCE,
+                                        "raw_aggtrade_source": raw_source,
+                                        "archive_status": archive.status,
+                                        "source_priority": ACCELERATOR_SOURCE_PRIORITY,
+                                        "accelerator_model": ACCELERATOR_MODEL,
+                                    }
+                                )
                 except Exception as exc:
                     status = "error"
                     error = f"{type(exc).__name__}: {exc}"

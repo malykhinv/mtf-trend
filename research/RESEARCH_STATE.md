@@ -3973,3 +3973,9 @@ Parity acceptance is now measurable, not qualitative: `research_tools.decision_p
 Current commit: UNKNOWN. Status: APPLIED locally.
 
 `run-htf-ltf-runner-discovery` is again a simple fixed-profile command with only `--days` exposed. Targeted LTF backfill, archive/REST source priority, seed planning thresholds, profile list, execution model, and portfolio simulation are internal research-contract values, not CLI knobs. Any future change to them should be a named patch plus research log entry, not an ad-hoc shell flag.
+
+## 2026-06-04 - P508 3d readiness finding
+
+Current commit: UNKNOWN. Status: APPLIED locally.
+
+The 3d run was structurally complete and used the archive accelerator, but targeted fetch artifacts still contained dozens of `UnicodeEncodeError` rows for non-ASCII pseudo-symbol market ids. P508 converts those into explicit `unsupported_binance_market_id` data-source rejects without archive/REST attempts. Before launching 30d, rerun at least a short smoke or inspect a resumed run's `htf_ltf_runner_targeted_ltf_fetch.csv`; fetch `error` rows should no longer be dominated by Unicode encoding failures.

@@ -5609,3 +5609,7 @@ Protocol after P506: run a small 1d/2d discovery first and inspect targeted fetc
 ## 2026-06-04 - P507 fixed runner command protocol
 
 Protocol after P507: runner discovery experiments should be launched as `python main.py run-htf-ltf-runner-discovery --days N`. Do not use shell flags for targeted backfill, seed thresholds, TF sets, workers, risk, or exits; those belong to code-reviewed profile patches. Before a 30d run, check `python main.py run-htf-ltf-runner-discovery --help` and confirm only `--days` appears for this command.
+
+## 2026-06-04 - P508 30d preflight protocol
+
+Finding from `.output/results/htf_ltf_runner_discovery_3d`: broad artifacts were complete, but targeted fetch errors were caused by unsupported non-ASCII Binance market ids rather than real data gaps. After P508, run a short smoke or start 30d only if targeted fetch errors are not UnicodeEncodeError rows and unsupported pseudo-symbols appear as `unsupported_binance_market_id`. Do not interpret PnL/categories until the same-period live/backtest parity summary has `same_snapshot_different_signal_verdict=0` and selected overlap >= 90%.

@@ -38,6 +38,7 @@ from research_tools.runner_coarse_prefilter import (
 from research_tools.targeted_ltf_accelerator import (
     BINANCE_PUBLIC_ARCHIVE_SOURCE,
     RawAggTradeLoad,
+    UNSUPPORTED_BINANCE_MARKET_ID_STATUS,
     _raw_archive_zip_path,
     ensure_targeted_ltf_accelerated_cache,
 )
@@ -857,3 +858,32 @@ def test_targeted_ltf_accelerator_falls_back_to_rest_when_archive_missing(tmp_pa
     assert fetch_row["raw_aggtrade_source"] == "binance_futures_aggTrades_rest"
     assert fetch_row["archive_status"] == "archive_missing"
     assert bool(fetch_row["rest_fallback_used"]) is True
+
+
+def test_targeted_ltf_accelerator_rejects_unsupported_unicode_market_id_without_rest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    symbol = "币安人生/USDT:USDT"
+
+    def fail_rest(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise AssertionError("unsupported market ids must not call REST")
+
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._fetch_binance_futures_aggtrades_rows",
+        fail_rest,
+    )
+
+    fetch, materialize = ensure_targeted_ltf_accelerated_cache(
+        cache_dir=tmp_path,
+        windows_by_symbol={symbol: [(0, 59_999)]},
+        target_timeframes=("15s", "30s"),
+        max_merged_span_ms=60_000,
+    )
+
+    fetch_row = fetch.loc[fetch["row_type"].eq("fetch")].iloc[0]
+    assert fetch_row["status"] == UNSUPPORTED_BINANCE_MARKET_ID_STATUS
+    assert fetch_row["archive_status"] == UNSUPPORTED_BINANCE_MARKET_ID_STATUS
+    assert bool(fetch_row["rest_fallback_used"]) is False
+    assert set(materialize["status"].astype(str)) == {UNSUPPORTED_BINANCE_MARKET_ID_STATUS}
+    assert set(materialize["target_timeframe"].astype(str)) == {"15s", "30s"}
