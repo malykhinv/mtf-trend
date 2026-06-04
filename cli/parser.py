@@ -248,17 +248,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Research HTF anomaly plus LTF confirmation runner discovery with structural no-TP replay",
     )
     runner_discovery.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
-    runner_discovery.add_argument("--targeted-ltf-backfill", type=_str_to_bool, default=True)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-quote-ratio", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-trade-ratio", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-return-pct", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-range-pct", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-min-dormancy-to-anomaly-quote-ratio", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-min-dormancy-to-anomaly-trade-ratio", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-max-dormancy-range-pct-median", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-min-abs-quote-volume", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-min-abs-number-of-trades", type=float, default=None)
-    runner_discovery.add_argument("--targeted-backfill-max-events-per-symbol", type=_non_negative_int_for("--targeted-backfill-max-events-per-symbol"), default=None)
 
     materialize_subminute = subparsers.add_parser(
         "materialize-anomaly-subminute-cache",

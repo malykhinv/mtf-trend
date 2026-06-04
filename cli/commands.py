@@ -1754,10 +1754,6 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 
-def _runner_discovery_profile_arg(args: argparse.Namespace, name: str, profile_default: object) -> object:
-    value = getattr(args, name, None)
-    return profile_default if value is None else value
-
 def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs fixed HTF/LTF runner discovery profiles with structural no-TP replay."""
 
@@ -1866,54 +1862,18 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 ltf_max_confirm_candles=int(profile["ltf_max_confirm_candles"]),
                 trail_lookback_candles=int(profile["trail_lookback_candles"]),
                 max_hold_candles=int(profile["max_hold_candles"]),
-                symbol_workers=int(getattr(args, "backtest_symbol_workers", 1)),
-                auto_targeted_ltf_backfill=bool(getattr(args, "targeted_ltf_backfill", True)),
-                targeted_backfill_min_htf_quote_ratio=float(
-                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_quote_ratio", profile["seed_min_htf_quote_ratio"])
-                ),
-                targeted_backfill_min_htf_trade_ratio=float(
-                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_trade_ratio", profile["seed_min_htf_trade_ratio"])
-                ),
-                targeted_backfill_min_htf_return_pct=float(
-                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_return_pct", profile["seed_min_htf_return_pct"])
-                ),
-                targeted_backfill_min_htf_range_pct=float(
-                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_range_pct", profile["seed_min_htf_range_pct"])
-                ),
-                targeted_backfill_min_dormancy_to_anomaly_quote_ratio=float(
-                    _runner_discovery_profile_arg(
-                        args,
-                        "targeted_backfill_min_dormancy_to_anomaly_quote_ratio",
-                        profile["seed_min_dormancy_to_anomaly_quote_ratio"],
-                    )
-                ),
-                targeted_backfill_min_dormancy_to_anomaly_trade_ratio=float(
-                    _runner_discovery_profile_arg(
-                        args,
-                        "targeted_backfill_min_dormancy_to_anomaly_trade_ratio",
-                        profile["seed_min_dormancy_to_anomaly_trade_ratio"],
-                    )
-                ),
-                targeted_backfill_max_dormancy_range_pct_median=float(
-                    _runner_discovery_profile_arg(
-                        args,
-                        "targeted_backfill_max_dormancy_range_pct_median",
-                        profile["seed_max_dormancy_range_pct_median"],
-                    )
-                ),
-                targeted_backfill_min_abs_quote_volume=float(
-                    _runner_discovery_profile_arg(args, "targeted_backfill_min_abs_quote_volume", profile["seed_min_abs_quote_volume"])
-                ),
-                targeted_backfill_min_abs_number_of_trades=float(
-                    _runner_discovery_profile_arg(
-                        args,
-                        "targeted_backfill_min_abs_number_of_trades",
-                        profile["seed_min_abs_number_of_trades"],
-                    )
-                ),
-                targeted_backfill_max_events_per_symbol=int(
-                    _runner_discovery_profile_arg(args, "targeted_backfill_max_events_per_symbol", profile["seed_max_events_per_symbol"])
-                ),
+                symbol_workers=1,
+                auto_targeted_ltf_backfill=True,
+                targeted_backfill_min_htf_quote_ratio=float(profile["seed_min_htf_quote_ratio"]),
+                targeted_backfill_min_htf_trade_ratio=float(profile["seed_min_htf_trade_ratio"]),
+                targeted_backfill_min_htf_return_pct=float(profile["seed_min_htf_return_pct"]),
+                targeted_backfill_min_htf_range_pct=float(profile["seed_min_htf_range_pct"]),
+                targeted_backfill_min_dormancy_to_anomaly_quote_ratio=float(profile["seed_min_dormancy_to_anomaly_quote_ratio"]),
+                targeted_backfill_min_dormancy_to_anomaly_trade_ratio=float(profile["seed_min_dormancy_to_anomaly_trade_ratio"]),
+                targeted_backfill_max_dormancy_range_pct_median=float(profile["seed_max_dormancy_range_pct_median"]),
+                targeted_backfill_min_abs_quote_volume=float(profile["seed_min_abs_quote_volume"]),
+                targeted_backfill_min_abs_number_of_trades=float(profile["seed_min_abs_number_of_trades"]),
+                targeted_backfill_max_events_per_symbol=int(profile["seed_max_events_per_symbol"]),
             )
             result_dir = run_discovery(discovery_config, progress_label=f"runner discovery {profile['name']}")
             combined_portfolio_config = discovery_config

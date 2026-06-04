@@ -3967,3 +3967,9 @@ Current commit: UNKNOWN. Status: APPLIED locally.
 Targeted subminute discovery now has a reusable raw-data source before REST: Binance public USD-M futures daily aggTrades ZIPs cached under `_raw_aggtrade_archive`. The accelerator still materializes only explicitly requested windows and still uses the same target-LTF writer as REST. Full-day archive files are not feature lookahead because rows are filtered to requested timestamp intervals before any candle aggregation.
 
 Parity acceptance is now measurable, not qualitative: `research_tools.decision_parity_join --summary-output ...` reports exact snapshot coverage, same-snapshot signal mismatches, and selected-signal overlap. For the project goal, require `same_snapshot_different_signal_verdict=0` and selected overlap at or above 90% on a same-period live/backtest comparison before using 30d PnL as strategy evidence.
+
+## 2026-06-04 - P507 runner discovery CLI contract
+
+Current commit: UNKNOWN. Status: APPLIED locally.
+
+`run-htf-ltf-runner-discovery` is again a simple fixed-profile command with only `--days` exposed. Targeted LTF backfill, archive/REST source priority, seed planning thresholds, profile list, execution model, and portfolio simulation are internal research-contract values, not CLI knobs. Any future change to them should be a named patch plus research log entry, not an ad-hoc shell flag.

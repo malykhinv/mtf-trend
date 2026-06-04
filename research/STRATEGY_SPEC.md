@@ -985,6 +985,11 @@ The operator command is intentionally fixed-profile:
 python main.py run-htf-ltf-runner-discovery --days N
 ```
 
+`--days` is the only public flag for this command. TF sets, targeted backfill,
+data-source priority, seed planning thresholds, execution model, portfolio
+model, risk, and trailing parameters are part of the fixed research contract
+and must not be shell-level tuning knobs.
+
 The command must run exactly these TF sets unless code is deliberately changed:
 - `5m_30s`: HTF anomaly on 5m, LTF confirmation/replay on 30s;
 - `5m_1m`: HTF anomaly on 5m, LTF confirmation/replay on 1m;
@@ -1013,7 +1018,7 @@ Required truth boundaries:
 - `runner_10pct_next_hour`, `future_max_return_pct`, and anomaly-low-break fields are future labels for evaluation only. They must not be used as entry filters.
 - Entry replay starts only after closed forward LTF confirmation, enters at the next LTF open with adverse slippage, and rejects stale/drift/excess-risk cases before simulating.
 - Stop must be structural: anomaly low and closed confirmation-window lows with a small buffer. Position management closes 50% at TP1=0.75R, then manages the remaining 50% with structural trailing stop or max-hold time exit. Early-exit conditions are telemetry only unless deliberately re-enabled as a separate experiment.
-- Broad runs should default to cache-only 5m/1m when subminute cache is not already materialized. The command must not trigger exchange candle or seconds-data downloads during the backtest.
+- Broad runs may use the targeted LTF accelerator for subminute profiles. Raw aggTrades may be loaded through trusted target-LTF cache, cached/downloaded public Binance archives, or REST fallback, but this is data transport only and must not become a user-tunable strategy filter.
 
 Artifacts must expose:
 - candidate rows with dormancy, smooth pregrowth, actual OI status/change, HTF quote/trade ratios, HTF-internal LTF distribution/acceleration, runner labels, and anomaly-low-break labels;

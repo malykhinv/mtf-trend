@@ -11172,3 +11172,33 @@ Risk:
 ```text
 Downloading a full daily aggTrades archive can be heavier than REST for a tiny one-off interval on very liquid symbols, but it is reusable and avoids REST rate-limit collapse in broad 30d discovery. Acceptance is not PnL: require no same-snapshot signal mismatches and target selected-overlap >= 90% on a matched live/backtest period before treating the simulator as live-like.
 ```
+
+## 2026-06-04 - P507 simplify runner discovery CLI
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Removes shell-level tuning from `run-htf-ltf-runner-discovery` so the standard command is again:
+
+```bash
+python main.py run-htf-ltf-runner-discovery --days N
+```
+
+Changes:
+
+- Removes public targeted-backfill/backfill-threshold flags from `cli/parser.py`.
+- Removes command-side profile override plumbing from `cli/commands.py`; fixed profile values now come only from the profile table.
+- Keeps targeted subminute backfill enabled internally for the fixed research profiles.
+- Adds parser regression tests that accept `--days` and reject removed tuning flags.
+- Updates `research/STRATEGY_SPEC.md` to state that `--days` is the only public flag and that raw aggTrade loading is data transport, not a strategy knob.
+
+Validation:
+
+```bash
+python -m pytest tests/test_cli_runner_discovery_empty_artifacts.py -q
+```
+
+Risk:
+
+```text
+Users can no longer run ad-hoc runner-discovery threshold variants from the shell. That is intentional: threshold/profile changes should be deliberate code/research patches so live/backtest parity and experiment identity remain auditable.
+```
