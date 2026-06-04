@@ -3951,3 +3951,11 @@ P472 is PROPOSED / UNKNOWN commit. Shared-core decisions now carry a source-neut
 P475 is PROPOSED / UNKNOWN commit. It fixes the remaining parity break after P465-P472/P474: live and backtest now build pre-seed context as rolling HTF-width windows stepped by LTF candles from the same normalized LTF substrate. Backtest no longer drops seeds at the adapter `anomaly_gate` before the shared core, exact confirm rejects are ledgered per window, live pending seeds expire deterministically after max-confirm, and `snapshot_hash` excludes adapter `decision_time_ms`.
 
 Next validation: apply P475 on top of P465-P472/P474, run compile/guard/core smoke, then run a small same-period live/backtest replay and inspect `snapshot_hash` joins before changing any thresholds or exits.
+
+## 2026-06-04 - P505 targeted LTF accelerator status
+
+Current commit: UNKNOWN. Status: APPLIED locally.
+
+The next honest 10x acceleration path is now isolated behind `research_tools/targeted_ltf_accelerator.py`. It currently centralizes targeted subminute cache orchestration and materializes 15s/30s sibling target caches from one raw aggTrade interval, but it does not yet add bulk/archive aggTrade sources. Trading logic, shared core inputs, execution model, and thresholds are unchanged.
+
+Main remaining bottleneck risk: cold-cache 30d discovery can still be REST-bound if most requested windows are new. The next improvement should add a bulk/raw aggTrade source into the accelerator source-priority chain, not another strategy filter, and acceptance must be parity-first: same target windows should produce the same `snapshot_hash -> signal_verdict` before any profitability comparison.

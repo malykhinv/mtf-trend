@@ -2055,6 +2055,18 @@ def _targeted_ltf_seed_gate_description(config: HtfLtfRunnerDiscoveryConfig) -> 
         ret=float(config.min_htf_return_pct),
     )
 
+
+def _targeted_ltf_accelerator_timeframes(ltf_timeframe: str) -> tuple[str, ...]:
+    """Materialize reusable sibling caches without changing the active TF."""
+
+    target = str(ltf_timeframe)
+    if target == "15s":
+        return ("15s", "30s")
+    if target == "30s":
+        return ("30s", "15s")
+    return (target,)
+
+
 def _ensure_targeted_ltf_backfill(
     *,
     cache_dir: Path,
@@ -2069,7 +2081,7 @@ def _ensure_targeted_ltf_backfill(
             pd.DataFrame([{"status": "no_targeted_windows", "reason": "targeted_planner_selected_zero_windows"}]),
             pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}]),
         )
-    from research_tools.anomaly_strategy_backtest import ensure_targeted_aggtrade_direct_ltf_cache
+    from research_tools.targeted_ltf_accelerator import ensure_targeted_ltf_accelerated_cache
 
     selected: dict[str, list[tuple[int, int]]] = {}
     for raw_symbol, raw_windows in windows_by_symbol.items():
@@ -2077,12 +2089,13 @@ def _ensure_targeted_ltf_backfill(
         windows = list(raw_windows)
         if symbol and windows:
             selected[symbol] = windows
+    target_timeframes = _targeted_ltf_accelerator_timeframes(ltf_timeframe)
     effective_workers = _effective_symbol_workers(workers, total_items=len(selected))
     if effective_workers <= 1:
-        return ensure_targeted_aggtrade_direct_ltf_cache(
+        return ensure_targeted_ltf_accelerated_cache(
             cache_dir=cache_dir,
             windows_by_symbol=selected,
-            target_timeframes=(str(ltf_timeframe),),
+            target_timeframes=target_timeframes,
             progress_label=progress_label,
             max_merged_span_ms=max_merged_span_ms,
         )
@@ -2090,10 +2103,10 @@ def _ensure_targeted_ltf_backfill(
     progress = _ProgressLine(label=f"{progress_label}: symbols", total=len(selected))
 
     def _fetch_symbol(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-        return ensure_targeted_aggtrade_direct_ltf_cache(
+        return ensure_targeted_ltf_accelerated_cache(
             cache_dir=cache_dir,
             windows_by_symbol={symbol: selected[symbol]},
-            target_timeframes=(str(ltf_timeframe),),
+            target_timeframes=target_timeframes,
             progress_label=None,
             max_merged_span_ms=max_merged_span_ms,
         )
@@ -2126,11 +2139,12 @@ def _ensure_targeted_ltf_backfill(
             {
                 "symbol": "__all__",
                 "status": "parallel_window_plan",
-                "target_timeframes": str(ltf_timeframe),
+                "target_timeframes": ",".join(target_timeframes),
                 "symbols_with_windows": int(len(selected)),
                 "raw_targeted_windows": int(sum(len(windows) for windows in selected.values())),
                 "targeted_fetch_workers": int(effective_workers),
                 "max_merged_span_ms": "unbounded" if max_merged_span_ms is None else int(max_merged_span_ms),
+                "accelerator_model": "targeted_ltf_accelerator_v1",
                 "row_type": "plan",
             }
         ]

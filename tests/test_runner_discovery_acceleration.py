@@ -26,6 +26,7 @@ from research_tools.htf_ltf_runner_discovery import (
     _pre_seed_context_candles_from_htf,
     _post_entry_fetch_window_for_signal,
     _signal_entry_tail_ms,
+    _targeted_ltf_accelerator_timeframes,
     _targeted_ltf_backfill_seeds_for_symbol,
     _targeted_ltf_seed_timestamps_by_symbol,
 )
@@ -33,6 +34,7 @@ from research_tools.runner_coarse_prefilter import (
     coarse_minute_pair_prefilter,
     prepare_minute_coarse_frame,
 )
+from research_tools.targeted_ltf_accelerator import ensure_targeted_ltf_accelerated_cache
 
 
 def _minute_frame(start_ms: int, rows: int, *, quote: float, trades: float, close_step: float = 0.0) -> pd.DataFrame:
@@ -641,3 +643,85 @@ def test_empty_aggtrade_window_writes_coverage_index(tmp_path) -> None:
     assert rows == 2
     assert path.endswith(DIRECT_TARGET_AGGTRADE_COVERAGE_INDEX_FILE)
     assert missing == []
+
+
+def test_targeted_ltf_accelerator_materializes_reusable_sibling_timeframes_from_one_empty_fetch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    symbol = "AAA/USDT:USDT"
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_fetch(symbol_arg: str, *, start_timestamp_ms: int, end_timestamp_ms: int) -> pd.DataFrame:
+        calls.append((symbol_arg, int(start_timestamp_ms), int(end_timestamp_ms)))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._fetch_binance_futures_aggtrades_rows",
+        fake_fetch,
+    )
+
+    fetch, materialize = ensure_targeted_ltf_accelerated_cache(
+        cache_dir=tmp_path,
+        windows_by_symbol={symbol: [(0, 59_999)]},
+        target_timeframes=("15s", "30s"),
+        max_merged_span_ms=60_000,
+    )
+
+    assert calls == [(symbol, 0, 59_999)]
+    assert fetch.loc[fetch["row_type"].eq("fetch"), "target_timeframes"].tolist() == ["15s,30s"]
+    assert set(materialize["target_timeframe"].astype(str)) == {"15s", "30s"}
+    assert set(materialize["status"].astype(str)) == {"empty_aggtrades_coverage_index_written"}
+    assert _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="15s",
+        window_start_ms=0,
+        window_end_ms=59_999,
+    ) == []
+    assert _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="30s",
+        window_start_ms=0,
+        window_end_ms=59_999,
+    ) == []
+
+
+def test_targeted_ltf_accelerator_keeps_partial_sibling_bucket_uncovered(tmp_path, monkeypatch) -> None:
+    symbol = "AAA/USDT:USDT"
+
+    def fake_fetch(_symbol: str, *, start_timestamp_ms: int, end_timestamp_ms: int) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._fetch_binance_futures_aggtrades_rows",
+        fake_fetch,
+    )
+
+    ensure_targeted_ltf_accelerated_cache(
+        cache_dir=tmp_path,
+        windows_by_symbol={symbol: [(15_000, 44_999)]},
+        target_timeframes=("15s", "30s"),
+        max_merged_span_ms=30_000,
+    )
+
+    assert _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="15s",
+        window_start_ms=15_000,
+        window_end_ms=44_999,
+    ) == []
+    assert _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="30s",
+        window_start_ms=0,
+        window_end_ms=59_999,
+    ) == [(0, 59_999)]
+
+
+def test_runner_discovery_15s_and_30s_backfills_materialize_sibling_caches() -> None:
+    assert _targeted_ltf_accelerator_timeframes("15s") == ("15s", "30s")
+    assert _targeted_ltf_accelerator_timeframes("30s") == ("30s", "15s")

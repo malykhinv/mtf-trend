@@ -11122,3 +11122,28 @@ Risk:
 ```text
 Live signal selection now honestly requires enough closed 30s history to build the 24h seed-aligned context. If startup/maintenance has not populated the ring, the core returns `contract_seed_aligned_context_not_ready` instead of using a shorter accidental baseline.
 ```
+
+## 2026-06-04 - P505 targeted LTF accelerator module
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Implements the first honest runner-discovery accelerator step without changing strategy logic:
+
+- Adds `research_tools/targeted_ltf_accelerator.py` as the single orchestration module for targeted subminute cache acceleration.
+- Keeps `PumpDecisionCore` and runner discovery signal logic unchanged; the accelerator only subtracts trusted target-LTF cache coverage, fetches missing Binance futures aggTrades, and materializes requested target candles.
+- Turns `ensure_targeted_aggtrade_direct_ltf_cache(...)` into a compatibility facade that delegates to the accelerator, avoiding a second active orchestration path.
+- Lets 15s/30s runner-discovery fetches materialize both sibling target caches from the same raw aggTrade interval. The active profile timeframe is not changed.
+- Adds accelerator artifact labels: `accelerator_model`, `source_priority`, and direct aggTrades data source fields.
+- Adds tests for multi-target materialization and partial-bucket honesty.
+
+Validation:
+
+```bash
+python -m pytest tests/test_runner_discovery_acceleration.py -q
+```
+
+Risk:
+
+```text
+This is not the full 10x solution by itself. It removes duplicated orchestration and enables cache reuse across 15s/30s materialization, but a 30d run can still be too slow if most windows are cold and REST is the dominant source. Next acceleration should plug bulk/raw aggTrade archive reuse into this module's source-priority chain, then prove parity by snapshot_hash/signal_verdict overlap.
+```
