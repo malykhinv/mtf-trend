@@ -2689,6 +2689,13 @@ def _write_direct_aggtrade_target_ltf_delta(
     aggregated["aggtrade_materialization_model"] = "direct_aggtrades_to_target_ltf_no_1s_cache"
     ParquetStorage(cache_dir).save_incremental_delta(symbol, Timeframe(str(target_timeframe)), aggregated)
     _write_direct_target_ltf_coverage_index(cache_dir, symbol, str(target_timeframe), aggregated)
+    _write_empty_direct_target_ltf_coverage_index(
+        cache_dir,
+        symbol,
+        str(target_timeframe),
+        start_timestamp_ms=int(start_timestamp_ms),
+        end_timestamp_ms=int(end_timestamp_ms),
+    )
     return "written_interval", int(len(aggregated)), str(_cache_data_path(cache_dir, symbol, str(target_timeframe)))
 
 

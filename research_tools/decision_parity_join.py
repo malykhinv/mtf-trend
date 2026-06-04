@@ -111,11 +111,64 @@ def build_comparison(live_path: Path, backtest_path: Path) -> list[dict[str, str
     return output
 
 
+def _hashes_with_value(rows: list[dict[str, str]], field: str, value: str) -> set[str]:
+    result: set[str] = set()
+    for row in rows:
+        snapshot_hash = str(row.get("snapshot_hash") or "")
+        if snapshot_hash and str(row.get(field) or "") == value:
+            result.add(snapshot_hash)
+    return result
+
+
+def _ratio(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return ""
+    return f"{float(numerator) / float(denominator):.6f}"
+
+
+def build_summary(live_path: Path, backtest_path: Path, comparison: list[dict[str, str]]) -> list[dict[str, str]]:
+    live_rows = _read_rows(live_path)
+    backtest_rows = _read_rows(backtest_path)
+    live_hashes = {str(row.get("snapshot_hash") or "") for row in live_rows if str(row.get("snapshot_hash") or "")}
+    backtest_hashes = {str(row.get("snapshot_hash") or "") for row in backtest_rows if str(row.get("snapshot_hash") or "")}
+    shared_hashes = live_hashes & backtest_hashes
+    live_selected = _hashes_with_value(live_rows, "signal_verdict", "selected")
+    backtest_selected = _hashes_with_value(backtest_rows, "signal_verdict", "selected")
+    shared_selected = live_selected & backtest_selected
+    mismatch_counts: dict[str, int] = {}
+    for row in comparison:
+        mismatch = str(row.get("mismatch_type") or "")
+        mismatch_counts[mismatch] = mismatch_counts.get(mismatch, 0) + 1
+    signal_mismatches = int(mismatch_counts.get("same_snapshot_different_signal_verdict", 0))
+    shared_signal_matches = max(0, int(len(shared_hashes)) - signal_mismatches)
+    selected_union = live_selected | backtest_selected
+    metrics = {
+        "live_snapshot_hashes": len(live_hashes),
+        "backtest_snapshot_hashes": len(backtest_hashes),
+        "shared_snapshot_hashes": len(shared_hashes),
+        "live_snapshot_coverage_by_backtest": _ratio(len(shared_hashes), len(live_hashes)),
+        "backtest_snapshot_coverage_by_live": _ratio(len(shared_hashes), len(backtest_hashes)),
+        "shared_signal_matches": shared_signal_matches,
+        "same_snapshot_different_signal_verdict": signal_mismatches,
+        "shared_signal_parity_rate": _ratio(shared_signal_matches, len(shared_hashes)),
+        "live_selected_snapshot_hashes": len(live_selected),
+        "backtest_selected_snapshot_hashes": len(backtest_selected),
+        "shared_selected_snapshot_hashes": len(shared_selected),
+        "selected_overlap_vs_live": _ratio(len(shared_selected), len(live_selected)),
+        "selected_overlap_vs_backtest": _ratio(len(shared_selected), len(backtest_selected)),
+        "selected_jaccard_overlap": _ratio(len(shared_selected), len(selected_union)),
+    }
+    for mismatch, count in sorted(mismatch_counts.items()):
+        metrics[f"mismatch_type:{mismatch}"] = int(count)
+    return [{"metric": key, "value": str(value)} for key, value in metrics.items()]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Join live2/backtest decision ledgers by snapshot_hash")
     parser.add_argument("--live", required=True, type=Path, help="Path to live2_decision_ledger.csv")
     parser.add_argument("--backtest", required=True, type=Path, help="Path to htf_ltf_runner_decision_ledger.csv")
     parser.add_argument("--output", required=True, type=Path, help="Output comparison CSV path")
+    parser.add_argument("--summary-output", type=Path, default=None, help="Optional parity summary CSV path")
     args = parser.parse_args()
     rows = build_comparison(args.live, args.backtest)
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +176,13 @@ def main() -> None:
         writer = csv.DictWriter(file_obj, fieldnames=_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+    if args.summary_output is not None:
+        summary = build_summary(args.live, args.backtest, rows)
+        args.summary_output.parent.mkdir(parents=True, exist_ok=True)
+        with args.summary_output.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.DictWriter(file_obj, fieldnames=("metric", "value"))
+            writer.writeheader()
+            writer.writerows(summary)
 
 
 if __name__ == "__main__":

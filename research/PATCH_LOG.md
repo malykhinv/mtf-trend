@@ -11147,3 +11147,28 @@ Risk:
 ```text
 This is not the full 10x solution by itself. It removes duplicated orchestration and enables cache reuse across 15s/30s materialization, but a 30d run can still be too slow if most windows are cold and REST is the dominant source. Next acceleration should plug bulk/raw aggTrade archive reuse into this module's source-priority chain, then prove parity by snapshot_hash/signal_verdict overlap.
 ```
+
+## 2026-06-04 - P506 archive-backed targeted LTF acceleration and parity summary
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Extends P505 toward the actual 30d goal without changing signal logic, thresholds, portfolio rules, execution, or exits:
+
+- `research_tools/targeted_ltf_accelerator.py` now uses source priority `trusted_target_ltf_cache -> Binance public futures daily aggTrades archive -> Binance aggTrades REST`.
+- Public archive ZIPs are cached under `.output/cache/_raw_aggtrade_archive/...`; missing daily archives get a `.missing` sentinel so broad runs do not repeatedly request known-missing symbol-days.
+- Archive data is filtered back to the exact requested interval before materialization. Full-day archive availability is transport/cache only, not a feature lookahead.
+- Fetch artifacts expose `raw_aggtrade_source`, `archive_status`, `archive_error`, `archive_files`, `archive_urls`, and `rest_fallback_used`.
+- Direct target-LTF coverage now records every fully contained target bucket in the fetched raw interval, including quiet buckets with no trades. This avoids repeat downloads for already-proven empty subminute buckets.
+- `research_tools.decision_parity_join` can now write an optional summary CSV with exact `snapshot_hash` coverage, shared signal parity, and selected-signal overlap metrics.
+
+Validation:
+
+```bash
+python -m pytest tests/test_runner_discovery_acceleration.py tests/test_decision_parity_join.py -q
+```
+
+Risk:
+
+```text
+Downloading a full daily aggTrades archive can be heavier than REST for a tiny one-off interval on very liquid symbols, but it is reusable and avoids REST rate-limit collapse in broad 30d discovery. Acceptance is not PnL: require no same-snapshot signal mismatches and target selected-overlap >= 90% on a matched live/backtest period before treating the simulator as live-like.
+```

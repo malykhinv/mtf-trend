@@ -5599,3 +5599,9 @@ Protocol after P463: run live2 for at least one closed hour. During runtime, cop
 Hypothesis: moving targeted subminute fetch/materialization into one accelerator module and materializing 15s/30s sibling caches from the same raw aggTrade interval reduces duplicate future work without changing signal decisions.
 
 Protocol after P505: first run unit/compile/decision-contract checks. Then run a small 1d/2d discovery on a warmable subset and inspect `htf_ltf_runner_targeted_ltf_fetch.csv` / `htf_ltf_runner_targeted_ltf_materialize.csv` for `accelerator_model=targeted_ltf_accelerator_v1`, sibling `target_timeframes` on 15s/30s phases, and no target-LTF coverage for partial sibling buckets. If comparing old and new runs, compare `snapshot_hash` and `signal_verdict` before runtime or PnL. PnL is not an acceptance criterion for this patch.
+
+## 2026-06-04 - P506 archive accelerator + parity acceptance protocol
+
+Hypothesis: archive-backed raw aggTrade loading reduces 30d discovery wall time materially while preserving live/backtest decision parity, because both archive and REST paths feed the same raw aggTrade materializer and the same `PumpDecisionCore`.
+
+Protocol after P506: run a small 1d/2d discovery first and inspect targeted fetch artifacts. Accept the data-source patch only if archive rows show `raw_aggtrade_source=binance_public_data_futures_um_daily_aggTrades_archive` when local/public ZIPs exist, REST fallback rows expose `rest_fallback_used=true`, and repeated runs show already-covered empty buckets are not refetched. For live/backtest parity, join same-period ledgers with `python -m research_tools.decision_parity_join --live <live2_decision_ledger.csv> --backtest <htf_ltf_runner_decision_ledger.csv> --output <comparison.csv> --summary-output <summary.csv>`. Treat the simulator as live-like only if `same_snapshot_different_signal_verdict=0` and selected overlap is at least 90%; only then inspect 30d PnL.

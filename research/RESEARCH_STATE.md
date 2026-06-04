@@ -3959,3 +3959,11 @@ Current commit: UNKNOWN. Status: APPLIED locally.
 The next honest 10x acceleration path is now isolated behind `research_tools/targeted_ltf_accelerator.py`. It currently centralizes targeted subminute cache orchestration and materializes 15s/30s sibling target caches from one raw aggTrade interval, but it does not yet add bulk/archive aggTrade sources. Trading logic, shared core inputs, execution model, and thresholds are unchanged.
 
 Main remaining bottleneck risk: cold-cache 30d discovery can still be REST-bound if most requested windows are new. The next improvement should add a bulk/raw aggTrade source into the accelerator source-priority chain, not another strategy filter, and acceptance must be parity-first: same target windows should produce the same `snapshot_hash -> signal_verdict` before any profitability comparison.
+
+## 2026-06-04 - P506 archive-backed backtest acceleration status
+
+Current commit: UNKNOWN. Status: APPLIED locally.
+
+Targeted subminute discovery now has a reusable raw-data source before REST: Binance public USD-M futures daily aggTrades ZIPs cached under `_raw_aggtrade_archive`. The accelerator still materializes only explicitly requested windows and still uses the same target-LTF writer as REST. Full-day archive files are not feature lookahead because rows are filtered to requested timestamp intervals before any candle aggregation.
+
+Parity acceptance is now measurable, not qualitative: `research_tools.decision_parity_join --summary-output ...` reports exact snapshot coverage, same-snapshot signal mismatches, and selected-signal overlap. For the project goal, require `same_snapshot_different_signal_verdict=0` and selected overlap at or above 90% on a same-period live/backtest comparison before using 30d PnL as strategy evidence.

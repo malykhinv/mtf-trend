@@ -1075,6 +1075,20 @@ For seed-first parity, pre-seed context is rolling-based too. A rolling seed tha
 
 Backtest adapters must not reject seeds by HTF anomaly thresholds before the shared core. They may use broad mathematical supersets only for data-fetch planning, but the decision ledger must make core-level selected/rejected/dependency outcomes visible.
 
+## Backtest Targeted LTF Data-Source Contract
+
+Subminute backtests may use cached target LTF candles, cached/downloaded Binance public USD-M futures daily aggTrades archives, or Binance aggTrades REST as transport sources for historical raw trades. These sources are equivalent only after they are reduced to the exact requested timestamp windows and materialized through the same target-LTF writer.
+
+Allowed source priority:
+
+```text
+trusted target-LTF cache
+-> Binance public futures daily aggTrades archive filtered to requested windows
+-> Binance futures aggTrades REST fallback
+```
+
+This is a data-loading accelerator, not a trading filter. Full-day archive files must not broaden feature availability: only rows inside the planner's requested windows may be aggregated. Archive status, REST fallback, source labels, and coverage for empty-but-verified buckets must remain visible in targeted LTF artifacts. Quiet buckets inside a verified raw interval are covered data, not missing data to refetch.
+
 ## Decision parity ledger contract
 
 Every live/backtest call into the rolling seed-first core must be auditable by a source-neutral `snapshot_hash`. The hash is built from the normalized symbol, TF set, contract/core version, exact rolling seed bounds, exact confirmation bounds, seed candles, pre-seed context candles, and confirmation candles. It must not include websocket/REST source labels, portfolio state, entry-guard state, execution fills, or artifact-only labels.

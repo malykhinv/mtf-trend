@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import warnings
+import zipfile
 
 import pandas as pd
 
@@ -34,7 +35,12 @@ from research_tools.runner_coarse_prefilter import (
     coarse_minute_pair_prefilter,
     prepare_minute_coarse_frame,
 )
-from research_tools.targeted_ltf_accelerator import ensure_targeted_ltf_accelerated_cache
+from research_tools.targeted_ltf_accelerator import (
+    BINANCE_PUBLIC_ARCHIVE_SOURCE,
+    RawAggTradeLoad,
+    _raw_archive_zip_path,
+    ensure_targeted_ltf_accelerated_cache,
+)
 
 
 def _minute_frame(start_ms: int, rows: int, *, quote: float, trades: float, close_step: float = 0.0) -> pd.DataFrame:
@@ -73,6 +79,15 @@ class _JsonResponse:
 
     def read(self) -> bytes:
         return json.dumps(self.payload).encode("utf-8")
+
+
+def _archive_unavailable(*_args: object, **_kwargs: object) -> RawAggTradeLoad:
+    return RawAggTradeLoad(
+        frame=pd.DataFrame(),
+        status="archive_missing",
+        source=BINANCE_PUBLIC_ARCHIVE_SOURCE,
+        error="test archive unavailable",
+    )
 
 
 def test_coarse_minute_prefilter_rejects_only_proven_impossible_window() -> None:
@@ -660,6 +675,10 @@ def test_targeted_ltf_accelerator_materializes_reusable_sibling_timeframes_from_
         "research_tools.targeted_ltf_accelerator._fetch_binance_futures_aggtrades_rows",
         fake_fetch,
     )
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._load_binance_public_archive_aggtrades_rows",
+        _archive_unavailable,
+    )
 
     fetch, materialize = ensure_targeted_ltf_accelerated_cache(
         cache_dir=tmp_path,
@@ -698,6 +717,10 @@ def test_targeted_ltf_accelerator_keeps_partial_sibling_bucket_uncovered(tmp_pat
         "research_tools.targeted_ltf_accelerator._fetch_binance_futures_aggtrades_rows",
         fake_fetch,
     )
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._load_binance_public_archive_aggtrades_rows",
+        _archive_unavailable,
+    )
 
     ensure_targeted_ltf_accelerated_cache(
         cache_dir=tmp_path,
@@ -725,3 +748,112 @@ def test_targeted_ltf_accelerator_keeps_partial_sibling_bucket_uncovered(tmp_pat
 def test_runner_discovery_15s_and_30s_backfills_materialize_sibling_caches() -> None:
     assert _targeted_ltf_accelerator_timeframes("15s") == ("15s", "30s")
     assert _targeted_ltf_accelerator_timeframes("30s") == ("30s", "15s")
+
+
+def test_targeted_ltf_accelerator_uses_local_public_archive_before_rest(tmp_path, monkeypatch) -> None:
+    symbol = "AAA/USDT:USDT"
+    market_id = "AAAUSDT"
+    day = "2024-01-01"
+    start_ms = 1_704_067_200_000
+    zip_path = _raw_archive_zip_path(tmp_path, market_id, day)
+    zip_path.parent.mkdir(parents=True)
+    archive_csv = pd.DataFrame(
+        [
+            {
+                "agg_trade_id": 1,
+                "price": "100.0",
+                "quantity": "2.0",
+                "first_trade_id": 10,
+                "last_trade_id": 10,
+                "transact_time": start_ms + 1_000,
+                "is_buyer_maker": "false",
+            },
+            {
+                "agg_trade_id": 2,
+                "price": "101.0",
+                "quantity": "1.0",
+                "first_trade_id": 11,
+                "last_trade_id": 11,
+                "transact_time": start_ms + 31_000,
+                "is_buyer_maker": "true",
+            },
+        ]
+    ).to_csv(index=False)
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr(f"{market_id}-aggTrades-{day}.csv", archive_csv)
+
+    def fail_rest(*_args: object, **_kwargs: object) -> pd.DataFrame:
+        raise AssertionError("REST fallback should not run when archive covers the interval")
+
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._fetch_binance_futures_aggtrades_rows",
+        fail_rest,
+    )
+
+    fetch, materialize = ensure_targeted_ltf_accelerated_cache(
+        cache_dir=tmp_path,
+        windows_by_symbol={symbol: [(start_ms, start_ms + 59_999)]},
+        target_timeframes=("15s", "30s"),
+        max_merged_span_ms=60_000,
+    )
+
+    fetch_row = fetch.loc[fetch["row_type"].eq("fetch")].iloc[0]
+    assert fetch_row["raw_aggtrade_source"] == BINANCE_PUBLIC_ARCHIVE_SOURCE
+    assert fetch_row["archive_status"] == "archive_ok"
+    assert bool(fetch_row["rest_fallback_used"]) is False
+    assert int(fetch_row["aggtrade_rows_fetched"]) == 2
+    assert set(materialize["target_timeframe"].astype(str)) == {"15s", "30s"}
+    assert set(materialize["raw_aggtrade_source"].astype(str)) == {BINANCE_PUBLIC_ARCHIVE_SOURCE}
+    assert _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="15s",
+        window_start_ms=start_ms,
+        window_end_ms=start_ms + 59_999,
+    ) == []
+    assert _trusted_materialized_entry_cache_missing_intervals(
+        tmp_path,
+        symbol,
+        target_timeframe="30s",
+        window_start_ms=start_ms,
+        window_end_ms=start_ms + 59_999,
+    ) == []
+
+
+def test_targeted_ltf_accelerator_falls_back_to_rest_when_archive_missing(tmp_path, monkeypatch) -> None:
+    symbol = "AAA/USDT:USDT"
+    calls: list[tuple[str, int, int]] = []
+
+    def fake_archive(*_args: object, **_kwargs: object) -> RawAggTradeLoad:
+        return RawAggTradeLoad(
+            frame=pd.DataFrame(),
+            status="archive_missing",
+            source=BINANCE_PUBLIC_ARCHIVE_SOURCE,
+            error="not listed yet",
+        )
+
+    def fake_rest(symbol_arg: str, *, start_timestamp_ms: int, end_timestamp_ms: int) -> pd.DataFrame:
+        calls.append((symbol_arg, int(start_timestamp_ms), int(end_timestamp_ms)))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._load_binance_public_archive_aggtrades_rows",
+        fake_archive,
+    )
+    monkeypatch.setattr(
+        "research_tools.targeted_ltf_accelerator._fetch_binance_futures_aggtrades_rows",
+        fake_rest,
+    )
+
+    fetch, _materialize = ensure_targeted_ltf_accelerated_cache(
+        cache_dir=tmp_path,
+        windows_by_symbol={symbol: [(0, 59_999)]},
+        target_timeframes=("30s",),
+        max_merged_span_ms=60_000,
+    )
+
+    fetch_row = fetch.loc[fetch["row_type"].eq("fetch")].iloc[0]
+    assert calls == [(symbol, 0, 59_999)]
+    assert fetch_row["raw_aggtrade_source"] == "binance_futures_aggTrades_rest"
+    assert fetch_row["archive_status"] == "archive_missing"
+    assert bool(fetch_row["rest_fallback_used"]) is True
