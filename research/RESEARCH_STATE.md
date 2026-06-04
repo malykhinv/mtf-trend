@@ -1,3 +1,15 @@
+## 2026-06-04 - P503 2d runner discovery audit and partial planner pruning
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The 2d run at `.output/results/htf_ltf_runner_discovery_2d` is structurally honest enough to analyze bottlenecks: all four TF profile folders and combined artifacts exist; honesty reports mark future-label separation, entry availability, LTF continuity, OI availability, costs and staged data access as ok/research-only as appropriate. The result is still not a profitability sample and should not be read for edge.
+
+Runtime was `7.21h` for 2d, implying about `108h` for 30d if linear. P502 fixed the old Binance 418/429 failure mode: only `5m_15s` had 7 fetch errors, and they were DNS `getaddrinfo` errors, not throttling. The remaining bottleneck is data volume: `5m_15s` fetched about `19.3M` aggTrade rows, with `18.4M` in pre-entry seed fetch alone. `5m_15s` pre-entry consumed about `736h` of fetched LTF windows.
+
+P503 adds safe planner pruning but does not claim 10x. Signal-entry planning now rejects terminal seed-stage failures with fast exact-seed checks: return, internal LTF sustained-flow shape, and closed-context quote/trade ratios. Pre-entry planning can narrow full 2xHTF pair fetches into exact seed windows when 1m bounds are complete; it falls back to the old full-pair superset when 1m coverage is incomplete. A 50-symbol `5m_15s` signal-entry dry sample reduced planned confirm windows from the old broad path to 232 passing windows, dominated by safe rejects `seed_htf_return_below_min`, `seed_ltf_flow_not_sustained`, `seed_htf_trade_ratio_below_min`, and `seed_htf_quote_ratio_below_min`. A 50-symbol pre-entry merge sample reduced merged window time only about 17%, so it is not the main answer.
+
+Conclusion: filters alone in the current REST aggTrades path will not make 30d practical. The next real 10x step is changing the data source/path: bulk daily aggTrades or a shared prebuilt aggTrades cache that materializes both 15s and 30s targets, plus an artifact-light long-run mode. Do not launch 30d full-universe/full-artifact on REST pagination expecting it to finish quickly.
+
 ## 2026-06-03 - P502 targeted aggTrades rate-limit repair
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.

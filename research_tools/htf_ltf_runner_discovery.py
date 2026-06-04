@@ -36,7 +36,6 @@ from research_tools.pump_decision_core import (
     ROLLING_LTF_MIN_QUOTE_PACE_RATIO,
     ROLLING_LTF_MIN_TRADE_PACE_RATIO,
     ROLLING_PROFILE_SPECS,
-    ROLLING_SEED_MIN_HTF_RETURN_PCT,
     DecisionCandle,
     DecisionSnapshot,
     DecisionVerdict,
@@ -50,6 +49,7 @@ from research_tools.pump_decision_core import (
 )
 from research_tools.runner_coarse_prefilter import (
     MINUTE_MS,
+    CoarsePrefilterVerdict,
     MinuteCoarseFrame,
     coarse_minute_pair_prefilter,
     prepare_minute_coarse_frame,
@@ -123,6 +123,7 @@ class HtfLtfRunnerDiscoveryConfig:
             raise ValueError("htf_timeframe and ltf_timeframe must differ")
         if _timeframe_ms(self.ltf_timeframe) >= _timeframe_ms(self.htf_timeframe):
             raise ValueError("ltf_timeframe must be lower than htf_timeframe")
+
         for name in (
             "days",
             "baseline_candles",
@@ -163,6 +164,15 @@ class HtfLtfRunnerDiscoveryConfig:
         if self.max_total_open_risk_pct < self.risk_per_trade_pct:
             raise ValueError("max_total_open_risk_pct must be >= risk_per_trade_pct")
 
+
+@dataclass(frozen=True, slots=True)
+class _SeedBaselineLookup:
+    minute_timestamps: np.ndarray
+    minute_quote_volumes: np.ndarray
+    minute_number_of_trades: np.ndarray
+    htf_timestamps: np.ndarray
+    htf_quote_volumes: np.ndarray
+    htf_number_of_trades: np.ndarray
 
 
 @dataclass(frozen=True, slots=True)
@@ -1160,6 +1170,25 @@ def _targeted_ltf_backfill_seeds_for_symbol(
             reason = str(minute_verdict.reason or "impossible_minute_seed_or_confirm_bounds")
             rejection_counts[reason if reason in rejection_counts else "impossible_minute_seed_or_confirm_bounds"] += 1
             continue
+        exact_seed_windows = _exact_seed_windows_by_minute_bounds(
+            minute_frame,
+            pair_start_ms=int(first_ts),
+            htf_ms=int(htf_ms),
+            ltf_ms=int(ltf_ms),
+            min_seed_return_pct=float(config.min_htf_return_pct),
+            min_seed_quote_ratio=float(config.min_htf_quote_ratio),
+            min_seed_trade_ratio=float(config.min_htf_trade_ratio),
+            min_confirm_return_pct=float(ROLLING_LTF_MIN_CONFIRM_RETURN_PCT),
+            min_confirm_quote_pace_ratio=float(ROLLING_LTF_MIN_QUOTE_PACE_RATIO),
+            min_confirm_trade_pace_ratio=float(ROLLING_LTF_MIN_TRADE_PACE_RATIO),
+            min_confirm_candles=min_confirm_candles,
+            max_confirm_candles=max_confirm_candles,
+            baseline_quote_values=possible_baseline_quotes,
+            baseline_trade_values=possible_baseline_trades,
+        )
+        if exact_seed_windows == []:
+            rejection_counts["impossible_minute_seed_or_confirm_bounds"] += 1
+            continue
 
         score = (
             float(max_possible_return) * 100.0
@@ -1182,6 +1211,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                     "max_possible_quote_ratio": float(max_possible_quote_ratio),
                     "max_possible_trade_ratio": float(max_possible_trade_ratio),
                     "possible_history_ends": "|".join(str(value) for value in possible_history_ends),
+                    "exact_seed_windows": exact_seed_windows,
                     **category_bounds,
                     **confirm_bounds,
                     **minute_verdict.bounds,
@@ -1215,9 +1245,15 @@ def _targeted_ltf_backfill_seeds_for_symbol(
         bounds = selected_by_idx[idx]
         first_ts = int(first["timestamp"])
         pair_end_exclusive = first_ts + 2 * int(htf_ms)
-        window_start = int(first_ts)
-        window_end = int(pair_end_exclusive - 1)
-        windows.append((window_start, window_end))
+        exact_seed_windows = bounds.get("exact_seed_windows")
+        planned_seed_windows = (
+            [(int(start), int(end)) for start, end in exact_seed_windows]
+            if isinstance(exact_seed_windows, list) and exact_seed_windows
+            else [(int(first_ts), int(pair_end_exclusive - 1))]
+        )
+        window_start = min(start for start, _ in planned_seed_windows)
+        window_end = max(end for _, end in planned_seed_windows)
+        windows.extend(planned_seed_windows)
         rows.append(
             {
                 "symbol": symbol,
@@ -1237,7 +1273,10 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "window_end_ms": window_end,
                 "window_end_utc": _timestamp_to_utc(window_end),
                 "window_ms": int(window_end - window_start + 1),
-                "window_model": "two_adjacent_htf_candles_only_then_exact_ltf_rolling_seed_check",
+                "window_model": "exact_seed_windows_by_1m_bounds_or_full_pair_fallback",
+                "exact_seed_windows_planned": int(len(planned_seed_windows)),
+                "exact_seed_window_total_ms": int(sum(end - start + 1 for start, end in planned_seed_windows)),
+                "exact_seed_window_fallback_full_pair": not (isinstance(exact_seed_windows, list) and exact_seed_windows),
                 "seed_gate": _targeted_ltf_seed_gate_description(config),
                 "known_at_seed_cutoff_ms": pair_end_exclusive,
                 "known_at_seed_cutoff_utc": _timestamp_to_utc(pair_end_exclusive),
@@ -1337,6 +1376,288 @@ def _targeted_ltf_seed_timestamps_by_symbol(plan: pd.DataFrame, *, phase_name: s
     return seeds
 
 
+def _exact_seed_windows_by_minute_bounds(
+    frame: MinuteCoarseFrame | None,
+    *,
+    pair_start_ms: int,
+    htf_ms: int,
+    ltf_ms: int,
+    min_seed_return_pct: float,
+    min_seed_quote_ratio: float,
+    min_seed_trade_ratio: float,
+    min_confirm_return_pct: float,
+    min_confirm_quote_pace_ratio: float,
+    min_confirm_trade_pace_ratio: float,
+    min_confirm_candles: int,
+    max_confirm_candles: int,
+    baseline_quote_values: Iterable[float],
+    baseline_trade_values: Iterable[float],
+) -> list[tuple[int, int]] | None:
+    if frame is None or len(frame.timestamps) == 0:
+        return None
+    min_baseline_quote = min((float(value) for value in baseline_quote_values if np.isfinite(float(value)) and float(value) > 0.0), default=float("nan"))
+    min_baseline_trades = min((float(value) for value in baseline_trade_values if np.isfinite(float(value)) and float(value) > 0.0), default=float("nan"))
+    if not np.isfinite(min_baseline_quote) or not np.isfinite(min_baseline_trades):
+        return None
+    min_duration_ms = max(1, int(min_confirm_candles) * int(ltf_ms))
+    max_confirm_ms = max(1, int(max_confirm_candles) * int(ltf_ms))
+    windows: list[tuple[int, int]] = []
+    for seed_start in range(int(pair_start_ms), int(pair_start_ms) + int(htf_ms) + 1, int(ltf_ms)):
+        seed = _minute_upper_stats_for_seed_window(frame, start_ms=int(seed_start), end_exclusive_ms=int(seed_start) + int(htf_ms))
+        if seed is None:
+            return None
+        seed_return = _safe_divide(float(seed["high"]) - float(seed["open_floor"]), float(seed["open_floor"]))
+        seed_quote_ratio = _safe_divide(float(seed["quote"]), min_baseline_quote)
+        seed_trade_ratio = _safe_divide(float(seed["trades"]), min_baseline_trades)
+        if not np.isfinite(seed_return) or seed_return < float(min_seed_return_pct):
+            continue
+        if not np.isfinite(seed_quote_ratio) or seed_quote_ratio < float(min_seed_quote_ratio):
+            continue
+        if not np.isfinite(seed_trade_ratio) or seed_trade_ratio < float(min_seed_trade_ratio):
+            continue
+        confirm_start = int(seed_start) + int(htf_ms)
+        confirm = _minute_upper_stats_for_seed_window(frame, start_ms=confirm_start, end_exclusive_ms=confirm_start + max_confirm_ms)
+        if confirm is None:
+            return None
+        confirm_return = _safe_divide(float(confirm["high"]) - float(confirm["open_floor"]), float(confirm["open_floor"]))
+        confirm_quote_pace = _safe_divide(float(confirm["quote"]), min_baseline_quote * min_duration_ms / int(htf_ms))
+        confirm_trade_pace = _safe_divide(float(confirm["trades"]), min_baseline_trades * min_duration_ms / int(htf_ms))
+        if not np.isfinite(confirm_return) or confirm_return < float(min_confirm_return_pct):
+            continue
+        if not np.isfinite(confirm_quote_pace) or confirm_quote_pace < float(min_confirm_quote_pace_ratio):
+            continue
+        if not np.isfinite(confirm_trade_pace) or confirm_trade_pace < float(min_confirm_trade_pace_ratio):
+            continue
+        windows.append((int(seed_start), int(seed_start) + int(htf_ms) - 1))
+    return windows
+
+
+def _minute_upper_stats_for_seed_window(frame: MinuteCoarseFrame, *, start_ms: int, end_exclusive_ms: int) -> dict[str, float] | None:
+    cover_start = int(start_ms) - (int(start_ms) % MINUTE_MS)
+    cover_end = int(end_exclusive_ms) if int(end_exclusive_ms) % MINUTE_MS == 0 else int(end_exclusive_ms) + (MINUTE_MS - int(end_exclusive_ms) % MINUTE_MS)
+    if cover_end <= cover_start:
+        return None
+    left = int(np.searchsorted(frame.timestamps, cover_start, side="left"))
+    right = int(np.searchsorted(frame.timestamps, cover_end, side="left"))
+    expected = int((cover_end - cover_start) // MINUTE_MS)
+    if right - left != expected:
+        return None
+    expected_ts = cover_start + np.arange(expected, dtype=np.int64) * MINUTE_MS
+    if not np.array_equal(frame.timestamps[left:right], expected_ts):
+        return None
+    return {
+        "quote": float(np.nansum(frame.quote_volumes[left:right])),
+        "trades": float(np.nansum(frame.number_of_trades[left:right])),
+        "high": float(np.nanmax(frame.highs[left:right])),
+        "open_floor": float(np.nanmin(np.minimum(frame.opens[left:right], frame.lows[left:right]))),
+    }
+
+
+def _fast_seed_stage_prefilter_for_signal_entry_plan(
+    candidate: Mapping[str, object],
+    *,
+    baseline_lookup: _SeedBaselineLookup,
+    config: HtfLtfRunnerDiscoveryConfig,
+) -> CoarsePrefilterVerdict:
+    model = "fast_exact_seed_and_closed_context_gate_data_loading_only"
+    bounds: dict[str, object] = {
+        "seed_stage_prefilter_model": model,
+        "seed_stage_prefilter_trading_signal": False,
+        "seed_stage_prefilter_signal_verdict": "possible",
+    }
+    seed_return = _safe_float(candidate.get("htf_return_pct"))
+    bounds["seed_stage_htf_return_pct"] = float(seed_return) if seed_return is not None else float("nan")
+    if seed_return is not None and seed_return < float(config.min_htf_return_pct):
+        return CoarsePrefilterVerdict(
+            False,
+            "seed_htf_return_below_min",
+            {
+                **bounds,
+                "seed_stage_prefilter_signal_verdict": "rejected",
+                "seed_stage_prefilter_reason": "seed_htf_return_below_min",
+                "seed_stage_prefilter_stage": "rolling_htf_seed",
+            },
+        )
+
+    if candidate.get("htf_ltf_sustained_flow_ok") is False:
+        return CoarsePrefilterVerdict(
+            False,
+            "seed_ltf_flow_not_sustained",
+            {
+                **bounds,
+                "seed_stage_prefilter_signal_verdict": "rejected",
+                "seed_stage_prefilter_reason": "seed_ltf_flow_not_sustained",
+                "seed_stage_prefilter_stage": "rolling_htf_seed",
+                "seed_stage_htf_ltf_sustained_flow_ok": False,
+                "seed_stage_htf_ltf_quote_top1_share": candidate.get("htf_ltf_quote_top1_share", float("nan")),
+                "seed_stage_htf_ltf_trade_top1_share": candidate.get("htf_ltf_trade_top1_share", float("nan")),
+                "seed_stage_htf_ltf_tail_quote_share": candidate.get("htf_ltf_tail_quote_share", float("nan")),
+                "seed_stage_htf_ltf_tail_trade_share": candidate.get("htf_ltf_tail_trade_share", float("nan")),
+            },
+        )
+
+    seed_open_ms = _coerce_int(candidate.get("rolling_htf_window_start_ms"))
+    seed_quote = _safe_float(candidate.get("anomaly_quote_volume"))
+    seed_trades = _safe_float(candidate.get("anomaly_number_of_trades"))
+    htf_ms = _timeframe_ms(config.htf_timeframe)
+    if seed_open_ms is None or seed_quote is None or seed_trades is None:
+        return CoarsePrefilterVerdict(True, "not_checked_missing_seed_values", {**bounds, "seed_stage_prefilter_reason": "not_checked_missing_seed_values"})
+
+    baseline_quote, baseline_trades, baseline_source = _closed_context_baseline_for_seed_prefilter(
+        lookup=baseline_lookup,
+        seed_open_ms=int(seed_open_ms),
+        htf_ms=int(htf_ms),
+        baseline_candles=int(config.baseline_candles),
+    )
+    bounds.update(
+        {
+            "seed_stage_baseline_source": baseline_source,
+            "seed_stage_baseline_quote_volume_median": baseline_quote,
+            "seed_stage_baseline_number_of_trades_median": baseline_trades,
+        }
+    )
+    if not np.isfinite(baseline_quote) or baseline_quote <= 0.0 or not np.isfinite(baseline_trades) or baseline_trades <= 0.0:
+        return CoarsePrefilterVerdict(True, "not_checked_missing_baseline", {**bounds, "seed_stage_prefilter_reason": "not_checked_missing_baseline"})
+
+    quote_ratio = _safe_divide(float(seed_quote), float(baseline_quote))
+    trade_ratio = _safe_divide(float(seed_trades), float(baseline_trades))
+    bounds.update(
+        {
+            "seed_stage_htf_quote_ratio": quote_ratio,
+            "seed_stage_htf_trade_ratio": trade_ratio,
+        }
+    )
+    if not np.isfinite(quote_ratio) or quote_ratio < float(config.min_htf_quote_ratio):
+        return CoarsePrefilterVerdict(
+            False,
+            "seed_htf_quote_ratio_below_min",
+            {
+                **bounds,
+                "seed_stage_prefilter_signal_verdict": "rejected",
+                "seed_stage_prefilter_reason": "seed_htf_quote_ratio_below_min",
+                "seed_stage_prefilter_stage": "rolling_htf_seed",
+            },
+        )
+    if not np.isfinite(trade_ratio) or trade_ratio < float(config.min_htf_trade_ratio):
+        return CoarsePrefilterVerdict(
+            False,
+            "seed_htf_trade_ratio_below_min",
+            {
+                **bounds,
+                "seed_stage_prefilter_signal_verdict": "rejected",
+                "seed_stage_prefilter_reason": "seed_htf_trade_ratio_below_min",
+                "seed_stage_prefilter_stage": "rolling_htf_seed",
+            },
+        )
+    return CoarsePrefilterVerdict(True, "seed_stage_fast_gates_passed", {**bounds, "seed_stage_prefilter_reason": "seed_stage_fast_gates_passed"})
+
+
+def _closed_context_baseline_for_seed_prefilter(
+    *,
+    lookup: _SeedBaselineLookup,
+    seed_open_ms: int,
+    htf_ms: int,
+    baseline_candles: int,
+) -> tuple[float, float, str]:
+    minute_result = _closed_context_baseline_from_minute(
+        lookup,
+        seed_open_ms=int(seed_open_ms),
+        htf_ms=int(htf_ms),
+        baseline_candles=int(baseline_candles),
+    )
+    if np.isfinite(minute_result[0]) and np.isfinite(minute_result[1]):
+        return minute_result[0], minute_result[1], "backtest_cache_1m_closed_htf_context_fast_prefilter"
+    htf_result = _closed_context_baseline_from_htf(
+        lookup,
+        seed_open_ms=int(seed_open_ms),
+        htf_ms=int(htf_ms),
+        baseline_candles=int(baseline_candles),
+    )
+    if np.isfinite(htf_result[0]) and np.isfinite(htf_result[1]):
+        return htf_result[0], htf_result[1], "backtest_cache_htf_context_fast_prefilter"
+    return float("nan"), float("nan"), "missing"
+
+
+def _prepare_seed_baseline_lookup(htf: pd.DataFrame, minute: pd.DataFrame) -> _SeedBaselineLookup:
+    return _SeedBaselineLookup(
+        *_numeric_context_arrays(minute),
+        *_numeric_context_arrays(htf),
+    )
+
+
+def _numeric_context_arrays(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if frame.empty or not {"timestamp", "quote_volume", "number_of_trades"}.issubset(frame.columns):
+        empty = np.array([], dtype=np.int64)
+        return empty, np.array([], dtype=float), np.array([], dtype=float)
+    prepared = frame[["timestamp", "quote_volume", "number_of_trades"]].copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    prepared["quote_volume"] = pd.to_numeric(prepared["quote_volume"], errors="coerce")
+    prepared["number_of_trades"] = pd.to_numeric(prepared["number_of_trades"], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp"]).drop_duplicates("timestamp", keep="last").sort_values("timestamp")
+    if prepared.empty:
+        empty = np.array([], dtype=np.int64)
+        return empty, np.array([], dtype=float), np.array([], dtype=float)
+    return (
+        prepared["timestamp"].astype("int64").to_numpy(),
+        prepared["quote_volume"].fillna(0.0).to_numpy(dtype=float),
+        prepared["number_of_trades"].fillna(0.0).to_numpy(dtype=float),
+    )
+
+
+def _closed_context_baseline_from_minute(
+    lookup: _SeedBaselineLookup,
+    *,
+    seed_open_ms: int,
+    htf_ms: int,
+    baseline_candles: int,
+) -> tuple[float, float]:
+    required_minutes = int(baseline_candles) * int(htf_ms // MINUTE_MS)
+    if required_minutes <= 0 or len(lookup.minute_timestamps) == 0:
+        return float("nan"), float("nan")
+    context_end_ms = (int(seed_open_ms) // MINUTE_MS) * MINUTE_MS
+    context_start_ms = int(context_end_ms) - required_minutes * MINUTE_MS
+    if context_end_ms <= context_start_ms:
+        return float("nan"), float("nan")
+    left = int(np.searchsorted(lookup.minute_timestamps, int(context_start_ms), side="left"))
+    right = int(np.searchsorted(lookup.minute_timestamps, int(context_end_ms), side="left"))
+    if right - left != required_minutes:
+        return float("nan"), float("nan")
+    expected = int(context_start_ms) + np.arange(required_minutes, dtype=np.int64) * MINUTE_MS
+    if not np.array_equal(lookup.minute_timestamps[left:right], expected):
+        return float("nan"), float("nan")
+    minute_per_htf = int(htf_ms // MINUTE_MS)
+    quotes = lookup.minute_quote_volumes[left:right].reshape(int(baseline_candles), minute_per_htf).sum(axis=1)
+    trades = lookup.minute_number_of_trades[left:right].reshape(int(baseline_candles), minute_per_htf).sum(axis=1)
+    return _positive_median_array(quotes), _positive_median_array(trades)
+
+
+def _closed_context_baseline_from_htf(
+    lookup: _SeedBaselineLookup,
+    *,
+    seed_open_ms: int,
+    htf_ms: int,
+    baseline_candles: int,
+) -> tuple[float, float]:
+    if len(lookup.htf_timestamps) == 0:
+        return float("nan"), float("nan")
+    context_start_ms = int(seed_open_ms) - int(baseline_candles) * int(htf_ms)
+    left = int(np.searchsorted(lookup.htf_timestamps, int(context_start_ms), side="left"))
+    right = int(np.searchsorted(lookup.htf_timestamps, int(seed_open_ms), side="left"))
+    if right - left != int(baseline_candles):
+        return float("nan"), float("nan")
+    expected = int(context_start_ms) + np.arange(int(baseline_candles), dtype=np.int64) * int(htf_ms)
+    if not np.array_equal(lookup.htf_timestamps[left:right], expected):
+        return float("nan"), float("nan")
+    return _positive_median_array(lookup.htf_quote_volumes[left:right]), _positive_median_array(lookup.htf_number_of_trades[left:right])
+
+
+def _positive_median_array(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values) & (values > 0.0)]
+    if len(finite) == 0:
+        return float("nan")
+    return float(np.median(finite))
+
+
 def _build_targeted_ltf_signal_entry_backfill_plan(
     *,
     storage: ParquetStorage,
@@ -1365,6 +1686,8 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
         htf_scan = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         if htf_scan.empty:
             return [], [], 0, 0
+        htf_context = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=htf_context_start_ms, end_ms=end_ms)
+        minute_context = _load_frame(local_storage, symbol, "1m", start_ms=htf_context_start_ms, end_ms=end_ms)
         ltf = _load_frame(
             local_storage,
             symbol,
@@ -1388,31 +1711,32 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
         seed_stage_prefilter_rejected = 0
         seed_stage_prefilter_possible = 0
         seed_stage_prefilter_not_ready = 0
+        baseline_lookup = _prepare_seed_baseline_lookup(htf_context, minute_context)
         for candidate in candidate_rows:
             htf_close_ms = _coerce_int(candidate.get("htf_close_ms"))
             if htf_close_ms is None:
                 continue
             exact_rolling_seed_count += 1
-            seed_return = _safe_float(candidate.get("htf_return_pct"))
-            if seed_return is not None and seed_return < float(ROLLING_SEED_MIN_HTF_RETURN_PCT):
+            seed_verdict = _fast_seed_stage_prefilter_for_signal_entry_plan(
+                candidate,
+                baseline_lookup=baseline_lookup,
+                config=config,
+            )
+            if not seed_verdict.possible:
                 seed_stage_prefilter_rejected += 1
                 symbol_rows.append(
                     _signal_entry_seed_rejected_plan_row_for_candidate(
                         candidate,
                         config=config,
                         seed_window_status="ok",
-                        prefilter_bounds={
-                            "seed_stage_prefilter_model": "context_free_seed_return_gate_data_loading_only",
-                            "seed_stage_prefilter_trading_signal": False,
-                            "seed_stage_prefilter_signal_verdict": "rejected",
-                            "seed_stage_prefilter_reason": "seed_htf_return_below_min",
-                            "seed_stage_prefilter_stage": "rolling_htf_seed",
-                            "seed_stage_htf_return_pct": float(seed_return),
-                        },
+                        prefilter_bounds=seed_verdict.bounds,
                     )
                 )
                 continue
-            seed_stage_prefilter_possible += 1
+            if str(seed_verdict.reason).startswith("not_checked_"):
+                seed_stage_prefilter_not_ready += 1
+            else:
+                seed_stage_prefilter_possible += 1
             window_start = int(htf_close_ms)
             window_end = int(htf_close_ms + _signal_entry_tail_ms(config, ltf_ms) - 1)
             symbol_windows.append((window_start, window_end))
@@ -1423,11 +1747,9 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
                     window_end=window_end,
                     config=config,
                     prefilter_bounds={
-                        "seed_stage_prefilter_model": "context_free_seed_return_gate_only_data_loading_superset",
+                        **seed_verdict.bounds,
                         "seed_stage_prefilter_trading_signal": False,
-                        "seed_stage_prefilter_signal_verdict": "possible",
-                        "seed_stage_prefilter_reason": "seed_return_possible_core_decides_after_confirm_fetch",
-                        "seed_stage_htf_return_pct": float(seed_return) if seed_return is not None else float("nan"),
+                        "seed_stage_prefilter_reason": seed_verdict.reason,
                     },
                 )
             )
@@ -1446,7 +1768,7 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
                     "seed_stage_prefilter_possible": int(seed_stage_prefilter_possible),
                     "seed_stage_prefilter_rejected": int(seed_stage_prefilter_rejected),
                     "seed_stage_prefilter_not_ready": int(seed_stage_prefilter_not_ready),
-                    "seed_stage_prefilter_model": "context_free_seed_return_gate_only_data_loading_superset",
+                    "seed_stage_prefilter_model": "fast_exact_seed_and_closed_context_gate_data_loading_only",
                     "strict_seed_gate_applied_before_candidate_build": True,
                     "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
                     "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed_stage_possible",
@@ -1502,7 +1824,7 @@ def _build_targeted_ltf_signal_entry_backfill_plan(
         "strict_seed_gate_applied_before_candidate_build": True,
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
-        "seed_stage_prefilter_model": "context_free_seed_return_gate_only_data_loading_superset",
+        "seed_stage_prefilter_model": "fast_exact_seed_and_closed_context_gate_data_loading_only",
         "window_model": "signal_confirm_and_next_open_fetch_after_exact_rolling_seed_stage_possible",
         "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future_label",
     }
@@ -1931,6 +2253,57 @@ def _collect_symbol_seed_candidates_for_signal_entry_plan(
         anomaly_low = float(np.nanmin(lows[start_pos:end_pos]))
         anomaly_quote = float(np.nansum(quotes[start_pos:end_pos]))
         anomaly_trades = float(np.nansum(trades[start_pos:end_pos]))
+        seed_quotes = quotes[start_pos:end_pos]
+        seed_trades = trades[start_pos:end_pos]
+        seed_opens = opens[start_pos:end_pos]
+        seed_closes = closes[start_pos:end_pos]
+        split = max(1, window_candles // 2)
+        first_quote = float(np.nansum(seed_quotes[:split]))
+        second_quote = float(np.nansum(seed_quotes[split:])) if split < len(seed_quotes) else float(np.nansum(seed_quotes[-1:]))
+        first_trades = float(np.nansum(seed_trades[:split]))
+        second_trades = float(np.nansum(seed_trades[split:])) if split < len(seed_trades) else float(np.nansum(seed_trades[-1:]))
+        second_open = float(seed_opens[split]) if split < len(seed_opens) else float(seed_opens[-1])
+        second_close = float(seed_closes[-1])
+        quote_top = float(np.nanmax(seed_quotes)) if len(seed_quotes) else float("nan")
+        trade_top = float(np.nanmax(seed_trades)) if len(seed_trades) else float("nan")
+        green_share = _safe_divide(float(np.sum(seed_closes > seed_opens)), float(window_candles))
+        quote_acceleration = _safe_divide(second_quote, first_quote)
+        trade_acceleration = _safe_divide(second_trades, first_trades)
+        quote_top1_share = _safe_divide(quote_top, anomaly_quote)
+        trade_top1_share = _safe_divide(trade_top, anomaly_trades)
+        tail_count = min(4, max(2, window_candles // 3))
+        tail_quotes = seed_quotes[-tail_count:]
+        tail_trades = seed_trades[-tail_count:]
+        tail_opens = seed_opens[-tail_count:]
+        tail_closes = seed_closes[-tail_count:]
+        tail_quote_share = _safe_divide(float(np.nansum(tail_quotes)), anomaly_quote)
+        tail_trade_share = _safe_divide(float(np.nansum(tail_trades)), anomaly_trades)
+        tail_green_share = _safe_divide(float(np.sum(tail_closes > tail_opens)), float(len(tail_closes)))
+        second_half_return = _safe_divide(second_close - second_open, second_open)
+        sustained_flow_ok = (
+            np.isfinite(anomaly_quote)
+            and anomaly_quote > 0.0
+            and np.isfinite(anomaly_trades)
+            and anomaly_trades > 0.0
+            and np.isfinite(quote_top1_share)
+            and quote_top1_share <= 0.55
+            and np.isfinite(trade_top1_share)
+            and trade_top1_share <= 0.55
+            and np.isfinite(green_share)
+            and green_share >= 0.50
+            and np.isfinite(second_half_return)
+            and second_half_return >= 0.0
+            and np.isfinite(quote_acceleration)
+            and quote_acceleration >= 0.75
+            and np.isfinite(trade_acceleration)
+            and trade_acceleration >= 0.75
+            and np.isfinite(tail_quote_share)
+            and tail_quote_share >= 0.20
+            and np.isfinite(tail_trade_share)
+            and tail_trade_share >= 0.20
+            and np.isfinite(tail_green_share)
+            and tail_green_share >= 0.50
+        )
         rows.append(
             {
                 "symbol": symbol,
@@ -1950,6 +2323,16 @@ def _collect_symbol_seed_candidates_for_signal_entry_plan(
                 "anomaly_quote_volume": anomaly_quote,
                 "anomaly_number_of_trades": anomaly_trades,
                 "htf_return_pct": _safe_divide(anomaly_close - anomaly_open, anomaly_open),
+                "htf_ltf_sustained_flow_ok": bool(sustained_flow_ok),
+                "htf_ltf_quote_top1_share": quote_top1_share,
+                "htf_ltf_trade_top1_share": trade_top1_share,
+                "htf_ltf_green_share": green_share,
+                "htf_ltf_second_half_return_pct": second_half_return,
+                "htf_ltf_quote_acceleration": quote_acceleration,
+                "htf_ltf_trade_acceleration": trade_acceleration,
+                "htf_ltf_tail_quote_share": tail_quote_share,
+                "htf_ltf_tail_trade_share": tail_trade_share,
+                "htf_ltf_tail_green_share": tail_green_share,
                 "future_label_available_at_entry": False,
                 "signal_entry_plan_candidate_model": "lightweight_exact_rolling_seed_no_future_label",
             }

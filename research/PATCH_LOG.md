@@ -1,3 +1,40 @@
+## 2026-06-04 - P503 fast seed-stage planner pruning
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P502.
+
+Purpose: reduce obviously wasted exact LTF confirm fetch/processing before attempting any longer runner discovery run.
+
+Changes:
+
+- Signal-entry planning now applies fast known-at-seed checks before confirm/next-open fetch: exact seed return, exact internal seed LTF sustained-flow shape, and closed-context seed quote/trade ratios.
+- These checks are data-loading guards only. They use seed/pre-seed data already available after pre-entry fetch and never use future labels, exits, PnL, post-entry highs/lows, or selected-trade survival.
+- Pre-entry planning can narrow a 2xHTF pair into exact seed windows when 1m upper bounds prove which starts can still pass seed+confirm prerequisites. If 1m coverage is incomplete, it falls back to the old full-pair superset.
+- Artifacts expose the planner model/reason and exact seed window counts.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_runner_discovery_acceleration.py tests\test_pump_decision_contract.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m research_tools.decision_contract_guard
+```
+
+Diagnostics:
+
+```text
+2d runtime: 7.21h total; linear 30d estimate about 108h.
+5m_15s fetched aggTrade rows: ~19.3M total, ~18.4M pre-entry.
+5m_15s fetched LTF windows: ~777.8h total, ~736.0h pre-entry.
+50-symbol 5m_15s signal-entry dry sample: 232 passing windows after fast seed-stage gates; major safe rejects were seed return, seed LTF flow shape, seed trade ratio and seed quote ratio.
+50-symbol 5m_15s pre-entry merged-window sample: only ~17% merged-window reduction, so this patch is not a full 10x solution.
+```
+
+Risk:
+
+```text
+Low strategy-bias risk if treated as a data-loading guard: terminal seed rejects are based on known-at-seed data. Medium operational risk because 10x still requires a data-source/path change; this patch should not be sold as making REST-based 30d practical by itself.
+```
+
 ## 2026-06-03 - P502 throttled Binance aggTrades targeted fetch
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P501/P500.

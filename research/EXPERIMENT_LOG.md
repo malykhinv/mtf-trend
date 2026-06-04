@@ -1,3 +1,55 @@
+## 2026-06-04 - 2d runner discovery artifact and bottleneck audit
+
+Input:
+
+```text
+.output/results/htf_ltf_runner_discovery_2d
+profiles: 5m_30s, 3m_30s, 5m_15s, 3m_15s
+```
+
+Artifact verdict:
+
+```text
+Structurally complete and mostly honest for bottleneck analysis. All four profile folders have run_config, plan/fetch/materialize, decision ledger, data dependencies, data-quality summary, honesty report, signals/trades and combined artifacts. Do not use 2d PnL for edge.
+```
+
+Runtime:
+
+```text
+5m_30s: 4456.765s
+3m_30s: 2402.610s
+5m_15s: 13409.109s
+3m_15s: 5675.813s
+total: 7.21h
+linear 30d estimate: ~108h
+```
+
+Fetch health:
+
+```text
+HTTP 418/429 problem is essentially gone after P502.
+Only 5m_15s had 7 fetch errors, all DNS getaddrinfo failures.
+```
+
+Main bottleneck:
+
+```text
+REST aggTrades volume, not PnL computation. 5m_15s fetched ~19.3M aggTrade rows; ~18.4M were pre-entry. 5m_15s pre-entry fetched ~736h of LTF windows for a 2d scan.
+```
+
+P503 dry checks:
+
+```text
+Fast seed-stage signal-entry gates reduce many planned confirm windows safely.
+Pre-entry exact seed-window narrowing only reduced merged window time by about 17% in a 50-symbol 5m_15s sample because overlapping exact seed windows merge back into broad intervals.
+```
+
+Conclusion:
+
+```text
+The current REST pagination path will not reach 10x on filters alone. The next experiment should be a bulk/prebuilt aggTrades source that materializes both 15s and 30s caches from one downloaded trade stream, plus artifact-light long-run mode.
+```
+
 ## 2026-06-03 - P502 rate-limit fix before 30d runner discovery
 
 Patch: P502 applied locally / UNKNOWN commit.
