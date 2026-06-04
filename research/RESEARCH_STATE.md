@@ -14,6 +14,8 @@ The honest 10x path is:
 
 This preserves live/backtest parity because the decision core still reads the same normalized closed LTF candles from cache and emits the same snapshot/verdict contract. The accelerator changes only transport and cache materialization.
 
+Risk checklist before implementation: bulk/raw aggTrades ordering and duplicate ids must be normalized exactly once; interval boundaries must be inclusive/exclusive-compatible with current REST path; empty intervals require source-confirmed coverage; target candle aggregation must keep the same timestamp/open/high/low/close/quote/trade/taker semantics as live/backtest adapters; raw or target cache version must change if aggregation semantics change; delisted/new symbols must remain explicit unavailable data, not silent zeros; parity must be proven by old-vs-new `snapshot_hash`/`signal_verdict` equality on overlapping non-missing 2d windows.
+
 ## 2026-06-04 - P503 2d runner discovery audit and partial planner pruning
 
 Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
