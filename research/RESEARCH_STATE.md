@@ -4008,3 +4008,25 @@ The robust nature family is `clean buyer continuation`: taker-buy confirmation, 
 - Not-late-chase variant: `buyer60 + seed_tail_quote_share<=55% + confirm_trade_pace>=5 + prior_spikes<=10`, 85 trades, sum `+0.9611`, WR `78.8%`.
 
 This is still not a live-ready proof because it was mined on the same 30d dataset. The next validation must freeze one or two rules above and test on another period or same-period live/backtest parity before changing live filters.
+
+## 2026-06-05 - strengthened category and exit-policy memory
+
+Current commit: UNKNOWN. Status: ANALYZED / APPLIED locally.
+
+The categories to remember are no longer raw C/A/S. Raw C/A/S stays an artifact label only. The frozen research family is `clean buyer continuation`: no material pre-seed dump, strong taker-buy confirmation, real confirmation return/trade pace, clean prior-spike history, and no single late-tail/single-print seed dominance.
+
+Stronger high-win candidates from the same 30d run:
+- `buyer60 + confirm_ret>=0.8% + prior_spikes<=10 + no pre-seed dump`: 48 trades, sum `+0.6771`, WR `81.3%`, top20 positive share `41.8%`.
+- `buyer60 + confirm_ret>=0.6% + prior_spikes<=10 + 5m profiles`: 53 trades, sum `+0.7450`, WR `83.0%`, top20 positive share `44.2%`.
+- `buyer60 + confirm_trade_pace>=5 + prior_spikes<=10 + 15s profiles`: 45 trades, sum `+0.5684`, WR `80.0%`, top20 positive share `41.1%`.
+- `buyer60 + confirm_trade_pace>=5 + quote_pace in [3,40] + 5m_15s`: 42 trades, sum `+0.5476`, WR `81.0%`, top20 positive share `43.1%`.
+
+Exit-policy replay was rerun through `ParquetStorage`, so base parquet plus `delta/` targeted LTF cache were visible. Input was 118 strong-category rows with forced post-entry materialization; 99 windows were fully continuous and 19 had later LTF gaps, but every replayed trade closed before the problematic gap. Artifacts are in `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/exit_policy_v1/`.
+
+Exit readout:
+- No-TP / structural-trail-only is not the default path. It can raise summed return on this sample, but it drops WR to about `56-59%` and makes returns heavily top-dependent (`top10` positive share about `44-52%`, `top20` about `68-69%` on the strong union).
+- Current `TP1=0.75R close 50% then trail` is profitable on strong categories but still leaves more runner-tail dependence than needed.
+- `TP1=0.75R close 75% then trail 25%` is the best near-term compromise for the project goal: it keeps upside, cuts runner-tail dependence versus 50% close, and does not turn the system into scalp-only.
+- `full TP at 0.75R` is the clean conservative benchmark. `full TP at 0.5R` maximizes WR and lowers top dependence further, but sacrifices average return and may overfit toward small early pops.
+
+Code hygiene applied locally: discovery TP fill now requires candle trade-through (`high > TP`) instead of ambiguous exact touch, and the honesty report now describes the actual TP1 partial + structural trailing model. This does not change signal/category selection.

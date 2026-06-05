@@ -3332,7 +3332,9 @@ def _simulate_no_tp_runner_trade(
             exit_price = raw_exit_price * (1.0 - config.exit_slippage_pct)
             exit_stop_before_update = active_stop
             break
-        if not tp1_hit and high >= tp1_price:
+        # Conservative exchange-limit proxy: an exact candle-high touch is
+        # ambiguous in OHLCV, so require trade-through before counting TP1 fill.
+        if not tp1_hit and high > tp1_price:
             tp1_hit = True
             tp1_ts = candle_ts
             tp1_raw_price = tp1_price
@@ -5196,7 +5198,7 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
             {
                 "check": "exit_model",
                 "status": "ok",
-                "detail": "no TP is simulated; exits are structural stop, structural trailing stop, or max-hold wall-clock time exit. If the post-entry LTF path has a gap before exit, the trade is skipped rather than carried across missing time.",
+                "detail": "TP1 is simulated as a conservative exchange-limit proxy: close the configured TP1 fraction at TP1 only after candle trade-through, then manage the remainder by structural trailing stop or max-hold wall-clock time exit. If the post-entry LTF path has a gap before exit, the trade is skipped rather than carried across missing time.",
             },
             {
                 "check": "ltf_continuity",

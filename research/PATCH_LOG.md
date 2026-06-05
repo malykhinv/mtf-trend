@@ -11227,3 +11227,26 @@ Risk:
 ```text
 If Binance ever lists a symbol requiring non-ASCII market ids, this guard would reject it. Current Binance futures market ids are ASCII, and rejecting unsupported pseudo-symbols is safer than emitting runtime encoding errors during 30d discovery.
 ```
+
+## 2026-06-05 - P511 conservative TP fill report and archive CSV noise cleanup
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- `research_tools/htf_ltf_runner_discovery.py` now treats TP1 fill as a conservative exchange-limit proxy: exact candle-high touch is ambiguous, so TP1 requires `high > tp1_price` instead of `high >= tp1_price`.
+- The runner discovery honesty report now describes the actual exit model: TP1 partial close followed by structural trailing or max-hold exit. The stale "no TP is simulated" wording was wrong after the TP1 partial runner contract.
+- `research_tools/targeted_ltf_accelerator.py` reads public-archive aggTrade CSVs with `low_memory=False` to avoid noisy dtype warnings from mixed Binance archive rows.
+- Research memory was updated with the frozen clean-buyer category hypotheses and the strong-category exit-policy replay.
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+The TP fill change is conservative and can only remove ambiguous exact-touch TP fills from future backtests. It does not change signal/category selection, targeted data loading, live order placement, actual exchange fills, or stop logic. Historical 30d artifacts generated before this patch remain tied to their recorded code/report versions; the follow-up replay showed no difference between >= and > for current TP0.75/50 on the 118 strong-category refill subset.
+```

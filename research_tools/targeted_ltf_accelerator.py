@@ -154,7 +154,7 @@ def _read_binance_public_archive_zip(
         if not names:
             return pd.DataFrame(columns=columns)
         with archive.open(names[0]) as handle:
-            frame = pd.read_csv(handle, header=None)
+            frame = pd.read_csv(handle, header=None, low_memory=False)
     if frame.empty or len(frame.columns) < len(columns):
         return pd.DataFrame(columns=columns)
     frame = frame.iloc[:, : len(columns)].copy()

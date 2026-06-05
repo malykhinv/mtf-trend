@@ -5695,3 +5695,41 @@ This is hypothesis generation on one 30d dataset. Do not promote to live until f
 
 Next experiment:
 Freeze two candidates for validation: broad `buyer55 + no pre-seed dump` and strong `buyer60 + confirm_ret>=0.6% + prior_spikes<=10`, optionally with the no-dump add-on. Validate on another period/cache snapshot before any live filter change.
+
+## 2026-06-05 - strong-category TP / trailing replay
+
+Run: `.output/results/htf_ltf_runner_discovery_30d`.
+
+Question: should strong clean-buyer categories use a TP, how far should it be, how much should close there, and is structural trailing without TP better?
+
+Protocol:
+- Input: 118 strong-category rows saved in `_analysis_coverage/exit_policy_v1/forced_materialize_selected_trades.csv`.
+- Data source: `ParquetStorage.load_window_result`, so base target-LTF parquet plus `delta/` materialized windows were both visible.
+- Coverage: 117 windows loaded as `parquet_window_loaded_with_delta`, 1 as `parquet_delta_window_loaded`. Strict LTF windows: 99 `ok`, 19 later `ltf_gap`; every replayed trade closed before the gap, so the exit comparison is usable for this strong subset.
+- Replay variants: no TP with initial stop/time exit, no TP with structural trailing from entry, full TP at 0.5R/0.75R/1R/1.25R/1.5R/2R, partial TP close 25/50/75% with structural trailing, and a small set of TP0.75 rest-target-or-trail variants.
+- Fill model: stop-first inside candle; conservative TP fill requires candle trade-through (`high > TP`). A legacy `high >= TP` comparison was also checked for current 0.75R/50%; it matched the conservative result on this subset.
+
+Artifacts:
+- `_analysis_coverage/exit_policy_v1/exit_variant_trade_replay_strong_refilled_storage.csv`
+- `_analysis_coverage/exit_policy_v1/exit_variant_summary_by_category_strong_refilled_storage.csv`
+- `_analysis_coverage/exit_policy_v1/exit_variant_recommendation_score_strong_refilled_storage.csv`
+
+Main strong-union readout:
+- `no_tp_initial_stop_time`: 105 closed, sum `+1.9221`, WR `59.1%`, top10 positive share `52.5%`, top20 `69.2%`.
+- `no_tp_trail_from_entry`: 118 closed, sum `+1.2580`, WR `55.9%`, top10 `43.5%`, top20 `68.4%`.
+- current conservative `TP0.75R close50 trail`: 118 closed, sum `+1.4137`, WR `75.4%`, top10 `25.2%`, top20 `42.4%`.
+- `full TP0.5R`: 118 closed, sum `+0.8571`, WR `83.1%`, top10 `17.1%`, top20 `31.3%`.
+- `full TP0.75R`: 118 closed, sum `+1.1968`, WR `75.4%`, top10 `18.4%`, top20 `33.6%`.
+- `TP0.75R close75 trail`: 118 closed, sum `+1.3052`, WR `75.4%`, top10 `20.6%`, top20 `35.9%`.
+
+High-win clean-no-dump readout (`buyer60 + confirm_ret>=0.8% + prior<=10 + no-dump`):
+- `full TP0.5R`: 48 closed, sum `+0.4731`, WR `87.5%`, top10 `32.3%`, top20 `58.0%`.
+- `full TP0.75R`: 48 closed, sum `+0.6969`, WR `81.3%`, top10 `34.9%`, top20 `62.3%`.
+- current `TP0.75R close50 trail`: 48 closed, sum `+0.6796`, WR `81.3%`, top10 `42.7%`, top20 `72.7%`.
+- `TP0.75R close75 rest1.5R-or-trail`: 48 closed, sum `+0.7440`, WR `81.3%`, top10 `36.3%`, top20 `65.4%`.
+
+Conclusion:
+Do not remove TP. Structural trailing without TP is attractive only if we accept lower winrate and higher dependence on a few large runners, which conflicts with the current goal. The best next validation policy is `TP1=0.75R, close 75%, trail 25% structurally`. Benchmarks for validation should include `full TP0.75R` and `full TP0.5R`. Current 50% TP1 close remains acceptable but is more runner-tail dependent than necessary.
+
+Code follow-up:
+Discovery TP fill was tightened from `high >= TP` to `high > TP`, and the honesty report was corrected to describe TP1 partial + structural trailing instead of stale "no TP" wording.

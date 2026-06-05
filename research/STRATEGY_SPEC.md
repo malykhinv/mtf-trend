@@ -1107,3 +1107,69 @@ same signal verdict + different fill/exit = execution/simulation difference
 ```
 
 Live writes `live2_decision_ledger.csv`; discovery writes `htf_ltf_runner_decision_ledger.csv`; exact joins are produced by `research_tools/decision_parity_join.py`.
+
+## Frozen 30d category hypotheses under validation
+
+Raw C/A/S labels are not the current strategic truth by themselves. They are fixed-priority artifact/category context. The 30d run promoted a narrower research family for validation:
+
+```text
+clean buyer continuation =
+    no material pre-seed dump
+    + taker-buy confirmation
+    + real confirmation return/trade pace
+    + clean prior-spike history
+    + no obvious single-print or late-tail seed dominance
+```
+
+Frozen validation candidates:
+
+```text
+broad watchlist:
+  buyer55 + pregrowth_min_path_return_pct >= -1%
+
+strong cross-TF:
+  buyer60 + ltf_confirm_return_pct >= 0.006 + prior_spike_count_24h <= 10
+
+strong high-win:
+  buyer60 + ltf_confirm_return_pct >= 0.008 + prior_spike_count_24h <= 10
+  + pregrowth_min_path_return_pct >= -1%
+
+distributed seed:
+  strong buyer confirmation + htf_ltf_quote_top1_share <= 0.50
+  or htf_ltf_trade_top1_share <= 0.40
+
+not-late tape:
+  buyer60 + htf_ltf_tail_quote_share <= 0.55
+  + ltf_trade_pace_ratio >= 5 + prior_spike_count_24h <= 10
+```
+
+These are research hypotheses, not live-promoted filters until validated on another period or joined against same-period live/backtest decision ledgers with `same_snapshot_different_signal_verdict=0` and selected overlap at or above 90%.
+
+## Exit-policy hypothesis under validation
+
+The runner discovery exit model is TP-first protection plus structural trailing, not a pure no-TP runner:
+
+```text
+entry = next LTF open plus adverse slippage
+initial stop = structural stop known at decision/entry
+TP1 = entry + 0.75R
+default current close fraction = 50%
+remaining size = structural trailing stop or max-hold exit
+```
+
+For future validation, the preferred anti-tail candidate is:
+
+```text
+TP1 = 0.75R
+close 75% at TP1
+trail 25% structurally
+```
+
+Conservative benchmarks:
+
+```text
+full TP at 0.75R
+full TP at 0.5R
+```
+
+No-TP / structural-trail-only is not the default hypothesis because the 30d strong-category replay improved summed return mainly by accepting much lower winrate and much higher dependence on a small number of large runners.
