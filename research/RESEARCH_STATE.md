@@ -3991,3 +3991,20 @@ The run is not yet enough for a broad candidate-universe nature claim, because `
 Trading state: all selected combined profiles remain negative after costs (`816` closed, sum `-1.1323`, avg `-0.00139`, median `+0.00606`, winrate `53.6%`). C/A/S categories alone are not the edge. The strongest entry-time hypothesis from this run is `ltf_taker_buy_quote_share >= 0.55` plus no meaningful pre-seed dump (`pregrowth_min_path_return_pct >= -1%`). Per-profile live-filtered results for this fixed hypothesis were positive in all four profiles: `5m_30s` 165 trades sum `+0.6095`, `3m_30s` 158 trades sum `+0.1838`, `5m_15s` 114 trades sum `+0.6052`, `3m_15s` 151 trades sum `+0.3924`. The 15s profiles are cleaner across halves/days; 30s profiles are more first-half dependent.
 
 Next honest step: do not tune thresholds from this same run. Freeze the `buyer + no pre-seed dump` hypothesis, add or run a post-hoc candidate labeler only for already planned/covered candidate windows if broad runner/fader nature is needed, and validate on another period or a same-period live/backtest parity join before promoting any filter to live.
+
+## 2026-06-05 - 30d winning category families
+
+Current commit: be65b688. Status: ANALYZED / HYPOTHESIS GENERATION.
+
+Follow-up mining on `.output/results/htf_ltf_runner_discovery_30d` used only entry-time fields for rule masks; future runner labels, MFE/MAE, exits and PnL were evaluation-only. Generated artifacts are in `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/winning_categories_v1/`.
+
+Old C/A/S categories are not validated as standalone edge. They should not be discarded from artifacts, but they should be demoted to context/modifiers. A strengthened `C` subset is good only after adding buyer/confirmation/history filters; raw combined `C` and raw combined `A` remain negative.
+
+The robust nature family is `clean buyer continuation`: taker-buy confirmation, no material pre-seed dump, real confirmation return/trade pace, clean prior-spike history, and no obvious single-print/late-tail chase. Canonical frozen hypothesis candidates:
+- Broad base: `buyer55 + no pre-seed dump`, 588 per-profile trades, sum `+1.7910`, WR `60.4%`, top20 positive share `58.8%`.
+- Strong cross-TF: `buyer60 + confirm_ret>=0.6% + prior_spikes<=10`, 78 trades, sum `+0.9864`, WR `76.9%`, both halves positive, top20 positive share `44.5%`.
+- Strong cross-TF plus no-dump: add `pregrowth_min_path_return_pct>=-1%`, 63 trades, sum `+0.7899`, WR `79.4%`, both halves positive, top20 positive share `42.5%`.
+- Distributed variant: add `seed_top1_quote_share<=50%`, 75 trades, sum `+1.0037`, WR `77.3%`.
+- Not-late-chase variant: `buyer60 + seed_tail_quote_share<=55% + confirm_trade_pace>=5 + prior_spikes<=10`, 85 trades, sum `+0.9611`, WR `78.8%`.
+
+This is still not a live-ready proof because it was mined on the same 30d dataset. The next validation must freeze one or two rules above and test on another period or same-period live/backtest parity before changing live filters.

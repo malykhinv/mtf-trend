@@ -5657,3 +5657,41 @@ Limits:
 
 Next experiment:
 Freeze `buyer + no pre-seed dump` as a predeclared hypothesis. Validate it on a different period/cache snapshot or same-period live/backtest parity ledger before changing live filters. If broad pump-nature separation is needed first, build a targeted post-hoc candidate labeler that labels already known seed candidates without rerunning full 30d and without using labels as entry filters.
+
+## 2026-06-05 - 30d winning category family mining
+
+Run: `.output/results/htf_ltf_runner_discovery_30d`.
+
+Commit: be65b688, with unrelated dirty local files observed.
+
+Protocol:
+- Input rows: per-profile `htf_ltf_runner_trades_live_filtered.csv` for `5m_30s`, `3m_30s`, `5m_15s`, `3m_15s`.
+- Rule masks used only live-available entry-time fields: taker-buy share, pregrowth/no-dump path, confirmation return/pace, seed concentration/tail share, prior-spike history, initial risk, TF profile and existing C/A/S category id.
+- Future labels, PnL, MFE/MAE, exit reason and post-entry path were evaluation-only.
+- Stability filters required positive expectancy, positive median, useful winrate, both halves positive, acceptable top dependency and positive-day share.
+
+Artifacts:
+- `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/winning_categories_v1/all_generated_entry_time_categories.csv`
+- `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/winning_categories_v1/positive_entry_time_categories.csv`
+- `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/winning_categories_v1/stable_winning_entry_time_categories.csv`
+- `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/winning_categories_v1/strong_winning_entry_time_categories.csv`
+- `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/winning_categories_v1/representative_stable_winning_categories.csv`
+- `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/winning_categories_v1/canonical_winning_category_families.csv`
+
+Readout:
+- Old C/A/S categories are not confirmed as standalone edge. Raw combined `C_balanced_flow_acceptance` and `A_resonance_prior_spike` were negative. `C` becomes useful only after strong buyer/confirmation/history filters.
+- Dominant winning atom families among strong categories were buyer confirmation, TF scope, flow intensity, no-dump/pregrowth quality, clean prior history, controlled risk, not-late-chase tail share, and distributed seed flow.
+- Broad base category: `ltf_taker_buy_quote_share>=0.55` and `pregrowth_min_path_return_pct>=-1%`: 588 per-profile trades / 181 symbols, sum `+1.7910`, avg `+0.3046%`, median `+0.9301%`, WR `60.4%`, top20 positive share `58.8%`. It is high-sample but still only a mined hypothesis.
+- Strong cross-TF category: `buyer60 + confirm_ret>=0.6% + prior_spikes<=10`: 78 trades / 44 symbols, sum `+0.9864`, avg `+1.2647%`, median `+1.5934%`, WR `76.9%`, top20 positive share `44.5%`, all TF profiles positive.
+- Strong cross-TF plus no-dump: add `pregrowth_min_path_return_pct>=-1%`: 63 trades / 35 symbols, sum `+0.7899`, avg `+1.2538%`, median `+1.6110%`, WR `79.4%`, top20 positive share `42.5%`, all TF profiles positive.
+- Distributed variant: `buyer60 + seed_top1_quote_share<=50% + confirm_ret>=0.6% + prior_spikes<=10`: 75 trades, sum `+1.0037`, WR `77.3%`, top20 positive share `43.1%`.
+- Not-late-chase variant: `buyer60 + seed_tail_quote_share<=55% + confirm_trade_pace>=5 + prior_spikes<=10`: 85 trades, sum `+0.9611`, WR `78.8%`, top20 positive share `43.9%`.
+
+Interpretation:
+The pump nature that fits this run best is not one isolated spike and not dump-rebound. It is clean buyer continuation: the symbol was not just noisy, taker-buy flow led the confirmation, price already accepted upward, prior same-symbol spike history was not repeatedly fading, and the seed/confirmation flow was not a single late tail.
+
+Risk:
+This is hypothesis generation on one 30d dataset. Do not promote to live until frozen rules are validated out-of-sample or through same-period live/backtest parity.
+
+Next experiment:
+Freeze two candidates for validation: broad `buyer55 + no pre-seed dump` and strong `buyer60 + confirm_ret>=0.6% + prior_spikes<=10`, optionally with the no-dump add-on. Validate on another period/cache snapshot before any live filter change.
