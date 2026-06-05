@@ -331,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--execution-risk-per-trade-pct", type=float, default=0.02, help="Compatibility field; not used for live2 order sizing while fixed-notional mode is enforced.")
     anomaly_live2.add_argument("--execution-max-total-open-risk-pct", type=float, default=0.08)
     anomaly_live2.add_argument("--execution-max-open-positions", type=int, default=0, help="0 means unlimited live2 protected positions.")
-    anomaly_live2.add_argument("--position-supervisor-tp1-close-fraction", type=float, default=0.5)
+    anomaly_live2.add_argument("--position-supervisor-tp1-close-fraction", type=float, default=0.75)
     anomaly_live2.add_argument("--position-supervisor-early-exit-enabled", type=_str_to_bool, default=False)
     anomaly_live2.add_argument("--position-supervisor-early-exit-min-hold-candles", type=_positive_int_for("--position-supervisor-early-exit-min-hold-candles"), default=6)
     anomaly_live2.add_argument("--position-supervisor-early-exit-stall-candles", type=_positive_int_for("--position-supervisor-early-exit-stall-candles"), default=12)

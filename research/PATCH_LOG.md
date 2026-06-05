@@ -11250,3 +11250,43 @@ Risk:
 ```text
 The TP fill change is conservative and can only remove ambiguous exact-touch TP fills from future backtests. It does not change signal/category selection, targeted data loading, live order placement, actual exchange fills, or stop logic. Historical 30d artifacts generated before this patch remain tied to their recorded code/report versions; the follow-up replay showed no difference between >= and > for current TP0.75/50 on the 118 strong-category refill subset.
 ```
+
+## 2026-06-05 - P512 shared clean-buyer trade policy
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Purpose:
+
+Move the profitable mined category family into one source-neutral trade-policy layer so live2 and runner discovery do not implement separate versions of the same rules.
+
+Changes:
+
+- Added `research_tools/pump_trade_policy.py` with `clean_buyer_continuation_v1`.
+- The broad `buyer55 + no pre-seed dump` rule is watchlist-only. Accepted trade rules are stronger clean-buyer variants: high-win clean no-dump, 5m strong confirmation/history, 15s fast tape/history, 5m15 active tape, distributed seed, and not-late tape.
+- Exit policy is now part of the policy decision: `tp075_close75_structural_trail_v1`, `TP1=0.75R`, close `75%`, trail `25%`.
+- Runner discovery calls policy after `PumpDecisionCore selected`; policy rejects are written as signal-quality rejects with visible `trade_policy_*` fields and are not simulated as trades.
+- Runner discovery replay reads `tp1_r` and `tp1_close_fraction` from the accepted signal policy row.
+- Live2 signal adapter calls the same policy after core selected. Policy-rejected live rows do not reach entry guard/order execution.
+- Live2 decision ledger includes `core_signal_*`, `trade_policy_*`, and `exit_*` fields.
+- Live2 protected positions carry trade/exit policy fields. Managed TP1 is recalculated from actual fill and actual risk; signal TP is kept as audit context.
+- Position supervisor uses per-position `tp1_close_fraction`; config is fallback for legacy/manual positions.
+- Added unit coverage for policy decisions and live signal adapter policy acceptance/rejection.
+
+Validation:
+
+```bash
+python -m pytest tests/test_pump_trade_policy.py tests/test_live2_trade_policy_signal.py tests/test_pump_decision_contract.py tests/test_htf_ltf_runner_discovery.py::test_runner_simulation_marks_policy_tp1_partial_hit -q
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Known unrelated test limitation:
+
+```text
+tests/test_live2_market_watch.py currently fails collection because it imports legacy _effective_context_status from research_tools.anomaly_live2.signal. Several tests/test_htf_ltf_runner_discovery.py helpers also still use stale pre-P5xx signatures. Those failures pre-existed the shared trade-policy patch and should be cleaned separately.
+```
+
+Risk:
+
+```text
+This intentionally reduces live/backtest trade count because broad C/A/S core-selected rows now need to pass the clean-buyer trade policy. The change should improve quality and parity, but 30d metrics before P512 are no longer directly comparable to P512 runs because the traded signal layer changed.
+```

@@ -1173,3 +1173,53 @@ full TP at 0.5R
 ```
 
 No-TP / structural-trail-only is not the default hypothesis because the 30d strong-category replay improved summed return mainly by accepting much lower winrate and much higher dependence on a small number of large runners.
+
+## Shared Trade-Policy Runtime Contract
+
+The clean-buyer rules are implemented in one source-neutral module:
+
+```text
+research_tools/pump_trade_policy.py
+```
+
+Runtime order:
+
+```text
+DecisionSnapshot
+-> PumpDecisionCore
+-> PumpTradePolicy
+-> entry/execution guard
+-> live fill or backtest fill proxy
+-> verified stop / TP / structural trailing
+```
+
+`PumpDecisionCore` remains the snapshot/category signal boundary. `PumpTradePolicy` is the trade-quality boundary for the mined clean-buyer family. A core-selected signal may be rejected by trade policy; that is a signal-quality rejection, not portfolio capacity.
+
+Required artifact fields:
+
+```text
+core_signal_verdict
+core_signal_reason
+trade_policy_id
+trade_policy_version
+trade_policy_verdict
+trade_policy_reason
+trade_policy_rule_id
+trade_policy_matched_rule_ids
+trade_policy_watchlist_rule_ids
+exit_policy_id
+exit_tp1_r
+exit_tp1_close_fraction
+exit_runner_fraction
+exit_trail_model
+```
+
+Live and backtest must use the same `PumpTradePolicyDecision` for accepted/rejected trade policy. Live may still differ from backtest only in execution layers: current price drift, stale signal, exchange position, actual fill, verified stop, capacity, and live-only runtime gates.
+
+For live position management, `signal_tp1_price` is audit context. The managed `tp1_price` must be recalculated from actual fill and actual initial risk:
+
+```text
+actual_tp1_price = entry_fill_price + (entry_fill_price - stop_price) * exit_tp1_r
+```
+
+The per-position `tp1_close_fraction` comes from the accepted trade policy. Live config/supervisor defaults are fallback only for legacy/manual protected positions.

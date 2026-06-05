@@ -5733,3 +5733,21 @@ Do not remove TP. Structural trailing without TP is attractive only if we accept
 
 Code follow-up:
 Discovery TP fill was tightened from `high >= TP` to `high > TP`, and the honesty report was corrected to describe TP1 partial + structural trailing instead of stale "no TP" wording.
+
+## 2026-06-05 - P512 shared trade-policy validation protocol
+
+Hypothesis: moving the mined clean-buyer rules into one shared `PumpTradePolicy` layer lets live and backtest trade the same categories without duplicating rules or breaking `snapshot_hash -> signal verdict` parity.
+
+Implementation under test:
+- `research_tools/pump_trade_policy.py` evaluates `clean_buyer_continuation_v1`.
+- Live2 and runner discovery call it only after `PumpDecisionCore selected`.
+- Broad `buyer55 + no dump` is watchlist-only; real accepted rules require stronger buyer/confirmation/history/distribution/not-late-tape conditions.
+- Exit policy is `tp075_close75_structural_trail_v1`.
+
+Acceptance protocol:
+1. Unit tests: policy accepts/rejects deterministic feature dicts, and live signal adapter shows `core_signal_verdict=selected` with either `trade_policy_verdict=accepted` or `rejected`.
+2. Short discovery smoke: run `python main.py run-htf-ltf-runner-discovery --days 1`, inspect decision ledger and trades for `trade_policy_verdict`, `trade_policy_rule_id`, `exit_policy_id`, and nonempty policy reject reasons.
+3. Live shadow/small-notional: inspect `live2_decision_ledger.csv` and `live_events.csv`; accepted entries must carry the same policy fields and protected positions must show actual-fill TP1 plus `tp1_close_fraction=0.75`.
+4. Parity check: when a same-period live/backtest ledger exists, `same_snapshot_different_signal_verdict` must remain `0`. Policy rejects are allowed only if both sides produce the same policy verdict for the same snapshot.
+
+Do not compare PnL before the funnel confirms that old broad C/A/S rows are being rejected by trade policy for visible reasons.

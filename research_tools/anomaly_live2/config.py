@@ -95,7 +95,7 @@ class AnomalyLive2Config:
     execution_stop_visibility_sleep_seconds: float = 0.5
     execution_max_position_amount_slippage_ratio: float = 0.05
     position_supervisor_monitor_interval_ms: int = 1_000
-    position_supervisor_tp1_close_fraction: float = 0.5
+    position_supervisor_tp1_close_fraction: float = 0.75
     position_supervisor_breakeven_stop_offset_pct: float = 0.0
     position_supervisor_flat_position_abs_epsilon: float = 1e-12
     position_supervisor_early_exit_enabled: bool = False

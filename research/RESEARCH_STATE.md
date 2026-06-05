@@ -4030,3 +4030,21 @@ Exit readout:
 - `full TP at 0.75R` is the clean conservative benchmark. `full TP at 0.5R` maximizes WR and lowers top dependence further, but sacrifices average return and may overfit toward small early pops.
 
 Code hygiene applied locally: discovery TP fill now requires candle trade-through (`high > TP`) instead of ambiguous exact touch, and the honesty report now describes the actual TP1 partial + structural trailing model. This does not change signal/category selection.
+
+## 2026-06-05 - shared clean-buyer trade policy implementation
+
+Current commit: fcf768bc. Status: APPLIED locally / UNKNOWN commit.
+
+P512 moves the mined clean-buyer rules out of ad-hoc analysis masks and into a source-neutral module: `research_tools/pump_trade_policy.py`. Both live2 and runner discovery now call the same policy after `PumpDecisionCore` returns `selected`. Core-selected but policy-rejected rows are no longer hidden as portfolio effects; they are signal-quality rejects with `core_signal_verdict=selected`, `trade_policy_verdict=rejected`, and a visible policy reason.
+
+Trading policy implemented for live/backtest:
+- Active policy: `clean_buyer_continuation_v1`.
+- Accepted rule family: strong clean buyer continuation, 5m strong buyer confirmation/history, 15s fast tape/history, 5m15 active tape, distributed seed, and not-late tail tape.
+- Broad `buyer55 + no dump` is watchlist-only unless it also matches a stronger accepted rule.
+- Exit policy: `tp075_close75_structural_trail_v1`, `TP1=0.75R`, close `75%`, structurally trail `25%`.
+
+Live2 now carries policy fields in `Live2SignalDecision`, live decision ledger, protected position state, and execution details. For managed live positions, TP1 is recalculated from actual entry fill and actual initial risk, while signal TP remains audit/entry-guard context. The supervisor uses per-position `tp1_close_fraction`; config is fallback only for legacy/manual positions.
+
+Backtest discovery now writes policy fields in signal/trade rows and decision ledger, and its post-entry replay reads `tp1_r` and `tp1_close_fraction` from the accepted signal policy instead of treating discovery config as the policy source.
+
+Next validation: run a short `run-htf-ltf-runner-discovery --days 1` and inspect `trade_policy_verdict` funnel counts before comparing PnL. Then run live shadow/small-notional and verify live2 decision ledger has zero unexplained policy/execution mismatches.

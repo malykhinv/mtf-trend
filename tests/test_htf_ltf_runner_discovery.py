@@ -77,7 +77,7 @@ def test_ltf_signal_enters_next_open_after_closed_confirmation() -> None:
     assert signal["entry_timestamp_ms"] == 30_000
 
 
-def test_no_tp_runner_simulation_never_marks_tp_hit() -> None:
+def test_runner_simulation_marks_policy_tp1_partial_hit() -> None:
     ltf = pd.DataFrame(
         [
             {"timestamp": 0, "open": 100.0, "high": 100.5, "low": 99.8, "close": 100.2, "volume": 1.0},
@@ -94,6 +94,9 @@ def test_no_tp_runner_simulation_never_marks_tp_hit() -> None:
         "entry_timestamp_utc": "",
         "entry_price": 100.0,
         "initial_stop": 99.0,
+        "tp_model": "tp075_close75_structural_trail_v1",
+        "tp1_r": 0.75,
+        "tp1_close_fraction": 0.75,
         "runner_10pct_next_hour": True,
         "clean_runner_without_low_break": True,
     }
@@ -101,8 +104,9 @@ def test_no_tp_runner_simulation_never_marks_tp_hit() -> None:
     trade = _simulate_no_tp_runner_trade(signal, ltf=ltf, config=HtfLtfRunnerDiscoveryConfig(max_hold_candles=3))
 
     assert trade["status"] == "closed"
-    assert trade["tp1_hit"] is False
-    assert trade["tp_model"] == "none"
+    assert trade["tp1_hit"] is True
+    assert trade["tp_model"] == "tp075_close75_structural_trail_v1"
+    assert trade["tp1_close_fraction"] == 0.75
     assert trade["net_return"] > 0
 
 

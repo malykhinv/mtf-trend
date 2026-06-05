@@ -170,6 +170,7 @@ class Live2ProtectedPosition:
     tp1_price: float
     initial_amount: float
     remaining_amount: float
+    signal_tp1_price: float = 0.0
     entry_5m_oi_open_interest: float | None = None
     entry_5m_oi_previous_open_interest: float | None = None
     entry_5m_oi_change_pct_3x5m: float | None = None
@@ -198,6 +199,11 @@ class Live2ProtectedPosition:
     source_flow_quote_ratio: float | None = None
     source_flow_trade_ratio: float | None = None
     selected_rolling_htf_timeframe_ms: int | None = None
+    trade_policy_id: str = ""
+    trade_policy_rule_id: str = ""
+    exit_policy_id: str = ""
+    exit_tp1_r: float = 0.75
+    exit_trail_model: str = ""
     tp1_close_fraction: float = 1.0
     tp1_closed_amount: float = 0.0
     tp1_fill_price: float | None = None
@@ -231,6 +237,7 @@ class Live2ProtectedPosition:
             "signal_entry_price": self.signal_entry_price,
             "initial_risk_pct": self.initial_risk_pct,
             "tp1_price": self.tp1_price,
+            "signal_tp1_price": self.signal_tp1_price,
             "initial_amount": self.initial_amount,
             "remaining_amount": self.remaining_amount,
             "entry_5m_oi_open_interest": self.entry_5m_oi_open_interest,
@@ -261,6 +268,11 @@ class Live2ProtectedPosition:
             "source_flow_quote_ratio": self.source_flow_quote_ratio,
             "source_flow_trade_ratio": self.source_flow_trade_ratio,
             "selected_rolling_htf_timeframe_ms": self.selected_rolling_htf_timeframe_ms,
+            "trade_policy_id": self.trade_policy_id,
+            "trade_policy_rule_id": self.trade_policy_rule_id,
+            "exit_policy_id": self.exit_policy_id,
+            "exit_tp1_r": self.exit_tp1_r,
+            "exit_trail_model": self.exit_trail_model,
             "tp1_close_fraction": self.tp1_close_fraction,
             "tp1_closed_amount": self.tp1_closed_amount,
             "tp1_fill_price": self.tp1_fill_price,
@@ -771,6 +783,13 @@ class Live2ExecutionEngine:
             )
 
         actual_initial_risk_usdt = actual_initial_risk * position_delta_amount
+        policy_tp1_r = _finite_float_or_none(signal_decision.exit_tp1_r)
+        if policy_tp1_r is None:
+            policy_tp1_r = _finite_float_or_none(signal_decision.features.get("exit_tp1_r")) or 0.75
+        actual_tp1_price = float(fill.average_price) + actual_initial_risk * float(policy_tp1_r)
+        policy_tp1_close_fraction = _finite_float_or_none(signal_decision.tp1_close_fraction)
+        if policy_tp1_close_fraction is None:
+            policy_tp1_close_fraction = _finite_float_or_none(signal_decision.features.get("exit_tp1_close_fraction")) or 1.0
         max_single_trade_risk_usdt = account_balance_usdt * self.config.risk_per_trade_pct
         if actual_initial_risk_usdt > max_single_trade_risk_usdt + 1e-9:
             return self._integrity_error_after_fill(
@@ -873,9 +892,10 @@ class Live2ExecutionEngine:
             category_id=str(signal_decision.category_id or ""),
             signal_entry_price=float(signal_entry_price),
             initial_risk_pct=actual_initial_risk_pct,
-            tp1_price=float(signal_decision.tp1_at_decision or 0.0),
+            tp1_price=actual_tp1_price,
             initial_amount=position_delta_amount,
             remaining_amount=position_delta_amount,
+            signal_tp1_price=float(signal_decision.tp1_at_decision or 0.0),
             entry_5m_oi_open_interest=_finite_float_or_none(signal_decision.features.get("oi_open_interest")),
             entry_5m_oi_previous_open_interest=_finite_float_or_none(signal_decision.features.get("oi_previous_open_interest")),
             entry_5m_oi_change_pct_3x5m=_finite_float_or_none(signal_decision.features.get("oi_change_pct_3x5m")),
@@ -904,6 +924,12 @@ class Live2ExecutionEngine:
             source_flow_quote_ratio=_finite_float_or_none(signal_decision.features.get("selected_source_flow_quote_ratio")),
             source_flow_trade_ratio=_finite_float_or_none(signal_decision.features.get("selected_source_flow_trade_ratio")),
             selected_rolling_htf_timeframe_ms=_int_or_none(signal_decision.features.get("rolling_runner_htf_timeframe_ms")),
+            trade_policy_id=str(signal_decision.trade_policy_id or signal_decision.features.get("trade_policy_id") or ""),
+            trade_policy_rule_id=str(signal_decision.trade_policy_rule_id or signal_decision.features.get("trade_policy_rule_id") or ""),
+            exit_policy_id=str(signal_decision.exit_policy_id or signal_decision.features.get("exit_policy_id") or ""),
+            exit_tp1_r=float(policy_tp1_r),
+            exit_trail_model=str(signal_decision.features.get("exit_trail_model") or ""),
+            tp1_close_fraction=float(policy_tp1_close_fraction),
         )
         with self._lock:
             self._protected_positions[state.symbol] = protected_position
@@ -939,6 +965,13 @@ class Live2ExecutionEngine:
                 "planned_risk_usdt": planned_risk_usdt,
                 "actual_initial_risk_pct": actual_initial_risk_pct,
                 "actual_initial_risk_usdt": actual_initial_risk_usdt,
+                "signal_tp1_at_decision": float(signal_decision.tp1_at_decision or 0.0),
+                "actual_tp1_price": actual_tp1_price,
+                "exit_tp1_r": float(policy_tp1_r),
+                "tp1_close_fraction": float(policy_tp1_close_fraction),
+                "trade_policy_id": str(signal_decision.trade_policy_id or signal_decision.features.get("trade_policy_id") or ""),
+                "trade_policy_rule_id": str(signal_decision.trade_policy_rule_id or signal_decision.features.get("trade_policy_rule_id") or ""),
+                "exit_policy_id": str(signal_decision.exit_policy_id or signal_decision.features.get("exit_policy_id") or ""),
                 "planned_initial_risk_pct": planned_initial_risk_pct,
                 "current_open_risk_usdt_before_entry": current_open_risk_usdt,
                 "entry_current_open_interest": {

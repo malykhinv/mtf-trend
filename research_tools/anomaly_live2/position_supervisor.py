@@ -30,7 +30,7 @@ class Live2PositionSupervisorConfig:
     """Strict defaults for generation-0 position supervision."""
 
     monitor_interval_ms: int = 1_000
-    tp1_close_fraction: float = 0.5
+    tp1_close_fraction: float = 0.75
     breakeven_stop_offset_pct: float = 0.0
     flat_position_abs_epsilon: float = 1e-12
     min_remaining_amount: float = 1e-12
@@ -781,7 +781,7 @@ class Live2PositionSupervisor:
         exchange_amount: float,
         now_ms: int,
     ) -> Live2PositionSupervisorAction:
-        close_fraction = float(self.config.tp1_close_fraction)
+        close_fraction = float(position.tp1_close_fraction or self.config.tp1_close_fraction)
         close_amount = _tp1_reduce_only_close_amount(
             position=position,
             exchange_amount=exchange_amount,
@@ -913,7 +913,7 @@ class Live2PositionSupervisor:
             status="closed_verified_tp1_full",
             amount=0.0,
             remaining_amount=0.0,
-            tp1_close_fraction=self.config.tp1_close_fraction,
+            tp1_close_fraction=close_fraction,
             tp1_closed_amount=float(fill.filled_amount),
             tp1_fill_price=float(fill.average_price),
             tp1_order_id=fill.order_id,

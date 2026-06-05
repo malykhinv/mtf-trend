@@ -32,6 +32,7 @@ from research_tools.pump_decision_core import (
     rolling_category_priority_rank,
     rolling_context_windows_for_tf_set,
 )
+from research_tools.pump_trade_policy import evaluate_pump_trade_policy
 
 from .market_data.candles import Live2Candle
 from .state import Live2RollingSeedState, SymbolState
@@ -90,6 +91,11 @@ class Live2SignalDecision:
     initial_stop_at_decision: float | None = None
     initial_risk_pct_at_decision: float | None = None
     tp1_at_decision: float | None = None
+    trade_policy_id: str = ""
+    trade_policy_rule_id: str = ""
+    exit_policy_id: str = ""
+    exit_tp1_r: float | None = None
+    tp1_close_fraction: float | None = None
     features: dict[str, object] = field(default_factory=dict)
     dependency_reasons: tuple[str, ...] = ()
     reject_reasons: tuple[str, ...] = ()
@@ -337,6 +343,43 @@ class Live2SignalEngine:
             features["confirmation_candles"] = len(state_snapshot.ltf_confirm.confirm_candles)
         if verdict.verdict == "selected":
             category_id = str(verdict.category_id or features.get("rolling_runner_category_id", "") or "")
+            trade_policy = evaluate_pump_trade_policy(features)
+            features = {
+                **features,
+                "core_signal_verdict": verdict.verdict,
+                "core_signal_reason": "core_selected",
+                **trade_policy.as_features(),
+            }
+            if not trade_policy.accepted:
+                self._total_rejected += 1
+                dependency_reasons = tuple(_dependency_reason(item) for item in verdict.dependencies)
+                reject_reasons = tuple(item.reason for item in verdict.rejects) + (trade_policy.reason,)
+                self._last_dependency_reasons = dependency_reasons
+                self._last_reject_reasons = reject_reasons
+                return Live2SignalDecision(
+                    verdict="rejected",
+                    reason=trade_policy.reason,
+                    category_id=category_id,
+                    category_rank=rolling_category_priority_rank(category_id),
+                    signal_entry_price=verdict.signal_entry_price,
+                    initial_stop_at_decision=verdict.initial_stop_price,
+                    initial_risk_pct_at_decision=_float_or_none(features.get("initial_risk_pct_at_decision")),
+                    tp1_at_decision=verdict.tp1_price,
+                    trade_policy_id=trade_policy.policy_id,
+                    trade_policy_rule_id=trade_policy.matched_rule_id,
+                    exit_policy_id=trade_policy.exit_policy.policy_id,
+                    exit_tp1_r=trade_policy.exit_policy.tp1_r,
+                    tp1_close_fraction=trade_policy.exit_policy.tp1_close_fraction,
+                    features={
+                        **features,
+                        "category_contract": ROLLING_DECISION_CONTRACT_ID,
+                        "category_label": category_id,
+                        "signal_dependency_reasons": dependency_reasons,
+                        "signal_reject_reasons": reject_reasons,
+                    },
+                    dependency_reasons=dependency_reasons,
+                    reject_reasons=reject_reasons,
+                )
             self._total_selected += 1
             self._selected_by_category[category_id] += 1
             dependency_reasons = tuple(_dependency_reason(item) for item in verdict.dependencies)
@@ -352,6 +395,11 @@ class Live2SignalEngine:
                 initial_stop_at_decision=verdict.initial_stop_price,
                 initial_risk_pct_at_decision=_float_or_none(features.get("initial_risk_pct_at_decision")),
                 tp1_at_decision=verdict.tp1_price,
+                trade_policy_id=trade_policy.policy_id,
+                trade_policy_rule_id=trade_policy.matched_rule_id,
+                exit_policy_id=trade_policy.exit_policy.policy_id,
+                exit_tp1_r=trade_policy.exit_policy.tp1_r,
+                tp1_close_fraction=trade_policy.exit_policy.tp1_close_fraction,
                 features={
                     **features,
                     "category_contract": ROLLING_DECISION_CONTRACT_ID,

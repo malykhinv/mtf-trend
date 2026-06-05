@@ -5,7 +5,8 @@ The tool separates two jobs that are easy to mix up:
 * future labels: did an HTF anomaly become a +10% runner within the next hour,
   and was the anomaly low broken before that happened;
 * executable replay: would a live bot, using only closed LTF candles available
-  at the decision time, enter, close 50% at TP1=0.75R, and manage the
+  at the decision time, pass the shared trade policy, close the configured
+  TP1 fraction at TP1=0.75R, and manage the
   remainder with structural stop/trailing.
 
 Artifacts are research-only. They are meant to learn runner nature, not to
@@ -46,6 +47,12 @@ from research_tools.pump_decision_core import (
     evaluate_ltf_confirm_sequence_after_seed,
     rolling_category_priority_rank,
     rolling_context_windows_for_tf_set,
+)
+from research_tools.pump_trade_policy import (
+    DEFAULT_PUMP_EXIT_POLICY,
+    PUMP_TRADE_POLICY_ID,
+    PumpTradePolicyDecision,
+    evaluate_pump_trade_policy,
 )
 from research_tools.runner_coarse_prefilter import (
     MINUTE_MS,
@@ -95,7 +102,7 @@ class HtfLtfRunnerDiscoveryConfig:
     trail_lookback_candles: int = 6
     trail_buffer_pct: float = 0.0005
     tp1_r: float = 0.75
-    tp1_close_fraction: float = 0.5
+    tp1_close_fraction: float = DEFAULT_PUMP_EXIT_POLICY.tp1_close_fraction
     max_hold_candles: int = 720
     fee_rate: float = 0.0004
     entry_slippage_pct: float = 0.0005
@@ -194,6 +201,20 @@ SIGNAL_ARTIFACT_COLUMNS = [
     "signal_status",
     "signal_verdict",
     "signal_reason",
+    "core_signal_verdict",
+    "core_signal_reason",
+    "trade_policy_id",
+    "trade_policy_version",
+    "trade_policy_verdict",
+    "trade_policy_reason",
+    "trade_policy_rule_id",
+    "trade_policy_matched_rule_ids",
+    "trade_policy_watchlist_rule_ids",
+    "exit_policy_id",
+    "exit_tp1_r",
+    "exit_tp1_close_fraction",
+    "exit_runner_fraction",
+    "exit_trail_model",
     "portfolio_verdict",
     "portfolio_reason",
     "htf_timeframe",
@@ -608,7 +629,8 @@ def run_htf_ltf_runner_discovery(
                         "end_timestamp_ms": int(end_ms),
                         "end_timestamp_utc": _timestamp_to_utc(end_ms),
                         "execution_model": "next_ltf_open_after_closed_ltf_confirmation",
-                        "exit_model": "tp1_0p75r_close_50pct_then_structural_trailing",
+                        "trade_policy_model": PUMP_TRADE_POLICY_ID,
+                        "exit_model": DEFAULT_PUMP_EXIT_POLICY.policy_id,
                         "future_label_model": "separate_next_hour_10pct_label_not_used_for_entry",
                         "data_access_model": (
                             "rolling_htf_pair_superset_then_signal_entry_fetch_then_core_selected_post_entry_replay"
@@ -2922,6 +2944,7 @@ def _decision_ledger_row(
     post_seed_window: _StrictLtfWindow,
     candidate: dict[str, object],
     backtest_execution_skip_reason: str = "",
+    trade_policy: PumpTradePolicyDecision | None = None,
 ) -> dict[str, object]:
     snapshot = verdict.snapshot
     seed = snapshot.rolling_seed
@@ -2938,6 +2961,8 @@ def _decision_ledger_row(
         "tf_set": snapshot.tf_set,
         "signal_verdict": verdict.verdict,
         "signal_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "core_selected",
+        "core_signal_verdict": verdict.verdict,
+        "core_signal_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "core_selected",
         "portfolio_verdict": "not_evaluated_signal_not_selected" if verdict.verdict != "selected" else "not_evaluated_before_portfolio",
         "portfolio_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "portfolio_layer_runs_after_execution_simulation",
         "signal_reject_stage": _first_reject_stage(verdict),
@@ -2964,6 +2989,17 @@ def _decision_ledger_row(
         "initial_stop_price": verdict.initial_stop_price if verdict.initial_stop_price is not None else float("nan"),
         "tp1_price": verdict.tp1_price if verdict.tp1_price is not None else float("nan"),
     }
+    if trade_policy is not None:
+        row.update(trade_policy.as_features())
+        if trade_policy.accepted:
+            row["signal_reason"] = trade_policy.reason
+        else:
+            row["signal_verdict"] = "rejected"
+            row["signal_reason"] = trade_policy.reason
+            row["portfolio_verdict"] = "not_evaluated_signal_not_selected"
+            row["portfolio_reason"] = trade_policy.reason
+            row["signal_reject_stage"] = "trade_policy"
+            row["signal_reject_reason"] = trade_policy.reason
     if backtest_execution_skip_reason:
         row["portfolio_verdict"] = "not_evaluated_backtest_execution_guard_skipped"
         row["portfolio_reason"] = backtest_execution_skip_reason
@@ -2993,8 +3029,20 @@ def _decision_ledger_row(
         "initial_risk_pct_at_decision",
         "rolling_runner_matched_categories",
         "rolling_runner_category_priority_rank",
+        "trade_policy_id",
+        "trade_policy_version",
+        "trade_policy_verdict",
+        "trade_policy_reason",
+        "trade_policy_rule_id",
+        "trade_policy_matched_rule_ids",
+        "trade_policy_watchlist_rule_ids",
+        "exit_policy_id",
+        "exit_tp1_r",
+        "exit_tp1_close_fraction",
+        "exit_runner_fraction",
+        "exit_trail_model",
     ):
-        row[key] = features.get(key, float("nan"))
+        row.setdefault(key, features.get(key, float("nan")))
     return row
 
 
@@ -3043,11 +3091,33 @@ def _build_first_ltf_signal(
         context_cache=context_cache,
     )
     exact_verdicts = list(evaluate_ltf_confirm_sequence_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles))
-    decision_rows = [_decision_ledger_row(verdict=item, post_seed_window=post_seed_window, candidate=candidate) for item in exact_verdicts]
+    decision_rows: list[dict[str, object]] = []
+    for item in exact_verdicts:
+        item_policy = evaluate_pump_trade_policy(item.features) if item.verdict == "selected" else None
+        decision_rows.append(
+            _decision_ledger_row(
+                verdict=item,
+                post_seed_window=post_seed_window,
+                candidate=candidate,
+                trade_policy=item_policy,
+            )
+        )
     verdict = next((item for item in exact_verdicts if item.verdict == "selected"), exact_verdicts[-1] if exact_verdicts else evaluate_first_ltf_confirm_after_seed(snapshot, post_seed_ltf_candles=post_seed_candles))
     if verdict.verdict != "selected":
         if not decision_rows:
             decision_rows.append(_decision_ledger_row(verdict=verdict, post_seed_window=post_seed_window, candidate=candidate))
+        return None, decision_rows
+    trade_policy = evaluate_pump_trade_policy(verdict.features)
+    if not trade_policy.accepted:
+        if not any(row.get("snapshot_hash") == decision_snapshot_hash(verdict.snapshot) and row.get("trade_policy_verdict") for row in decision_rows):
+            decision_rows.append(
+                _decision_ledger_row(
+                    verdict=verdict,
+                    post_seed_window=post_seed_window,
+                    candidate=candidate,
+                    trade_policy=trade_policy,
+                )
+            )
         return None, decision_rows
 
     confirm = verdict.snapshot.ltf_confirm
@@ -3056,6 +3126,7 @@ def _build_first_ltf_signal(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
+            trade_policy=trade_policy,
             backtest_execution_skip_reason="selected_without_confirm_snapshot",
         ))
         return None, decision_rows
@@ -3068,6 +3139,7 @@ def _build_first_ltf_signal(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
+            trade_policy=trade_policy,
             backtest_execution_skip_reason="entry_next_open_missing_after_core_selected",
         ))
         return None, decision_rows
@@ -3078,6 +3150,7 @@ def _build_first_ltf_signal(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
+            trade_policy=trade_policy,
             backtest_execution_skip_reason="entry_before_decision_available",
         ))
         return None, decision_rows
@@ -3101,12 +3174,14 @@ def _build_first_ltf_signal(
             verdict=verdict,
             post_seed_window=post_seed_window,
             candidate=candidate,
+            trade_policy=trade_policy,
             backtest_execution_skip_reason=execution_skip,
         ))
         return None, decision_rows
 
     oi_at_signal = _oi_asof(oi, decision_available_ts)
-    features = dict(verdict.features)
+    features = {**dict(verdict.features), **trade_policy.as_features()}
+    exit_policy = trade_policy.exit_policy
     matched_categories = str(features.get("rolling_runner_matched_categories") or verdict.category_id)
     category = verdict.category_id or matched_categories.split("|")[0]
     signal = {
@@ -3114,7 +3189,9 @@ def _build_first_ltf_signal(
         **features,
         "signal_status": "selected",
         "signal_verdict": "selected",
-        "signal_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "core_selected",
+        "signal_reason": trade_policy.reason,
+        "core_signal_verdict": verdict.verdict,
+        "core_signal_reason": _first_reject_reason(verdict) if verdict.verdict != "selected" else "core_selected",
         "portfolio_verdict": "not_evaluated_before_portfolio",
         "portfolio_reason": "portfolio_layer_runs_after_execution_simulation",
         "signal_model": "rolling_seed_first_ltf_confirm_shared_core",
@@ -3139,7 +3216,9 @@ def _build_first_ltf_signal(
         "initial_risk": initial_risk,
         "initial_risk_pct": initial_risk_pct,
         "structural_stop_model": "shared_core_seed_low_and_closed_ltf_lows_before_decision_minus_buffer",
-        "tp_model": "none",
+        "tp_model": exit_policy.policy_id,
+        "tp1_r": float(exit_policy.tp1_r),
+        "tp1_close_fraction": float(exit_policy.tp1_close_fraction),
         "signal_oi_status": oi_at_signal["status"],
         "signal_oi_timestamp_ms": oi_at_signal["timestamp_ms"],
         "signal_oi_available_timestamp_ms": oi_at_signal["available_timestamp_ms"],
@@ -3298,8 +3377,15 @@ def _simulate_no_tp_runner_trade(
     if future.empty:
         return _skipped_trade(signal, _post_entry_window_skip_reason(future_window), **window_audit)
 
-    tp1_r = float(config.tp1_r)
-    tp1_close_fraction = float(config.tp1_close_fraction)
+    signal_tp1_r = _finite_float(signal.get("tp1_r"))
+    signal_tp1_close_fraction = _finite_float(signal.get("tp1_close_fraction"))
+    tp1_r = signal_tp1_r if np.isfinite(signal_tp1_r) and signal_tp1_r > 0.0 else float(config.tp1_r)
+    tp1_close_fraction = (
+        signal_tp1_close_fraction
+        if np.isfinite(signal_tp1_close_fraction) and 0.0 < signal_tp1_close_fraction <= 1.0
+        else float(config.tp1_close_fraction)
+    )
+    tp_model = str(signal.get("tp_model") or signal.get("exit_policy_id") or "tp1_partial_then_structural_trailing")
     tp1_price = entry_price + initial_risk * tp1_r
     active_stop = initial_stop
     trail_updates = 0
@@ -3393,7 +3479,7 @@ def _simulate_no_tp_runner_trade(
         "tp1_raw_price": tp1_raw_price,
         "tp1_fill_price": tp1_fill_price,
         "tp1_close_fraction": tp1_close_fraction,
-        "tp_model": "tp1_0p75r_close_50pct_then_structural_trailing",
+        "tp_model": tp_model,
         "mfe_pct": _safe_divide(max_high - entry_price, entry_price),
         "mae_pct": _safe_divide(min_low - entry_price, entry_price),
         "gross_r": gross_r,
@@ -4659,6 +4745,14 @@ def _safe_divide(numerator: float, denominator: float) -> float:
     if not np.isfinite(numerator) or not np.isfinite(denominator) or denominator == 0.0:
         return float("nan")
     return numerator / denominator
+
+
+def _finite_float(value: object) -> float:
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float("nan")
+    return result if np.isfinite(result) else float("nan")
 
 
 def _strict_ltf_window(
