@@ -3979,3 +3979,15 @@ Current commit: UNKNOWN. Status: APPLIED locally.
 Current commit: UNKNOWN. Status: APPLIED locally.
 
 The 3d run was structurally complete and used the archive accelerator, but targeted fetch artifacts still contained dozens of `UnicodeEncodeError` rows for non-ASCII pseudo-symbol market ids. P508 converts those into explicit `unsupported_binance_market_id` data-source rejects without archive/REST attempts. Before launching 30d, rerun at least a short smoke or inspect a resumed run's `htf_ltf_runner_targeted_ltf_fetch.csv`; fetch `error` rows should no longer be dominated by Unicode encoding failures.
+
+## 2026-06-05 - 30d runner discovery state
+
+Current commit: b0bcafa8. Status: ANALYZED.
+
+Run `.output/results/htf_ltf_runner_discovery_30d` completed all four fixed profiles: `5m_30s`, `3m_30s`, `5m_15s`, `3m_15s`. Coverage is good enough for selected-signal, trade, and per-category readouts: HTF uses real `quote_volume` and `number_of_trades`; LTF uses real `quote_volume`, `number_of_trades`, and `taker_buy_quote_volume` for almost the full universe. Fetch rejects are not internet-loss dominated: they are mainly explicit `unsupported_binance_market_id` rows for three non-ASCII market ids, plus five stock-like symbols with missing LTF source coverage.
+
+The run is not yet enough for a broad candidate-universe nature claim, because `htf_ltf_runner_candidate_rule_scores.csv` is empty (`no_events`) in every profile and candidate rows do not carry future labels. That does not invalidate trade PnL or selected category analysis, but it prevents a clean runner-vs-fader lift study over all seed candidates.
+
+Trading state: all selected combined profiles remain negative after costs (`816` closed, sum `-1.1323`, avg `-0.00139`, median `+0.00606`, winrate `53.6%`). C/A/S categories alone are not the edge. The strongest entry-time hypothesis from this run is `ltf_taker_buy_quote_share >= 0.55` plus no meaningful pre-seed dump (`pregrowth_min_path_return_pct >= -1%`). Per-profile live-filtered results for this fixed hypothesis were positive in all four profiles: `5m_30s` 165 trades sum `+0.6095`, `3m_30s` 158 trades sum `+0.1838`, `5m_15s` 114 trades sum `+0.6052`, `3m_15s` 151 trades sum `+0.3924`. The 15s profiles are cleaner across halves/days; 30s profiles are more first-half dependent.
+
+Next honest step: do not tune thresholds from this same run. Freeze the `buyer + no pre-seed dump` hypothesis, add or run a post-hoc candidate labeler only for already planned/covered candidate windows if broad runner/fader nature is needed, and validate on another period or a same-period live/backtest parity join before promoting any filter to live.

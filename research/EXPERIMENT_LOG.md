@@ -5613,3 +5613,47 @@ Protocol after P507: runner discovery experiments should be launched as `python 
 ## 2026-06-04 - P508 30d preflight protocol
 
 Finding from `.output/results/htf_ltf_runner_discovery_3d`: broad artifacts were complete, but targeted fetch errors were caused by unsupported non-ASCII Binance market ids rather than real data gaps. After P508, run a short smoke or start 30d only if targeted fetch errors are not UnicodeEncodeError rows and unsupported pseudo-symbols appear as `unsupported_binance_market_id`. Do not interpret PnL/categories until the same-period live/backtest parity summary has `same_snapshot_different_signal_verdict=0` and selected overlap >= 90%.
+
+## 2026-06-05 - 30d HTF/LTF runner discovery coverage and edge readout
+
+Run: `.output/results/htf_ltf_runner_discovery_30d`.
+
+Commit: b0bcafa8, with unrelated dirty local files observed.
+
+Coverage audit:
+- Profiles completed: `5m_30s`, `3m_30s`, `5m_15s`, `3m_15s`.
+- Runtime by profile: about 10.05h, 4.95h, 9.36h, 7.75h.
+- Targeted fetch status was materially healthy. Error-like fetch rows were explicit `unsupported_binance_market_id`, not network outages: 392 / 446 / 359 / 430 rows across the four profiles, all from three non-ASCII pseudo-symbol market ids.
+- Archive accelerator was used heavily; REST fallback was negligible (`3m_30s` had 4 REST fallback rows after archive errors).
+- True LTF source coverage was missing for five stock-like symbols (`ASTS`, `BBX`, `LLY`, `NOK`, `SLX`). OI was missing for those and a few stock-like symbols in 5m profiles. These rows did not produce live-filtered selected trades.
+- Signal-path LTF gaps were small relative to ledger size: `post_seed_ltf_missing` counts were 8 / 3 / 41 / 53 across profiles. Most `data_dependency_not_ready` rows were seed-aligned context readiness, not failed internet fetch.
+
+Analysis artifacts written under `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/`:
+- `coverage_and_category_summary.json`
+- `combined_entry_time_rule_checks.csv`
+- `combined_entry_time_feature_medians.csv`
+- `combined_category_tf_breakdown.csv`
+- `buyer_notdump_profile_stability.csv`
+- `buyer_notdump_by_day.csv`
+
+Trade/category readout:
+- Combined selected portfolio was negative after fees/slippage: 816 closed, sum `-1.1323`, avg `-0.00139`, median `+0.00606`, winrate `53.6%`.
+- Categories alone are not enough: combined `C_balanced_flow_acceptance` was 546 trades sum `-0.8973`; `A_resonance_prior_spike` was 269 trades sum `-0.2448`; `S_7d_5m30_strict` had only 1 combined trade.
+- Per-profile category behavior is mixed. `A` helped `5m_15s` and slightly helped `5m_30s`, but hurt `3m_15s`; `C` was not reliably positive.
+
+Most useful hypothesis from entry-time fields:
+- `ltf_taker_buy_quote_share >= 0.55` alone was positive in individual `5m_30s`, `5m_15s`, and `3m_15s`, but not robust enough after combined portfolio selection.
+- Adding a no-dump condition, `pregrowth_min_path_return_pct >= -1%`, produced a cleaner fixed hypothesis across all individual profiles:
+  - `5m_30s`: 165 trades, sum `+0.6095`, median `+0.00886`, winrate `58.8%`.
+  - `3m_30s`: 158 trades, sum `+0.1838`, median `+0.00812`, winrate `56.3%`.
+  - `5m_15s`: 114 trades, sum `+0.6052`, median `+0.01208`, winrate `67.5%`.
+  - `3m_15s`: 151 trades, sum `+0.3924`, median `+0.00965`, winrate `60.9%`.
+- Stability is best on 15s. `5m_15s` had both halves positive and 21/28 positive trading days; `3m_15s` had both halves positive and 16/27 positive days. The 30s profiles were more dependent on the first half of the period.
+
+Limits:
+- This is not a live-ready edge claim. The rule was found inside the same 30d run, so multiple-testing risk remains.
+- `candidate_rule_scores.csv` is empty in all profiles because candidate rows do not carry future labels. This blocks a broad candidate-universe nature conclusion.
+- Same-period live/backtest parity was not proven in this analysis because no matching `live2_decision_ledger.csv` was found locally.
+
+Next experiment:
+Freeze `buyer + no pre-seed dump` as a predeclared hypothesis. Validate it on a different period/cache snapshot or same-period live/backtest parity ledger before changing live filters. If broad pump-nature separation is needed first, build a targeted post-hoc candidate labeler that labels already known seed candidates without rerunning full 30d and without using labels as entry filters.
