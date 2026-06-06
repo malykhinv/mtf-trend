@@ -203,6 +203,7 @@ def test_large_runner_discovery_smoke_writes_honest_artifacts(tmp_path: Path) ->
     )
 
     matches = pd.read_csv(result_dir / "large_runner_rule_matches.csv")
+    setups = pd.read_csv(result_dir / "large_runner_setups.csv")
     trades = pd.read_csv(result_dir / "large_runner_trade_grid.csv")
     config = pd.read_csv(result_dir / "run_config.csv")
     top_growth = pd.read_csv(result_dir / "large_runner_top_growth.csv")
@@ -211,7 +212,9 @@ def test_large_runner_discovery_smoke_writes_honest_artifacts(tmp_path: Path) ->
     assert set(matches["arm_id"]) >= {"E5_ignition_strict", "E5_mass_ignition"}
     assert not trades.empty
     assert trades["future_label_available_at_entry"].eq(False).all()
+    assert "setup_selection_model" in setups.columns
     assert config.loc[0, "data_access_model"] == "cache_only_5m_1m_no_exchange_fetch"
+    assert config.loc[0, "candidate_model"] == "first_broad_plus_first_prefilter_pass_promotion_per_symbol_per_60m_cluster"
     assert config.loc[0, "top_growth_audit_model"] == "evaluation_only_first15_full_hour_and_pre60_windows"
     assert "hour_high_candle_open_offset_min" in top_growth.columns
     assert "first15_high_return_pct" in top_growth.columns
@@ -232,5 +235,7 @@ def test_large_runner_discovery_smoke_writes_honest_artifacts(tmp_path: Path) ->
         "large_runner_nature_sensitivity.csv",
         "large_runner_prefilter_missed_top_growth.csv",
         "large_runner_top_growth_timing_audit.csv",
+        "large_runner_by_setup_selection.csv",
+        "large_runner_portfolio_by_setup_selection.csv",
     ]:
         pd.read_csv(result_dir / name)

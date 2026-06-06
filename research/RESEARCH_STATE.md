@@ -4505,3 +4505,38 @@ the old first-15m funnel was indeed too blunt. Of `717` rows marked
 later in the full labelled hour. Therefore these rows are not all true early
 misses. The next generator work must focus on first-15m/pre-hour misses and on
 cases where full-hour visibility exists but prefilter/nature rejects the setup.
+
+## 2026-06-06 - Large-runner cluster promotion patch
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The timing audit exposed a concrete research-model flaw: the old
+`run-large-runner-discovery` setup selector kept only the first broad 5m
+candidate per symbol/60m cluster. On strong `>=30%` hourly runners, many
+`5m_prefilter_failed` rows were caused by a weak first broad print, while a
+later raw candidate in the same cluster passed the same 5m prefilter.
+
+Patch P524 changes candidate generation additively:
+
+```text
+keep first broad 5m awakening per 60m cluster for audit continuity
+if it fails 5m prefilter, also keep the first later raw candidate in that
+cluster that passes the decision-time 5m prefilter
+```
+
+This remains a research expansion, not live trading logic. It does not use
+top-growth labels, PnL, MFE/MAE, exits, or portfolio survival for selection.
+
+1d smoke:
+
+```text
+raw: 3972
+setups: 2412
+matches: 79
+closed simulated rows: 310
+```
+
+The expansion is bounded: the 1d smoke increased matches from the previous
+`44` to `79`, not by orders of magnitude. The next required check is a 45d
+rerun to see whether promoted setups recover missed large runners without
+destroying median/ex-top10/top-dependence.

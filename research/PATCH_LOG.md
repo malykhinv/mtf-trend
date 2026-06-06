@@ -11626,3 +11626,52 @@ Diagnostics-only performance patch. The old 45d artifacts still need a fresh
 rerun to include the new top-growth high-offset and first5/first15/first30
 fields.
 ```
+
+## 2026-06-06 - P524 large-runner cluster promotion selector
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Replaced the strict first-only cluster selector in
+  `run-large-runner-discovery` with an additive selector:
+  `first_broad_5m_awakening` plus, only if that first row fails 5m prefilter,
+  the first later raw candidate in the same 60m cluster that passes 5m
+  prefilter.
+- Added setup audit fields:
+  `setup_selection_model`, `setup_cluster_raw_rank`,
+  `cluster_initial_seed_open_ms`, `cluster_initial_prefilter_passed`, and
+  `cluster_promoted_after_initial_prefilter_fail`.
+- Added summary artifacts:
+  `large_runner_by_setup_selection.csv` and
+  `large_runner_portfolio_by_setup_selection.csv`.
+- Updated funnel stage naming from first-only setup to
+  `cluster_selected_setups`.
+- Updated tests for the new candidate-model contract.
+
+Validation:
+
+```bash
+python -m pytest tests/test_large_runner_discovery.py tests/test_cli_runner_discovery_empty_artifacts.py -q
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+python main.py run-large-runner-discovery --days 1
+```
+
+1d smoke:
+
+```text
+raw=3972
+setups=2412
+matches=79
+trade-grid rows=395
+closed simulated rows=310
+```
+
+Risk:
+
+```text
+Research/backtest expansion only. It increases candidate coverage but may add
+noise. It must be judged by a 45d rerun with promoted-vs-first setup summaries,
+top-dependence, median net, ex-top10, and missed top-growth coverage. It does
+not change live2 or PumpDecisionCore.
+```

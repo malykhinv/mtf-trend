@@ -170,6 +170,15 @@ exit: structural SL + structural trailing, no TP
 
 The tool is meant to learn runner nature: dormancy, smooth pre-pump price/OI growth, sustained quote-volume and real trade-count expansion, and whether structural lows survive. Future labels must not be used as entry filters inside the same replay.
 
+For `run-large-runner-discovery`, cluster setup selection is allowed to keep a
+small live-like superset rather than only the first weak broad print in each
+60m cluster. The current model keeps the first broad 5m awakening for audit and
+adds at most one later candidate in the same cluster only if that candidate
+passes the same decision-time 5m prefilter. This is not a future-label filter:
+it must not inspect hourly top-growth labels, exits, PnL, MFE/MAE, or portfolio
+survival. It exists because live would continue evaluating later closed candles
+after an initial broad candidate failed.
+
 ---
 
 ## 3. Category / nature checks

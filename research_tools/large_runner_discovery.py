@@ -176,7 +176,7 @@ def run_large_runner_discovery(
             quality[0]["data_rejection"] = "missing_real_5m_quote_or_trade_count"
             return {"raw": [], "setups": [], "matches": [], "trades": [], "quality": quality, "top_hours": []}
         raw = _collect_raw_candidates(symbol=symbol, frame=prepared_5m, start_ms=start_ms, end_ms=end_ms, config=config)
-        first_setups = _first_setup_per_cluster(raw, config=config)
+        first_setups = _cluster_setups_with_prefilter(raw, frame_5m=prepared_5m, config=config)
         top_hours = _hourly_growth_rows(symbol=symbol, frame_5m=prepared_5m, start_ms=start_ms, end_ms=end_ms)
         if not first_setups:
             quality[0]["1m_load_scope"] = "not_loaded_no_broad_setups"
@@ -184,11 +184,10 @@ def run_large_runner_discovery(
         setup_rows: list[dict[str, object]] = []
         enrichable_setups: list[dict[str, object]] = []
         for setup in first_setups:
-            prefilter = _large_runner_5m_prefilter(setup, frame_5m=prepared_5m)
-            if bool(prefilter["large_runner_5m_prefilter_passed"]):
-                enrichable_setups.append({**setup, **prefilter})
+            if bool(setup["large_runner_5m_prefilter_passed"]):
+                enrichable_setups.append(setup)
             else:
-                setup_rows.append({**setup, **prefilter, "enrichment_status": "skipped_1m_prefilter_no_large_runner_arm_possible"})
+                setup_rows.append({**setup, "enrichment_status": "skipped_1m_prefilter_no_large_runner_arm_possible"})
         if not enrichable_setups:
             quality[0]["1m_load_scope"] = "not_loaded_no_prefiltered_large_runner_setups"
             return {"raw": raw, "setups": setup_rows, "matches": [], "trades": [], "quality": quality, "top_hours": top_hours}
@@ -310,6 +309,8 @@ def run_large_runner_discovery(
         ("large_runner_exit_policy_comparison.csv", _exit_policy_comparison(trade_frame)),
         ("large_runner_by_arm.csv", _summary_by(trade_frame, ["arm_id"])),
         ("large_runner_by_arm_exit_policy.csv", _summary_by(trade_frame, ["arm_id", "exit_policy_id"])),
+        ("large_runner_by_setup_selection.csv", _summary_by(trade_frame, ["setup_selection_model"])),
+        ("large_runner_portfolio_by_setup_selection.csv", _summary_by(portfolio_frame, ["setup_selection_model"])),
         ("large_runner_by_day.csv", _summary_by_day(trade_frame)),
         ("large_runner_mfe_mae.csv", _mfe_mae_frame(trade_frame)),
         ("large_runner_skip_reasons.csv", _skip_reasons(trade_frame)),
@@ -344,7 +345,7 @@ def run_large_runner_discovery(
                         "data_access_model": "cache_only_5m_1m_no_exchange_fetch",
                         "entry_model": "decision_close_then_next_1m_open_plus_adverse_slippage",
                         "future_label_model": "evaluation_only_not_used_for_rule_matching",
-                        "candidate_model": "first_broad_5m_awakening_per_symbol_per_60m_cluster",
+                        "candidate_model": "first_broad_plus_first_prefilter_pass_promotion_per_symbol_per_60m_cluster",
                         "top_growth_audit_model": "evaluation_only_first15_full_hour_and_pre60_windows",
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                     }
@@ -496,13 +497,59 @@ def _collect_raw_candidates(
     return rows
 
 
-def _first_setup_per_cluster(raw: list[dict[str, object]], *, config: LargeRunnerDiscoveryConfig) -> list[dict[str, object]]:
+def _cluster_setups_with_prefilter(
+    raw: list[dict[str, object]],
+    *,
+    frame_5m: pd.DataFrame,
+    config: LargeRunnerDiscoveryConfig,
+) -> list[dict[str, object]]:
+    """Select cluster setups without letting the first weak print hide later wake-up.
+
+    The old research shortcut kept only the first broad 5m candidate in a
+    60-minute cluster. That is cheaper, but it is not live-like: live would keep
+    evaluating later closed candles after the first weak broad wake-up failed.
+    This selector keeps that first row for audit continuity and adds at most one
+    later row only when it already passes the same decision-time 5m prefilter.
+    """
     del config
-    first: dict[tuple[str, int], dict[str, object]] = {}
+    groups: dict[tuple[str, int], list[dict[str, object]]] = {}
     for row in sorted(raw, key=lambda item: (str(item.get("symbol", "")), int(item.get("timestamp_ms", 0)))):
         key = (str(row.get("symbol", "")), int(row.get("cluster_start_ms", 0)))
-        first.setdefault(key, row)
-    return list(first.values())
+        groups.setdefault(key, []).append(row)
+
+    selected: list[dict[str, object]] = []
+    for (_symbol, _cluster_start), rows in groups.items():
+        first = rows[0]
+        first_prefilter = _large_runner_5m_prefilter(first, frame_5m=frame_5m)
+        first_row = {
+            **first,
+            **first_prefilter,
+            "setup_selection_model": "first_broad_5m_awakening",
+            "setup_cluster_raw_rank": 1,
+            "cluster_initial_seed_open_ms": int(first.get("seed_open_ms", 0)),
+            "cluster_initial_prefilter_passed": bool(first_prefilter["large_runner_5m_prefilter_passed"]),
+            "cluster_promoted_after_initial_prefilter_fail": False,
+        }
+        selected.append(first_row)
+        if bool(first_prefilter["large_runner_5m_prefilter_passed"]):
+            continue
+        for rank, candidate in enumerate(rows[1:], start=2):
+            candidate_prefilter = _large_runner_5m_prefilter(candidate, frame_5m=frame_5m)
+            if not bool(candidate_prefilter["large_runner_5m_prefilter_passed"]):
+                continue
+            selected.append(
+                {
+                    **candidate,
+                    **candidate_prefilter,
+                    "setup_selection_model": "first_prefilter_pass_after_initial_broad_fail",
+                    "setup_cluster_raw_rank": int(rank),
+                    "cluster_initial_seed_open_ms": int(first.get("seed_open_ms", 0)),
+                    "cluster_initial_prefilter_passed": False,
+                    "cluster_promoted_after_initial_prefilter_fail": True,
+                }
+            )
+            break
+    return selected
 
 
 def _large_runner_5m_prefilter(setup: Mapping[str, object], *, frame_5m: pd.DataFrame) -> dict[str, object]:
@@ -1857,7 +1904,7 @@ def _feature_deciles(setups: pd.DataFrame) -> pd.DataFrame:
 def _funnel(raw: pd.DataFrame, setups: pd.DataFrame, matches: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
     rows = [
         {"stage": "raw_broad_5m_candidates", "rows": int(len(raw))},
-        {"stage": "first_setup_per_symbol_60m", "rows": int(len(setups))},
+        {"stage": "cluster_selected_setups", "rows": int(len(setups))},
         {"stage": "large_runner_arm_matches", "rows": int(len(matches))},
         {"stage": "trade_grid_rows", "rows": int(len(trades))},
     ]

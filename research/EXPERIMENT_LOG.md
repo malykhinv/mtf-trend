@@ -6443,3 +6443,43 @@ of those, raw 5m candidate visible later in full top-hour: 559
 This means the old missed-runner count overstated true early broad-gate misses.
 The next rerun still matters because the old top-growth CSV lacks high-offset
 and first5/first15/first30 facts.
+
+## 2026-06-06 - planned large-runner cluster-promotion rerun
+
+Status: PLANNED.
+
+Reason:
+
+Strong first15 top-growth misses showed a live-parity problem in the research
+shortcut, not a category-threshold problem. In the old 45d artifacts, among
+`48` strong `>=30%` first15 rows with `5m_prefilter_failed`, `41` had a later
+raw candidate in the same top hour that passed the 5m prefilter, and `17` had
+that pass inside the first 15 minutes.
+
+Patch P524 adds at most one promoted setup per symbol/60m cluster after an
+initial broad candidate fails 5m prefilter. The selector uses only known-by-
+decision-time 5m fields and the existing 5m prefilter.
+
+1d smoke after P524:
+
+```text
+raw=3972
+setups=2412
+matches=79
+trade-grid rows=395
+closed simulated rows=310
+```
+
+Next experiment:
+
+Run `python main.py run-large-runner-discovery --days 45` and compare against
+the prior 45d baseline:
+
+- setup_selection_model split: first broad vs promoted;
+- selected `v4_quality_cool` portfolio metrics;
+- top-growth first15/full-hour coverage, especially `>=20%` and `>=30%`;
+- ex-top5/ex-top10 and top5 share;
+- median and active-day stability.
+
+Reject the promotion if it only adds noisy trades or worsens the selected
+portfolio robustness.
