@@ -6483,3 +6483,108 @@ the prior 45d baseline:
 
 Reject the promotion if it only adds noisy trades or worsens the selected
 portfolio robustness.
+
+## 2026-06-06 - 45d cluster-promotion readout
+
+Status: COMPLETED / ANALYZED.
+
+Command:
+
+```bash
+python main.py run-large-runner-discovery --days 45
+```
+
+Artifacts:
+
+```text
+.output/results/large_runner_discovery_45d
+```
+
+Commit/model:
+
+```text
+commit: 62d177be
+candidate_model: first_broad_plus_first_prefilter_pass_promotion_per_symbol_per_60m_cluster
+```
+
+Run summary:
+
+```text
+runtime: 3719.766s
+raw broad candidates: 126987
+cluster selected setups: 77079
+arm matches: 2812
+trade-grid rows: 14060
+closed simulated rows: 9945
+```
+
+What improved:
+
+- Full trade grid moved from slightly negative to roughly flat/slightly
+  positive (`avg_net=+0.0112%`, `win_rate=22.41%`).
+- Promoted setups recovered real large-runner coverage:
+  `>=30%` first15 portfolio-covered rows increased `23 -> 33`; full-hour
+  coverage increased `27 -> 50`; pre60_to_hour_end coverage increased
+  `36 -> 67`.
+- The biggest old failure, `5m_prefilter_failed`, fell sharply for `>=30%`
+  full-hour rows (`55 -> 9`).
+
+What failed:
+
+- The combined selected `v4_quality_cool` portfolio is weaker than the original
+  first-broad benchmark:
+
+```text
+124 trades, 2.76/day, 76 symbols
+WR 40.32%
+median -0.48%
+sum +195.65%
+top10 share 97.25%
+positive active day rate 57.5%
+worst day -13.05%
+```
+
+- The original first-broad subset stayed the same useful benchmark:
+
+```text
+53 trades
+WR 56.60%
+median +0.53%
+sum +140.12%
+ex-top10 +6.22%
+```
+
+- The promoted subset itself is not robust:
+
+```text
+71 portfolio trades
+WR 28.17%
+median -0.77%
+sum +55.53%
+ex-top10 negative
+```
+
+Potential promoted sub-hypothesis:
+
+```text
+promoted v4 + m1_last2_trade_share <= ~0.385
+```
+
+This says the promoted seed should not be a last-two-minute chase inside its
+own 5m candle. It looked better (`~21` portfolio trades, `61.9%` WR,
+`+0.88%` median), but portfolio ex-top10 remained negative, so it is not enough
+for live promotion.
+
+Verdict:
+
+Keep cluster promotion in the research command because it fixes missed-runner
+coverage and exposes useful candidate anatomy. Do not mix promoted rows into
+the live trade policy yet. Treat first-broad `v4_quality_cool` as the current
+tradable benchmark and promoted rows as a separate hypothesis bucket.
+
+Next experiment:
+
+Add/inspect a promoted-only sensitivity artifact before any live wiring:
+`m1_last2_trade_share` caps, delay caps, E5 mass/strict split, and top-dependence
+by setup-selection model. The objective is to prove whether promoted setups can
+be made median-positive and ex-top10-positive without using top-growth labels.

@@ -11675,3 +11675,30 @@ noise. It must be judged by a 45d rerun with promoted-vs-first setup summaries,
 top-dependence, median net, ex-top10, and missed top-growth coverage. It does
 not change live2 or PumpDecisionCore.
 ```
+
+## 2026-06-06 - P525 cluster-promotion 45d readout docs
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Documented the 45d rerun of P524 cluster promotion in
+  `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+- Recorded that promotion improves missed large-runner coverage but weakens the
+  combined `v4_quality_cool` trading package.
+- Recorded that promoted rows should remain a separate research bucket, not
+  live trade policy.
+
+Validation:
+
+```text
+Run artifacts exist under .output/results/large_runner_discovery_45d.
+No trading code changed in this docs-only patch.
+```
+
+Risk:
+
+```text
+Documentation only. The promoted `m1_last2_trade_share <= ~0.385` observation
+is a small-sample hypothesis, not a promoted category.
+```

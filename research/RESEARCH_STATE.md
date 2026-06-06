@@ -4540,3 +4540,50 @@ The expansion is bounded: the 1d smoke increased matches from the previous
 `44` to `79`, not by orders of magnitude. The next required check is a 45d
 rerun to see whether promoted setups recover missed large runners without
 destroying median/ex-top10/top-dependence.
+
+45d promoted rerun result at commit `62d177be`:
+
+```text
+runtime: 3719.766s
+raw: 126987
+setups: 77079
+matches: 2812
+trade-grid rows: 14060
+closed simulated rows: 9945
+```
+
+Coverage improved materially:
+
+```text
+>=30% first15 top-growth portfolio-covered: 23 -> 33
+>=30% full-hour top-growth portfolio-covered: 27 -> 50
+>=30% pre60_to_hour_end portfolio-covered: 36 -> 67
+>=30% first15 5m_prefilter_failed: 48 -> 31
+>=30% full-hour 5m_prefilter_failed: 55 -> 9
+```
+
+But the combined `v4_quality_cool` portfolio weakened as a tradable package:
+
+```text
+trades: 124 / 2.76 per day
+WR: 40.32%
+median: -0.48%
+sum: +195.65%
+top5 share: 61.38%
+top10 share: 97.25%
+ex-top10: +5.38%
+positive active day rate: 57.5%
+worst day: -13.05%
+```
+
+The original first-broad `v4_quality_cool` subset stayed identical to the
+previous benchmark: `53` trades, `56.6%` WR, `+0.53%` median, `+140.12%` sum,
+`+6.22%` ex-top10. The new promoted subset added `71` portfolio trades but was
+not robust: `28.17%` WR, `-0.77%` median, `+55.53%` sum, and negative ex-top10.
+
+Conclusion: cluster promotion is useful as missed-runner research coverage, but
+it must not be promoted to live trade policy as-is. The best promoted
+sub-hypothesis is `m1_last2_trade_share <= ~0.385`, which means the promoted
+seed is not tail-chase inside its own 5m candle. It remains too small and
+top-dependent for live promotion: about `21` portfolio trades, `61.9%` WR,
+`+0.88%` median, but negative ex-top10 in portfolio sequencing.
