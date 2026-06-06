@@ -5846,3 +5846,25 @@ Readout:
 
 Conclusion:
 Absolute baseline volume/trade-count is not a standalone edge filter. Very high baseline liquidity may be worse in broad C/A/S-selected material, likely because it points toward already-crowded/top-like names, but the stronger clean-buyer policy does not prove a reliable liquidity threshold. Keep baseline as context/segmentation, not as an entry rule, until out-of-sample validation proves otherwise.
+
+## 2026-06-06 - FORM live2 trade review
+
+Run: `.output/results/live2_anomaly_runs/20260605_214104`.
+
+Question: was the FORM live trade just noisy action, and should it trigger a code change?
+
+Facts:
+- Selected row: `FORM/USDT:USDT`, `5m_30s`, seed `2026-06-06T05:07:00Z` to `05:12:00Z`, confirm `05:12:00Z` to `05:13:30Z`, decision `05:13:30Z`.
+- Entry was truthful: signal/live/fill all `0.2433`, signal age about `1035ms`, drift `0`, actual market fill verified, initial stop verified.
+- Trade policy: `strong_high_win_clean_notdump`; matched rules also included `five_minute_strong_buyer_confirm_history` and distributed seed watchlist rules.
+- Entry-time evidence was strong for a short clean-buyer continuation: `ltf_taker_buy_quote_share=0.6839`, `ltf_confirm_return_pct=0.9125%`, `ltf_quote_pace_ratio=21.13`, `ltf_trade_pace_ratio=10.74`, `current_vs_prior_spike_max_quote=2.79`, and no material 5m pre-seed dump in the accepted snapshot (`pregrowth_min_path_return_pct=-0.26%`).
+- The suspicious field is seed tail concentration: `htf_ltf_tail_quote_share=0.8845`. However, a 30d P514 accepted-policy readout did not show high tail share as a bad standalone splitter; high-tail samples were few and still positive in-sample.
+- FORM was not a 10% hourly top-growth runner. The closed `05:00-06:00Z` 1h candle was `+7.02%`, below the `10%` top-growth threshold.
+- Outcome was managed correctly: TP1 partial was verified at about `05:34:08Z`, structural stop was trailed, and final close was verified at about `05:34:47Z`. Realized PnL in the protected position was about `+0.2571 USDT`.
+- OI was not useful as a decision-time blocker in this old pre-P516 run: signal/pump-start current OI were `not_seen`; entry current OI was fetched after fill and was `ok`. Final symbol-state OI showed only a mild current-OI drift from first-ok to end, not a PIEVERSE-like collapse.
+
+Conclusion:
+FORM is not clean evidence of a large pump runner. It is better classified as a short clean-buyer pop that the current `TP0.75R close75 trail` management captured before later weakness. Do not patch code from this single example by blocking high tail share or below-10% hourly growth; that would be outcome/label leakage if used at entry time and may discard profitable P514 material.
+
+Next research step:
+Separate two evaluation buckets in future analysis: `runner candidate` (`10%+` hourly/top-growth style continuation) and `TP-pop candidate` (clean buyer continuation sufficient for TP1/trailing). If the project decides to trade only large runners, the policy must be revalidated against runner labels, not patched from FORM by visual hindsight.

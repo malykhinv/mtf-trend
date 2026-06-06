@@ -4149,3 +4149,22 @@ not enough to promote a liquidity threshold. Use baseline liquidity as a
 segmentation/audit dimension, not as a live entry filter. The stronger edge
 candidate remains clean buyer continuation nature: no dump, buyer flow,
 confirmation, clean prior-spike history, and non-late/non-single-print tape.
+
+## 2026-06-06 - FORM trade interpretation
+
+Current commit: UNKNOWN. Status: ANALYZED.
+
+FORM from `.output/results/live2_anomaly_runs/20260605_214104` was not a clean
+10%+ runner example. It was a short clean-buyer continuation/pop: the live
+entry was fresh and exactly filled at signal price, policy evidence was strong,
+TP1 partial and structural trailing close were verified, and realized PnL was
+positive. The later chart weakness happened after the position was already
+closed by trailing stop.
+
+No immediate code patch is justified from FORM alone. High seed-tail quote
+share looked suspicious visually, but the 30d P514 accepted subset does not
+show high tail share as a bad standalone splitter. The important research risk
+is semantic: current live policy can monetize TP-pop continuations, while the
+project's stated target often refers to 10-20-50% runners. Future validation
+must separate `TP-pop edge` from `large-runner edge` before changing live
+filters.
