@@ -5826,3 +5826,23 @@ The OI filter did not fail numerically; it was not wired into the current rollin
 
 Patch direction:
 Keep OI collapse out of source-neutral `snapshot_hash -> signal_verdict` until backtest has a matching historical OI simulation. Add it as a live executable-entry guard: if comparable current OI has materially dropped from the first fresh session OI baseline, or if available 5m OI has materially dropped over `3x5m`, reject the order with an explicit entry-guard reason.
+
+## 2026-06-06 - 30d baseline liquidity vs profitability check
+
+Run: `.output/results/htf_ltf_runner_discovery_30d`.
+
+Question: do absolute baseline liquidity levels (`baseline_quote_volume_median` and `baseline_number_of_trades_median`) correlate with trade profitability?
+
+Protocol:
+- Input: combined live-filtered closed trades and raw closed trades from the 30d runner discovery.
+- Metrics: Spearman rank correlation against `net_return`, log-scale Pearson against `net_return`, Spearman against win/loss, and quartile readouts by each baseline field.
+- Filters were not optimized from outcomes. The check used entry-time baseline fields only; PnL was evaluation-only.
+- Analysis artifacts were written locally under `_analysis_coverage/` as `baseline_liquidity_profit_correlation.json` and `baseline_liquidity_profit_correlation_rows.csv`.
+
+Readout:
+- All live-filtered closed trades: 816 rows. Baseline quote volume correlation with net return was weak negative (`spearman=-0.0275`, `pearson(log)=-0.0442`). Baseline trade count was also weak negative (`spearman=-0.0530`, `pearson(log)=-0.0699`).
+- Raw closed trades: 5207 rows. The highest-liquidity quartile was materially worse than the middle quartiles for both quote volume and trade-count baseline. Correlations again stayed weak negative.
+- Current P514 accepted-policy subset, replayed from entry-time fields on the live-filtered artifact, had only 48 rows. It showed a weak positive quote-volume slope (`spearman=+0.1623`) and weak positive trade-count slope (`+0.0805`), but the sample is too small and non-monotonic enough to avoid using this as a hard filter.
+
+Conclusion:
+Absolute baseline volume/trade-count is not a standalone edge filter. Very high baseline liquidity may be worse in broad C/A/S-selected material, likely because it points toward already-crowded/top-like names, but the stronger clean-buyer policy does not prove a reliable liquidity threshold. Keep baseline as context/segmentation, not as an entry rule, until out-of-sample validation proves otherwise.

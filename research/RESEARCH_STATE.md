@@ -4132,3 +4132,20 @@ Next validation: run live2 and inspect `entry_guard_reason` counts. A future
 backtest experiment should replay the accepted 30d signals with decision-time
 5m OI to estimate how much this guard reduces trades and whether it improves
 expectancy without hiding data-quality gaps.
+
+## 2026-06-06 - baseline liquidity correlation state
+
+Current commit: UNKNOWN. Status: ANALYZED.
+
+The 30d runner discovery does not support a simple rule that higher absolute
+baseline liquidity is better. On all 816 live-filtered closed trades,
+`baseline_quote_volume_median` and `baseline_number_of_trades_median` both had
+weak negative correlation with net return and win/loss. The broad raw sample
+showed the same pattern, with the highest-liquidity quartile underperforming.
+
+For the current P514 accepted-policy subset replayed from entry-time fields,
+the sample was only 48 rows and showed a weak positive quote-volume slope, but
+not enough to promote a liquidity threshold. Use baseline liquidity as a
+segmentation/audit dimension, not as a live entry filter. The stronger edge
+candidate remains clean buyer continuation nature: no dump, buyer flow,
+confirmation, clean prior-spike history, and non-late/non-single-print tape.
