@@ -11387,3 +11387,32 @@ Risk:
 ```text
 This is a live execution guard, not a source-neutral PumpDecisionCore change. It improves live safety for obvious OI-collapse cases like PIEVERSE, but backtest parity for this exact guard requires a separate historical 5m-OI simulation. Missing OI remains diagnostic and does not silently become zero.
 ```
+
+## 2026-06-06 - P517 large-runner research memory update
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Documented the second 30d large-runner edge deep dive in
+  `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+- Recorded the proposed additive backtest expansion for
+  `large_runner_candidate` profiles, including 5m ignition, 10m confirmation,
+  15m exceptional continuation, preheat ignition, structural trailing exits,
+  early invalidation, and required honesty artifacts.
+- No trading code, live execution code, configs, or backtest mechanics were
+  changed by this patch.
+
+Validation:
+
+```bash
+git diff --check -- research/RESEARCH_STATE.md research/EXPERIMENT_LOG.md research/PATCH_LOG.md
+```
+
+Risk:
+
+```text
+Documentation only. The proposed hypotheses remain in-sample research ideas
+until the backtest is expanded and run with live-like entry, fees/slippage,
+structural exits, top-dependence checks, and no future labels in rule logic.
+```

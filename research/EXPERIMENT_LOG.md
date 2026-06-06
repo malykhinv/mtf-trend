@@ -6009,3 +6009,119 @@ Build a shared backtest/live `large_runner_candidate` policy in the same trade
 policy layer, but first evaluate it offline against close/structure-aware
 labels and structural trailing outcomes. Do not patch live filters directly
 from future-high labels.
+
+## 2026-06-06 - 30d large-runner edge deep dive
+
+Run: `.output/results/htf_ltf_runner_discovery_30d`.
+
+Question:
+Can early runner rules be strengthened enough to support a new backtest profile
+for large potential runners: good winrate, about `1-10` trades/day, low
+top-trade/top-symbol dependence, no lookahead, and no optimistic entry?
+
+Protocol:
+- Reused the first 5m broad-awakening setup table and 5m lifecycle table from
+  `large_runner_nature_v1`.
+- Added entry-time evaluation labels for hypothetical 5m, 10m, and 15m
+  decisions:
+  - remaining peak from entry `>=10%/15%/20%`;
+  - clean `15%/20%` labels requiring remaining peak plus future close at least
+    `+5%` versus entry;
+  - dead-noise proxy where remaining peak from entry is below `3%`.
+- Tested named hypotheses and a threshold search over early return, quote/trade
+  ratios, 1m sustained tape, prior 24h spike context, soft no-dump context, OI
+  non-collapse, buyer-share bands, and 10m/15m price confirmation. All rule
+  fields were available at the simulated decision time; future labels were used
+  only for evaluation.
+- Wrote local artifacts under
+  `_analysis_coverage/large_runner_nature_v1/edge_deep_dive_v2/`:
+  `hypothesis_rule_readout.csv`, `feature_decile_readouts.csv`,
+  `boolean_feature_lift.csv`, `threshold_search_ranked_rules.csv`, and compact
+  top-rule CSV views.
+
+Findings:
+- Base rate is extremely low. Across `42076` first-5m setups, only about
+  `0.49%` had `15%+` remaining peak after a 5m entry and only about `0.43%`
+  were clean `15%+` by the close-positive label.
+- The strongest simple driver remains price expansion. Feature deciles showed
+  the largest lift from absolute first-5m trade count, first-5m quote mass,
+  early high/close return, and pre60 range. Flow ratios help, but absolute
+  participation and price movement dominate.
+- A useful but not sufficient 5m candidate shape is:
+  first-5m return around `5-7%`, real flow present, strict 1m sustained tape,
+  no material OI/short-covering collapse, and preferably current flow at least
+  comparable to recent large own-symbol spikes.
+- Representative 5m candidates from the threshold search:
+  - `first5m_return >= 5.0%`, strict 1m sustained tape, prior24 quote relevance
+    `>=0.5`: `135` rows (`4.5/day`), `17.0%` `15%+` potential, `14.1%` clean
+    `15%+`, `36.3%` dead-noise.
+  - Same plus OI/short-covering non-collapse: `127` rows (`4.2/day`), `17.3%`
+    `15%+` potential, `14.2%` clean `15%+`, `36.2%` dead-noise.
+  - `first5m_return >= 5.5%`, strict 1m sustained tape, prior24 relevance
+    `>=0.5`, no short-covering: `104` rows (`3.5/day`), `19.2%` `15%+`
+    potential, `15.4%` clean `15%+`, `36.5%` dead-noise.
+  - Very strict `first5m_return >= 7%` variants can reach roughly `17-19%`
+    clean `15%+` labels at `1-2/day`, but median remaining close is still
+    negative and sample size is small.
+- 10m/15m confirmation improves certainty that the move exists but does not
+  magically fix the runner edge. A representative 10m branch
+  (`first5m_return >=3%`, 10m close `>=7%`, modest 10m wick) had `221` rows
+  (`7.4/day`), `11.8%` `15%+` potential, `9.0%` clean `15%+`, and `38.0%`
+  dead-noise. It is cleaner than broad noise but later and not superior to the
+  best 5m strict ignition branch.
+- Hard quote/trade-ratio thresholds beyond the broad awakening gate were not
+  consistently the best splitter. In strong first-5m price expansion, insisting
+  on extra quote/trade ratio often reduces sample without clearly improving
+  clean runner rate.
+- Strong pre60 range/preheat is positively associated with future large
+  potential. This argues against a blunt `perfect sleep only` rule. The better
+  distinction is likely `constructive preheat / accumulation` versus
+  `violent dump + short-covering rebound`.
+
+Interpretation:
+Static entry filters alone do not yet prove a tradable large-runner edge. The
+candidate set can be narrowed to roughly `1-10/day` without top-symbol
+dominance, but dead-noise remains high and median close after entry is negative.
+The next honest test must simulate the whole trade: actual proxy entry,
+structural initial stop, structural trailing, BE rules, and fast invalidation
+when flow/price fail to continue.
+
+Backtest expansion plan:
+1. Add a separate additive `large_runner_candidate` research profile, not a
+   replacement for current TP-pop policy.
+2. Implement several arms in the shared trade-policy layer:
+   - `E5_ignition_strict`: first 5m return `>=5.0-5.5%`, strict 1m sustained
+     tape, prior spike relevance, no OI/short-covering collapse.
+   - `E5_mass_ignition`: first 5m return `>=5.5%` with broader flow evidence,
+     used to test whether price expansion itself is enough.
+   - `E10_confirmed_runner`: wait for 10m close around `>=7%`, modest upper
+     wick, and no broken structure.
+   - `E15_exceptional_runner`: low-frequency branch for very strong 15m
+     continuation only when RR and structure remain sane.
+   - `preheat_ignition`: allow elevated pre60 range/flow but reject violent
+     dump plus OI-collapse/short-covering cases.
+3. Extend backtest execution for these arms to use decision-time entry
+   (`5m/10m/15m` close plus live-like next-bar/adverse proxy), fees/slippage,
+   stale/drift/RR guards, and no future labels in rule logic.
+4. Add runner-specific exit policies:
+   - trail all by 1m/5m structure;
+   - TP1 `0.75R` close only `25-33%`, trail the rest;
+   - TP1 `1.5R` close `25-33%`, trail the rest;
+   - BE/tighten after `+1R` or after confirmed flow stall;
+   - hard early kill when no new high / no sustained flow by `10-15m` after
+     entry.
+5. Output artifacts required for honesty:
+   `runner_candidate_funnel.csv`, `runner_trade_grid.csv`,
+   `runner_mfe_mae.csv`, `runner_exit_policy_comparison.csv`,
+   `runner_top_dependence.csv`, `runner_top_growth_coverage.csv`, and parity
+   ledger fields with rule id, snapshot hash, decision time, entry time, and
+   feature availability.
+6. Decide success only by realized simulated trades after fees/slippage, not by
+   future-high labels. Required readout: trades/day, expectancy, winrate,
+   median trade, top 5/10 trade dependence, symbol/day concentration, missed
+   top runners, and reject reasons.
+
+Risk:
+This is still same-30d in-sample hypothesis mining. The 30d runner backtest can
+rank candidates, but any strong profile must then be forward-tested in live
+artifacts or a later untouched period before promotion to real live sizing.

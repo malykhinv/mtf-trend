@@ -4229,3 +4229,37 @@ should evaluate structural trailing behavior after entry, not just whether a
 future high printed. The current live policy may be a TP-pop policy; a
 large-runner policy should be separated in research and then shared by
 backtest/live only after parity checks.
+
+## 2026-06-06 - large-runner edge deep-dive state
+
+Current commit: UNKNOWN. Status: ANALYZED / PROPOSED.
+
+A second 30d readout tested entry-time candidate rules against remaining peak
+potential after 5m/10m/15m entry, clean close-positive runner labels, daily and
+symbol concentration, and dead-noise rates. Artifacts are under
+`_analysis_coverage/large_runner_nature_v1/edge_deep_dive_v2/`.
+
+The best pure-entry candidates are not yet a proven edge. Strong first-5m
+expansion around `5-7%`, especially with strict 1m sustained tape and prior
+flow relevance, gives only about `1-10` candidates/day and improves clean
+`15%+` potential materially versus the broad base, but still has high dead-noise
+rate around `35-42%` and negative median remaining close. This means the next
+work should not be another static entry-filter tweak. The edge, if present, is
+likely in combining early runner selection with runner-specific structural
+management and fast invalidation.
+
+Important feature signal:
+- early price expansion and absolute first-5m trade/quote mass dominate;
+- 1m sustained/late flow improves quality but cannot replace price expansion;
+- high pre60 range/preheat is positively associated with large runners, so a
+  rigid sleep-only/no-prior-volatility rule can discard good moves;
+- OI non-collapse is useful mainly as a short-covering safety guard, not as a
+  standalone alpha booster;
+- buyer-share extremes and prior-24h spike dominance are weak as hard filters.
+
+Proposed backtest expansion: add a separate `large_runner_candidate` research
+profile with multiple arms for early 5m ignition, 10m confirmation, and rare
+15m exceptional continuation. Keep it additive: do not replace the current
+TP-pop clean-buyer policy until the 30d structural-exit backtest proves actual
+expectancy after fees/slippage, portfolio sequencing, top-trade dependence, and
+live/backtest parity.
