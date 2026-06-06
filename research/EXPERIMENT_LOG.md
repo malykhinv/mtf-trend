@@ -6390,3 +6390,37 @@ For `>=30%` hourly high runners, most misses are candidate-generation misses:
 covered rows. Next experiment should mine these misses for decision-time
 features and broaden candidate generators only where live could have seen the
 same early evidence.
+
+## 2026-06-06 - planned large-runner timing rerun
+
+Status: PLANNED.
+
+Reason:
+
+The first 45d missed-runner artifact used only `first_15m_of_top_hour`. A quick
+read of existing artifacts showed that many rows classified as
+`broad_5m_gate_not_seen` in the first 15 minutes had raw 5m candidates later in
+the same labelled hour. That means the old funnel is too blunt for deciding
+whether to broaden early candidate generation.
+
+Patch P522 adds:
+
+```text
+large_runner_top_growth_timing_audit.csv
+hour_high_candle_open_offset_min
+first5/first15/first30 top-hour growth and flow fields
+```
+
+Next experiment:
+
+Run `python main.py run-large-runner-discovery --days 45` again and analyze:
+
+- true first-15m misses by high-return bucket;
+- full-hour visibility versus early visibility;
+- pre60 visibility before the labelled top hour;
+- which misses failed broad 5m gate, first-cluster selection, 5m prefilter,
+  1m enrichment, arm matching, nature selection, execution simulation, or
+  portfolio sequencing.
+
+The result should drive the next code change. Do not add candidate generators
+from hourly labels alone.

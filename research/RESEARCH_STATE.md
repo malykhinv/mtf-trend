@@ -4471,3 +4471,30 @@ Next research direction: keep `v4_quality_cool` as the current conservative
 benchmark, reject `v4_standard`, and investigate the 45d missed-runner funnel
 to add decision-time candidate generators that catch slow/hidden early runners
 without using future labels in trade rules.
+
+## 2026-06-06 - Large-runner timing audit patch
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The first 45d missed-runner funnel was directionally useful but too coarse: it
+classified top-growth coverage only inside the first 15 minutes of the labelled
+hour. That is not enough to distinguish a genuinely missed early runner from a
+runner whose top-hour label began before/after the actual pump start.
+
+P522 adds evaluation-only timing artifacts to `run-large-runner-discovery`:
+
+```text
+large_runner_top_growth.csv:
+  hour high 5m-candle offset plus first5/first15/first30 high/close/flow stats
+
+large_runner_top_growth_timing_audit.csv:
+  candidate/setup/prefilter/enrichment/arm/nature/trade/portfolio visibility
+  for first_15m_of_top_hour, full_top_hour, and pre60_to_hour_end windows
+```
+
+This is diagnostics only. It does not change candidate rules, nature rules,
+execution simulation, live2, or `PumpDecisionCore`.
+
+Next: rerun `python main.py run-large-runner-discovery --days 45` and use the
+new timing audit to separate true early misses from late/hour-label artifacts
+before adding any new candidate generator.

@@ -291,6 +291,14 @@ def run_large_runner_discovery(
         trade_frame,
         portfolio_frame,
     )
+    top_growth_timing_frame = _top_growth_timing_audit(
+        top_growth_frame,
+        raw_frame,
+        setup_frame,
+        match_frame,
+        trade_frame,
+        portfolio_frame,
+    )
 
     artifacts = [
         ("large_runner_candidates_raw.csv", raw_frame),
@@ -313,6 +321,7 @@ def run_large_runner_discovery(
         ("large_runner_nature_top_dependency.csv", nature_top_dependency_frame),
         ("large_runner_nature_sensitivity.csv", nature_sensitivity_frame),
         ("large_runner_prefilter_missed_top_growth.csv", missed_top_growth_frame),
+        ("large_runner_top_growth_timing_audit.csv", top_growth_timing_frame),
         ("large_runner_top_growth.csv", top_growth_frame),
         ("large_runner_top_growth_coverage.csv", top_coverage_frame),
         ("large_runner_feature_deciles.csv", _feature_deciles(setup_frame)),
@@ -336,6 +345,7 @@ def run_large_runner_discovery(
                         "entry_model": "decision_close_then_next_1m_open_plus_adverse_slippage",
                         "future_label_model": "evaluation_only_not_used_for_rule_matching",
                         "candidate_model": "first_broad_5m_awakening_per_symbol_per_60m_cluster",
+                        "top_growth_audit_model": "evaluation_only_first15_full_hour_and_pre60_windows",
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                     }
                 ]
@@ -938,7 +948,14 @@ def _hourly_growth_rows(*, symbol: str, frame_5m: pd.DataFrame, start_ms: int, e
             continue
         first_open = float(group.iloc[0]["open"])
         close = float(group.iloc[-1]["close"])
-        high = float(group["high"].max())
+        high_series = pd.to_numeric(group["high"], errors="coerce")
+        high_idx = high_series.idxmax()
+        high_row = group.loc[high_idx] if high_idx in group.index else group.iloc[0]
+        high = float(high_series.max())
+        high_ts = int(high_row["timestamp"])
+        first5 = _hour_prefix_stats(group, first_open=first_open, period_start_ms=int(period_start), minutes=5)
+        first15 = _hour_prefix_stats(group, first_open=first_open, period_start_ms=int(period_start), minutes=15)
+        first30 = _hour_prefix_stats(group, first_open=first_open, period_start_ms=int(period_start), minutes=30)
         rows.append(
             {
                 "symbol": symbol,
@@ -951,11 +968,50 @@ def _hourly_growth_rows(*, symbol: str, frame_5m: pd.DataFrame, start_ms: int, e
                 "hour_close": close,
                 "hour_high_return_pct": _safe_divide(high - first_open, first_open),
                 "hour_close_return_pct": _safe_divide(close - first_open, first_open),
+                "hour_high_candle_open_ms": high_ts,
+                "hour_high_candle_open_utc": _timestamp_to_utc(high_ts),
+                "hour_high_candle_open_offset_min": _safe_divide(float(high_ts - int(period_start)), float(MINUTE_MS)),
                 "quote_volume": float(group["quote_volume"].sum()) if "quote_volume" in group.columns else float("nan"),
                 "number_of_trades": float(group["number_of_trades"].sum()) if "number_of_trades" in group.columns else float("nan"),
+                **first5,
+                **first15,
+                **first30,
             }
         )
     return rows
+
+
+def _hour_prefix_stats(
+    group: pd.DataFrame,
+    *,
+    first_open: float,
+    period_start_ms: int,
+    minutes: int,
+) -> dict[str, object]:
+    prefix = f"first{int(minutes)}"
+    if group.empty:
+        return {
+            f"{prefix}_high_return_pct": float("nan"),
+            f"{prefix}_close_return_pct": float("nan"),
+            f"{prefix}_quote_volume": float("nan"),
+            f"{prefix}_number_of_trades": float("nan"),
+        }
+    window = group.loc[pd.to_numeric(group["timestamp"], errors="coerce") < int(period_start_ms) + int(minutes) * MINUTE_MS]
+    if window.empty:
+        return {
+            f"{prefix}_high_return_pct": float("nan"),
+            f"{prefix}_close_return_pct": float("nan"),
+            f"{prefix}_quote_volume": float("nan"),
+            f"{prefix}_number_of_trades": float("nan"),
+        }
+    high = float(pd.to_numeric(window["high"], errors="coerce").max())
+    close = float(window.iloc[-1]["close"])
+    return {
+        f"{prefix}_high_return_pct": _safe_divide(high - float(first_open), float(first_open)),
+        f"{prefix}_close_return_pct": _safe_divide(close - float(first_open), float(first_open)),
+        f"{prefix}_quote_volume": float(window["quote_volume"].sum()) if "quote_volume" in window.columns else float("nan"),
+        f"{prefix}_number_of_trades": float(window["number_of_trades"].sum()) if "number_of_trades" in window.columns else float("nan"),
+    }
 
 
 def _top_growth_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1310,6 +1366,188 @@ def _prefilter_missed_top_growth(
             }
         )
     return pd.DataFrame(rows, columns=columns)
+
+
+def _top_growth_timing_audit(
+    top_growth: pd.DataFrame,
+    raw: pd.DataFrame,
+    setups: pd.DataFrame,
+    matches: pd.DataFrame,
+    trades: pd.DataFrame,
+    portfolio: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "symbol",
+        "period_start_ms",
+        "period_start_utc",
+        "hour_high_return_pct",
+        "hour_close_return_pct",
+        "hour_high_candle_open_offset_min",
+        "first5_high_return_pct",
+        "first15_high_return_pct",
+        "first30_high_return_pct",
+        "audit_window_model",
+        "window_start_offset_min",
+        "window_end_offset_min",
+        "window_start_ms",
+        "window_start_utc",
+        "window_end_ms",
+        "window_end_utc",
+        "raw_candidates_in_window",
+        "raw_first_offset_min",
+        "setups_in_window",
+        "setup_first_offset_min",
+        "prefilter_passed_setups",
+        "prefilter_passed_first_offset_min",
+        "enriched_setups",
+        "enriched_first_offset_min",
+        "arm_matches",
+        "arm_match_first_offset_min",
+        "nature_selected_matches",
+        "nature_selected_first_offset_min",
+        "closed_trade_rows",
+        "closed_trade_first_offset_min",
+        "portfolio_rows",
+        "portfolio_first_offset_min",
+        "missed_stage",
+    ]
+    if top_growth.empty:
+        return pd.DataFrame(columns=columns)
+
+    raw = raw.copy()
+    setups = setups.copy()
+    matches = matches.copy()
+    trades = trades.copy()
+    portfolio = portfolio.copy()
+    windows = (
+        ("first_15m_of_top_hour", 0, 15 * MINUTE_MS),
+        ("full_top_hour", 0, HOUR_MS),
+        ("pre60_to_hour_end", -HOUR_MS, HOUR_MS),
+    )
+    rows: list[dict[str, object]] = []
+    for _, top in top_growth.iterrows():
+        symbol = str(top.get("symbol", ""))
+        period_start = int(top.get("period_start_ms", 0))
+        for window_name, start_offset, end_offset in windows:
+            window_start = period_start + int(start_offset)
+            window_end = period_start + int(end_offset)
+            raw_window = _rows_for_symbol_time(raw, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
+            if raw_window.empty:
+                raw_window = _rows_for_symbol_time(raw, symbol=symbol, time_column="timestamp_ms", start_ms=window_start, end_ms=window_end)
+            setup_window = _rows_for_symbol_time(setups, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
+            match_window = _rows_for_symbol_time(matches, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
+            trade_window = _rows_for_symbol_time(trades, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
+            portfolio_window = _rows_for_symbol_time(portfolio, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
+
+            prefilter_window = (
+                setup_window.loc[_bool_series(setup_window, "large_runner_5m_prefilter_passed").fillna(False)]
+                if not setup_window.empty
+                else pd.DataFrame()
+            )
+            enriched_window = (
+                setup_window.loc[setup_window.get("enrichment_status", pd.Series(dtype=str)).astype(str).eq("1m_enriched_after_5m_prefilter")]
+                if not setup_window.empty
+                else pd.DataFrame()
+            )
+            nature_window = (
+                match_window.loc[_bool_series(match_window, "large_runner_nature_selected").fillna(False)]
+                if not match_window.empty
+                else pd.DataFrame()
+            )
+            closed_window = (
+                trade_window.loc[trade_window.get("status", pd.Series(dtype=str)).astype(str).eq("closed")]
+                if not trade_window.empty
+                else pd.DataFrame()
+            )
+            portfolio_count = int(len(portfolio_window))
+            missed_stage = _missed_stage_from_counts(
+                raw_count=int(len(raw_window)),
+                setup_count=int(len(setup_window)),
+                prefilter_passed_count=int(len(prefilter_window)),
+                enriched_count=int(len(enriched_window)),
+                match_count=int(len(match_window)),
+                nature_selected_count=int(len(nature_window)),
+                closed_trade_count=int(len(closed_window)),
+                portfolio_count=portfolio_count,
+            )
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "period_start_ms": period_start,
+                    "period_start_utc": top.get("period_start_utc", ""),
+                    "hour_high_return_pct": top.get("hour_high_return_pct", float("nan")),
+                    "hour_close_return_pct": top.get("hour_close_return_pct", float("nan")),
+                    "hour_high_candle_open_offset_min": top.get("hour_high_candle_open_offset_min", float("nan")),
+                    "first5_high_return_pct": top.get("first5_high_return_pct", float("nan")),
+                    "first15_high_return_pct": top.get("first15_high_return_pct", float("nan")),
+                    "first30_high_return_pct": top.get("first30_high_return_pct", float("nan")),
+                    "audit_window_model": window_name,
+                    "window_start_offset_min": _safe_divide(float(start_offset), float(MINUTE_MS)),
+                    "window_end_offset_min": _safe_divide(float(end_offset), float(MINUTE_MS)),
+                    "window_start_ms": int(window_start),
+                    "window_start_utc": _timestamp_to_utc(window_start),
+                    "window_end_ms": int(window_end),
+                    "window_end_utc": _timestamp_to_utc(window_end),
+                    "raw_candidates_in_window": int(len(raw_window)),
+                    "raw_first_offset_min": _first_time_offset_min(raw_window, "seed_open_ms", period_start),
+                    "setups_in_window": int(len(setup_window)),
+                    "setup_first_offset_min": _first_time_offset_min(setup_window, "seed_open_ms", period_start),
+                    "prefilter_passed_setups": int(len(prefilter_window)),
+                    "prefilter_passed_first_offset_min": _first_time_offset_min(prefilter_window, "seed_open_ms", period_start),
+                    "enriched_setups": int(len(enriched_window)),
+                    "enriched_first_offset_min": _first_time_offset_min(enriched_window, "seed_open_ms", period_start),
+                    "arm_matches": int(len(match_window)),
+                    "arm_match_first_offset_min": _first_time_offset_min(match_window, "seed_open_ms", period_start),
+                    "nature_selected_matches": int(len(nature_window)),
+                    "nature_selected_first_offset_min": _first_time_offset_min(nature_window, "seed_open_ms", period_start),
+                    "closed_trade_rows": int(len(closed_window)),
+                    "closed_trade_first_offset_min": _first_time_offset_min(closed_window, "seed_open_ms", period_start),
+                    "portfolio_rows": portfolio_count,
+                    "portfolio_first_offset_min": _first_time_offset_min(portfolio_window, "seed_open_ms", period_start),
+                    "missed_stage": missed_stage,
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _missed_stage_from_counts(
+    *,
+    raw_count: int,
+    setup_count: int,
+    prefilter_passed_count: int,
+    enriched_count: int,
+    match_count: int,
+    nature_selected_count: int,
+    closed_trade_count: int,
+    portfolio_count: int,
+) -> str:
+    if int(portfolio_count):
+        return "covered_by_portfolio"
+    if int(closed_trade_count):
+        return "simulated_trade_not_portfolio_selected"
+    if int(nature_selected_count):
+        return "nature_selected_but_no_closed_trade"
+    if int(match_count):
+        return "arm_matched_but_not_selected_nature"
+    if int(enriched_count):
+        return "enriched_but_no_arm_match"
+    if int(prefilter_passed_count):
+        return "prefilter_passed_but_not_enriched_or_missing_1m"
+    if int(setup_count):
+        return "5m_prefilter_failed"
+    if int(raw_count):
+        return "raw_candidate_not_first_cluster_setup"
+    return "broad_5m_gate_not_seen"
+
+
+def _first_time_offset_min(frame: pd.DataFrame, time_column: str, period_start_ms: int) -> float:
+    if frame.empty or time_column not in frame.columns:
+        return float("nan")
+    timestamps = pd.to_numeric(frame[time_column], errors="coerce").dropna()
+    if timestamps.empty:
+        return float("nan")
+    first_ts = float(timestamps.min())
+    return _safe_divide(first_ts - float(period_start_ms), float(MINUTE_MS))
 
 
 def _nature_category_summary_rows(

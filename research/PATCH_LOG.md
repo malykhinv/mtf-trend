@@ -11555,3 +11555,37 @@ Documentation only. The 45d result is still same-cache historical research, not
 proof of live edge. Next code work should focus on missed-runner candidate
 generation without allowing future labels into rule logic.
 ```
+
+## 2026-06-06 - P522 large-runner top-growth timing audit
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `hour_high_candle_open_ms/utc/offset_min` to
+  `large_runner_top_growth.csv`.
+- Added first5/first15/first30 top-hour high/close/quote/trade fields to
+  `large_runner_top_growth.csv`.
+- Added `large_runner_top_growth_timing_audit.csv`, with visibility counts and
+  first-seen offsets for raw candidates, first-cluster setups, 5m prefilter
+  pass, 1m enrichment, arm matches, nature-selected matches, simulated trades,
+  and portfolio rows.
+- The timing audit records three windows for each top-growth row:
+  `first_15m_of_top_hour`, `full_top_hour`, and `pre60_to_hour_end`.
+- Added tests that assert the new artifact contract is present.
+
+Validation:
+
+```bash
+python -m pytest tests/test_large_runner_discovery.py tests/test_cli_runner_discovery_empty_artifacts.py -q
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Diagnostics only. This patch adds future-label/top-growth audit fields, but
+does not use them for rule matching, trade selection, live2, PumpDecisionCore,
+or execution simulation. The next 45d rerun is required before drawing new
+missed-runner conclusions.
+```
