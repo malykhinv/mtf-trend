@@ -4194,3 +4194,38 @@ evaluation and entry guard completed within `152ms`; the rest is order, stop,
 verification, and current-OI fetch. This is safe for execution but confusing for
 backtest/live parity analysis. Future artifacts should separate
 pre-execution decision latency from post-execution audit duration.
+
+## 2026-06-06 - large-runner timing and nature state
+
+Current commit: UNKNOWN. Status: ANALYZED.
+
+The 30d 5m/1m cache supports a separate large-runner readout. On first 5m broad
+awakening setups, `10%+` hourly high runners were uncommon (`954 / 42076`,
+`2.27%`), `20%+` runners were rare (`185 / 42076`, `0.44%`), and `30%+`
+runners were tail events (`62 / 42076`, `0.15%`). This means the live strategy
+cannot treat every clean pop as a future 10-30% runner.
+
+Timing is still favorable if the early move is real. For `20%+` runners, the
+median `10%` hit came about `15m` after the first 5m awakening and median `20%`
+hit came about `30m`; the median peak was about `45m`. A 5m entry left median
+remaining peak potential near `20.8%`; a 10m confirmation still left about
+`19.3%`; a 15m confirmation left about `16.1%`; 20m started to become expensive
+at about `13.4%`. For `30%+` runners, even 10-15m confirmation often remained
+usable, but 20m materially reduced the remaining edge.
+
+The strongest first-5m discriminator was early price expansion itself:
+`first5m_return >= 3%` captured about `56%` of `20%+` runners with about
+`7.8%` `20%+` precision. Flow ratios and 1m structure improve cleanliness but
+do not replace price confirmation. Useful 1m structure is sustained/late flow:
+`3+` elevated 1m candles in both quote and trades, top one-minute concentration
+not too dominant, and last two minutes still contributing roughly `30%+` of
+first-5m flow. Requiring every minute to be green, requiring taker-buy share to
+be very high, requiring OI to rise, or requiring the first spike to exceed the
+prior 24h maximum is not supported as a hard filter.
+
+Important risk: hourly `high10/high20` labels include violent wick/fader
+events. Clean runner validation should prefer close/structure-aware labels and
+should evaluate structural trailing behavior after entry, not just whether a
+future high printed. The current live policy may be a TP-pop policy; a
+large-runner policy should be separated in research and then shared by
+backtest/live only after parity checks.

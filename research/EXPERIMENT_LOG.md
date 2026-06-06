@@ -5932,3 +5932,80 @@ Patch artifact/audit latency first: record `pre_execution_latency_ms`,
 `execution_call_duration_ms`, and keep final `latency_ms` clearly marked as
 audit latency. Then attack 95%+ uptime by reducing deadline hot-path backlog,
 not by loosening trade filters.
+
+## 2026-06-06 - 30d large-runner timing / early-entry study
+
+Run: `.output/results/htf_ltf_runner_discovery_30d`.
+
+Question:
+How long do real pump runners last, what entry window is still useful, and what
+early criteria separate `we entered the start and can structurally trail` from
+`we chased noisy highs and got stopped`?
+
+Protocol:
+- Built closed 1h runner labels from continuous 5m candles, using future
+  returns only as evaluation labels: `runner_high10/20/30_next60` and
+  `runner_close10/20_next60`.
+- Built first 5m broad-awakening setups per symbol per 60m cluster using only
+  entry-time features: early return, 24h self-baseline quote/trade ratios,
+  prior spike context, taker-buy share, OI change where available, and 1m
+  intra-window structure.
+- Enriched the first 5m setups with exact same-symbol 1m structure for the
+  first five 1m candles. An earlier merge attempt by timestamp only was
+  discarded; the final artifact joins by `symbol` and `start_ms`.
+- Measured hit time to `10%/20%/30%`, peak time, remaining peak potential after
+  hypothetical 5m/10m/15m/20m entries, and post-peak retrace.
+- Artifacts were written under
+  `_analysis_coverage/large_runner_nature_v1/`, including
+  `setup60_first5m_broad_awakening.csv`,
+  `setup60_first5m_broad_awakening_with_1m_structure.csv`,
+  `setup60_first5m_lifecycle_summary_by_label.csv`,
+  `setup60_first5m_wait_window_remaining_potential.csv`, and rule grids.
+
+Readout:
+- First 5m broad-awakening setup base: `42076` rows, `583` symbols.
+  `10%+` future high runners: `954` rows (`2.27%`). `20%+`: `185`
+  (`0.44%`). `30%+`: `62` (`0.15%`). Large runners are rare tails, so the
+  current clean-pop policy must not be assumed to be a large-runner policy.
+- For `20%+` runners, median first `10%` hit was about `15m`, median first
+  `20%` hit about `30m`, and median peak about `45m` after first 5m awakening.
+  Entry after 5m left median remaining peak potential about `20.8%`; after
+  10m about `19.3%`; after 15m about `16.1%`; after 20m about `13.4%`.
+- For `30%+` runners, median first `10%` hit was about `12.5m`, first `20%`
+  about `25m`, first `30%` about `35m`, and peak about `50m`. Entry after 10m
+  still left median remaining peak potential about `26.8%`; after 15m about
+  `24.5%`; after 20m about `20.4%`.
+- The strongest simple first-5m rule was early price expansion:
+  `first5m_return >= 3%` produced about `33%` `10%+` precision, `7.8%`
+  `20%+` precision, and captured about `56%` of `20%+` runners. This is
+  stronger than hard buyer-share/OI/prior-max rules.
+- Flow magnitude helps but is not enough by itself. Useful first-5m evidence is
+  high real quote/trade ratios plus sustained 1m tape: `3+` elevated 1m candles
+  in both quote and trades, no one-minute-only concentration, and last two 1m
+  candles still contributing a meaningful share of first-5m flow.
+- Hard filters that looked intuitively attractive are not supported as
+  standalone rules: requiring all minutes to be green, requiring very high
+  taker-buy share, requiring OI to rise, or requiring the first spike to exceed
+  the prior 24h maximum. They either reduce recall too much or do not improve
+  large-runner precision enough.
+- A blunt no-dump/dormancy filter also underperformed in runner labels. It
+  should be replaced by a more specific reject for violent dump/short-covering
+  context, OI collapse, and broken structure, not a blanket ban on all
+  pre-window volatility.
+- Hourly high labels include wick/fader traps: very large future highs can
+  close flat or red. Runner research must evaluate close/structure/trailing
+  behavior, not just future high.
+
+Conclusion:
+The practical large-runner entry window is `5m ideal`, `10m still strong`, and
+`15m acceptable for stronger/cleaner runners`; `20m` is usually late unless the
+move is already proving exceptional. A separate large-runner policy should watch
+symbols after the first 5m awakening, enter early when price+flow+1m hold are
+already strong, or wait up to 10-15m for confirmation only when remaining
+potential and structural stop still make sense.
+
+Next step:
+Build a shared backtest/live `large_runner_candidate` policy in the same trade
+policy layer, but first evaluate it offline against close/structure-aware
+labels and structural trailing outcomes. Do not patch live filters directly
+from future-high labels.
