@@ -6424,3 +6424,22 @@ Run `python main.py run-large-runner-discovery --days 45` again and analyze:
 
 The result should drive the next code change. Do not add candidate generators
 from hourly labels alone.
+
+Interim check:
+
+An attempted 45d rerun exceeded a 1h tool timeout and left an orphan Python
+process, which was stopped. No new final artifacts were written from that
+attempt. The timing-audit code was then microbenchmarked against the old 45d
+CSV artifacts and produced `5355` audit rows in `3.655s`, so the audit
+post-processing itself is not the long-run bottleneck.
+
+Useful interim finding from old artifacts:
+
+```text
+old first15 broad_5m_gate_not_seen rows: 717
+of those, raw 5m candidate visible later in full top-hour: 559
+```
+
+This means the old missed-runner count overstated true early broad-gate misses.
+The next rerun still matters because the old top-growth CSV lacks high-offset
+and first5/first15/first30 facts.

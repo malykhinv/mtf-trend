@@ -4498,3 +4498,10 @@ execution simulation, live2, or `PumpDecisionCore`.
 Next: rerun `python main.py run-large-runner-discovery --days 45` and use the
 new timing audit to separate true early misses from late/hour-label artifacts
 before adding any new candidate generator.
+
+Follow-up before rerun: a quick timing read over the old 45d artifacts showed
+the old first-15m funnel was indeed too blunt. Of `717` rows marked
+`broad_5m_gate_not_seen` in the first 15 minutes, `559` had raw 5m candidates
+later in the full labelled hour. Therefore these rows are not all true early
+misses. The next generator work must focus on first-15m/pre-hour misses and on
+cases where full-hour visibility exists but prefilter/nature rejects the setup.

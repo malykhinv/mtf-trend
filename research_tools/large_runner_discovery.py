@@ -1317,7 +1317,7 @@ def _prefilter_missed_top_growth(
         portfolio_window = _rows_for_symbol_time(portfolio, symbol=symbol, time_column="seed_open_ms", start_ms=period_start, end_ms=period_end)
         prefilter_passed = _bool_series(setup_window, "large_runner_5m_prefilter_passed").sum() if not setup_window.empty else 0
         enriched = (
-            setup_window.get("enrichment_status", pd.Series(dtype=str)).astype(str).eq("1m_enriched_after_5m_prefilter").sum()
+            _string_equals_series(setup_window, "enrichment_status", "1m_enriched_after_5m_prefilter").sum()
             if not setup_window.empty
             else 0
         )
@@ -1325,7 +1325,7 @@ def _prefilter_missed_top_growth(
             _bool_series(match_window, "large_runner_nature_selected").sum() if not match_window.empty else 0
         )
         closed_trades = (
-            trade_window.get("status", pd.Series(dtype=str)).astype(str).eq("closed").sum() if not trade_window.empty else 0
+            _string_equals_series(trade_window, "status", "closed").sum() if not trade_window.empty else 0
         )
         portfolio_rows = int(len(portfolio_window))
         if portfolio_rows:
@@ -1414,11 +1414,26 @@ def _top_growth_timing_audit(
     if top_growth.empty:
         return pd.DataFrame(columns=columns)
 
-    raw = raw.copy()
-    setups = setups.copy()
-    matches = matches.copy()
-    trades = trades.copy()
-    portfolio = portfolio.copy()
+    raw_index = _stage_time_index(raw, time_column="seed_open_ms", fallback_time_column="timestamp_ms")
+    setup_index = _stage_time_index(setups, time_column="seed_open_ms")
+    prefilter_index = _stage_time_index(
+        setups.loc[_bool_series(setups, "large_runner_5m_prefilter_passed")] if not setups.empty else pd.DataFrame(),
+        time_column="seed_open_ms",
+    )
+    enriched_index = _stage_time_index(
+        setups.loc[_string_equals_series(setups, "enrichment_status", "1m_enriched_after_5m_prefilter")] if not setups.empty else pd.DataFrame(),
+        time_column="seed_open_ms",
+    )
+    match_index = _stage_time_index(matches, time_column="seed_open_ms")
+    nature_index = _stage_time_index(
+        matches.loc[_bool_series(matches, "large_runner_nature_selected")] if not matches.empty else pd.DataFrame(),
+        time_column="seed_open_ms",
+    )
+    closed_trade_index = _stage_time_index(
+        trades.loc[_string_equals_series(trades, "status", "closed")] if not trades.empty else pd.DataFrame(),
+        time_column="seed_open_ms",
+    )
+    portfolio_index = _stage_time_index(portfolio, time_column="seed_open_ms")
     windows = (
         ("first_15m_of_top_hour", 0, 15 * MINUTE_MS),
         ("full_top_hour", 0, HOUR_MS),
@@ -1431,43 +1446,22 @@ def _top_growth_timing_audit(
         for window_name, start_offset, end_offset in windows:
             window_start = period_start + int(start_offset)
             window_end = period_start + int(end_offset)
-            raw_window = _rows_for_symbol_time(raw, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
-            if raw_window.empty:
-                raw_window = _rows_for_symbol_time(raw, symbol=symbol, time_column="timestamp_ms", start_ms=window_start, end_ms=window_end)
-            setup_window = _rows_for_symbol_time(setups, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
-            match_window = _rows_for_symbol_time(matches, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
-            trade_window = _rows_for_symbol_time(trades, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
-            portfolio_window = _rows_for_symbol_time(portfolio, symbol=symbol, time_column="seed_open_ms", start_ms=window_start, end_ms=window_end)
-
-            prefilter_window = (
-                setup_window.loc[_bool_series(setup_window, "large_runner_5m_prefilter_passed").fillna(False)]
-                if not setup_window.empty
-                else pd.DataFrame()
-            )
-            enriched_window = (
-                setup_window.loc[setup_window.get("enrichment_status", pd.Series(dtype=str)).astype(str).eq("1m_enriched_after_5m_prefilter")]
-                if not setup_window.empty
-                else pd.DataFrame()
-            )
-            nature_window = (
-                match_window.loc[_bool_series(match_window, "large_runner_nature_selected").fillna(False)]
-                if not match_window.empty
-                else pd.DataFrame()
-            )
-            closed_window = (
-                trade_window.loc[trade_window.get("status", pd.Series(dtype=str)).astype(str).eq("closed")]
-                if not trade_window.empty
-                else pd.DataFrame()
-            )
-            portfolio_count = int(len(portfolio_window))
+            raw_count, raw_first = _stage_count_first_offset(raw_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
+            setup_count, setup_first = _stage_count_first_offset(setup_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
+            prefilter_count, prefilter_first = _stage_count_first_offset(prefilter_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
+            enriched_count, enriched_first = _stage_count_first_offset(enriched_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
+            match_count, match_first = _stage_count_first_offset(match_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
+            nature_count, nature_first = _stage_count_first_offset(nature_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
+            closed_count, closed_first = _stage_count_first_offset(closed_trade_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
+            portfolio_count, portfolio_first = _stage_count_first_offset(portfolio_index, symbol=symbol, start_ms=window_start, end_ms=window_end, period_start_ms=period_start)
             missed_stage = _missed_stage_from_counts(
-                raw_count=int(len(raw_window)),
-                setup_count=int(len(setup_window)),
-                prefilter_passed_count=int(len(prefilter_window)),
-                enriched_count=int(len(enriched_window)),
-                match_count=int(len(match_window)),
-                nature_selected_count=int(len(nature_window)),
-                closed_trade_count=int(len(closed_window)),
+                raw_count=raw_count,
+                setup_count=setup_count,
+                prefilter_passed_count=prefilter_count,
+                enriched_count=enriched_count,
+                match_count=match_count,
+                nature_selected_count=nature_count,
+                closed_trade_count=closed_count,
                 portfolio_count=portfolio_count,
             )
             rows.append(
@@ -1488,26 +1482,70 @@ def _top_growth_timing_audit(
                     "window_start_utc": _timestamp_to_utc(window_start),
                     "window_end_ms": int(window_end),
                     "window_end_utc": _timestamp_to_utc(window_end),
-                    "raw_candidates_in_window": int(len(raw_window)),
-                    "raw_first_offset_min": _first_time_offset_min(raw_window, "seed_open_ms", period_start),
-                    "setups_in_window": int(len(setup_window)),
-                    "setup_first_offset_min": _first_time_offset_min(setup_window, "seed_open_ms", period_start),
-                    "prefilter_passed_setups": int(len(prefilter_window)),
-                    "prefilter_passed_first_offset_min": _first_time_offset_min(prefilter_window, "seed_open_ms", period_start),
-                    "enriched_setups": int(len(enriched_window)),
-                    "enriched_first_offset_min": _first_time_offset_min(enriched_window, "seed_open_ms", period_start),
-                    "arm_matches": int(len(match_window)),
-                    "arm_match_first_offset_min": _first_time_offset_min(match_window, "seed_open_ms", period_start),
-                    "nature_selected_matches": int(len(nature_window)),
-                    "nature_selected_first_offset_min": _first_time_offset_min(nature_window, "seed_open_ms", period_start),
-                    "closed_trade_rows": int(len(closed_window)),
-                    "closed_trade_first_offset_min": _first_time_offset_min(closed_window, "seed_open_ms", period_start),
+                    "raw_candidates_in_window": raw_count,
+                    "raw_first_offset_min": raw_first,
+                    "setups_in_window": setup_count,
+                    "setup_first_offset_min": setup_first,
+                    "prefilter_passed_setups": prefilter_count,
+                    "prefilter_passed_first_offset_min": prefilter_first,
+                    "enriched_setups": enriched_count,
+                    "enriched_first_offset_min": enriched_first,
+                    "arm_matches": match_count,
+                    "arm_match_first_offset_min": match_first,
+                    "nature_selected_matches": nature_count,
+                    "nature_selected_first_offset_min": nature_first,
+                    "closed_trade_rows": closed_count,
+                    "closed_trade_first_offset_min": closed_first,
                     "portfolio_rows": portfolio_count,
-                    "portfolio_first_offset_min": _first_time_offset_min(portfolio_window, "seed_open_ms", period_start),
+                    "portfolio_first_offset_min": portfolio_first,
                     "missed_stage": missed_stage,
                 }
             )
     return pd.DataFrame(rows, columns=columns)
+
+
+def _stage_time_index(
+    frame: pd.DataFrame,
+    *,
+    time_column: str,
+    fallback_time_column: str | None = None,
+) -> dict[str, np.ndarray]:
+    if frame.empty or "symbol" not in frame.columns:
+        return {}
+    selected_time_column = time_column if time_column in frame.columns else fallback_time_column
+    if not selected_time_column or selected_time_column not in frame.columns:
+        return {}
+    work = pd.DataFrame(
+        {
+            "symbol": frame["symbol"].astype(str),
+            "timestamp_ms": pd.to_numeric(frame[selected_time_column], errors="coerce"),
+        }
+    ).dropna()
+    if work.empty:
+        return {}
+    result: dict[str, np.ndarray] = {}
+    for symbol, group in work.groupby("symbol", sort=False):
+        result[str(symbol)] = np.sort(group["timestamp_ms"].astype("int64").to_numpy())
+    return result
+
+
+def _stage_count_first_offset(
+    index: Mapping[str, np.ndarray],
+    *,
+    symbol: str,
+    start_ms: int,
+    end_ms: int,
+    period_start_ms: int,
+) -> tuple[int, float]:
+    values = index.get(str(symbol))
+    if values is None or len(values) == 0:
+        return 0, float("nan")
+    left = int(np.searchsorted(values, int(start_ms), side="left"))
+    right = int(np.searchsorted(values, int(end_ms), side="left"))
+    count = max(0, right - left)
+    if count <= 0:
+        return 0, float("nan")
+    return count, _safe_divide(float(values[left]) - float(period_start_ms), float(MINUTE_MS))
 
 
 def _missed_stage_from_counts(
@@ -1538,16 +1576,6 @@ def _missed_stage_from_counts(
     if int(raw_count):
         return "raw_candidate_not_first_cluster_setup"
     return "broad_5m_gate_not_seen"
-
-
-def _first_time_offset_min(frame: pd.DataFrame, time_column: str, period_start_ms: int) -> float:
-    if frame.empty or time_column not in frame.columns:
-        return float("nan")
-    timestamps = pd.to_numeric(frame[time_column], errors="coerce").dropna()
-    if timestamps.empty:
-        return float("nan")
-    first_ts = float(timestamps.min())
-    return _safe_divide(first_ts - float(period_start_ms), float(MINUTE_MS))
 
 
 def _nature_category_summary_rows(
@@ -1946,6 +1974,12 @@ def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
     if pd.api.types.is_bool_dtype(values):
         return values.fillna(False).astype(bool)
     return values.astype(str).str.lower().isin({"true", "1", "yes", "y"})
+
+
+def _string_equals_series(frame: pd.DataFrame, column: str, value: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(False, index=frame.index)
+    return frame[column].astype(str).eq(str(value))
 
 
 def _safe_divide_series(numerator: pd.Series, denominator: pd.Series) -> pd.Series:

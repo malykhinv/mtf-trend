@@ -11589,3 +11589,40 @@ does not use them for rule matching, trade selection, live2, PumpDecisionCore,
 or execution simulation. The next 45d rerun is required before drawing new
 missed-runner conclusions.
 ```
+
+## 2026-06-06 - P523 indexed timing-audit implementation
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Reworked `large_runner_top_growth_timing_audit.csv` generation to build
+  per-stage `symbol -> sorted timestamp` indexes and use `np.searchsorted`
+  instead of repeated DataFrame scans per top-growth row/window.
+- Added a strict string-equality mask helper so missing status/enrichment
+  columns become explicit false masks with the correct index, not pandas
+  alignment edge cases.
+- No artifact fields, trading rules, nature rules, execution simulation, live2,
+  or `PumpDecisionCore` behavior changed.
+
+Validation:
+
+```bash
+python -m pytest tests/test_large_runner_discovery.py tests/test_cli_runner_discovery_empty_artifacts.py -q
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+```
+
+Microbenchmark on old `.output/results/large_runner_discovery_45d` CSVs:
+
+```text
+large_runner_top_growth_timing_audit rows: 5355
+runtime: 3.655s
+```
+
+Risk:
+
+```text
+Diagnostics-only performance patch. The old 45d artifacts still need a fresh
+rerun to include the new top-growth high-offset and first5/first15/first30
+fields.
+```
