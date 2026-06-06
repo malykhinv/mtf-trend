@@ -8,6 +8,7 @@ entry stale, drifted, TP-touched, or RR-collapsed before execution can exist.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 
 from .signal import Live2SignalDecision
 from .state import SymbolState
@@ -18,6 +19,9 @@ class Live2EntryGuardConfig:
     max_signal_age_ms: int = 5_000
     max_entry_price_drift_pct: float = 0.004
     min_rr_to_tp1: float = 0.70
+    max_current_oi_drop_from_first_ok_pct: float = 0.005
+    max_oi_3x5m_drop_pct: float = 0.005
+    max_current_oi_age_ms: int = 120_000
 
     def __post_init__(self) -> None:
         if self.max_signal_age_ms <= 0:
@@ -26,6 +30,12 @@ class Live2EntryGuardConfig:
             raise ValueError("max_entry_price_drift_pct must be >= 0")
         if self.min_rr_to_tp1 <= 0:
             raise ValueError("min_rr_to_tp1 must be > 0")
+        if self.max_current_oi_drop_from_first_ok_pct < 0:
+            raise ValueError("max_current_oi_drop_from_first_ok_pct must be >= 0")
+        if self.max_oi_3x5m_drop_pct < 0:
+            raise ValueError("max_oi_3x5m_drop_pct must be >= 0")
+        if self.max_current_oi_age_ms <= 0:
+            raise ValueError("max_current_oi_age_ms must be > 0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +77,9 @@ class Live2EntryGuardEngine:
             "max_signal_age_ms": self.config.max_signal_age_ms,
             "max_entry_price_drift_pct": self.config.max_entry_price_drift_pct,
             "min_rr_to_tp1": self.config.min_rr_to_tp1,
+            "max_current_oi_drop_from_first_ok_pct": self.config.max_current_oi_drop_from_first_ok_pct,
+            "max_oi_3x5m_drop_pct": self.config.max_oi_3x5m_drop_pct,
+            "max_current_oi_age_ms": self.config.max_current_oi_age_ms,
             "signal_timestamp_ms": signal_timestamp_ms,
             "decision_timestamp_ms": now_ms,
             "signal_age_ms": signal_age_ms,
@@ -82,6 +95,15 @@ class Live2EntryGuardEngine:
             return self._reject("live_stream_price_not_available_for_entry_guard", live_price=live_price, live_price_source=live_price_source, signal_age_ms=signal_age_ms, features=features)
         if signal_entry is None or signal_entry <= 0 or stop is None or stop <= 0 or tp1 is None or tp1 <= 0:
             return self._reject("signal_risk_levels_not_available_for_entry_guard", live_price=live_price, live_price_source=live_price_source, signal_age_ms=signal_age_ms, features=features)
+        oi_guard_reason = _oi_entry_guard_reject_reason(state=state, now_ms=now_ms, config=self.config, features=features)
+        if oi_guard_reason:
+            return self._reject(
+                oi_guard_reason,
+                live_price=live_price,
+                live_price_source=live_price_source,
+                signal_age_ms=signal_age_ms,
+                features=features,
+            )
         drift_pct = (live_price / signal_entry) - 1.0
         features["entry_price_drift_pct"] = drift_pct
         if drift_pct > self.config.max_entry_price_drift_pct:
@@ -139,6 +161,9 @@ class Live2EntryGuardEngine:
                 "max_signal_age_ms": self.config.max_signal_age_ms,
                 "max_entry_price_drift_pct": self.config.max_entry_price_drift_pct,
                 "min_rr_to_tp1": self.config.min_rr_to_tp1,
+                "max_current_oi_drop_from_first_ok_pct": self.config.max_current_oi_drop_from_first_ok_pct,
+                "max_oi_3x5m_drop_pct": self.config.max_oi_3x5m_drop_pct,
+                "max_current_oi_age_ms": self.config.max_current_oi_age_ms,
             },
         }
 
@@ -177,3 +202,76 @@ def _latest_stream_price_with_source(state: SymbolState) -> tuple[float | None, 
     if state.ticker_last_price is not None and state.ticker_last_price > 0:
         return state.ticker_last_price, "ticker_last_price"
     return None, "unavailable"
+
+
+def _oi_entry_guard_reject_reason(
+    *,
+    state: SymbolState,
+    now_ms: int,
+    config: Live2EntryGuardConfig,
+    features: dict[str, object],
+) -> str:
+    """Reject obvious short-cover / OI-collapse long entries.
+
+    Binance historical OI is coarse 5m data, while live current OI is a point
+    snapshot. This guard therefore lives in the executable-entry layer instead
+    of the source-neutral signal core. Missing OI remains diagnostic; only a
+    comparable and material OI drop blocks execution.
+    """
+
+    features.update(
+        {
+            "current_oi_status": state.current_oi_status,
+            "current_oi_open_interest": state.current_oi_open_interest,
+            "current_oi_timestamp_ms": state.current_oi_timestamp_ms,
+            "current_oi_last_seen_ms": state.current_oi_last_seen_ms,
+            "current_oi_first_ok_status": state.current_oi_first_ok_status,
+            "current_oi_first_ok_open_interest": state.current_oi_first_ok_open_interest,
+            "current_oi_first_ok_timestamp_ms": state.current_oi_first_ok_timestamp_ms,
+            "current_oi_first_ok_seen_ms": state.current_oi_first_ok_seen_ms,
+            "oi_status": state.oi_status,
+            "oi_open_interest": state.oi_open_interest,
+            "oi_previous_open_interest": state.oi_previous_open_interest,
+            "oi_change_pct_3x5m": state.oi_change_pct_3x5m,
+            "oi_latest_timestamp_ms": state.oi_latest_timestamp_ms,
+        }
+    )
+    current_age_ms = None
+    if state.current_oi_last_seen_ms is not None:
+        current_age_ms = max(0, int(now_ms) - int(state.current_oi_last_seen_ms))
+    features["current_oi_age_ms"] = current_age_ms
+    current = _finite_positive_float(state.current_oi_open_interest)
+    first_ok = _finite_positive_float(state.current_oi_first_ok_open_interest)
+    current_is_fresh = (
+        state.current_oi_status == "ok"
+        and state.current_oi_first_ok_status == "ok"
+        and current_age_ms is not None
+        and current_age_ms <= int(config.max_current_oi_age_ms)
+    )
+    if current_is_fresh and current is not None and first_ok is not None:
+        drop_from_first_ok = (current / first_ok) - 1.0
+        features["current_oi_change_pct_from_first_ok"] = drop_from_first_ok
+        if drop_from_first_ok < -float(config.max_current_oi_drop_from_first_ok_pct):
+            features["oi_entry_guard_reject_reason"] = "current_oi_drop_from_first_ok_before_execution"
+            return "current_oi_drop_from_first_ok_before_execution"
+    oi_3x5m_change = _finite_float(state.oi_change_pct_3x5m)
+    if state.oi_status == "ok" and oi_3x5m_change is not None:
+        features["oi_3x5m_change_pct_for_entry_guard"] = oi_3x5m_change
+        if oi_3x5m_change < -float(config.max_oi_3x5m_drop_pct):
+            features["oi_entry_guard_reject_reason"] = "oi_3x5m_drop_before_execution"
+            return "oi_3x5m_drop_before_execution"
+    features["oi_entry_guard_reject_reason"] = ""
+    return ""
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return parsed if isfinite(parsed) else None
+
+
+def _finite_positive_float(value: object) -> float | None:
+    parsed = _finite_float(value)
+    return parsed if parsed is not None and parsed > 0.0 else None

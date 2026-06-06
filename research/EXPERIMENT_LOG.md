@@ -5806,3 +5806,23 @@ Problem found:
 
 Conclusion:
 No new trade-policy change is justified from this run. The necessary fix is audit hygiene: make heartbeat events compact while keeping full status in `live2_status.json` and `live2_diagnostics_summary.json`.
+
+## 2026-06-06 - PIEVERSE live2 OI failure analysis
+
+Run: `.output/results/live2_anomaly_runs/20260605_214104`.
+
+Question: why did live2 enter `PIEVERSE/USDT:USDT` when the chart showed the price pop coinciding with a material OI dump, consistent with short-covering rather than fresh long expansion?
+
+Facts:
+- Entry row: `5m_30s`, `decision_time_ms=1780712610000`, `trade_policy_rule_id=not_late_tailq55_pace5`, fill `0.6736`, stop `0.65497235`, TP1 `0.6875707375`.
+- Flow/price fields passed the current clean-buyer tape rule: `ltf_taker_buy_quote_share=0.63698`, `ltf_quote_pace_ratio=13.7456`, `ltf_trade_pace_ratio=6.7351`, `pregrowth_min_path_return_pct=-0.00559`.
+- Outcome: stop closed about 9m41s later, realized around `-0.3264 USDT`.
+- The protected position had `entry_current_oi_status=ok`, but that current-OI snapshot was fetched after entry as audit context.
+- Decision-time/signal OI context was missing from the traded signal: `signal_current_oi_status=not_seen`, `pump_start_current_oi_status=not_seen`, and `entry_5m_oi_change_pct_3x5m=null`.
+- The old OI-divergence rejection test in code was for legacy `post_htf_acceptance_long`; that path is not the current rolling seed-first live2 trade path.
+
+Conclusion:
+The OI filter did not fail numerically; it was not wired into the current rolling seed-first entry path. `PumpDecisionCore` and `PumpTradePolicy` saw clean buyer tape, but the live entry guard did not yet reject current-OI collapse/short-covering cases before order placement.
+
+Patch direction:
+Keep OI collapse out of source-neutral `snapshot_hash -> signal_verdict` until backtest has a matching historical OI simulation. Add it as a live executable-entry guard: if comparable current OI has materially dropped from the first fresh session OI baseline, or if available 5m OI has materially dropped over `3x5m`, reject the order with an explicit entry-guard reason.

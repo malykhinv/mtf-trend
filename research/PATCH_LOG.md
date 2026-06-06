@@ -11361,3 +11361,29 @@ Risk:
 ```text
 This changes only diagnostic event payload shape for heartbeat rows. Trading decisions, entry guard, execution, position supervision, status JSON, diagnostics summary, and decision ledger are unchanged. Any tooling that parsed full runtime status from live2_heartbeat events should read live2_status.json or live2_diagnostics_summary.json instead.
 ```
+
+## 2026-06-06 - P516 live2 OI-collapse entry guard
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- `research_tools/anomaly_live2/entry_guard.py` now blocks long execution when OI suggests short-covering/OI contraction:
+  - fresh current OI down more than `0.5%` from the first fresh session current-OI baseline;
+  - or available 5m OI down more than `0.5%` over `3x5m`.
+- Reject reasons are visible as `current_oi_drop_from_first_ok_before_execution` and `oi_3x5m_drop_before_execution`.
+- `research_tools/anomaly_live2/signal.py` now carries OI values/timestamps/status fields in live decision features for audit, without changing the shared decision-core signal verdict.
+- Added `tests/test_live2_entry_guard_oi.py`.
+
+Validation:
+
+```bash
+python -m pytest tests/test_live2_entry_guard_oi.py tests/test_live2_heartbeat_artifacts.py tests/test_live2_trade_policy_signal.py tests/test_live2_market_watch.py -q
+python -m compileall research_tools/anomaly_live2 research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+This is a live execution guard, not a source-neutral PumpDecisionCore change. It improves live safety for obvious OI-collapse cases like PIEVERSE, but backtest parity for this exact guard requires a separate historical 5m-OI simulation. Missing OI remains diagnostic and does not silently become zero.
+```

@@ -4104,3 +4104,31 @@ capacity without changing signal, trade policy, execution, or parity logic.
 Next live validation: launch live2 after P514 plus compact heartbeat and verify
 that `live2_events.csv` no longer approaches budget, `dropped_count` stays zero,
 and decision latency/backlog is assessed without event-writer noise.
+
+## 2026-06-06 - PIEVERSE OI-collapse guard
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+PIEVERSE from `.output/results/live2_anomaly_runs/20260605_214104` exposed a
+real strategy-safety gap: the current rolling seed-first live path did not use
+OI collapse to block entries. The old OI-divergence rejection was legacy
+`post_htf_acceptance_long` code and was not active for the current shared
+core/trade-policy path.
+
+Applied locally: live2 entry guard now rejects selected/accepted long signals
+before order placement when fresh comparable current OI is down more than
+`0.5%` from the first fresh session OI baseline, or when available 5m OI is
+down more than `0.5%` over `3x5m`. The reject reasons are explicit:
+`current_oi_drop_from_first_ok_before_execution` and
+`oi_3x5m_drop_before_execution`.
+
+This is intentionally an execution-layer live safety guard, not a
+`PumpDecisionCore` signal change, because current OI is not the same data shape
+as seed/confirm candles. Backtest parity still needs a separate honest
+historical 5m-OI simulation before OI collapse can be treated as a shared
+trade-policy rule.
+
+Next validation: run live2 and inspect `entry_guard_reason` counts. A future
+backtest experiment should replay the accepted 30d signals with decision-time
+5m OI to estimate how much this guard reduces trades and whether it improves
+expectancy without hiding data-quality gaps.

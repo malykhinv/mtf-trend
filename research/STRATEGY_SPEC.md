@@ -1255,3 +1255,33 @@ TP1 = 0.75R from actual fill and actual stop risk
 TP1 close fraction = accepted policy field, default 0.75
 early-exit redflags = telemetry only unless explicitly revalidated later
 ```
+
+## Live OI Collapse Entry Guard
+
+OI is not part of the source-neutral `PumpDecisionCore` signal contract yet.
+Binance gives historical OI at coarse 5m granularity and live current OI as a
+point snapshot, so pretending it is a 15s/30s decision candle would break
+backtest/live honesty.
+
+For live safety, OI collapse is an execution-layer entry guard:
+
+```text
+core selected
+-> trade policy accepted
+-> stale/drift/RR/live-OI entry guard
+-> order only if guard accepts
+```
+
+Long entries are rejected before order placement when comparable OI shows that
+the price pop is likely short-covering / OI contraction rather than fresh long
+participation:
+
+```text
+current OI fresh and current_oi / first_fresh_session_oi - 1 < -0.5%
+or available 5m OI change over 3x5m < -0.5%
+```
+
+Missing OI does not silently become zero and does not itself reject; it remains
+diagnostic. A backtest parity version must use only OI fields available at the
+simulated decision/entry time, likely 5m historical OI, and must not invent
+1m/15s/30s OI candles.
