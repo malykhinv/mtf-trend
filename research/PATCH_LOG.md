@@ -11527,3 +11527,31 @@ pure, but the categories remain 30d in-sample hypotheses until the 45d run and
 missed-runner audit confirm stability without future labels, top-trade
 dependence, or live/backtest parity breaks.
 ```
+
+## 2026-06-06 - P521 45d large-runner nature readout
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Documented the completed 45d `run-large-runner-discovery` result in
+  `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+- Recorded that `v4_quality_cool` remains promising but weaker than the 30d
+  readout, while `v4_standard` should not be promoted.
+- Recorded the missed-runner funnel showing candidate generation / 5m prefilter
+  coverage as the next bottleneck.
+
+Validation:
+
+```text
+Run artifacts exist under .output/results/large_runner_discovery_45d.
+No trading code changed in this docs-only patch.
+```
+
+Risk:
+
+```text
+Documentation only. The 45d result is still same-cache historical research, not
+proof of live edge. Next code work should focus on missed-runner candidate
+generation without allowing future labels into rule logic.
+```

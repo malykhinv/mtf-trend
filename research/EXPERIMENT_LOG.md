@@ -6317,3 +6317,76 @@ selected category by `large_runner_nature_summary.csv`,
 `large_runner_nature_by_week.csv`, `large_runner_nature_top_dependency.csv`,
 `large_runner_nature_sensitivity.csv`, and
 `large_runner_prefilter_missed_top_growth.csv`.
+
+## 2026-06-06 - 45d selected-category backtest result
+
+Status: COMPLETED / ANALYZED.
+
+Command:
+
+```bash
+python main.py run-large-runner-discovery --days 45
+```
+
+Artifacts:
+
+```text
+.output/results/large_runner_discovery_45d
+```
+
+Run summary:
+
+```text
+runtime: 1706.687s
+raw broad candidates: 126987
+first-cluster setups: 76399
+arm matches: 1518
+trade-grid rows: 7590
+closed simulated rows: 5200
+```
+
+The full trade grid remains noisy (`avg_net=-0.1365%`, `win_rate=21.63%`).
+The useful readout is therefore the selected category layer.
+
+Selected portfolio `v4_quality_cool` on `tp075r_close25_be1r_kill10`:
+
+```text
+53 trades, 1.18/day, 39 symbols
+WR 56.60%
+avg +2.64%
+median +0.53%
+sum +140.12%
+ex-top5 +38.81%
+ex-top10 +6.22%
+top5 share 72.31%
+positive active days 65.52%
+worst day -7.15%
+```
+
+Readout:
+
+- `v4_quality_cool` is still the best benchmark category, but 45d downgrades it
+  from "strong" to "promising but fragile".
+- `v4_standard` is rejected for now: more trades but negative median and worse
+  day risk.
+- Stricter `early_taker <= 55%` or `m1_quote_top1 <= 35%` variants improve
+  WR/median but cut frequency to roughly `0.35-0.62/day` and become more
+  top-dependent.
+- Core natures A/B and boosters C/D/E do not stand alone on 45d portfolio
+  readout; they are useful context/confidence fields only.
+
+Missed-runner readout:
+
+```text
+>=10% hourly top-growth rows: 1785
+5m_prefilter_failed: 788
+broad_5m_gate_not_seen: 717
+covered_by_portfolio: 183
+arm_matched_but_not_selected_nature: 76
+```
+
+For `>=30%` hourly high runners, most misses are candidate-generation misses:
+`48` prefilter failures and `32` broad-gate misses versus `23` portfolio
+covered rows. Next experiment should mine these misses for decision-time
+features and broaden candidate generators only where live could have seen the
+same early evidence.

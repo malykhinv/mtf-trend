@@ -4392,3 +4392,82 @@ compileall data/exchanges research_tools cli constants.py main.py launcher.py
 `launcher.py` is absent in the local checkout, so compileall reports it cannot
 list that path while still exiting successfully. Next step is a 45d
 `run-large-runner-discovery` and analysis of the selected category artifacts.
+
+## 2026-06-06 - 45d large-runner nature readout
+
+Current commit: UNKNOWN. Status: ANALYZED.
+
+Ran:
+
+```text
+python main.py run-large-runner-discovery --days 45
+```
+
+Artifacts:
+
+```text
+.output/results/large_runner_discovery_45d
+```
+
+Period: `2026-04-17T15:50:00Z` to `2026-06-01T15:50:00Z`. Runtime:
+`1706.687s`. Data quality remained suitable for 5m flow research:
+`594/594` symbols had real `quote_volume` and `number_of_trades`; `586/594`
+had cached 5m OI. Targeted 1m enrichment loaded `218` symbols and `875`
+enrichable setups; `37657` first-cluster setups were skipped by the 5m
+prefilter.
+
+Selected portfolio result for `v4_quality_cool` with
+`tp075r_close25_be1r_kill10`:
+
+```text
+trades: 53 / 1.18 per day
+symbols: 39
+win_rate: 56.60%
+avg_net: +2.64%
+median_net: +0.53%
+sum_net: +140.12%
+sum ex-top5: +38.81%
+sum ex-top10: +6.22%
+top5 share: 72.31%
+high10 next60: 79.25%
+high20 next60: 24.53%
+positive active day rate: 65.52%
+worst day: -7.15%
+```
+
+Verdict: `v4_quality_cool` survived the 45d extension but is materially weaker
+than the 30d readout. It remains a promising research candidate, not a proven
+live strategy. The result is median-positive and ex-top10 positive, but top5
+share is slightly above the target, and weekly stability is not clean.
+
+`v4_standard` should not be promoted: `75` trades, `1.67/day`, `46.67%` WR,
+`-0.37%` median, and `-11.42%` worst day. It adds frequency by admitting too
+many weak/chase setups.
+
+Sensitivity readout:
+- `pre60_return_cap <= 4%` did not materially improve robustness over 6%.
+- `m1_quote_top1 <= 35%` and `early_taker <= 55%` improve WR/median but cut
+  frequency to about `0.6/day` and increase top-trade dependence.
+- Harder filters look like confidence tiers, not a standalone solution.
+
+Missed-runner audit:
+
+```text
+all >=10% hourly top-growth rows: 1785
+5m_prefilter_failed: 788
+broad_5m_gate_not_seen: 717
+covered_by_portfolio: 183
+arm_matched_but_not_selected_nature: 76
+enriched_but_no_arm_match: 18
+```
+
+For `30%+` hourly high runners (`133` rows): `48` failed the 5m prefilter,
+`32` were not seen by the broad 5m gate, `27` matched an arm but not selected
+nature, and only `23` were portfolio-covered. This confirms the chronic missed
+runner problem is mostly candidate generation / prefilter coverage, not just
+the final category filter.
+
+Next research direction: keep `v4_quality_cool` as the current conservative
+benchmark, reject `v4_standard`, and investigate the 45d missed-runner funnel
+to add decision-time candidate generators that catch slow/hidden early runners
+without using future labels in trade rules.
