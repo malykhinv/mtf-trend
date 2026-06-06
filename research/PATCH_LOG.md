@@ -11488,3 +11488,42 @@ Documentation only. The v4 rules remain in-sample 30d research hypotheses.
 They must not be promoted to live until the pure evaluator, OOS-style reporting,
 missed-runner audit, and future-label isolation tests are implemented and pass.
 ```
+
+## 2026-06-06 - P520 large-runner nature evaluator artifacts
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/large_runner_nature_rules.py` with a pure
+  decision-time evaluator for `v4_quality_cool`, `v4_standard`,
+  `A_cool_stress_absorption`, `B_liquid_distributed_moderate_taker`, and
+  C/D/E boosters.
+- Wired evaluator output into `large_runner_discovery.py` setup, match, trade
+  grid, and portfolio artifacts.
+- Added new artifacts:
+  `large_runner_nature_summary.csv`, `large_runner_nature_by_week.csv`,
+  `large_runner_nature_by_symbol.csv`,
+  `large_runner_nature_top_dependency.csv`,
+  `large_runner_nature_sensitivity.csv`, and
+  `large_runner_prefilter_missed_top_growth.csv`.
+- Added tests for future-label/realized-field isolation, OI-missing behavior,
+  veto precedence, and new artifact creation.
+- Updated strategy/research docs to state that this is research-only and does
+  not change live2, `PumpDecisionCore`, or the active clean-buyer policy.
+
+Validation:
+
+```bash
+python -m pytest tests/test_large_runner_discovery.py tests/test_cli_runner_discovery_empty_artifacts.py -q
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+This adds category classification to research artifacts only. The evaluator is
+pure, but the categories remain 30d in-sample hypotheses until the 45d run and
+missed-runner audit confirm stability without future labels, top-trade
+dependence, or live/backtest parity breaks.
+```

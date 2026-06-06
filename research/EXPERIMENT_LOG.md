@@ -6276,3 +6276,44 @@ Implement the pure evaluator and artifact-only validation layer, then rerun
 `python main.py run-large-runner-discovery --days 30`. Do not change live2 or
 `PumpDecisionCore` until this reports stable OOS-style behavior and explains
 the missed top-growth runners.
+
+## 2026-06-06 - large-runner nature evaluator implemented
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Implemented the planned artifact-only category layer:
+
+- Added pure evaluator `research_tools/large_runner_nature_rules.py`.
+- Added setup/match/trade/portfolio fields:
+  `large_runner_nature_rule_ids`, `large_runner_nature_trade_rule_ids`,
+  `large_runner_nature_ids`, `large_runner_nature_booster_ids`,
+  `large_runner_nature_veto_reasons`, `large_runner_nature_selected`, and
+  confidence/scope fields.
+- Added validation artifacts for selected category summaries, weekly splits,
+  symbol concentration, top-dependence, threshold sensitivity, and missed
+  top-growth funnel.
+- Added no-lookahead tests that mutate future labels and realized outcome
+  fields while asserting the evaluator output is unchanged.
+
+Important boundary:
+
+```text
+This does not change live2, PumpDecisionCore, or active clean-buyer trade
+policy. The selected categories are research classifications until the 45d
+artifact readout survives OOS-style checks and missed-runner audit.
+```
+
+Validation:
+
+```bash
+python -m pytest tests/test_large_runner_discovery.py tests/test_cli_runner_discovery_empty_artifacts.py -q
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+```
+
+Next experiment:
+
+Run `python main.py run-large-runner-discovery --days 45` and judge the
+selected category by `large_runner_nature_summary.csv`,
+`large_runner_nature_by_week.csv`, `large_runner_nature_top_dependency.csv`,
+`large_runner_nature_sensitivity.csv`, and
+`large_runner_prefilter_missed_top_growth.csv`.

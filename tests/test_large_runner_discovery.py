@@ -8,6 +8,7 @@ from research_tools.large_runner_discovery import (
     match_large_runner_arms,
     run_large_runner_discovery,
 )
+from research_tools.large_runner_nature_rules import evaluate_large_runner_nature
 
 
 def _write_cache_frame(cache_dir: Path, symbol: str, timeframe: str, frame: pd.DataFrame) -> None:
@@ -127,6 +128,67 @@ def test_large_runner_arm_matching_ignores_future_labels() -> None:
     assert "E10_confirmed_runner" in base
 
 
+def test_large_runner_nature_evaluator_ignores_future_and_realized_fields() -> None:
+    features = {
+        "arm_id": "E5_ignition_strict",
+        "decision_offset_minutes": 5,
+        "early_return_pct": 0.062,
+        "pre60_return_pct": 0.020,
+        "pre60_range_pct": 0.065,
+        "pre60_quote_sum": 1_500_000,
+        "pre60_trades_sum": 55_000,
+        "m1_min_path_return": -0.006,
+        "m1_quote_top1_share": 0.32,
+        "m1_trade_top1_share": 0.31,
+        "early_taker_buy_quote_share": 0.53,
+        "current_vs_prior_max_trade_24h": 0.90,
+        "oi_change_early_pct": 0.001,
+    }
+
+    base = evaluate_large_runner_nature(features).as_features()
+    with_future = evaluate_large_runner_nature(
+        {
+            **features,
+            "future60_high_return_pct": -1.0,
+            "runner_high20_next60": False,
+            "mfe_pct": -1.0,
+            "mae_pct": -1.0,
+            "net_return": -1.0,
+            "exit_reason": "forced_test_mutation",
+        }
+    ).as_features()
+
+    assert base == with_future
+    assert base["large_runner_nature_selected"] is True
+    assert "v4_quality_cool" in str(base["large_runner_nature_trade_rule_ids"])
+
+
+def test_large_runner_nature_evaluator_oi_missing_and_veto_precedence() -> None:
+    features = {
+        "arm_id": "E5_mass_ignition",
+        "decision_offset_minutes": 5,
+        "early_return_pct": 0.070,
+        "pre60_return_pct": 0.020,
+        "pre60_range_pct": 0.020,
+        "pre60_quote_sum": 2_000_000,
+        "pre60_trades_sum": 60_000,
+        "m1_min_path_return": -0.002,
+        "m1_quote_top1_share": 0.34,
+        "m1_trade_top1_share": 0.35,
+        "early_taker_buy_quote_share": 0.54,
+        "current_vs_prior_max_trade_24h": 0.80,
+        "oi_change_early_pct": float("nan"),
+    }
+
+    missing_oi = evaluate_large_runner_nature(features).as_features()
+    vetoed = evaluate_large_runner_nature({**features, "early_taker_buy_quote_share": 0.66}).as_features()
+
+    assert missing_oi["large_runner_nature_selected"] is True
+    assert "v4_quality_cool" in str(missing_oi["large_runner_nature_trade_rule_ids"])
+    assert vetoed["large_runner_nature_selected"] is False
+    assert "early_taker_buy_quote_share_gt_0.62" in str(vetoed["large_runner_nature_veto_reasons"])
+
+
 def test_large_runner_discovery_smoke_writes_honest_artifacts(tmp_path: Path) -> None:
     symbol = "AAA/USDT:USDT"
     cache_dir = tmp_path / "cache"
@@ -156,5 +218,11 @@ def test_large_runner_discovery_smoke_writes_honest_artifacts(tmp_path: Path) ->
         "large_runner_trade_grid.csv",
         "large_runner_funnel.csv",
         "large_runner_top_growth_coverage.csv",
+        "large_runner_nature_summary.csv",
+        "large_runner_nature_by_week.csv",
+        "large_runner_nature_by_symbol.csv",
+        "large_runner_nature_top_dependency.csv",
+        "large_runner_nature_sensitivity.csv",
+        "large_runner_prefilter_missed_top_growth.csv",
     ]:
         pd.read_csv(result_dir / name)

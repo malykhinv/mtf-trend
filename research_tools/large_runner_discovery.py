@@ -24,6 +24,11 @@ import pandas as pd
 from constants import DEFAULT_CACHE_DIR, DEFAULT_RESULTS_DIR
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
+from research_tools.large_runner_nature_rules import (
+    TRADE_ELIGIBLE_E5_ARMS,
+    evaluate_large_runner_nature,
+    v4_quality_mask,
+)
 
 
 MINUTE_MS = 60_000
@@ -273,6 +278,19 @@ def run_large_runner_discovery(
     top_growth_frame = _top_growth_frame(pd.DataFrame(top_hour_rows))
     top_coverage_frame = _top_growth_coverage(top_growth_frame, match_frame)
     portfolio_frame, portfolio_events = _apply_research_portfolio(trade_frame, config=config)
+    nature_summary_frame = _nature_summary(trade_frame, portfolio_frame, config=config)
+    nature_by_week_frame = _nature_by_period(portfolio_frame, period="week", config=config)
+    nature_by_symbol_frame = _nature_by_symbol(portfolio_frame, config=config)
+    nature_top_dependency_frame = _nature_top_dependency(portfolio_frame)
+    nature_sensitivity_frame = _nature_sensitivity(portfolio_frame, config=config)
+    missed_top_growth_frame = _prefilter_missed_top_growth(
+        top_growth_frame,
+        raw_frame,
+        setup_frame,
+        match_frame,
+        trade_frame,
+        portfolio_frame,
+    )
 
     artifacts = [
         ("large_runner_candidates_raw.csv", raw_frame),
@@ -289,6 +307,12 @@ def run_large_runner_discovery(
         ("large_runner_skip_reasons.csv", _skip_reasons(trade_frame)),
         ("large_runner_top_dependency.csv", _top_dependency(trade_frame)),
         ("large_runner_portfolio_top_dependency.csv", _top_dependency(portfolio_frame)),
+        ("large_runner_nature_summary.csv", nature_summary_frame),
+        ("large_runner_nature_by_week.csv", nature_by_week_frame),
+        ("large_runner_nature_by_symbol.csv", nature_by_symbol_frame),
+        ("large_runner_nature_top_dependency.csv", nature_top_dependency_frame),
+        ("large_runner_nature_sensitivity.csv", nature_sensitivity_frame),
+        ("large_runner_prefilter_missed_top_growth.csv", missed_top_growth_frame),
         ("large_runner_top_growth.csv", top_growth_frame),
         ("large_runner_top_growth_coverage.csv", top_coverage_frame),
         ("large_runner_feature_deciles.csv", _feature_deciles(setup_frame)),
@@ -567,6 +591,7 @@ def _enrich_setup(
         _nan_or_ge(row.get("oi_change_early_pct"), -0.005)
         and _nan_or_ge(row.get("oi_change_pre60_pct"), -0.020)
     )
+    row.update(evaluate_large_runner_nature(row).as_features())
     row["future_label_available_at_entry"] = False
     row["future_label_assignment_model"] = "after_setup_construction_evaluation_only"
     del frame_5m
@@ -604,7 +629,7 @@ def _build_arm_match(
             entry_skip_reason = "invalid_initial_risk"
         elif initial_risk_pct > float(config.max_initial_risk_pct):
             entry_skip_reason = "initial_risk_above_max"
-    return {
+    result = {
         **dict(setup),
         "arm_id": arm.arm_id,
         "arm_priority": int(arm.priority),
@@ -622,6 +647,8 @@ def _build_arm_match(
         "large_runner_policy_id": LARGE_RUNNER_DISCOVERY_ID,
         "future_label_available_at_entry": False,
     }
+    result.update(evaluate_large_runner_nature(result).as_features())
+    return result
 
 
 def _simulate_trade(
@@ -1013,6 +1040,392 @@ def _apply_research_portfolio(trades: pd.DataFrame, *, config: LargeRunnerDiscov
     portfolio["portfolio_model"] = "priority_arms_max4_same_symbol_cooldown_5m_research"
     del config
     return portfolio.reset_index(drop=True), pd.DataFrame(events)
+
+
+def _nature_summary(trade_grid: pd.DataFrame, portfolio: pd.DataFrame, *, config: LargeRunnerDiscoveryConfig) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for scope, frame in (("trade_grid", trade_grid), ("portfolio", portfolio)):
+        rows.extend(
+            _nature_category_summary_rows(
+                frame,
+                scope=scope,
+                category_type="trade_rule",
+                source_column="large_runner_nature_trade_rule_ids",
+                config=config,
+            )
+        )
+        rows.extend(
+            _nature_category_summary_rows(
+                frame,
+                scope=scope,
+                category_type="nature",
+                source_column="large_runner_nature_ids",
+                config=config,
+            )
+        )
+        rows.extend(
+            _nature_category_summary_rows(
+                frame,
+                scope=scope,
+                category_type="booster",
+                source_column="large_runner_nature_booster_ids",
+                config=config,
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+def _nature_by_period(portfolio: pd.DataFrame, *, period: str, config: LargeRunnerDiscoveryConfig) -> pd.DataFrame:
+    if portfolio.empty or "entry_timestamp_ms" not in portfolio.columns:
+        return pd.DataFrame()
+    frame = _explode_multi_value(portfolio, "large_runner_nature_trade_rule_ids", "category_id")
+    if frame.empty:
+        return pd.DataFrame()
+    timestamps = pd.to_datetime(pd.to_numeric(frame["entry_timestamp_ms"], errors="coerce"), unit="ms", utc=True)
+    if period == "week":
+        iso = timestamps.dt.isocalendar()
+        frame["period_id"] = iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
+    else:
+        frame["period_id"] = timestamps.dt.date.astype(str)
+    rows: list[dict[str, object]] = []
+    group_columns = ["period_id", "category_id", "exit_policy_id"]
+    for key, group in frame.groupby(group_columns, dropna=False):
+        period_id, category_id, exit_policy_id = key
+        rows.append(
+            {
+                "period_type": period,
+                "period_id": period_id,
+                "category_type": "trade_rule",
+                "category_id": category_id,
+                "exit_policy_id": exit_policy_id,
+                **_summary_metrics_with_days(group, pd.DataFrame(), days=config.days),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _nature_by_symbol(portfolio: pd.DataFrame, *, config: LargeRunnerDiscoveryConfig) -> pd.DataFrame:
+    if portfolio.empty or "symbol" not in portfolio.columns:
+        return pd.DataFrame()
+    frame = _explode_multi_value(portfolio, "large_runner_nature_trade_rule_ids", "category_id")
+    if frame.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for key, group in frame.groupby(["symbol", "category_id", "exit_policy_id"], dropna=False):
+        symbol, category_id, exit_policy_id = key
+        rows.append(
+            {
+                "symbol": symbol,
+                "category_type": "trade_rule",
+                "category_id": category_id,
+                "exit_policy_id": exit_policy_id,
+                **_summary_metrics_with_days(group, pd.DataFrame(), days=config.days),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _nature_top_dependency(portfolio: pd.DataFrame) -> pd.DataFrame:
+    if portfolio.empty:
+        return pd.DataFrame()
+    frame = _explode_multi_value(portfolio, "large_runner_nature_trade_rule_ids", "category_id")
+    if frame.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for key, group in frame.groupby(["category_id", "exit_policy_id"], dropna=False):
+        category_id, exit_policy_id = key
+        dep = _top_dependency(group)
+        for _, row in dep.iterrows():
+            rows.append(
+                {
+                    "category_type": "trade_rule",
+                    "category_id": category_id,
+                    "exit_policy_id": exit_policy_id,
+                    **row.to_dict(),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _nature_sensitivity(portfolio: pd.DataFrame, *, config: LargeRunnerDiscoveryConfig) -> pd.DataFrame:
+    if portfolio.empty or "status" not in portfolio.columns:
+        return pd.DataFrame()
+    frame = portfolio.loc[portfolio["status"].astype(str).eq("closed")].copy()
+    if frame.empty:
+        return pd.DataFrame()
+    frame = frame.loc[
+        pd.to_numeric(frame.get("decision_offset_minutes", pd.Series(index=frame.index)), errors="coerce").eq(5)
+        & frame.get("arm_id", pd.Series(index=frame.index)).astype(str).isin(TRADE_ELIGIBLE_E5_ARMS)
+    ].copy()
+    if frame.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    selected_policy = "tp075r_close25_be1r_kill10"
+    if "exit_policy_id" in frame.columns:
+        policy_frame = frame.loc[frame["exit_policy_id"].astype(str).eq(selected_policy)].copy()
+    else:
+        policy_frame = frame.iloc[0:0].copy()
+    if policy_frame.empty:
+        policy_frame = frame.copy()
+    variants: list[tuple[str, str, pd.Series]] = []
+    for cap in (0.04, 0.06, 0.08, 0.10, 0.12):
+        variants.append(
+            (
+                "pre60_return_cap",
+                f"{cap:.2f}",
+                policy_frame.apply(lambda row, cap=cap: v4_quality_mask(row.to_dict(), pre60_return_cap=cap), axis=1),
+            )
+        )
+    for cap in (0.35, 0.36, 0.41, 0.45, 0.55):
+        variants.append(
+            (
+                "m1_quote_top1_cap_liquid_seed",
+                f"{cap:.2f}",
+                _v4_quality_variant_mask(policy_frame, m1_quote_top1_cap=cap),
+            )
+        )
+    for cap in (0.55, 0.58, 0.62):
+        variants.append(
+            (
+                "early_taker_veto_cap",
+                f"{cap:.2f}",
+                _v4_quality_variant_mask(policy_frame, early_taker_veto_cap=cap),
+            )
+        )
+    for cap in (0.075, 0.08, 0.09):
+        variants.append(
+            (
+                "early_return_cap_liquid_seed",
+                f"{cap:.3f}",
+                _v4_quality_variant_mask(policy_frame, early_return_cap=cap),
+            )
+        )
+    for variant_name, variant_value, mask in variants:
+        selected = policy_frame.loc[mask.fillna(False)].copy()
+        rows.append(
+            {
+                "category_type": "trade_rule",
+                "category_id": "v4_quality_cool",
+                "exit_policy_id": selected_policy if not policy_frame.empty else "",
+                "variant_name": variant_name,
+                "variant_value": variant_value,
+                **_summary_metrics_with_days(selected, pd.DataFrame(), days=config.days),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _prefilter_missed_top_growth(
+    top_growth: pd.DataFrame,
+    raw: pd.DataFrame,
+    setups: pd.DataFrame,
+    matches: pd.DataFrame,
+    trades: pd.DataFrame,
+    portfolio: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "symbol",
+        "period_start_ms",
+        "period_start_utc",
+        "hour_high_return_pct",
+        "hour_close_return_pct",
+        "audit_window_model",
+        "raw_candidates_in_window",
+        "setups_in_window",
+        "prefilter_passed_setups",
+        "enriched_setups",
+        "arm_matches",
+        "nature_selected_matches",
+        "closed_trade_rows",
+        "portfolio_rows",
+        "missed_stage",
+    ]
+    if top_growth.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    raw = raw.copy()
+    setups = setups.copy()
+    matches = matches.copy()
+    trades = trades.copy()
+    portfolio = portfolio.copy()
+    for _, top in top_growth.iterrows():
+        symbol = str(top.get("symbol", ""))
+        period_start = int(top.get("period_start_ms", 0))
+        period_end = period_start + 15 * MINUTE_MS
+        raw_window = _rows_for_symbol_time(raw, symbol=symbol, time_column="seed_open_ms", start_ms=period_start, end_ms=period_end)
+        if raw_window.empty:
+            raw_window = _rows_for_symbol_time(raw, symbol=symbol, time_column="timestamp_ms", start_ms=period_start, end_ms=period_end)
+        setup_window = _rows_for_symbol_time(setups, symbol=symbol, time_column="seed_open_ms", start_ms=period_start, end_ms=period_end)
+        match_window = _rows_for_symbol_time(matches, symbol=symbol, time_column="seed_open_ms", start_ms=period_start, end_ms=period_end)
+        trade_window = _rows_for_symbol_time(trades, symbol=symbol, time_column="seed_open_ms", start_ms=period_start, end_ms=period_end)
+        portfolio_window = _rows_for_symbol_time(portfolio, symbol=symbol, time_column="seed_open_ms", start_ms=period_start, end_ms=period_end)
+        prefilter_passed = _bool_series(setup_window, "large_runner_5m_prefilter_passed").sum() if not setup_window.empty else 0
+        enriched = (
+            setup_window.get("enrichment_status", pd.Series(dtype=str)).astype(str).eq("1m_enriched_after_5m_prefilter").sum()
+            if not setup_window.empty
+            else 0
+        )
+        nature_selected = (
+            _bool_series(match_window, "large_runner_nature_selected").sum() if not match_window.empty else 0
+        )
+        closed_trades = (
+            trade_window.get("status", pd.Series(dtype=str)).astype(str).eq("closed").sum() if not trade_window.empty else 0
+        )
+        portfolio_rows = int(len(portfolio_window))
+        if portfolio_rows:
+            missed_stage = "covered_by_portfolio"
+        elif int(closed_trades):
+            missed_stage = "simulated_trade_not_portfolio_selected"
+        elif int(nature_selected):
+            missed_stage = "nature_selected_but_no_closed_trade"
+        elif not match_window.empty:
+            missed_stage = "arm_matched_but_not_selected_nature"
+        elif int(enriched):
+            missed_stage = "enriched_but_no_arm_match"
+        elif int(prefilter_passed):
+            missed_stage = "prefilter_passed_but_not_enriched_or_missing_1m"
+        elif not setup_window.empty:
+            missed_stage = "5m_prefilter_failed"
+        elif not raw_window.empty:
+            missed_stage = "raw_candidate_not_first_cluster_setup"
+        else:
+            missed_stage = "broad_5m_gate_not_seen"
+        rows.append(
+            {
+                "symbol": symbol,
+                "period_start_ms": period_start,
+                "period_start_utc": top.get("period_start_utc", ""),
+                "hour_high_return_pct": top.get("hour_high_return_pct", float("nan")),
+                "hour_close_return_pct": top.get("hour_close_return_pct", float("nan")),
+                "audit_window_model": "first_15m_of_top_hour",
+                "raw_candidates_in_window": int(len(raw_window)),
+                "setups_in_window": int(len(setup_window)),
+                "prefilter_passed_setups": int(prefilter_passed),
+                "enriched_setups": int(enriched),
+                "arm_matches": int(len(match_window)),
+                "nature_selected_matches": int(nature_selected),
+                "closed_trade_rows": int(closed_trades),
+                "portfolio_rows": int(portfolio_rows),
+                "missed_stage": missed_stage,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _nature_category_summary_rows(
+    frame: pd.DataFrame,
+    *,
+    scope: str,
+    category_type: str,
+    source_column: str,
+    config: LargeRunnerDiscoveryConfig,
+) -> list[dict[str, object]]:
+    exploded = _explode_multi_value(frame, source_column, "category_id")
+    if exploded.empty:
+        return []
+    rows: list[dict[str, object]] = []
+    for key, group in exploded.groupby(["category_id", "exit_policy_id"], dropna=False):
+        category_id, exit_policy_id = key
+        closed = group.loc[group["status"].astype(str).eq("closed")].copy() if "status" in group.columns else group.copy()
+        skipped = group.loc[group["status"].astype(str).eq("skipped")].copy() if "status" in group.columns else pd.DataFrame()
+        rows.append(
+            {
+                "scope": scope,
+                "category_type": category_type,
+                "category_id": category_id,
+                "exit_policy_id": exit_policy_id,
+                **_summary_metrics_with_days(closed, skipped, days=config.days),
+            }
+        )
+    return rows
+
+
+def _summary_metrics_with_days(closed: pd.DataFrame, skipped: pd.DataFrame, *, days: int) -> dict[str, object]:
+    metrics = _summary_metrics(closed, skipped)
+    closed_count = int(metrics.get("closed_trades", 0) or 0)
+    metrics["trades_per_day"] = _safe_divide(float(closed_count), float(days))
+    if not closed.empty and "entry_timestamp_ms" in closed.columns:
+        day = pd.to_datetime(pd.to_numeric(closed["entry_timestamp_ms"], errors="coerce"), unit="ms", utc=True).dt.date
+        net = pd.to_numeric(closed.get("net_return", pd.Series(index=closed.index)), errors="coerce")
+        day_sum = net.groupby(day).sum()
+        metrics["active_days"] = int(day_sum.size)
+        metrics["positive_active_days"] = int(day_sum.gt(0.0).sum())
+        metrics["positive_active_day_rate"] = float(day_sum.gt(0.0).mean()) if day_sum.size else float("nan")
+        metrics["worst_day_net_return"] = float(day_sum.min()) if day_sum.size else float("nan")
+        metrics["median_day_net_return"] = float(day_sum.median()) if day_sum.size else float("nan")
+    else:
+        metrics["active_days"] = 0
+        metrics["positive_active_days"] = 0
+        metrics["positive_active_day_rate"] = float("nan")
+        metrics["worst_day_net_return"] = float("nan")
+        metrics["median_day_net_return"] = float("nan")
+    return metrics
+
+
+def _explode_multi_value(frame: pd.DataFrame, source_column: str, target_column: str) -> pd.DataFrame:
+    if frame.empty or source_column not in frame.columns:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for _, row in frame.iterrows():
+        raw_value = row.get(source_column, "")
+        values = [value for value in str(raw_value).split("|") if value and value.lower() != "nan"]
+        for value in values:
+            item = row.to_dict()
+            item[target_column] = value
+            rows.append(item)
+    return pd.DataFrame(rows)
+
+
+def _v4_quality_variant_mask(
+    frame: pd.DataFrame,
+    *,
+    m1_quote_top1_cap: float = 0.41,
+    early_taker_veto_cap: float = 0.62,
+    early_return_cap: float = 0.075,
+) -> pd.Series:
+    if frame.empty:
+        return pd.Series(dtype=bool)
+    early_return = pd.to_numeric(frame.get("early_return_pct", pd.Series(index=frame.index)), errors="coerce")
+    pre60_range = pd.to_numeric(frame.get("pre60_range_pct", pd.Series(index=frame.index)), errors="coerce")
+    pre60_trades = pd.to_numeric(frame.get("pre60_trades_sum", pd.Series(index=frame.index)), errors="coerce")
+    pre60_return = pd.to_numeric(frame.get("pre60_return_pct", pd.Series(index=frame.index)), errors="coerce")
+    m1_min_path = pd.to_numeric(frame.get("m1_min_path_return", pd.Series(index=frame.index)), errors="coerce")
+    m1_quote_top1 = pd.to_numeric(frame.get("m1_quote_top1_share", pd.Series(index=frame.index)), errors="coerce")
+    m1_trade_top1 = pd.to_numeric(frame.get("m1_trade_top1_share", pd.Series(index=frame.index)), errors="coerce")
+    early_taker = pd.to_numeric(frame.get("early_taker_buy_quote_share", pd.Series(index=frame.index)), errors="coerce")
+    oi_early = pd.to_numeric(frame.get("oi_change_early_pct", pd.Series(index=frame.index)), errors="coerce")
+    stress = pre60_range.ge(0.030) & pre60_trades.ge(12_000) & m1_min_path.le(-0.004)
+    liquid = (
+        early_return.le(float(early_return_cap))
+        & pre60_trades.ge(40_000)
+        & m1_quote_top1.le(float(m1_quote_top1_cap))
+        & (oi_early.ge(0.0) | oi_early.isna())
+    )
+    veto = (
+        pre60_return.gt(0.06)
+        | early_return.gt(0.09)
+        | m1_quote_top1.gt(0.55)
+        | m1_trade_top1.gt(0.55)
+        | early_taker.gt(float(early_taker_veto_cap))
+    )
+    return (stress | liquid) & ~veto
+
+
+def _rows_for_symbol_time(
+    frame: pd.DataFrame,
+    *,
+    symbol: str,
+    time_column: str,
+    start_ms: int,
+    end_ms: int,
+) -> pd.DataFrame:
+    if frame.empty or "symbol" not in frame.columns or time_column not in frame.columns:
+        return pd.DataFrame()
+    timestamps = pd.to_numeric(frame[time_column], errors="coerce")
+    return frame.loc[
+        frame["symbol"].astype(str).eq(symbol)
+        & timestamps.between(int(start_ms), int(end_ms), inclusive="left")
+    ].copy()
 
 
 def _exit_policy_comparison(trades: pd.DataFrame) -> pd.DataFrame:

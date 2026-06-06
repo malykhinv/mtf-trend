@@ -4357,3 +4357,38 @@ Missed-runner boundary: current large-runner arms cover only about `14%` of
 hourly `10%+` high runners, `28%` of `20%+`, `36%` of `30%+`, and `60%` of
 `50%+`. That is acceptable for a high-conviction E5 branch, but it does not yet
 solve the chronic missed-runner problem.
+
+## 2026-06-06 - large-runner nature evaluator implementation
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Implemented the independent pack direction as research-only classification:
+`research_tools/large_runner_nature_rules.py` now exposes a pure v4 evaluator
+for `v4_quality_cool`, `v4_standard`, two core natures, and three boosters.
+`large_runner_discovery.py` writes the evaluator fields into setups, matches,
+trade grid, and portfolio trades, then emits summary artifacts for:
+
+```text
+large_runner_nature_summary.csv
+large_runner_nature_by_week.csv
+large_runner_nature_by_symbol.csv
+large_runner_nature_top_dependency.csv
+large_runner_nature_sensitivity.csv
+large_runner_prefilter_missed_top_growth.csv
+```
+
+The evaluator is intentionally not wired into live2 or `PumpDecisionCore`. It
+is an artifact classifier for the next 45d run. The selected trade scope is
+E5-only and limited to `E5_ignition_strict` / `E5_mass_ignition`; preheat and
+E10/E15 remain research readouts.
+
+Validation completed:
+
+```text
+pytest tests/test_large_runner_discovery.py tests/test_cli_runner_discovery_empty_artifacts.py -q
+compileall data/exchanges research_tools cli constants.py main.py launcher.py
+```
+
+`launcher.py` is absent in the local checkout, so compileall reports it cannot
+list that path while still exiting successfully. Next step is a 45d
+`run-large-runner-discovery` and analysis of the selected category artifacts.

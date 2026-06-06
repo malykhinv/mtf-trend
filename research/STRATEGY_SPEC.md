@@ -1322,3 +1322,47 @@ Future labels and top-growth coverage are evaluation-only. They must not be
 used to match arms, choose entries, or choose exits. The mode is meant to learn
 what separates runners from faders and to compare structural exit policies
 before any promotion into shared live/backtest trade policy.
+
+### Large-Runner Nature Rules
+
+The selected large-runner categories are implemented only as research artifact
+classification, not as live trading logic:
+
+```text
+research_tools/large_runner_nature_rules.py
+```
+
+The evaluator is pure and uses only decision-time feature mappings. It must not
+read future labels, realized PnL, MFE/MAE, exit fields, or artifact context.
+
+Current portfolio candidates:
+
+```text
+v4_quality_cool:
+  E5 only, strict/mass arms only
+  (stress_seed OR liquid_oi_seed)
+  AND anti_chase
+  AND pre60_return_pct <= 6%
+
+v4_standard:
+  same, but pre60_return_pct <= 12%
+```
+
+Core natures:
+
+```text
+A_cool_stress_absorption
+B_liquid_distributed_moderate_taker
+```
+
+Boosters, not standalone trade arms:
+
+```text
+C_oi_supported_liquid_distribution
+D_24h_flow_record_absorption
+E_extreme_range_distributed
+```
+
+`preheat_ignition`, E10 market continuation, and E15 market continuation remain
+research/readout branches only. They may help label confirmed runners or future
+retest hypotheses, but they are not part of the selected E5 quality category.
