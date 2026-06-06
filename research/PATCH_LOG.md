@@ -11456,3 +11456,35 @@ is loaded for an arm and uses no future labels, but any profitable 30d result
 must still be checked for fees/slippage, portfolio sequencing, top dependence,
 data gaps, and forward/live artifact parity.
 ```
+
+## 2026-06-06 - P519 independent runner-edge pack review
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Documented the review of
+  `C:\Users\Ascf\Desktop\runner_edge_independent_research_pack.zip`.
+- Reconciled the pack's `v4_quality_cool` result with local
+  `.output/results/large_runner_discovery_30d` artifacts.
+- Recorded the key limitation that the headline result is E5 strict/mass
+  portfolio-only and should not include `preheat_ignition`, E10, or E15 market
+  entries.
+- Added a parity-safe implementation plan for a pure
+  `large_runner_nature_rules` evaluator, artifact-only validation, threshold
+  sensitivity, missed-runner funnel, and no-lookahead tests.
+- No trading code, live code, or backtest mechanics were changed.
+
+Validation:
+
+```bash
+git diff --check -- research/RESEARCH_STATE.md research/EXPERIMENT_LOG.md research/PATCH_LOG.md
+```
+
+Risk:
+
+```text
+Documentation only. The v4 rules remain in-sample 30d research hypotheses.
+They must not be promoted to live until the pure evaluator, OOS-style reporting,
+missed-runner audit, and future-label isolation tests are implemented and pass.
+```

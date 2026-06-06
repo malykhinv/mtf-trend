@@ -4290,3 +4290,70 @@ Smoke result: `run-large-runner-discovery --days 1` completed on the current
 `2389` first-cluster setups, `44` arm matches, and `220` trade-grid rows
 (`165` closed after execution guards). The sample was negative in 1d, which is
 expected and is not an edge conclusion.
+
+## 2026-06-06 - independent runner-edge pack review
+
+Current commit: UNKNOWN. Status: ANALYZED / PROPOSED.
+
+Reviewed `runner_edge_independent_research_pack.zip` against the local
+`large_runner_discovery_30d` artifacts. The pack direction is useful but must
+remain a hypothesis until validated out-of-sample or on untouched forward/live
+artifacts.
+
+The strongest current contour is not "buy every large hourly runner". It is a
+narrow E5-only portfolio branch using `E5_ignition_strict` and
+`E5_mass_ignition`, excluding `preheat_ignition`, `E10`, and `E15` as trade
+entries:
+
+```text
+v4_quality_cool =
+((stress_seed) OR (liquid_oi_seed))
+AND anti_chase
+AND pre60_return_pct <= 6%
+
+stress_seed:
+pre60_range_pct >= 3.0%
+pre60_trades_sum >= 12k
+m1_min_path_return <= -0.4%
+
+liquid_oi_seed:
+early_return_pct <= 7.5%
+pre60_trades_sum >= 40k
+m1_quote_top1_share <= 41%
+oi_change_early_pct >= 0 OR OI missing
+
+veto:
+pre60_return_pct > 6%
+early_return_pct > 9%
+m1_quote_top1_share > 55%
+m1_trade_top1_share > 55%
+early_taker_buy_quote_share > 62%
+```
+
+Independent local recalculation confirms the pack's main `v4_quality_cool`
+numbers when restricted to portfolio-selected E5 strict/mass trades with
+`tp075r_close25_be1r_kill10`: `31` trades, `22` symbols, `70.97%` WR,
+`+4.59%` average net, `+1.67%` median net, `+142.15%` sum net,
+`+40.83%` ex-top5, `+14.36%` ex-top10, and `82.35%` positive active days.
+
+Key interpretation:
+- two candidate natures are tradeable research branches:
+  `A_cool_stress_absorption` and `B_liquid_distributed_moderate_taker`;
+- OI support, 24h flow-record, and extreme range are boosters, not independent
+  arms;
+- `preheat_ignition` is not part of v4-quality trading;
+- `E10/E15` can label confirmed runners, but market continuation entry is often
+  late and needs a separate retest/pullback hypothesis;
+- "no dump before pump" did not survive this readout; controlled stress plus
+  absorption currently looks stronger than clean no-pain dormancy.
+
+Data-quality boundary: the 30d local run has true 5m `quote_volume` and
+`number_of_trades` for `594/594` symbols and cached 5m OI for `586/594`.
+However, 1m enrichment is targeted (`163` symbols, `532` enrichable setups),
+so m1-nature conclusions must be validated with an explicit missed-runner /
+prefilter audit.
+
+Missed-runner boundary: current large-runner arms cover only about `14%` of
+hourly `10%+` high runners, `28%` of `20%+`, `36%` of `30%+`, and `60%` of
+`50%+`. That is acceptable for a high-conviction E5 branch, but it does not yet
+solve the chronic missed-runner problem.

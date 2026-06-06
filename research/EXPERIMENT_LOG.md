@@ -6180,3 +6180,99 @@ Run 30d with this command and analyze runner/fader separation by arm, exit
 policy, MFE/MAE, top-growth coverage, skip reasons, top dependency, and
 portfolio sequencing. Do not promote any arm to live until the 30d artifact
 readout shows realized expectancy after fees/slippage and low top dependence.
+
+## 2026-06-06 - independent runner-edge pack review and implementation plan
+
+Status: ANALYZED / PROPOSED.
+
+Inputs:
+
+```text
+C:\Users\Ascf\Desktop\runner_edge_independent_research_pack.zip
+.output/results/large_runner_discovery_30d
+```
+
+What was verified:
+
+- The pack's headline `v4_quality_cool` result is reproducible from local
+  artifacts only when restricted to portfolio-selected E5 strict/mass entries
+  and the `tp075r_close25_be1r_kill10` exit policy.
+- The same rules become materially weaker or different if `preheat_ignition`,
+  E10/E15 entries, or duplicate non-portfolio arm rows are mixed in.
+- Future labels (`future60_*`, hourly top-growth) remain evaluation fields and
+  should not be used in rule matching.
+- Current 5m data quality is good enough for this analysis, but 1m enrichment
+  is targeted and therefore requires a missed-runner/prefilter audit before we
+  claim that the found m1 natures cover the market.
+
+Current candidate package:
+
+```text
+Core natures:
+1. A_cool_stress_absorption
+2. B_liquid_distributed_moderate_taker
+
+Boosters:
+1. OI non-collapse/support
+2. 24h flow-record relevance
+3. extreme pre60 range with distributed m1 flow
+
+Do not promote as trade arms yet:
+preheat_ignition, E10 market continuation, E15 market continuation.
+```
+
+Code plan, additive and parity-safe:
+
+1. Add `research_tools/large_runner_nature_rules.py` as a pure evaluator.
+   It should expose versioned rule definitions for `v4_quality_cool`,
+   `v4_standard`, `A`, `B`, and booster scores. Inputs are plain
+   decision-time feature mappings; outputs include `nature_id`,
+   `nature_version`, `base_pass`, `boosters`, `veto_reasons`, and
+   `feature_boundary`.
+2. Wire the evaluator into `large_runner_discovery.py` artifacts only. Add
+   columns to setups, rule matches, trade grid, and portfolio trades, but do
+   not replace current arms or live policy.
+3. Add validation artifacts:
+   `large_runner_nature_summary.csv`, `large_runner_nature_by_week.csv`,
+   `large_runner_nature_by_symbol.csv`, `large_runner_nature_top_dependency.csv`,
+   `large_runner_nature_sensitivity.csv`, and
+   `large_runner_prefilter_missed_top_growth.csv`.
+4. Add walk-forward/OOS-style reporting without new CLI flags:
+   for any `--days N` run, split artifacts into chronological blocks
+   (for example thirds and calendar weeks) and report whether each nature keeps
+   positive median, positive ex-top10, acceptable top5 share, and positive
+   active-day rate.
+5. Add rule sensitivity around the pack thresholds, not one fixed magic value:
+   `pre60_return cap` 4/6/8/10/12%, `m1_top1 cap` 35/36/41/45/55%,
+   `taker cap` 55/58/62%, and `early_return cap` 7.5/8/9%.
+6. Add an explicit prefilter honesty audit: for every hourly top-growth runner
+   missed by current arms, record whether it failed the broad 5m gate, first
+   cluster selection, 5m prefilter, 1m availability, nature rule, execution
+   guard, or portfolio cap.
+7. Add tests that mutate future-label and realized-PnL fields and assert that
+   the nature evaluator output is unchanged. Also test OI-missing behavior and
+   veto precedence.
+8. Only after the artifact readout survives the above, decide whether to add a
+   shared live/backtest trade-policy branch. That branch must use the same pure
+   evaluator and keep actual-fill/stale/drift/TP-already-reached guards.
+
+Success criteria before live promotion:
+
+```text
+WR >= 50%
+median net > 0
+ex-top10 net > 0
+positive active days >= 60%
+top5 share <= 70%
+frequency >= 1 trade/day
+no collapse in any chronological block
+clear missed-runner funnel
+no future labels or realized fields in rule inputs
+```
+
+Next experiment:
+
+Implement the pure evaluator and artifact-only validation layer, then rerun
+`python main.py run-large-runner-discovery --days 30`. Do not change live2 or
+`PumpDecisionCore` until this reports stable OOS-style behavior and explains
+the missed top-growth runners.
