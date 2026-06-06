@@ -4168,3 +4168,29 @@ is semantic: current live policy can monetize TP-pop continuations, while the
 project's stated target often refers to 10-20-50% runners. Future validation
 must separate `TP-pop edge` from `large-runner edge` before changing live
 filters.
+
+## 2026-06-06 - live2 20260606_070834 SANTOS / uptime state
+
+Current commit: UNKNOWN. Status: ANALYZED.
+
+The current live2 run `.output/results/live2_anomaly_runs/20260606_070834`
+opened one real position: `SANTOS/USDT:USDT`, `5m_15s`, category
+`C_balanced_flow_acceptance`, policy rule `strong_high_win_clean_notdump`.
+Entry integrity was good: signal age about `152ms`, drift `0`, market fill
+`0.6694` versus signal `0.6702`, initial stop verified, and final stop close
+verified. The trade was not a reconciliation failure; it was a clean-buyer
+continuation loser with about `4.4%` initial risk that stopped before TP1.
+
+Runtime trading availability is still below target. The diagnostics window
+showed about `77%` session allowed time (`5452.5s` allowed / `1535.9s`
+blocked), mostly from `decision_latency_degraded`. Artifact writing is healthy
+after heartbeat compaction and did not drop events. The main blocker is hot-path
+deadline load/backlog across the 15s and 30s engines, with user-data stream DNS
+reconnects as a secondary gate.
+
+Parity risk found: live selected rows currently record final `latency_ms` after
+the whole execution call. For SANTOS that is `3128ms`, although signal
+evaluation and entry guard completed within `152ms`; the rest is order, stop,
+verification, and current-OI fetch. This is safe for execution but confusing for
+backtest/live parity analysis. Future artifacts should separate
+pre-execution decision latency from post-execution audit duration.

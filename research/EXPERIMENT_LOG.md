@@ -5868,3 +5868,67 @@ FORM is not clean evidence of a large pump runner. It is better classified as a 
 
 Next research step:
 Separate two evaluation buckets in future analysis: `runner candidate` (`10%+` hourly/top-growth style continuation) and `TP-pop candidate` (clean buyer continuation sufficient for TP1/trailing). If the project decides to trade only large runners, the policy must be revalidated against runner labels, not patched from FORM by visual hindsight.
+
+## 2026-06-06 - live2 20260606_070834 SANTOS run audit
+
+Run: `.output/results/live2_anomaly_runs/20260606_070834`.
+
+Question:
+1. Analyze the current live trade.
+2. Explain why trading availability is around 79%, not 95-100%.
+3. Simulate whether backtest would have taken the same trade.
+4. List live/backtest parity violations.
+
+Readout:
+- The run opened one real trade: `SANTOS/USDT:USDT`, `5m_15s`, snapshot
+  `4c23c6a080ade8c22e15015423f7f934542ccc31b28e2ea388dee150201727d4`.
+- Signal window: rolling 5m seed `2026-06-06T09:45:00Z-09:50:00Z`, 15s
+  confirmation `09:50:00Z-09:51:15Z`, decision `09:51:15Z`.
+- Policy accepted `C_balanced_flow_acceptance` via
+  `strong_high_win_clean_notdump`: confirm return `+1.13%`, taker-buy share
+  `0.665`, quote pace `13.0x`, trade pace `5.13x`, seed tail quote share
+  `0.227`, and pre-seed min-path return about `-0.85%`.
+- Execution integrity was good: signal/live price `0.6702`, actual fill
+  `0.6694`, verified initial stop near `0.6408`, stop-market final fill
+  `0.6386`, realized exchange PnL `-0.55132 USDT` before fees.
+- The trade was a real loser, not an artifact bug. It needed continuation
+  after a roughly `4.4%` risk setup and never hit TP1.
+- Runtime gate diagnostics showed about `77%` allowed session time at the
+  captured artifact point. Main blocker: `decision_latency_degraded`.
+  Transition counts were dominated by 67 pure decision-latency degraded states;
+  `user_data_stream_not_ready` was present but secondary. Writer budget and
+  dropped events were healthy.
+
+Backtest simulation:
+- Existing 30d aggTrade archive for SANTOS only had local daily data through
+  `2026-06-01`, so the exact `2026-06-06` snapshot could not be replayed from
+  the current backtest cache without fetching current-day data.
+- Deterministic artifact-level replay says the shared core/trade-policy would
+  accept the same snapshot if backtest materialized the same 15s/5m candles.
+  A next-bar/adverse-slippage proxy entry around `0.670535` with stop fill
+  around `0.640459` would stop out for about `-4.59%` net after two 5 bps fees.
+  The outcome direction matches live.
+
+Parity gaps:
+- Live `latency_ms` for accepted rows is final audit latency after execution.
+  SANTOS shows `3128ms`, but signal+entry guard completed in `152ms`; execution
+  consumed the remaining `2976ms`. Backtest parity needs separate
+  pre-execution decision latency and post-execution audit duration.
+- Live has execution-layer OI/current-price/user-data guards that are not yet a
+  shared historical backtest policy. SANTOS was not blocked by OI, but the
+  general parity gap remains.
+- Backtest uses proxy fills/slippage while live uses actual exchange fills and
+  user-data stop fills, so exact PnL parity is not expected.
+- Live runtime gates can block entries during decision latency or user-data
+  outages. Backtest currently does not replay those operational blocks.
+- Independent 15s and 30s engines can produce different same-symbol outcomes:
+  SANTOS `5m_15s` accepted at `09:51:15Z`, while `5m_30s` rejected at
+  `09:51:30Z` for `initial_risk_above_max`. This is expected only if portfolio
+  ordering and same-symbol consumption are replayed deterministically.
+
+Next step:
+Patch artifact/audit latency first: record `pre_execution_latency_ms`,
+`signal_evaluate_duration_ms`, `entry_guard_duration_ms`,
+`execution_call_duration_ms`, and keep final `latency_ms` clearly marked as
+audit latency. Then attack 95%+ uptime by reducing deadline hot-path backlog,
+not by loosening trade filters.
