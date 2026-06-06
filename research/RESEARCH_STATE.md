@@ -4081,3 +4081,26 @@ skipped instead of blocking collection.
 Next live step: start live2 with the simple command and inspect
 `live2_decision_ledger.csv` for `trade_policy_verdict`, `trade_policy_rule_id`,
 and zero unexpected execution integrity errors before judging PnL.
+
+## 2026-06-06 - live2 audit hygiene after pre-P514 run
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+The pre-P514 live2 run `.output/results/live2_anomaly_runs/20260605_214104`
+did not reveal an execution integrity failure: two real entries had verified
+fills/stops, one TP1 partial was verified, both final closes were verified, and
+`total_integrity_errors=0`.
+
+The run did reveal an artifact durability problem. `live2_events.csv` hit the
+128 MiB budget because high-frequency heartbeat events carried full nested
+runtime/status blobs; heartbeat rows alone consumed about `120 MB`. Full status
+belongs in `live2_status.json` and diagnostics summary, not every event row.
+
+Applied locally: heartbeat event payload is now compact/bounded and keeps only
+gate state, counters, per-timeframe decision totals, execution/supervisor
+counters, and artifact budget counters. This should preserve long live audit
+capacity without changing signal, trade policy, execution, or parity logic.
+
+Next live validation: launch live2 after P514 plus compact heartbeat and verify
+that `live2_events.csv` no longer approaches budget, `dropped_count` stays zero,
+and decision latency/backlog is assessed without event-writer noise.

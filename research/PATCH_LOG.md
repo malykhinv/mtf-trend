@@ -11337,3 +11337,27 @@ Risk:
 ```text
 This reduces live trade count and is still based on same-30d in-sample evidence. It is a conservative launch-safety change: weak buckets remain auditable as watchlist rejects, but no longer reach real orders without stronger clean-buyer confirmation.
 ```
+
+## 2026-06-06 - P515 compact live2 heartbeat events
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added a bounded heartbeat event payload builder in `research_tools/anomaly_live2/runner.py`.
+- `live2_heartbeat` events no longer embed full `market_data_status`, `decision_status`, `execution_status`, `runtime_gate_status`, `user_data_stream_status`, or `artifact_writer_status` blobs on every heartbeat.
+- Full nested status remains available through `live2_status.json` and `live2_diagnostics_summary.json`; event CSV now keeps compact gate state, counters, per-timeframe decision totals, execution/supervisor counters, and artifact budget counters.
+- Added `tests/test_live2_heartbeat_artifacts.py` to prevent reintroducing full nested status dumps into high-frequency heartbeat events.
+
+Validation:
+
+```bash
+python -m pytest tests/test_live2_heartbeat_artifacts.py tests/test_live2_trade_policy_signal.py tests/test_live2_market_watch.py -q
+python -m compileall research_tools/anomaly_live2 research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+This changes only diagnostic event payload shape for heartbeat rows. Trading decisions, entry guard, execution, position supervision, status JSON, diagnostics summary, and decision ledger are unchanged. Any tooling that parsed full runtime status from live2_heartbeat events should read live2_status.json or live2_diagnostics_summary.json instead.
+```

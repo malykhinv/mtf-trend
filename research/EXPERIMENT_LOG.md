@@ -5784,3 +5784,25 @@ Readout:
 
 Conclusion:
 Do not add forced exit / BE timer to live yet. The current policy should stay `TP0.75R close75 trail`. If risk must be tightened later, validate a very late negative-only kill switch as a separate hypothesis, not as default behavior. The more valuable next change is category cleanup and out-of-sample validation, especially checking weak current-policy rule buckets instead of trying to rescue weak trades with exit hacks.
+
+## 2026-06-06 - pre-P514 live2 run audit
+
+Run: `.output/results/live2_anomaly_runs/20260605_214104`.
+
+Purpose: check the previous live2 run before the P514 launch-tightening patch and decide whether it revealed another code issue.
+
+Readout:
+- Runtime: `2026-06-05T21:41:04Z` to `2026-06-06T06:25:16Z`, stopped by keyboard interrupt.
+- Universe/data: 600 selected symbols, ticker/mark/aggTrade streams ended ready; 600 prior-context symbols ok; live aggTrade ended `323 ok_active`, `220 ok_idle_no_trades`, `57 gap_missing_expected_bucket`, plus 50 inactive/not-seen symbols outside selected universe.
+- Gate uptime since the session metric window: `19705s` allowed vs `3410s` blocked, about `85%` allowed. The end state was `no_new_entries` from `decision_latency_degraded`.
+- Decision funnel: 3090 deadline decisions in summary, 1503 ledger rows, 23 core-selected rows, 5 P512 trade-policy accepted rows, 2 real entries. Top blockers were deadline miss/backlog (`1298 closed bucket not evaluated`, `138 expired backlog`, plus late evaluations), normal core rejects (`ltf_confirm_return_below_min=1268`, `seed_ltf_flow_not_sustained=590`), and policy quality rejects (`rule_not_matched=10`, `watchlist_only=7` in summary).
+- Executed positions: `PIEVERSE/USDT:USDT` entered by `not_late_tailq55_pace5`, verified entry fill and initial stop, then stopped for about `-0.3264 USDT`; `FORM/USDT:USDT` entered by `strong_high_win_clean_notdump`, TP1 75% partial verified, structural stop replacement verified, final close verified for about `+0.2571 USDT`.
+- Execution integrity: `total_integrity_errors=0`, `total_orders_submitted=2`, `total_positions_protected=2`, `total_final_closes=2`, `total_tp1_closes=1`. This run does not show a fill/stop reconciliation bug.
+- P514 impact: this run used `p512_clean_buyer_trade_policy`; none of the five accepted rows were accepted solely by the weak P514-disabled standalone 5m15/distributed buckets. P514 therefore mainly helps the next launch defaults and future weak buckets, not these two executed trades.
+- Top-growth audit: 10 hourly status snapshots completed over 600 symbols. There were 7 top movers above 10% (`SLX`, `MBOX`, `CLO`, `BAN`, `GUA`, `龙虾` twice). Status coverage had 5902 below-threshold rows, 7 ok rows, and 91 fetch failures during network instability.
+
+Problem found:
+`live2_events.csv` reached its 128 MiB budget. The reason was diagnostic spam, not trading activity: 2041 `live2_heartbeat` rows consumed about `120 MB` because each heartbeat wrote full nested runtime/status blobs. The writer then dropped 5938 event jobs, including heartbeat/deadline noise but also some non-critical user-data/account events. Decision ledger and critical execution events survived, but a longer live could lose later audit rows after budget saturation.
+
+Conclusion:
+No new trade-policy change is justified from this run. The necessary fix is audit hygiene: make heartbeat events compact while keeping full status in `live2_status.json` and `live2_diagnostics_summary.json`.

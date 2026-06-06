@@ -51,6 +51,118 @@ from .top_growth import Live2TopGrowthAudit, Live2TopGrowthAuditConfig, Live2Top
 from .user_data_stream import Live2UserDataStreamSource
 
 
+def _compact_live2_heartbeat_event_data(
+    *,
+    symbols_total: int,
+    ticker_status_counts: dict[str, int],
+    aggtrade_status_counts: dict[str, object],
+    startup_aggtrade_status_counts: dict[str, object],
+    live_aggtrade_status_counts: dict[str, object],
+    candle_coverage_counts: dict[str, object],
+    market_data_status: dict[str, object],
+    decision_status: dict[str, object],
+    deadline_cycle: dict[str, object],
+    decision_cycle_elapsed_ms: int,
+    hot_path_elapsed_ms: int,
+    heartbeat_elapsed_ms: int,
+    main_loop_gap_ms: int,
+    runtime_gate_status: dict[str, object],
+    new_entries_allowed: bool,
+    execution_status: dict[str, object],
+    user_data_stream_status: dict[str, object],
+    position_supervisor_cycle: dict[str, object],
+    session_top: dict[str, object],
+    top_growth_audit: dict[str, object],
+    artifact_writer_status: dict[str, object],
+) -> dict[str, object]:
+    """Return a bounded heartbeat event payload.
+
+    Full nested runtime status is persisted by ``write_status`` and
+    ``write_diagnostics_summary``.  Heartbeat events are high frequency, so the
+    event CSV should carry only compact counters and gate state; otherwise long
+    live runs can exhaust the event budget and start dropping later audit rows.
+    """
+
+    execution_engine = execution_status.get("execution_engine")
+    if not isinstance(execution_engine, dict):
+        execution_engine = {}
+    position_supervisor = runtime_gate_status.get("position_supervisor_status")
+    if not isinstance(position_supervisor, dict):
+        position_supervisor = {}
+    readiness = runtime_gate_status.get("readiness")
+    if not isinstance(readiness, dict):
+        readiness = {}
+    output_budget = artifact_writer_status.get("output_file_budget")
+    if not isinstance(output_budget, dict):
+        output_budget = {}
+    user_data_events = user_data_stream_status.get("events_by_type")
+    if not isinstance(user_data_events, dict):
+        user_data_events = {}
+    decision_engines = decision_status.get("engines")
+    if not isinstance(decision_engines, dict):
+        decision_engines = {}
+    timeframe_summary: dict[str, dict[str, object]] = {}
+    for timeframe_ms, engine_status in decision_engines.items():
+        if not isinstance(engine_status, dict):
+            continue
+        signal_engine = engine_status.get("signal_engine")
+        if not isinstance(signal_engine, dict):
+            signal_engine = {}
+        timeframe_summary[str(timeframe_ms)] = {
+            "status": engine_status.get("status"),
+            "total_decisions": engine_status.get("total_decisions"),
+            "total_rejected": engine_status.get("total_rejected"),
+            "total_deadline_missed": engine_status.get("total_deadline_missed"),
+            "total_deadline_expired_backlog": engine_status.get("total_deadline_expired_backlog"),
+            "total_flow_freshness_reject": engine_status.get("total_flow_freshness_reject"),
+            "total_data_dependency_not_ready": engine_status.get("total_data_dependency_not_ready"),
+            "selected_count": engine_status.get("selected_count"),
+            "signal_total_selected": signal_engine.get("total_selected"),
+        }
+    return {
+        "symbols_total": symbols_total,
+        "ticker_status_counts": ticker_status_counts,
+        "aggtrade_status_counts": aggtrade_status_counts,
+        "startup_aggtrade_status_counts": startup_aggtrade_status_counts,
+        "live_aggtrade_status_counts": live_aggtrade_status_counts,
+        "candle_coverage_counts": candle_coverage_counts,
+        "market_data_ready": market_data_status.get("market_data_ready_for_entries"),
+        "market_data_reason": market_data_status.get("reason"),
+        "shards_connected": market_data_status.get("shards_connected"),
+        "shards_total": market_data_status.get("shards_total"),
+        "decision_timeframes": timeframe_summary,
+        "deadline_cycle": deadline_cycle,
+        "decision_cycle_elapsed_ms": decision_cycle_elapsed_ms,
+        "hot_path_elapsed_ms": hot_path_elapsed_ms,
+        "heartbeat_elapsed_ms": heartbeat_elapsed_ms,
+        "main_loop_gap_ms": main_loop_gap_ms,
+        "runtime_gate_status": runtime_gate_status.get("status"),
+        "runtime_gate_reason": runtime_gate_status.get("reason"),
+        "readiness": readiness,
+        "new_entries_allowed": new_entries_allowed,
+        "execution_status": execution_status.get("status"),
+        "open_protected_positions": execution_engine.get("open_protected_positions"),
+        "total_orders_submitted": execution_engine.get("total_orders_submitted"),
+        "total_positions_protected": execution_engine.get("total_positions_protected"),
+        "total_execution_integrity_errors": execution_engine.get("total_integrity_errors"),
+        "position_supervisor_status": position_supervisor.get("status"),
+        "position_supervisor_total_integrity_errors": position_supervisor.get("total_integrity_errors"),
+        "position_supervisor_total_final_closes": position_supervisor.get("total_final_closes"),
+        "position_supervisor_total_tp1_closes": position_supervisor.get("total_tp1_closes"),
+        "position_supervisor_cycle": position_supervisor_cycle,
+        "user_data_stream_ready": user_data_stream_status.get("ready"),
+        "user_data_stream_status": user_data_stream_status.get("status"),
+        "user_data_events_by_type": user_data_events,
+        "session_top": session_top,
+        "top_growth_audit": top_growth_audit,
+        "artifact_writer_ready": artifact_writer_status.get("ready"),
+        "artifact_writer_queue_size": artifact_writer_status.get("queue_size"),
+        "artifact_writer_dropped_count": artifact_writer_status.get("dropped_count"),
+        "artifact_writer_dropped_by_kind": artifact_writer_status.get("dropped_by_kind"),
+        "artifact_writer_output_file_budget": output_budget,
+    }
+
+
 class AnomalyLive2Runner:
     """Generation-0 live2 runner.
 
@@ -926,29 +1038,29 @@ class AnomalyLive2Runner:
                 event_type="live2_heartbeat",
                 component=Live2Component.RUNNER,
                 message="generation_0_fast_decision_loop_alive",
-                data={
-                    "symbols_total": len(self.state_store),
-                    "ticker_status_counts": self.state_store.ticker_counts(),
-                    "aggtrade_status_counts": market_data_status.get("aggtrade_status_counts", {}),
-                    "startup_aggtrade_status_counts": market_data_status.get("startup_aggtrade_status_counts", {}),
-                    "live_aggtrade_status_counts": market_data_status.get("live_aggtrade_status_counts", {}),
-                    "candle_coverage_counts": market_data_status.get("candle_coverage_counts", {}),
-                    "market_data_status": market_data_status,
-                    "decision_status": decision_status,
-                    "deadline_cycle": deadline_cycle,
-                    "decision_cycle_elapsed_ms": self._last_decision_cycle_elapsed_ms,
-                    "hot_path_elapsed_ms": self._last_hot_path_elapsed_ms,
-                    "heartbeat_elapsed_ms": heartbeat_elapsed_ms,
-                    "main_loop_gap_ms": self._last_main_loop_gap_ms,
-                    "runtime_gate_status": runtime_gate_status,
-                    "new_entries_allowed": self.readiness.new_entries_allowed,
-                    "execution_status": execution_status,
-                    "user_data_stream_status": self._user_data_stream_status(),
-                    "position_supervisor_cycle": supervisor_cycle,
-                    "session_top": self._last_session_top_snapshot or {},
-                    "top_growth_audit": self._last_top_growth_audit_stats.as_dict(),
-                    "artifact_writer_status": artifact_writer_status,
-                },
+                data=_compact_live2_heartbeat_event_data(
+                    symbols_total=len(self.state_store),
+                    ticker_status_counts=self.state_store.ticker_counts(),
+                    aggtrade_status_counts=market_data_status.get("aggtrade_status_counts", {}),
+                    startup_aggtrade_status_counts=market_data_status.get("startup_aggtrade_status_counts", {}),
+                    live_aggtrade_status_counts=market_data_status.get("live_aggtrade_status_counts", {}),
+                    candle_coverage_counts=market_data_status.get("candle_coverage_counts", {}),
+                    market_data_status=market_data_status,
+                    decision_status=decision_status,
+                    deadline_cycle=deadline_cycle,
+                    decision_cycle_elapsed_ms=self._last_decision_cycle_elapsed_ms,
+                    hot_path_elapsed_ms=self._last_hot_path_elapsed_ms,
+                    heartbeat_elapsed_ms=heartbeat_elapsed_ms,
+                    main_loop_gap_ms=self._last_main_loop_gap_ms,
+                    runtime_gate_status=runtime_gate_status,
+                    new_entries_allowed=self.readiness.new_entries_allowed,
+                    execution_status=execution_status,
+                    user_data_stream_status=self._user_data_stream_status(),
+                    position_supervisor_cycle=supervisor_cycle,
+                    session_top=self._last_session_top_snapshot or {},
+                    top_growth_audit=self._last_top_growth_audit_stats.as_dict(),
+                    artifact_writer_status=artifact_writer_status,
+                ),
             )
         )
         writer.write_symbol_state(self.state_store, aggtrade_stale_ms=self.config.aggtrade_stale_ms)
