@@ -1926,6 +1926,26 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
     return _run_with_logging("run-htf-ltf-runner-discovery", config, _run)
 
 
+def run_large_runner_discovery(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs cache-only 5m/1m large-runner discovery with structural exit grids."""
+
+    def _run() -> int:
+        from research_tools.large_runner_discovery import LargeRunnerDiscoveryConfig, run_large_runner_discovery as run_discovery
+
+        days = int(getattr(args, "days", 30))
+        output_dir = config.backtest.results_dir / f"large_runner_discovery_{days}d"
+        discovery_config = LargeRunnerDiscoveryConfig(
+            cache_dir=config.backtest.cache_dir,
+            output_dir=output_dir,
+            days=days,
+        )
+        result_dir = run_discovery(discovery_config, progress_label="large runner discovery")
+        print(f"large-runner discovery artifacts: {result_dir}", flush=True)
+        return 0
+
+    return _run_with_logging("run-large-runner-discovery", config, _run)
+
+
 def materialize_anomaly_subminute_cache(config: AppConfig, args: argparse.Namespace) -> int:
     """Materializes 1s-derived subminute anomaly entry caches."""
 

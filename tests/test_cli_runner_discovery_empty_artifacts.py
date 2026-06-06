@@ -42,3 +42,20 @@ def test_runner_discovery_cli_rejects_removed_tuning_flags() -> None:
 
     with pytest.raises(SystemExit):
         parser.parse_args(["run-htf-ltf-runner-discovery", "--targeted-ltf-backfill", "false"])
+
+
+def test_large_runner_discovery_cli_exposes_only_days_flag() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["run-large-runner-discovery", "--days", "3"])
+
+    assert args.command == "run-large-runner-discovery"
+    assert args.days == 3
+    assert not hasattr(args, "min_return")
+
+
+def test_large_runner_discovery_cli_rejects_tuning_flags() -> None:
+    parser = build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run-large-runner-discovery", "--min-return", "0.05"])

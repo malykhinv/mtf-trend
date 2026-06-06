@@ -1285,3 +1285,40 @@ Missing OI does not silently become zero and does not itself reject; it remains
 diagnostic. A backtest parity version must use only OI fields available at the
 simulated decision/entry time, likely 5m historical OI, and must not invent
 1m/15s/30s OI candles.
+
+## Large-Runner Discovery Research Mode
+
+Large-runner research is now separated from the active TP-pop clean-buyer
+policy. The command is:
+
+```text
+python main.py run-large-runner-discovery --days N
+```
+
+This mode is cache-only and additive. It does not change `PumpDecisionCore`,
+live2, or the current HTF/LTF runner discovery command. It uses:
+
+```text
+5m closed candles -> broad awakening setups and hourly runner/fader labels
+1m closed candles -> intra-seed tape, decision-time confirmation, and exit path
+```
+
+The command intentionally does not load `1s`, `15s`, or `30s` data. It first
+uses a cheap 5m prefilter to decide whether a setup can possibly match a
+large-runner arm, then enriches only those setups with 1m. The prefilter uses
+only candles that would be closed by the relevant 5m/10m/15m decision time.
+
+Current research arms:
+
+```text
+E5_ignition_strict
+E5_mass_ignition
+preheat_ignition
+E10_confirmed_runner
+E15_exceptional_runner
+```
+
+Future labels and top-growth coverage are evaluation-only. They must not be
+used to match arms, choose entries, or choose exits. The mode is meant to learn
+what separates runners from faders and to compare structural exit policies
+before any promotion into shared live/backtest trade policy.

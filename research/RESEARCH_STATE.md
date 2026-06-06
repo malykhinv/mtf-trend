@@ -4263,3 +4263,30 @@ profile with multiple arms for early 5m ignition, 10m confirmation, and rare
 TP-pop clean-buyer policy until the 30d structural-exit backtest proves actual
 expectancy after fees/slippage, portfolio sequencing, top-trade dependence, and
 live/backtest parity.
+
+## 2026-06-06 - large-runner discovery mode state
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Implemented a separate command, `run-large-runner-discovery --days N`, for
+cache-only large-runner research. It is not a flag on the existing runner
+discovery and does not change live2, `PumpDecisionCore`, or the TP-pop
+clean-buyer policy.
+
+The mode scans 5m candles for broad first-awakening setups, keeps the first
+setup per symbol per 60m cluster, applies a cheap 5m-only prefilter, and only
+then loads targeted 1m windows for candidate arms and structural exit
+simulation. It avoids `1s`, `15s`, and `30s` data, so it should be much cheaper
+than the old HTF/LTF discovery path while still preserving true 1m dynamics for
+runner/fader research.
+
+Honesty boundary: future labels/top-growth coverage are written only as
+evaluation artifacts. Arm matching uses only fields available at the relevant
+5m/10m/15m decision time. Empty artifacts are written with headers to avoid the
+old `No columns to parse from file` failure mode.
+
+Smoke result: `run-large-runner-discovery --days 1` completed on the current
+594-symbol cache in about `240.6s`, producing `3972` raw broad candidates,
+`2389` first-cluster setups, `44` arm matches, and `220` trade-grid rows
+(`165` closed after execution guards). The sample was negative in 1d, which is
+expected and is not an edge conclusion.

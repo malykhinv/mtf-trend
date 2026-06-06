@@ -11416,3 +11416,43 @@ Documentation only. The proposed hypotheses remain in-sample research ideas
 until the backtest is expanded and run with live-like entry, fees/slippage,
 structural exits, top-dependence checks, and no future labels in rule logic.
 ```
+
+## 2026-06-06 - P518 large-runner discovery command
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/large_runner_discovery.py`, a separate cache-only
+  5m/1m large-runner research mode.
+- Added CLI command `run-large-runner-discovery --days N`.
+- Added candidate arms for 5m ignition, mass ignition, preheat ignition, 10m
+  confirmation, and 15m exceptional continuation.
+- Added structural exit policy comparison with trail-only, partial TP + trail,
+  BE, and early-kill variants.
+- Added full artifacts for candidates, setups, rule matches, trade grid,
+  portfolio sequencing, exit-policy summaries, MFE/MAE, top dependency,
+  top-growth coverage, feature deciles, funnel, data quality, and run config.
+- Empty artifact CSVs now keep headers, avoiding the old pandas
+  `No columns to parse from file` failure mode for this command.
+- Added tests for CLI exposure, future-label isolation in arm matching, and a
+  synthetic cache smoke run.
+
+Validation:
+
+```bash
+python -m pytest tests/test_large_runner_discovery.py tests/test_cli_runner_discovery_empty_artifacts.py -q
+python main.py run-large-runner-discovery --help
+python main.py run-large-runner-discovery --days 1
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+This is a research/backtest command, not a live policy change. It is still
+in-sample on the current 30d cache. The 5m prefilter only controls whether 1m
+is loaded for an arm and uses no future labels, but any profitable 30d result
+must still be checked for fees/slippage, portfolio sequencing, top dependence,
+data gaps, and forward/live artifact parity.
+```

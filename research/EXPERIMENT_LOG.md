@@ -6125,3 +6125,58 @@ Risk:
 This is still same-30d in-sample hypothesis mining. The 30d runner backtest can
 rank candidates, but any strong profile must then be forward-tested in live
 artifacts or a later untouched period before promotion to real live sizing.
+
+## 2026-06-06 - large-runner discovery command implementation
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Command:
+
+```bash
+python main.py run-large-runner-discovery --days N
+```
+
+Implementation summary:
+- Added a separate cache-only 5m/1m research mode instead of another flag on
+  `run-htf-ltf-runner-discovery`.
+- The command scans all cached 5m symbols, builds broad first-awakening
+  candidates, keeps the first setup per symbol per 60m cluster, applies a
+  5m-only prefilter, and enriches only possible large-runner setups with 1m.
+- Candidate arms are `E5_ignition_strict`, `E5_mass_ignition`,
+  `preheat_ignition`, `E10_confirmed_runner`, and
+  `E15_exceptional_runner`.
+- Exit policies compared in the trade grid include full structural trail,
+  `0.75R` partial plus trail, `1.5R` partial plus trail, and two early-kill/BE
+  variants.
+- The mode writes full research artifacts:
+  `large_runner_candidates_raw.csv`, `large_runner_setups.csv`,
+  `large_runner_rule_matches.csv`, `large_runner_trade_grid.csv`,
+  `large_runner_portfolio_trades.csv`, `large_runner_exit_policy_comparison.csv`,
+  `large_runner_mfe_mae.csv`, `large_runner_top_dependency.csv`,
+  `large_runner_top_growth.csv`, `large_runner_top_growth_coverage.csv`,
+  `large_runner_feature_deciles.csv`, `large_runner_funnel.csv`,
+  `large_runner_data_quality.csv`, and `run_config.csv`.
+
+Honesty:
+- Future-high/close labels and hourly top-growth coverage are evaluation-only
+  artifact fields.
+- Rule matching uses only 5m/1m features available by the arm's simulated
+  decision time.
+- Entry uses next 1m open plus adverse slippage.
+- Stop/TP intrabar ambiguity is handled conservatively by checking stop before
+  TP.
+- The command does not fetch exchange data and does not use 1s/15s/30s caches.
+
+Smoke:
+- `run-large-runner-discovery --days 1` completed on the current 594-symbol
+  cache in about `240.6s`.
+- Artifacts showed `3972` raw broad candidates, `2389` first-cluster setups,
+  `44` arm matches, `220` trade-grid rows, and `165` closed simulated trades.
+- The 1d result was negative and is only a smoke/diagnostic check, not an edge
+  conclusion.
+
+Next experiment:
+Run 30d with this command and analyze runner/fader separation by arm, exit
+policy, MFE/MAE, top-growth coverage, skip reasons, top dependency, and
+portfolio sequencing. Do not promote any arm to live until the 30d artifact
+readout shows realized expectancy after fees/slippage and low top dependence.
