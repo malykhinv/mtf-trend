@@ -11290,3 +11290,24 @@ Risk:
 ```text
 This intentionally reduces live/backtest trade count because broad C/A/S core-selected rows now need to pass the clean-buyer trade policy. The change should improve quality and parity, but 30d metrics before P512 are no longer directly comparable to P512 runs because the traded signal layer changed.
 ```
+
+## 2026-06-06 - exit timing research artifacts
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added 30d exit-timing analysis artifacts under `.output/results/htf_ltf_runner_discovery_30d/_analysis_coverage/exit_timing_v1/`.
+- Updated research memory with the result that current `TP0.75R close75 trail` remains the best tested management policy and forced no-development exits should not be promoted to live yet.
+
+Validation:
+
+```bash
+python inline analysis replay over forced_materialize_selected_trades.csv and current PumpTradePolicy
+```
+
+Risk:
+
+```text
+This is a research/artifact update, not a code-path change. The detailed redflag replay covers 115 current-policy accepted strong rows with materialized post-entry LTF, while broad time-to-TP timing covers 365 current-policy raw trades. Treat forced-exit conclusions as strong enough to avoid adding timers now, not as final out-of-sample proof.
+```

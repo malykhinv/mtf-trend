@@ -4048,3 +4048,13 @@ Live2 now carries policy fields in `Live2SignalDecision`, live decision ledger, 
 Backtest discovery now writes policy fields in signal/trade rows and decision ledger, and its post-entry replay reads `tp1_r` and `tp1_close_fraction` from the accepted signal policy instead of treating discovery config as the policy source.
 
 Next validation: run a short `run-htf-ltf-runner-discovery --days 1` and inspect `trade_policy_verdict` funnel counts before comparing PnL. Then run live shadow/small-notional and verify live2 decision ledger has zero unexplained policy/execution mismatches.
+
+## 2026-06-06 - exit timing state
+
+Current commit: UNKNOWN. Status: ANALYZED.
+
+30d exit-timing research found no evidence that clean-buyer pump trades should be force-closed quickly when TP is not immediate. For current-policy raw trades, TP is often not instant: median TP delay among hits is `8.5m`, q75 `21.25m`, q90 `32.5m`. On the 115-row materialized strong replay, current `TP0.75R close75 trail` remains the best tested management policy (`+1.2836` sum, `75.7%` WR, PF `3.52`). Full `TP0.75R` is the conservative benchmark, not a clear upgrade.
+
+Fixed no-TP timers, dynamic same-speed timers, and flow/seller redflags all reduced expectancy on this replay. The redflags especially over-exited normal post-entry digestion. Pre-entry pump speed and buyer/pace metrics can be logged as confidence/diagnostics, but they should not move live stops or force exits without out-of-sample proof.
+
+Next honest step: keep live exit policy unchanged, and use the exit-timing artifacts to design a later out-of-sample validation only after category validation. Do not try to rescue weak category buckets with exit hacks; inspect weak `trade_policy_rule_id` buckets separately.

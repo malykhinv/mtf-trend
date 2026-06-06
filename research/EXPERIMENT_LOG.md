@@ -5751,3 +5751,36 @@ Acceptance protocol:
 4. Parity check: when a same-period live/backtest ledger exists, `same_snapshot_different_signal_verdict` must remain `0`. Policy rejects are allowed only if both sides produce the same policy verdict for the same snapshot.
 
 Do not compare PnL before the funnel confirms that old broad C/A/S rows are being rejected by trade policy for visible reasons.
+
+## 2026-06-06 - exit timing / no-development replay
+
+Run: `.output/results/htf_ltf_runner_discovery_30d`.
+
+Question: should clean-buyer pump trades be force-closed or moved to BE when TP does not arrive quickly, and can pre-entry pump speed define the deadline?
+
+Protocol:
+- Current `PumpTradePolicy` was applied back onto the 30d artifacts before analysis.
+- Broad time-to-TP readout used all 365 closed raw trades that pass current policy. This is valid for TP timing, but raw net PnL still reflects the old recorded exit implementation.
+- Detailed forced-exit/redflag replay used the 115 current-policy accepted rows inside the already materialized strong-category post-entry set. Post-entry LTF came from `ParquetStorage` with `delta/` windows; 96 windows were continuous `ok`, 19 had a later `ltf_gap`.
+- Replay was candle-by-candle and live-available: stop first inside candle, TP only on `high > TP`, timers/redflags only after a closed LTF candle, market exits with adverse exit slippage.
+- Tested: current `TP0.75R close75 trail`, full `TP0.75R`, fixed no-TP deadlines, deadlines derived from confirmation duration / same-speed-to-TP estimate, strict/balanced/aggressive redflags, and timer+redflag hybrids.
+
+Artifacts:
+- `_analysis_coverage/exit_timing_v1/time_to_tp_summary_current_policy_raw.csv`
+- `_analysis_coverage/exit_timing_v1/all_raw_current_policy_old_exit_summary.csv`
+- `_analysis_coverage/exit_timing_v1/exit_timing_variant_trade_replay.csv`
+- `_analysis_coverage/exit_timing_v1/exit_timing_variant_summary.csv`
+- `_analysis_coverage/exit_timing_v1/exit_timing_variant_summary_by_profile.csv`
+- `_analysis_coverage/exit_timing_v1/exit_timing_variant_summary_by_rule.csv`
+- `_analysis_coverage/exit_timing_v1/exit_timing_recommendation_score.csv`
+
+Readout:
+- Across 365 current-policy raw trades, TP hit rate was `65.2%`. Among TP hits, median delay was `8.5m`, q75 `21.25m`, q90 `32.5m`; only `20.8%` of all trades hit TP inside `5m`, `35.9%` inside `10m`, `42.7%` inside `15m`, `57.8%` inside `30m`.
+- On the 115-row detailed replay, current `TP0.75R close75 trail` was best: sum `+1.2836`, avg `+1.116%`, median `+1.519%`, WR `75.7%`, TP hit rate `72.2%`, PF `3.52`.
+- Full `TP0.75R` was a close conservative benchmark: sum `+1.1843`, WR `75.7%`, lower top dependence, but less upside than current partial+trail.
+- Fixed and dynamic forced exits did not beat baseline. Best late timer variants around 20-24 LTF candles reduced sum to about `+0.79` to `+0.85` and cut WR to about `43-49%`.
+- Redflag exits were worse. Strict redflag `exit_negative_else_be` fell to sum `+0.4730`, WR `32.2%`; balanced/aggressive redflags over-exited even more.
+- Pre-entry speed is useful as a weak confidence feature, not as a hard exit clock: speed return/min correlation with net return was only `+0.15`; taker-buy share, trade pace, and quote pace correlated with faster TP, but not strongly enough to justify forced exits.
+
+Conclusion:
+Do not add forced exit / BE timer to live yet. The current policy should stay `TP0.75R close75 trail`. If risk must be tightened later, validate a very late negative-only kill switch as a separate hypothesis, not as default behavior. The more valuable next change is category cleanup and out-of-sample validation, especially checking weak current-policy rule buckets instead of trying to rescue weak trades with exit hacks.
