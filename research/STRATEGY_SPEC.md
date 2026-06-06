@@ -1223,3 +1223,35 @@ actual_tp1_price = entry_fill_price + (entry_fill_price - stop_price) * exit_tp1
 ```
 
 The per-position `tp1_close_fraction` comes from the accepted trade policy. Live config/supervisor defaults are fallback only for legacy/manual protected positions.
+
+## P514 Clean-Buyer Policy Tightening
+
+The active accepted trade-policy buckets are intentionally narrower than the
+full list of mined/watchlist patterns:
+
+```text
+accepted:
+  strong_high_win_clean_notdump
+  five_minute_strong_buyer_confirm_history
+  fifteen_second_fast_tape_history
+  not_late_tailq55_pace5
+
+watchlist-only:
+  broad_buyer55_notdump_watchlist
+  five_minute_15s_active_tape
+  distributed_trade_top1_confirm08
+  distributed_quote_top1_confirm08
+```
+
+`five_minute_15s_active_tape` and standalone distributed-seed confirmations
+are not enough to trade live unless another accepted rule also matches. This
+keeps 5m/15s noisy tape and distributed-but-not-clean dump/rebound cases visible
+in artifacts without letting them reach entry execution.
+
+Live2 position management remains TP-first structural:
+
+```text
+TP1 = 0.75R from actual fill and actual stop risk
+TP1 close fraction = accepted policy field, default 0.75
+early-exit redflags = telemetry only unless explicitly revalidated later
+```

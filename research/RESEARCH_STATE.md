@@ -4058,3 +4058,26 @@ Current commit: UNKNOWN. Status: ANALYZED.
 Fixed no-TP timers, dynamic same-speed timers, and flow/seller redflags all reduced expectancy on this replay. The redflags especially over-exited normal post-entry digestion. Pre-entry pump speed and buyer/pace metrics can be logged as confidence/diagnostics, but they should not move live stops or force exits without out-of-sample proof.
 
 Next honest step: keep live exit policy unchanged, and use the exit-timing artifacts to design a later out-of-sample validation only after category validation. Do not try to rescue weak category buckets with exit hacks; inspect weak `trade_policy_rule_id` buckets separately.
+
+## 2026-06-06 - P514 live2 launch-ready tightening
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+Trade policy was tightened before the next live2 launch. The weak standalone
+`five_minute_15s_active_tape` bucket and standalone distributed seed buckets
+are now watchlist-only; they remain visible in artifacts but no longer permit
+orders unless a stronger accepted rule also matches. On the 30d current-policy
+raw readout, removing these primary weak buckets would reduce closed trades from
+`365` to `286` while improving old-exit avg from `+0.7446%` to `+0.9599%` and
+WR from `68.8%` to `72.0%`. Treat this as in-sample strengthening, not final
+edge proof.
+
+Live2 launch defaults were aligned with runtime config: rolling 1m maintenance
+lookback `720m`, top-growth cycle `16` symbols / `3s`, and supervisor TP1 close
+fraction `0.75`. The live2 market-watch test file now imports cleanly under the
+shared rolling seed-first runtime; legacy live-only setup tests are explicitly
+skipped instead of blocking collection.
+
+Next live step: start live2 with the simple command and inspect
+`live2_decision_ledger.csv` for `trade_policy_verdict`, `trade_policy_rule_id`,
+and zero unexpected execution integrity errors before judging PnL.

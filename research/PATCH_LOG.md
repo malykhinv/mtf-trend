@@ -11311,3 +11311,29 @@ Risk:
 ```text
 This is a research/artifact update, not a code-path change. The detailed redflag replay covers 115 current-policy accepted strong rows with materialized post-entry LTF, while broad time-to-TP timing covers 365 current-policy raw trades. Treat forced-exit conclusions as strong enough to avoid adding timers now, not as final out-of-sample proof.
 ```
+
+## 2026-06-06 - P514 tighten weak trade-policy buckets and live2 defaults
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- `research_tools/pump_trade_policy.py` now versions the policy as `p514_clean_buyer_trade_policy`.
+- `five_minute_15s_active_tape`, `distributed_trade_top1_confirm08`, and `distributed_quote_top1_confirm08` are watchlist-only unless another accepted rule also matches.
+- Live2 CLI defaults now match `AnomalyLive2Config` for rolling 1m maintenance lookback, top-growth throughput, and TP1 close fraction.
+- `tests/test_live2_market_watch.py` now reflects the current shared seed-first live2 runtime: legacy live-only setup tests are explicit skips, fake exchange implements the current balance/stop-not-found boundary, and early-exit expectations match telemetry-only behavior.
+- Added policy regression tests for weak 5m/15s active tape and distributed-without-no-dump watchlist rejection.
+
+Validation:
+
+```bash
+python -m pytest tests/test_pump_trade_policy.py tests/test_live2_trade_policy_signal.py tests/test_live2_market_watch.py tests/test_pump_decision_contract.py tests/test_htf_ltf_runner_discovery.py::test_runner_simulation_marks_policy_tp1_partial_hit -q
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live2 --help
+```
+
+Risk:
+
+```text
+This reduces live trade count and is still based on same-30d in-sample evidence. It is a conservative launch-safety change: weak buckets remain auditable as watchlist rejects, but no longer reach real orders without stronger clean-buyer confirmation.
+```

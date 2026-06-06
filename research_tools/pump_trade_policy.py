@@ -20,7 +20,7 @@ from research_tools.pump_decision_core import rolling_tf_set_from_features
 
 
 PUMP_TRADE_POLICY_ID = "clean_buyer_continuation_v1"
-PUMP_TRADE_POLICY_VERSION = "p512_clean_buyer_trade_policy"
+PUMP_TRADE_POLICY_VERSION = "p514_clean_buyer_trade_policy"
 
 EXIT_POLICY_TP075_CLOSE75_TRAIL = "tp075_close75_structural_trail_v1"
 
@@ -37,9 +37,6 @@ ACCEPTED_RULE_PRIORITY: tuple[str, ...] = (
     RULE_STRONG_HIGH_WIN_CLEAN_NOTDUMP,
     RULE_5M_STRONG_BUYER_CONFIRM_HISTORY,
     RULE_15S_FAST_TAPE_HISTORY,
-    RULE_5M15_ACTIVE_TAPE,
-    RULE_DISTRIBUTED_TRADE_TOP1_CONFIRM08,
-    RULE_DISTRIBUTED_QUOTE_TOP1_CONFIRM08,
     RULE_NOT_LATE_TAILQ55_PACE5,
 )
 
@@ -133,11 +130,11 @@ def evaluate_pump_trade_policy(features: Mapping[str, object]) -> PumpTradePolic
     if buyer60 and confirm_trade_pace5 and prior10 and tf_15s:
         matched.append(RULE_15S_FAST_TAPE_HISTORY)
     if buyer60 and confirm_trade_pace5 and confirm_quote_pace and tf_5m15:
-        matched.append(RULE_5M15_ACTIVE_TAPE)
+        watchlist.append(RULE_5M15_ACTIVE_TAPE)
     if buyer60 and confirm08 and prior10 and seed_trade_top1_40:
-        matched.append(RULE_DISTRIBUTED_TRADE_TOP1_CONFIRM08)
+        watchlist.append(RULE_DISTRIBUTED_TRADE_TOP1_CONFIRM08)
     if buyer60 and confirm08 and prior10 and seed_quote_top1_50:
-        matched.append(RULE_DISTRIBUTED_QUOTE_TOP1_CONFIRM08)
+        watchlist.append(RULE_DISTRIBUTED_QUOTE_TOP1_CONFIRM08)
     if buyer60 and seed_tail_quote_55 and confirm_trade_pace5 and prior10:
         matched.append(RULE_NOT_LATE_TAILQ55_PACE5)
 
