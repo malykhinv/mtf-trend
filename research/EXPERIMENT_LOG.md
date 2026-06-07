@@ -127,6 +127,79 @@ top-growth cases, and early live-available features that separate the 441
 anomaly-centric runners from the 1056 faders.
 ```
 
+## 2026-06-07 - P527 runner/fader feature audit
+
+Dataset:
+
+```text
+source: .output/results/large_runner_discovery_45d_p526/large_runner_setups.csv
+unit: complete enriched anomaly setup, not trade-grid row
+rows: 1497
+runners: 441
+faders: 1056
+symbols: 273
+label: runner_high10_next60 before anomaly-low break
+```
+
+Strongest univariate readout:
+
+```text
+15m close continuation: AUC 0.843, but later and can miss fast runners.
+10m close continuation: AUC 0.752.
+1m seed path drawdown: lower m1_min_path_return had directional AUC 0.619.
+pre60 range: AUC 0.618.
+1m top-1 concentration: lower is better, directional AUC about 0.596.
+OI early/pre60 change: higher is better, AUC about 0.583.
+```
+
+Seed-time facts:
+
+```text
+base runner10 rate: 29.46%
+m1_quote_top1_share <= 0.34: 457 rows, 38.51% runner10
+oi_change_early_pct >= 0.5%: 438 rows, 40.18% runner10
+oi_change_early_pct >= 1%: 288 rows, 40.97% runner10
+OI down while price rises >4%: 416 rows, 19.47% runner10
+pre60_min_path < -4% alone: 377 rows, 33.95% runner10
+pre60_min_path < -4% + OI down + m1_quote_top1 > 0.5: 19 rows, 5.26% runner10
+pre60_min_path < -4% + OI up + m1_quote_top1 <= 0.4: 141 rows, 44.68% runner10
+```
+
+Hit timing:
+
+```text
+runner10 hit <=5m: 112 / 441 = 25.40%
+runner10 hit <=10m: 213 / 441 = 48.30%
+runner10 hit <=15m: 263 / 441 = 59.64%
+runner10 hit <=30m: 355 / 441 = 80.50%
+```
+
+Candidate families to validate:
+
+```text
+seed_core_qtop34_oi005_oipre005_pre60le6_priortradele1:
+  61 rows, 57.38% runner10, 29.51% runner20, 36 symbols.
+  Drop top 3 symbols: 45 rows, 53.33% runner10.
+
+seed_core_qtop34_oi01_active_priorquotele1:
+  74 rows, 55.41% runner10, 25.68% runner20, 49 symbols.
+  Drop top 3 symbols: 60 rows, 51.67% runner10.
+
+confirm15_core_qtop40_oi_pos:
+  289 rows, 56.40% runner10, 23.18% runner20, 131 symbols.
+  Drop top 3 symbols: 251 rows, 56.18% runner10.
+  Trade-grid replay: 2030 closed rows, avg net about +1.08%, win about 35.62%.
+```
+
+Conclusion:
+
+```text
+The likely nature edge is not raw volume size. It is distributed active flow
+plus OI-supported participation, with explicit rejection of short-cover/rebound
+patterns. A 15m confirmation family is robust but late; a seed-time family is
+earlier and more selective. Both need a research-only rerun before live use.
+```
+
 ## 2026-06-04 - P504 proposed unified targeted LTF accelerator
 
 Status: PROPOSED.

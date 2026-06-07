@@ -41,6 +41,58 @@ such as `A_cool_stress_absorption`, `B_liquid_distributed_moderate_taker`,
 validation. Do not promote this to live rules without a stricter category/top
 dependency and missed-runner audit.
 
+## 2026-06-07 - P527 runner/fader early-feature audit
+
+Current commit: dbacbc19. Status: analysis only.
+
+P527 compared the 441 anomaly-centric +10 runners against 1056 faders from
+`.output/results/large_runner_discovery_45d_p526` using only live-available
+setup features. The strongest known-at-seed truths are:
+
+- One-print/concentrated flow is bad. `m1_quote_top1_share <= 0.34` improved
+  runner10 rate from 29.46% to 38.51%; `m1_quote_top1_share > 0.55` was a weak
+  veto bucket around 21%.
+- OI matters. Seed OI up is better than OI down; `oi_change_early_pct >= 0.5%`
+  gave 40.18% runner10, and `>= 1%` gave 40.97%. Price rising while OI falls is
+  short-cover/rebound risk, not organic pump awakening: `early_return > 4%` with
+  OI down was only 19.47% runner10 in setup labels and negative in trade-grid
+  replay.
+- Do not ban every pre-pump drawdown. Plain pre60 drawdown was not the enemy:
+  `pre60_min_path < -4%` had 33.95% runner10. The bad case is drawdown plus OI
+  down plus concentrated flow; `pre60_min_path < -4%`, OI down and
+  `m1_quote_top1_share > 0.5` was only 5.26% runner10 and strongly negative in
+  trade replay. Drawdown plus OI up and distributed flow was much better:
+  44.68% runner10.
+- Simple quote/trade ratios are not monotonic edge. Bigger volume/trade ratio
+  alone does not mean a better runner. The useful distinction is whether the
+  activity is distributed and OI-supported.
+- Waiting for 15m confirmation is much stronger but later: `close_ret_15m` had
+  the best univariate AUC (0.843), and `close_ret_15m >= 6%` plus distributed
+  flow and OI up produced about 56.4% runner10 over 289 setups. This is not
+  necessarily the best entry, because 59.64% of true runners already hit +10%
+  within 15m of seed close.
+
+Promising seed-time candidate families to validate next, not yet live rules:
+
+1. Distributed OI-supported seed: `m1_quote_top1_share <= 0.34`,
+   `oi_change_early_pct >= 0.5%`, `oi_change_pre60_pct >= 0.5%`,
+   `pre60_return_pct <= 6%`, and `current_vs_prior_max_trade_24h <= 1`. It had
+   61 setups, 57.38% runner10, 29.51% runner20, and remained above 53% after
+   dropping the top three symbols.
+2. Broad seed core: `m1_quote_top1_share <= 0.34`,
+   `oi_change_early_pct >= 1%`, `m1_elevated_both_count_3x >= 5`, and
+   `current_vs_prior_max_quote_24h <= 1`. It had 74 setups, 55.41% runner10,
+   25.68% runner20, 49 symbols, and top-symbol share under 7%.
+3. Later confirmation family: `close_ret_15m >= 6%`,
+   `m1_quote_top1_share <= 0.40`, and OI up. It had 289 setups, 56.40%
+   runner10 and stayed 56.18% after dropping top three symbols, but it is a
+   later entry and must be tested against missed fast runners and RR collapse.
+
+Next: add these as research-only candidate families in the large-runner module
+or a sibling pure rule module, then rerun/report 45d with separate seed-entry
+and 10m/15m-confirm entry buckets. Do not merge them into live until the
+portfolio model, top dependency, and entry freshness/RR are audited.
+
 ## 2026-06-04 - P504 proposed unified targeted LTF accelerator
 
 Current commit: UNKNOWN. Status: PROPOSED.
