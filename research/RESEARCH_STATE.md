@@ -1,6 +1,6 @@
 ## 2026-06-07 - P526 anomaly-centric large-runner labels
 
-Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+Current commit: e0ba949a. Status: APPLIED and pushed.
 
 `run-large-runner-discovery` no longer treats hourly top-growth as the primary
 runner/fader truth. The research label is now attached to the exact sliding
@@ -19,8 +19,27 @@ Validation smoke on `.output/results/large_runner_discovery_1d`: `raw=3972`,
 `setups=2412`, `matches=79`, `trades=310`, `avg_net=-1.0806%`,
 `win_rate=10.00%`. Among enriched setup rows with available future labels,
 roughly 17% were `runner_high10_next60` under the new target-before-low-break
-contract. Prior 45d large-runner metrics are not comparable and must be rerun
-under this label model before drawing edge conclusions.
+contract.
+
+The 45d P526 run at `.output/results/large_runner_discovery_45d_p526` completed
+in 3772.953s over 594 symbols (`2026-04-17T15:50:00Z` to
+`2026-06-01T15:50:00Z`): `raw=126987`, `setups=77079`, `matches=2812`,
+`trade_grid_rows=14060`, `closed=9945`, `skipped=4115`, `avg_net=+0.0112%`,
+`win_rate=22.41%`. The label split on complete enriched setups is useful:
+`1497` complete labels, `441` +10 runners (29.46%) and `1056` faders. Runner
+hit timing after seed close: p25 5m, median 11m, p75 24m, p90 42m.
+
+Interpretation: the new dataset is structurally valid for runner/fader feature
+research, but not yet a finished live edge. Closed grid rows labeled
+`runner_high10_next60` averaged about `+2.70%` net, while faders averaged about
+`-0.91%`, so the label captures the intended outcome. However, the all-portfolio
+sample is slightly negative (`1101` rows, avg `-0.00365%`, sum `-0.04018`) and
+top dependency is still high. Early evidence points toward distributed 1m flow
+(low top-1 concentration), positive early OI change, and selected nature groups
+such as `A_cool_stress_absorption`, `B_liquid_distributed_moderate_taker`,
+`D_24h_flow_record_absorption`, and `v4_quality_cool` as candidates for deeper
+validation. Do not promote this to live rules without a stricter category/top
+dependency and missed-runner audit.
 
 ## 2026-06-04 - P504 proposed unified targeted LTF accelerator
 

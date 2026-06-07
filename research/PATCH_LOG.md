@@ -1,6 +1,6 @@
 ## 2026-06-07 - P526 anomaly-centric large-runner labels
 
-Status: APPLIED locally / UNKNOWN commit. Builds on P524/P525 large-runner
+Status: APPLIED and pushed at e0ba949a. Builds on P524/P525 large-runner
 research mode.
 
 Purpose: remove hour-bucket target ambiguity from `run-large-runner-discovery`
@@ -40,6 +40,15 @@ Risk:
 Low lookahead risk for decisions: labels are evaluation-only and unavailable at
 entry. Medium interpretation risk until the 45d run is repeated, because old
 large-runner category metrics used the previous label contract.
+```
+
+Follow-up:
+
+```text
+45d P526 run completed at .output/results/large_runner_discovery_45d_p526.
+The old interpretation risk is resolved for this artifact, but live promotion is
+still blocked by top dependency, portfolio-all weakness, and missed top-growth
+audit findings.
 ```
 
 ## 2026-06-04 - P503 fast seed-stage planner pruning

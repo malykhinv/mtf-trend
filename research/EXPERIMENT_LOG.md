@@ -43,6 +43,90 @@ anomaly-centric labels, label completeness, target-hit timing, low-break timing,
 top-trade dependence, and live-available early features only.
 ```
 
+## 2026-06-07 - P526 45d anomaly-centric large-runner run
+
+Input:
+
+```text
+command: direct LargeRunnerDiscoveryConfig(days=45, output_dir=.output/results/large_runner_discovery_45d_p526)
+commit: e0ba949a
+output: .output/results/large_runner_discovery_45d_p526
+period: 2026-04-17T15:50:00Z -> 2026-06-01T15:50:00Z
+symbols: 594
+runtime_seconds: 3772.953
+```
+
+Funnel:
+
+```text
+raw_broad_5m_candidates: 126987
+cluster_selected_setups: 77079
+1m_enriched_after_5m_prefilter: 1555
+complete_future_labels: 1497
+large_runner_arm_matches: 2812
+trade_grid_rows: 14060
+closed: 9945
+skipped: 4115
+```
+
+Label readout:
+
+```text
+runner_high10_next60 complete setups: 441 / 1497 = 29.46%
+runner_high20_next60 complete setups: 156 / 1497 = 10.42%
+runner_high30_next60 complete setups: 72 / 1497 = 4.81%
+fader_high10_next60 complete setups: 1056 / 1497 = 70.54%
+low_break_before_high10: 425 / 1497 = 28.39%
+runner10 hit offset: p25 5m, median 11m, p75 24m, p90 42m
+```
+
+Initial edge readout:
+
+```text
+all closed grid rows: avg_net +0.0112%, win_rate 22.41%
+runner_high10 closed rows: avg_net about +2.70%, win_rate about 41.36%
+fader_high10 closed rows: avg_net about -0.91%, win_rate about 16.07%
+portfolio-all rows: 1101, avg_net about -0.00365%, sum -0.04018
+```
+
+Useful but not final candidate groups:
+
+```text
+A_cool_stress_absorption: 229 grid closed, avg_net about +1.71%, 78 symbols
+B_liquid_distributed_moderate_taker: 386 grid closed, avg_net about +0.98%, 114 symbols
+D_24h_flow_record_absorption: 148 grid closed, avg_net about +1.91%, 57 symbols
+v4_quality_cool: 169 grid closed, avg_net about +1.83%, 76 symbols
+```
+
+Feature hints to validate, not promote blindly:
+
+```text
+Lower 1m top-1 quote concentration had materially higher runner10 rate than
+one-print concentrated flow. Positive early OI change had a stronger runner10
+rate than flat/negative OI. Simple early quote/trade ratios were not monotonic
+enough to be standalone rules.
+```
+
+Top-growth audit:
+
+```text
+timing rows: 5355
+covered_by_portfolio: 1645
+5m_prefilter_failed: 2011
+broad_5m_gate_not_seen: 1013
+arm_matched_but_not_selected_nature: 498
+```
+
+Interpretation:
+
+```text
+P526 produces the right research dataset: sliding anomaly -> future continuation
+before anomaly-low invalidation. It does not yet prove a live-ready edge. The
+next analysis should focus on category robustness, top dependency, missed
+top-growth cases, and early live-available features that separate the 441
+anomaly-centric runners from the 1056 faders.
+```
+
 ## 2026-06-04 - P504 proposed unified targeted LTF accelerator
 
 Status: PROPOSED.
