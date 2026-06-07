@@ -1,3 +1,27 @@
+## 2026-06-07 - P526 anomaly-centric large-runner labels
+
+Current commit: UNKNOWN. Status: APPLIED locally / UNKNOWN commit.
+
+`run-large-runner-discovery` no longer treats hourly top-growth as the primary
+runner/fader truth. The research label is now attached to the exact sliding
+anomaly seed: from the seed close, a runner must reach +10%/+20%/+30% within the
+next 60m before any later 1m candle breaks the anomaly low. If the 60m path is
+complete and +10% does not happen before that low break, it is a fader. Same
+1m-candle target/low-break ambiguity is counted conservatively as low-break
+first.
+
+This fixes the user's concern about hour-bucket hindsight. The future label is
+still written only as an evaluation field (`future_label_available_at_entry =
+False`) after the known-at-decision setup is built. Hourly top-growth files
+remain audit-only for missed-runner orientation.
+
+Validation smoke on `.output/results/large_runner_discovery_1d`: `raw=3972`,
+`setups=2412`, `matches=79`, `trades=310`, `avg_net=-1.0806%`,
+`win_rate=10.00%`. Among enriched setup rows with available future labels,
+roughly 17% were `runner_high10_next60` under the new target-before-low-break
+contract. Prior 45d large-runner metrics are not comparable and must be rerun
+under this label model before drawing edge conclusions.
+
 ## 2026-06-04 - P504 proposed unified targeted LTF accelerator
 
 Current commit: UNKNOWN. Status: PROPOSED.

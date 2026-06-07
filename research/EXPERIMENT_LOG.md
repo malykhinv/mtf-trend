@@ -1,3 +1,48 @@
+## 2026-06-07 - P526 anomaly-centric large-runner smoke
+
+Input:
+
+```text
+command: .venv\Scripts\python.exe main.py run-large-runner-discovery --days 1
+output: .output/results/large_runner_discovery_1d
+```
+
+Result:
+
+```text
+raw=3972
+setups=2412
+matches=79
+trades=310
+avg_net=-1.0806%
+win_rate=10.00%
+future_label_model=anomaly_seed_close_target_before_seed_low_break_evaluation_only
+```
+
+Purpose:
+
+```text
+Verify that large-runner discovery now labels each sliding anomaly by whether
+the post-seed path reaches +10% before breaking the anomaly low, instead of
+using hourly top-growth membership as the primary target.
+```
+
+Interpretation:
+
+```text
+Smoke passed structurally, but it is not an edge result. The old 45d
+large-runner readout used a different high-only/hour-audit-oriented target
+contract and must be rerun before choosing categories or live rules.
+```
+
+Next experiment:
+
+```text
+Run 45d large-runner discovery under P526 and analyze runners/faders by
+anomaly-centric labels, label completeness, target-hit timing, low-break timing,
+top-trade dependence, and live-available early features only.
+```
+
 ## 2026-06-04 - P504 proposed unified targeted LTF accelerator
 
 Status: PROPOSED.

@@ -5,6 +5,7 @@ import pandas as pd
 from data.storage.parquet_storage import ParquetStorage
 from research_tools.large_runner_discovery import (
     LargeRunnerDiscoveryConfig,
+    _future_labels,
     match_large_runner_arms,
     run_large_runner_discovery,
 )
@@ -189,6 +190,57 @@ def test_large_runner_nature_evaluator_oi_missing_and_veto_precedence() -> None:
     assert "early_taker_buy_quote_share_gt_0.62" in str(vetoed["large_runner_nature_veto_reasons"])
 
 
+def test_anomaly_runner_label_requires_target_before_anomaly_low_break() -> None:
+    seed_open = 0
+    seed_close = 5 * 60_000
+    frame = pd.DataFrame(
+        [
+            {"timestamp": seed_close, "open": 100.0, "high": 105.0, "low": 99.0, "close": 104.0},
+            {"timestamp": seed_close + 60_000, "open": 104.0, "high": 111.0, "low": 102.0, "close": 110.0},
+            {"timestamp": seed_close + 2 * 60_000, "open": 110.0, "high": 112.0, "low": 98.0, "close": 99.0},
+        ]
+    )
+
+    labels = _future_labels(
+        frame,
+        seed_open=seed_open,
+        seed_close=seed_close,
+        anomaly_low=98.5,
+        anomaly_close=100.0,
+        config=LargeRunnerDiscoveryConfig(days=1, horizon_minutes=3),
+    )
+
+    assert labels["future_label_model"] == "anomaly_seed_close_target_before_seed_low_break"
+    assert labels["runner_high10_next60"] is True
+    assert labels["fader_high10_next60"] is False
+    assert labels["runner_high10_hit_offset_min"] == 1.0
+    assert labels["future60_low_break_offset_min"] == 2.0
+
+
+def test_anomaly_runner_label_treats_same_candle_low_break_as_not_runner() -> None:
+    seed_open = 0
+    seed_close = 5 * 60_000
+    frame = pd.DataFrame(
+        [
+            {"timestamp": seed_close, "open": 100.0, "high": 111.0, "low": 98.0, "close": 105.0},
+            {"timestamp": seed_close + 60_000, "open": 105.0, "high": 112.0, "low": 101.0, "close": 110.0},
+        ]
+    )
+
+    labels = _future_labels(
+        frame,
+        seed_open=seed_open,
+        seed_close=seed_close,
+        anomaly_low=99.0,
+        anomaly_close=100.0,
+        config=LargeRunnerDiscoveryConfig(days=1, horizon_minutes=2),
+    )
+
+    assert labels["runner_high10_next60"] is False
+    assert labels["fader_high10_next60"] is True
+    assert labels["future60_low_break_before_high10"] is True
+
+
 def test_large_runner_discovery_smoke_writes_honest_artifacts(tmp_path: Path) -> None:
     symbol = "AAA/USDT:USDT"
     cache_dir = tmp_path / "cache"
@@ -214,8 +266,11 @@ def test_large_runner_discovery_smoke_writes_honest_artifacts(tmp_path: Path) ->
     assert trades["future_label_available_at_entry"].eq(False).all()
     assert "setup_selection_model" in setups.columns
     assert config.loc[0, "data_access_model"] == "cache_only_5m_1m_no_exchange_fetch"
+    assert config.loc[0, "future_label_model"] == "anomaly_seed_close_target_before_seed_low_break_evaluation_only"
     assert config.loc[0, "candidate_model"] == "first_broad_plus_first_prefilter_pass_promotion_per_symbol_per_60m_cluster"
     assert config.loc[0, "top_growth_audit_model"] == "evaluation_only_first15_full_hour_and_pre60_windows"
+    assert "future60_low_break_before_high10" in setups.columns
+    assert "fader_high10_next60" in trades.columns
     assert "hour_high_candle_open_offset_min" in top_growth.columns
     assert "first15_high_return_pct" in top_growth.columns
     assert "audit_window_model" in timing_audit.columns

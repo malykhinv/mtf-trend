@@ -170,14 +170,31 @@ exit: structural SL + structural trailing, no TP
 
 The tool is meant to learn runner nature: dormancy, smooth pre-pump price/OI growth, sustained quote-volume and real trade-count expansion, and whether structural lows survive. Future labels must not be used as entry filters inside the same replay.
 
-For `run-large-runner-discovery`, cluster setup selection is allowed to keep a
-small live-like superset rather than only the first weak broad print in each
-60m cluster. The current model keeps the first broad 5m awakening for audit and
-adds at most one later candidate in the same cluster only if that candidate
-passes the same decision-time 5m prefilter. This is not a future-label filter:
-it must not inspect hourly top-growth labels, exits, PnL, MFE/MAE, or portfolio
-survival. It exists because live would continue evaluating later closed candles
-after an initial broad candidate failed.
+For `run-large-runner-discovery`, setups are anomaly-centric, not hour-centric.
+The scanner walks symbols left-to-right on closed 5m/1m data, finds a broad
+awakening seed, and labels that exact anomaly after the fact:
+
+```text
+runner: high reaches +10%/+20%/+30% from anomaly close within the next 60m
+        before any later 1m candle breaks the anomaly low
+fader: complete 60m path exists, but +10% is not reached before that low break
+```
+
+The label starts after the seed close and is evaluation-only: it must not be
+available to the entry rule, candidate prefilter, trade simulation entry, or
+portfolio logic. With 1m OHLCV the exact intraminute order is unknown, so a
+same-candle target hit and low break is treated conservatively as low-break
+first. Hourly top-growth artifacts remain audit data for missed-runner
+orientation; they are not the source of runner/fader labels.
+
+Cluster setup selection is allowed to keep a small live-like superset rather
+than only the first weak broad print in each 60m cluster. The current model
+keeps the first broad 5m awakening for audit and adds at most one later
+candidate in the same cluster only if that candidate passes the same
+decision-time 5m prefilter. This is not a future-label filter: it must not
+inspect hourly top-growth labels, exits, PnL, MFE/MAE, or portfolio survival. It
+exists because live would continue evaluating later closed candles after an
+initial broad candidate failed.
 
 ---
 

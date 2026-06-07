@@ -3,8 +3,9 @@
 This module is intentionally separate from the current HTF/LTF runner
 discovery. It is a cheaper research sweep over 5m + 1m cached candles:
 
-* 5m candles find broad first-awakening setups and hourly runner labels;
+* 5m candles find broad first-awakening setups from left to right;
 * 1m candles describe intra-seed tape and simulate entry/exit paths;
+* runner/fader labels are anchored to each anomaly, not to calendar hours;
 * future labels are written only as evaluation fields, never as rule inputs.
 """
 
@@ -344,7 +345,7 @@ def run_large_runner_discovery(
                         "research_model": LARGE_RUNNER_DISCOVERY_ID,
                         "data_access_model": "cache_only_5m_1m_no_exchange_fetch",
                         "entry_model": "decision_close_then_next_1m_open_plus_adverse_slippage",
-                        "future_label_model": "evaluation_only_not_used_for_rule_matching",
+                        "future_label_model": "anomaly_seed_close_target_before_seed_low_break_evaluation_only",
                         "candidate_model": "first_broad_plus_first_prefilter_pass_promotion_per_symbol_per_60m_cluster",
                         "top_growth_audit_model": "evaluation_only_first15_full_hour_and_pre60_windows",
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
@@ -629,7 +630,14 @@ def _enrich_setup(
     )
     confirm10 = _confirm_features(frame_1m, seed_open=seed_open, minutes=10, prefix="confirm10")
     confirm15 = _confirm_features(frame_1m, seed_open=seed_open, minutes=15, prefix="confirm15")
-    labels = _future_labels(frame_1m, seed_open=seed_open, config=config)
+    labels = _future_labels(
+        frame_1m,
+        seed_open=seed_open,
+        seed_close=seed_close,
+        anomaly_low=_float(setup.get("low")),
+        anomaly_close=_float(setup.get("close")),
+        config=config,
+    )
     row = {**dict(setup), **seed, **confirm10, **confirm15, **labels}
     row["m1_sustain_mid"] = bool(
         row.get("m1_valid_count", 0) >= 5
@@ -825,37 +833,149 @@ def _simulate_trade(
     }
 
 
-def _future_labels(frame_1m: pd.DataFrame, *, seed_open: int, config: LargeRunnerDiscoveryConfig) -> dict[str, object]:
-    horizon_end = int(seed_open) + int(config.horizon_minutes) * MINUTE_MS
-    path = _window(frame_1m, int(seed_open), horizon_end)
-    if path.empty:
+def _future_labels(
+    frame_1m: pd.DataFrame,
+    *,
+    seed_open: int,
+    seed_close: int,
+    anomaly_low: float,
+    anomaly_close: float,
+    config: LargeRunnerDiscoveryConfig,
+) -> dict[str, object]:
+    horizon_end = int(seed_close) + int(config.horizon_minutes) * MINUTE_MS
+    path = _window(frame_1m, int(seed_close), horizon_end)
+    expected_count = int(config.horizon_minutes)
+    base = {
+        "future_label_model": "anomaly_seed_close_target_before_seed_low_break",
+        "future_label_anchor": "seed_close",
+        "future_label_available_at_entry": False,
+        "future60_expected_1m_candles": expected_count,
+        "future60_valid_count": int(len(path)),
+        "anomaly_low": float(anomaly_low),
+        "anomaly_close": float(anomaly_close),
+    }
+    if path.empty or not np.isfinite(float(anomaly_low)) or not np.isfinite(float(anomaly_close)) or float(anomaly_close) <= 0.0:
         return {
+            **base,
+            "future_label_status": "missing_or_invalid_anomaly_path",
             "future60_high_return_pct": float("nan"),
             "future60_close_return_pct": float("nan"),
             "future60_min_path_pct": float("nan"),
+            "future60_raw_high_return_from_seed_open_pct": float("nan"),
+            "future60_high_before_low_return_pct": float("nan"),
+            "future60_low_break_before_high10": False,
+            "future60_low_break_timestamp_ms": float("nan"),
+            "future60_low_break_offset_min": float("nan"),
             "runner_high10_next60": False,
             "runner_high20_next60": False,
             "runner_high30_next60": False,
             "runner_close10_next60": False,
             "runner_close20_next60": False,
+            "fader_high10_next60": False,
         }
-    first_open = float(path.iloc[0]["open"])
+
+    old_path = _window(frame_1m, int(seed_open), int(seed_open) + int(config.horizon_minutes) * MINUTE_MS)
     future_high = float(path["high"].max())
     future_low = float(path["low"].min())
     future_close = float(path.iloc[-1]["close"])
-    high_ret = _safe_divide(future_high - first_open, first_open)
-    close_ret = _safe_divide(future_close - first_open, first_open)
-    min_ret = _safe_divide(future_low - first_open, first_open)
+    high_ret = _safe_divide(future_high - float(anomaly_close), float(anomaly_close))
+    close_ret = _safe_divide(future_close - float(anomaly_close), float(anomaly_close))
+    min_ret = _safe_divide(future_low - float(anomaly_close), float(anomaly_close))
+    raw_seed_open_high_ret = float("nan")
+    if not old_path.empty:
+        first_open = float(old_path.iloc[0]["open"])
+        raw_seed_open_high_ret = _safe_divide(float(old_path["high"].max()) - first_open, first_open)
+
+    target10 = float(anomaly_close) * 1.10
+    target20 = float(anomaly_close) * 1.20
+    target30 = float(anomaly_close) * 1.30
+    low_break = _first_threshold_event(path, threshold=float(anomaly_low), column="low", direction="le")
+    hit10 = _first_threshold_event(path, threshold=target10, column="high", direction="ge")
+    hit20 = _first_threshold_event(path, threshold=target20, column="high", direction="ge")
+    hit30 = _first_threshold_event(path, threshold=target30, column="high", direction="ge")
+
+    runner10 = _target_before_low_break(hit10, low_break)
+    runner20 = _target_before_low_break(hit20, low_break)
+    runner30 = _target_before_low_break(hit30, low_break)
+    high_before_low = _high_before_event(path, event_ts=low_break.get("timestamp_ms"))
+    high_before_low_ret = _safe_divide(high_before_low - float(anomaly_close), float(anomaly_close))
+    low_break_before_high10 = bool(low_break["hit"] and (not hit10["hit"] or int(low_break["timestamp_ms"]) <= int(hit10["timestamp_ms"])))
+    labels_complete = int(len(path)) >= expected_count
     return {
+        **base,
+        "future_label_status": "ok" if labels_complete else "partial_1m_path",
         "future60_high_return_pct": high_ret,
         "future60_close_return_pct": close_ret,
         "future60_min_path_pct": min_ret,
-        "runner_high10_next60": bool(high_ret >= 0.10),
-        "runner_high20_next60": bool(high_ret >= 0.20),
-        "runner_high30_next60": bool(high_ret >= 0.30),
-        "runner_close10_next60": bool(close_ret >= 0.10),
-        "runner_close20_next60": bool(close_ret >= 0.20),
+        "future60_raw_high_return_from_seed_open_pct": raw_seed_open_high_ret,
+        "future60_high_before_low_return_pct": high_before_low_ret,
+        "future60_low_break_before_high10": low_break_before_high10,
+        "future60_low_break_timestamp_ms": low_break.get("timestamp_ms", float("nan")),
+        "future60_low_break_utc": _timestamp_to_utc(low_break.get("timestamp_ms")),
+        "future60_low_break_offset_min": _event_offset_min(low_break, int(seed_close)),
+        "runner_high10_hit_timestamp_ms": hit10.get("timestamp_ms", float("nan")),
+        "runner_high10_hit_utc": _timestamp_to_utc(hit10.get("timestamp_ms")),
+        "runner_high10_hit_offset_min": _event_offset_min(hit10, int(seed_close)),
+        "runner_high20_hit_timestamp_ms": hit20.get("timestamp_ms", float("nan")),
+        "runner_high20_hit_utc": _timestamp_to_utc(hit20.get("timestamp_ms")),
+        "runner_high20_hit_offset_min": _event_offset_min(hit20, int(seed_close)),
+        "runner_high30_hit_timestamp_ms": hit30.get("timestamp_ms", float("nan")),
+        "runner_high30_hit_utc": _timestamp_to_utc(hit30.get("timestamp_ms")),
+        "runner_high30_hit_offset_min": _event_offset_min(hit30, int(seed_close)),
+        "runner_high10_next60": bool(runner10 and labels_complete),
+        "runner_high20_next60": bool(runner20 and labels_complete),
+        "runner_high30_next60": bool(runner30 and labels_complete),
+        "runner_close10_next60": bool(close_ret >= 0.10 and labels_complete and not low_break["hit"]),
+        "runner_close20_next60": bool(close_ret >= 0.20 and labels_complete and not low_break["hit"]),
+        "fader_high10_next60": bool(labels_complete and not runner10),
     }
+
+
+def _first_threshold_event(path: pd.DataFrame, *, threshold: float, column: str, direction: str) -> dict[str, object]:
+    if path.empty or column not in path.columns or not np.isfinite(float(threshold)):
+        return {"hit": False, "timestamp_ms": float("nan")}
+    values = pd.to_numeric(path[column], errors="coerce")
+    if direction == "ge":
+        mask = values.ge(float(threshold))
+    elif direction == "le":
+        mask = values.le(float(threshold))
+    else:
+        raise ValueError(f"unsupported threshold direction: {direction}")
+    rows = path.loc[mask.fillna(False)]
+    if rows.empty:
+        return {"hit": False, "timestamp_ms": float("nan")}
+    return {"hit": True, "timestamp_ms": int(rows.iloc[0]["timestamp"])}
+
+
+def _target_before_low_break(target_event: Mapping[str, object], low_break_event: Mapping[str, object]) -> bool:
+    if not bool(target_event.get("hit")):
+        return False
+    if not bool(low_break_event.get("hit")):
+        return True
+    # Same 1m candle is ambiguous with OHLCV, so low-break wins the tie.
+    return int(target_event["timestamp_ms"]) < int(low_break_event["timestamp_ms"])
+
+
+def _high_before_event(path: pd.DataFrame, *, event_ts: object) -> float:
+    if path.empty or "high" not in path.columns:
+        return float("nan")
+    try:
+        parsed_event_ts = int(float(event_ts))
+    except (TypeError, ValueError):
+        parsed_event_ts = 0
+    if parsed_event_ts > 0:
+        window = path.loc[pd.to_numeric(path["timestamp"], errors="coerce") < parsed_event_ts]
+    else:
+        window = path
+    if window.empty:
+        return float("nan")
+    return float(pd.to_numeric(window["high"], errors="coerce").max())
+
+
+def _event_offset_min(event: Mapping[str, object], anchor_ms: int) -> float:
+    if not bool(event.get("hit")):
+        return float("nan")
+    return _safe_divide(float(event["timestamp_ms"]) - float(anchor_ms), float(MINUTE_MS))
 
 
 def _minute_window_features(

@@ -1,3 +1,47 @@
+## 2026-06-07 - P526 anomaly-centric large-runner labels
+
+Status: APPLIED locally / UNKNOWN commit. Builds on P524/P525 large-runner
+research mode.
+
+Purpose: remove hour-bucket target ambiguity from `run-large-runner-discovery`
+and make runner/fader labels match the user's intended question: given a
+specific sliding anomaly, did it become a +10% runner before invalidating the
+anomaly low?
+
+Changes:
+
+- Changed future-label metadata to
+  `anomaly_seed_close_target_before_seed_low_break_evaluation_only`.
+- `_future_labels(...)` now starts the outcome path at `seed_close`, uses the
+  anomaly close as the return reference, and records the anomaly low.
+- `runner_high10_next60` / `runner_high20_next60` /
+  `runner_high30_next60` are true only when the target is hit before a later
+  1m low breaks the anomaly low and the 60m label path is complete.
+- Added `fader_high10_next60`, low-break timestamp/offset fields, hit
+  timestamp/offset fields, and a raw seed-open high-return diagnostic for
+  compatibility/audit.
+- Treat target and anomaly-low break inside the same 1m candle as a fader,
+  because OHLCV cannot prove the target happened first.
+- Kept hourly top-growth artifacts as evaluation-only audit; they are not entry
+  or label sources.
+- Added unit tests for target-before-low-break and same-candle ambiguity.
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_large_runner_discovery.py tests\test_cli_runner_discovery_empty_artifacts.py -q
+.venv\Scripts\python.exe -m compileall data\exchanges research_tools cli constants.py main.py launcher.py
+.venv\Scripts\python.exe main.py run-large-runner-discovery --days 1
+```
+
+Risk:
+
+```text
+Low lookahead risk for decisions: labels are evaluation-only and unavailable at
+entry. Medium interpretation risk until the 45d run is repeated, because old
+large-runner category metrics used the previous label contract.
+```
+
 ## 2026-06-04 - P503 fast seed-stage planner pruning
 
 Status: APPLIED locally / UNKNOWN commit. Builds on P502.
