@@ -1,3 +1,89 @@
+## 2026-06-07 - P528 category robustness / strengthened seed readout
+
+Dataset:
+
+```text
+source: .output/results/large_runner_discovery_45d_p526
+base setup labels: 1497 complete anomaly setups, 441 runners, 1056 faders
+base E5 representative universe: 690 deduped trades
+artifacts:
+  p527_category_metrics.csv
+  p527_setup_category_metrics.csv
+  p528_e5_seed_rule_search.csv
+```
+
+Method:
+
+```text
+Report each candidate by setup labels and by representative trade replay.
+For early seed categories, use one E5 row per symbol+entry timestamp and prefer
+strict ignition over mass ignition. Positive trade days mean daily sum of net
+return > 0. Top dependency is measured by symbol contribution to total net.
+```
+
+Strengthened early category:
+
+```text
+rule: qtop<=0.45 & oiE>=0.005 & oiP>=0 & preRet<=0.06 &
+      taker<=.62 & active>=4 & quote<=1.2
+trades: 51
+symbols: 42
+winrate: 31.37%
+avg_net: +2.82%
+positive_days: 14/27
+runner10: 31.37%
+runner20: 15.69%
+top1_symbol: APE/USDT:USDT
+top1_profit_share: 27.79%
+top3_profit_share: 78.46%
+drop_top3: 43 trades, +2.56% avg net, 32.56% winrate
+```
+
+Prior candidate readout:
+
+```text
+Seed A setup labels: 61 setups, 57.38% runner10, 29.51% runner20.
+Seed A E5 dedup trades: 19 trades, 31.58% winrate, +3.13% avg net, 5/12 positive days.
+
+Seed B setup labels: 74 setups, 55.41% runner10, 25.68% runner20.
+Seed B E5 dedup trades: 26 trades, 15.38% winrate, +0.67% avg net, 3/17 positive days.
+
+Confirm15 setup labels: 289 setups, 56.40% runner10, 23.18% runner20.
+Confirm15 E5 proxy trades: 127 trades, 37.80% winrate, +1.64% avg net, 22/39 positive days.
+Confirm15 E10 trades: 90 trades, 22.22% winrate, +0.37% avg net, 11/39 positive days.
+Confirm15 E15 trades: 20 trades, 35.00% winrate, -0.04% avg net, 5/17 positive days.
+```
+
+Veto readout:
+
+```text
+Short-cover rebound setup labels: 416 setups, 19.47% runner10, 6.25% runner20, 2/45 positive label days.
+Short-cover rebound E5 dedup: 200 trades, 25.50% winrate, +0.19% avg net, 15/43 positive trade days, top-tail dependent.
+
+Dump OI-down concentrated setup labels: 19 setups, 5.26% runner10, 42.11% low-break, 0/15 positive label days.
+Dump OI-down concentrated E5 dedup: 8 trades, 25.00% winrate, -1.18% avg net, 2/7 positive trade days.
+```
+
+Interpretation:
+
+```text
+The strongest current live-plausible direction is an early distributed
+OI-supported active-continuation category, not the narrower Seed A/B rules by
+themselves. Confirm15 is a good quality signal but becomes much weaker when
+entry is actually delayed to 10m/15m. Short-cover/rebound and OI-down
+concentrated dump patterns should be explicit vetoes for runner strategy.
+```
+
+Next experiment:
+
+```text
+Add the strengthened early rule and veto buckets as named research-only families
+in large-runner discovery, then rerun/report with separate early entry,
+continuation-management, top-miss, and execution-freshness artifacts. Do not
+promote to live before checking actual fill/RR parity and out-of-sample
+robustness.
+```
+
 ## 2026-06-07 - P526 anomaly-centric large-runner smoke
 
 Input:

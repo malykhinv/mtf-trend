@@ -1,3 +1,64 @@
+## 2026-06-07 - P528 category robustness readout
+
+Current commit: 4416b2a9. Status: analysis only.
+
+P528 deepened the 45d P526 runner/fader readout with trade-level robustness
+metrics: representative trade count, winrate, positive PnL days, top-symbol
+dependency, and drop-top-3 performance. The unit for seed execution is a
+deduplicated E5 representative row per `(symbol, entry_timestamp_ms)`, preferring
+strict ignition over mass ignition when both exist.
+
+Best early seed expansion found so far:
+
+```text
+qtop<=0.45, oiE>=0.5%, oiP>=0, preRet<=6%, taker<=0.62,
+active_1m_count>=4, current_quote_vs_prior_24h<=1.2
+```
+
+This is a wider version of the prior distributed/OI-supported seed thesis. It
+produced `51` E5 representative trades across `42` symbols, `31.37%` winrate,
+`+2.82%` average net, `14/27` positive trade days, `31.37%` runner10 labels and
+`15.69%` runner20 labels. Top dependency is still present but materially better
+than the narrower seed families: top-1 symbol contributed `27.79%` of total net,
+top-3 contributed `78.46%`, and after dropping the top three symbols the sample
+remained positive at `+2.56%` average net over `43` trades.
+
+Prior seed families remain useful as nature evidence, but not enough as live
+rules alone:
+
+```text
+Seed A setup labels: 61 setups, 57.38% runner10, 29.51% runner20.
+Seed A E5 trades: 19 trades, 31.58% winrate, +3.13% avg net, 5/12 positive days.
+Seed B setup labels: 74 setups, 55.41% runner10, 25.68% runner20.
+Seed B E5 trades: 26 trades, 15.38% winrate, +0.67% avg net, 3/17 positive days.
+```
+
+The 15m confirmation family remains the strongest quality label but is not a
+free entry rule. At E5 proxy timing it had `127` trades, `37.80%` winrate,
+`+1.64%` average net, `22/39` positive days, and low top dependency
+(`19.20%` top-1, `44.34%` top-3). But realistic delayed entries weaken sharply:
+E10 had `90` trades, `22.22%` winrate, `+0.37%` average net, `11/39` positive
+days and heavy top dependency; E15 had `20` trades and slightly negative average
+net. Therefore 15m continuation is useful for quality/management, but pure
+waiting-to-15m likely loses too much RR.
+
+Veto evidence strengthened:
+
+```text
+Short-cover rebound: 416 setups, only 19.47% runner10 and 2/45 positive
+runner-label days. E5 trade PnL is slightly positive only through tail/top
+dependence and should not be treated as robust runner edge.
+Dump + OI-down + concentrated flow: 19 setups, 5.26% runner10, 42.11% low-break,
+0/15 positive runner-label days, and negative E5/E10 trade replay.
+```
+
+Interpretation: the best current direction is not "more thresholds", but a
+research-only early category for distributed OI-supported active continuation,
+plus explicit vetoes for short-cover/rebound and OI-down concentrated dump
+patterns. Before live promotion, rerun or extend the backtest with this category
+as a named research family and audit actual execution freshness/RR, top-growth
+misses, and out-of-sample days.
+
 ## 2026-06-07 - P526 anomaly-centric large-runner labels
 
 Current commit: e0ba949a. Status: APPLIED and pushed.
