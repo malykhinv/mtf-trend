@@ -43,7 +43,7 @@ HOUR_MS = 60 * MINUTE_MS
 DAY_MS = 24 * HOUR_MS
 
 LARGE_RUNNER_DISCOVERY_ID = "large_runner_discovery_v1"
-LEVEL_ATTACK_DISCOVERY_ID = "multi_tf_level_attack_v3"
+LEVEL_ATTACK_DISCOVERY_ID = "multi_tf_level_attack_v4"
 LEVEL_ATTACK_TIMEFRAMES = ("h1", "h4", "d1")
 LEVEL_ATTACK_PRIMARY_PREFIX = "h1"
 
@@ -386,6 +386,7 @@ def run_large_runner_discovery(
                         "level_attack_model": LEVEL_ATTACK_DISCOVERY_ID,
                         "level_attack_candidate_source": "cluster_selected_setups_not_only_arm_matches",
                         "level_attack_top_growth_coverage_model": "setup_level_attack_lookback_60m_to_first15m",
+                        "level_attack_speed_model": "exact_htf_bucket_with_closed_history_recall_prefilter",
                         "post_entry_validation_model": "entry_plus_1m_2m_3m_evaluation_only",
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                     }
@@ -1108,6 +1109,75 @@ def _aggregate_5m_to_1h(frame_5m: pd.DataFrame) -> pd.DataFrame:
     return _aggregate_5m_to_level_timeframe(frame_5m, "1h")
 
 
+
+def _level_attack_history(frame: pd.DataFrame, *, seed_bucket: int, lookback_bars: int) -> pd.DataFrame:
+    if frame.empty or "timestamp" not in frame.columns:
+        return pd.DataFrame()
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+    history = frame.loc[timestamps < int(seed_bucket)].tail(int(lookback_bars)).copy()
+    if history.empty:
+        return pd.DataFrame()
+    return history
+
+
+def _should_run_level_attack_scan(
+    history: pd.DataFrame,
+    match: Mapping[str, object],
+    *,
+    prefix: str,
+    scan_config: HourlyLevelScanConfig,
+) -> bool:
+    """Cheap exact-HTF recall prefilter before expensive touch clustering.
+
+    Uses only closed HTF history before the setup bucket. It never changes the
+    live/research contract: H1 is still refreshed on each closed H1 candle, H4 on
+    each closed H4 candle, D1 on each closed D1 candle. The filter only avoids a
+    full level scan when the closed history has no high shelf anywhere near the
+    current attack price.
+    """
+    if history.empty or "high" not in history.columns:
+        return False
+    seed_close = _float(match.get("close"))
+    seed_high = _float(match.get("high"))
+    seed_open_price = _float(match.get("open"))
+    reference_price = seed_open_price if np.isfinite(seed_open_price) and seed_open_price > 0.0 else seed_close
+    if not np.isfinite(seed_close) or seed_close <= 0.0 or not np.isfinite(reference_price) or reference_price <= 0.0:
+        return False
+
+    highs = pd.to_numeric(history["high"], errors="coerce").dropna()
+    lows = pd.to_numeric(history.get("low", pd.Series(dtype=float)), errors="coerce").dropna()
+    if highs.empty:
+        return False
+
+    tolerance = max(float(scan_config.touch_tolerance_pct), 0.001)
+    # Recall-first caps. They are wider than the loose candidate band, so this
+    # should not remove genuine level-attack candidates; it only skips setups
+    # with no historical high shelf in the reachable area above price.
+    max_distance = {"h1": 0.22, "h4": 0.30, "d1": 0.45}.get(prefix, 0.25)
+    max_price = max(seed_close, reference_price) * (1.0 + max_distance)
+    min_price = min(seed_close, reference_price) * (1.0 - tolerance * 2.0)
+    nearby_highs = highs.loc[(highs >= min_price) & (highs <= max_price)]
+    if nearby_highs.empty:
+        return False
+
+    # If the current seed already poked a prior high shelf, always scan: this is
+    # exactly the "entry in level crossing" case we care about.
+    if np.isfinite(seed_high) and bool((nearby_highs <= seed_high * (1.0 + tolerance)).any()):
+        return True
+
+    # Otherwise require at least a tiny cluster/repeated shelf near the attack
+    # zone or enough pullback room to evaluate progress-to-level.
+    rounded = (nearby_highs / max(seed_close, 1e-12) / max(tolerance * 2.0, 1e-9)).round().astype("int64")
+    if int(rounded.value_counts().max()) >= 2:
+        return True
+    if not lows.empty:
+        recent_low = float(lows.tail(min(len(lows), max(12, int(scan_config.recent_move_lookback_bars)))).min())
+        if recent_low > 0.0:
+            move_from_low = _safe_divide(seed_close - recent_low, seed_close)
+            if np.isfinite(move_from_low) and move_from_low >= 0.025:
+                return True
+    return False
+
 def _build_level_attack_contexts(frame_5m: pd.DataFrame, config: LargeRunnerDiscoveryConfig) -> dict[str, dict[str, object]]:
     return {
         "h1": {
@@ -1175,27 +1245,34 @@ def _level_attack_features(
     symbol = str(match.get("symbol", ""))
     seed_open = int(_float(match.get("seed_open_ms")))
     seed_bucket = seed_open // int(timeframe_ms) * int(timeframe_ms)
+    seed_open_price = _float(match.get("open"))
+    seed_high = _float(match.get("high"))
+    seed_close = _float(match.get("close"))
+    entry_price = _float(match.get("entry_price"))
+    if not np.isfinite(seed_close) or seed_close <= 0.0:
+        base[f"{prefix}_level_attack_status"] = f"missing_{prefix}_seed_close"
+        return base
+
+    history = _level_attack_history(frame, seed_bucket=seed_bucket, lookback_bars=int(scan_config.lookback_bars))
     if seed_bucket not in cache:
-        history = frame.loc[pd.to_numeric(frame["timestamp"], errors="coerce") < seed_bucket].tail(int(scan_config.lookback_bars)).copy()
         if history.empty:
             cache[seed_bucket] = ([], "unknown", f"empty_closed_{prefix}_history")
-        else:
+        elif _should_run_level_attack_scan(history, match, prefix=prefix, scan_config=scan_config):
             cache[seed_bucket] = find_hourly_overhead_levels(
                 history,
                 symbol=symbol,
                 config=scan_config,
                 chart_path="",
             )
+        else:
+            base[f"{prefix}_level_attack_status"] = f"prefilter_no_near_{prefix}_high_cluster"
+            return base
     levels, trend, reason = cache[seed_bucket]
     if not levels:
         base[f"{prefix}_level_attack_status"] = f"no_level:{reason}"
         base[f"{prefix}_level_trend_state"] = trend
         return base
 
-    seed_open_price = _float(match.get("open"))
-    seed_high = _float(match.get("high"))
-    seed_close = _float(match.get("close"))
-    entry_price = _float(match.get("entry_price"))
     if not np.isfinite(entry_price) or entry_price <= 0.0:
         entry_price = seed_close
     initial_risk_pct = _float(match.get("initial_risk_pct"))
