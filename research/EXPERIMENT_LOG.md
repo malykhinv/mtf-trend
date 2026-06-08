@@ -1,3 +1,30 @@
+## 2026-06-08 - P530 planned level-attack experiment
+
+Input:
+
+```text
+patch: P530 proposed
+scope: large-runner discovery artifacts
+```
+
+Question:
+
+```text
+Can old tested H1 levels act as stop-cluster fuel when price is already near the level, current flow exceeds prior attempts, and entry happens before or during the first level crossing?
+```
+
+Planned readout:
+
+```text
+- all candidates in large_runner_level_attack_candidates.csv
+- advance_before_level versus crossing entries
+- session split: Asia, Europe, US, overlaps
+- post-entry 1m/2m/3m anti-fader gates
+- top-removal survival by family
+```
+
+Status: not run yet.
+
 ## 2026-06-07 - P528 category robustness / strengthened seed readout
 
 Dataset:

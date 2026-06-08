@@ -1,3 +1,29 @@
+## 2026-06-08 - P530 H1 level-attack observability for large-runner discovery
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Purpose: add fast research artifacts for the user's level-attack hypothesis: price is close to an old tested H1 liquidity level, current flow is stronger than prior attacks, and the entry can be studied both before the nearest level is crossed and during the crossing.
+
+Changes:
+
+- Reuses the existing `research_tools.hourly_levels.find_hourly_overhead_levels` logic instead of inventing a second level finder.
+- Builds a closed-H1 frame from already-loaded 5m cache per symbol and caches level scans by `(symbol, closed hour)`, so discovery does not rescan levels per trade row.
+- Adds H1 level-attack features to rule matches/trades: nearest level, distance in pct/R, progress from last pullback to level, 70% attack-zone flag, seed high/close crossing flags, entry mode (`advance_before_level`, `seed_high_crossing`, `seed_close_crossing`, `entry_in_level_band`, `after_level_break`), current quote/trades versus prior level attacks, and 1R/2R/3R cascade counts.
+- Adds `large_runner_level_attack_candidates.csv` for direct review of advance/crossing candidates.
+- Carries forward P529 observability: post-entry 1m/2m/3m anti-fader labels, session labels, `net_r`, and `large_runner_stability_report.csv`.
+
+Risk:
+
+```text
+Low lookahead risk: levels are computed only from closed H1 candles before the seed hour; post-entry labels are explicitly evaluation-only. Medium interpretation risk: this patch starts with H1 levels only. 4h/1d should be added after this smoke proves the H1 path is fast and useful.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools cli constants.py main.py launcher.py
+```
+
 ## 2026-06-07 - P526 anomaly-centric large-runner labels
 
 Status: APPLIED and pushed at e0ba949a. Builds on P524/P525 large-runner

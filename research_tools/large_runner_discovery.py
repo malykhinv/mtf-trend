@@ -30,13 +30,20 @@ from research_tools.large_runner_nature_rules import (
     evaluate_large_runner_nature,
     v4_quality_mask,
 )
+from research_tools.hourly_levels import (
+    HourlyLevelMetric,
+    HourlyLevelScanConfig,
+    find_hourly_overhead_levels,
+)
 
 
 MINUTE_MS = 60_000
 FIVE_MINUTE_MS = 5 * MINUTE_MS
 HOUR_MS = 60 * MINUTE_MS
+DAY_MS = 24 * HOUR_MS
 
 LARGE_RUNNER_DISCOVERY_ID = "large_runner_discovery_v1"
+LEVEL_ATTACK_DISCOVERY_ID = "h1_level_attack_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +217,9 @@ def run_large_runner_discovery(
                 "1m_prefilter_skipped_setups": int(len(first_setups) - len(enrichable_setups)),
             }
         )
+        level_frame_1h = _aggregate_5m_to_1h(prepared_5m)
+        level_cache: dict[int, tuple[list[HourlyLevelMetric], str, str]] = {}
+        level_scan_config = _level_attack_scan_config(config)
         match_rows: list[dict[str, object]] = []
         trade_rows: list[dict[str, object]] = []
         for setup in enrichable_setups:
@@ -218,7 +228,16 @@ def run_large_runner_discovery(
             setup_rows.append(enriched)
             for arm_id in match_large_runner_arms(enriched):
                 arm = next(arm for arm in LARGE_RUNNER_ARMS if arm.arm_id == arm_id)
-                match = _build_arm_match(enriched, arm=arm, frame_1m=frame_1m, config=config)
+                match = _build_arm_match(
+                    enriched,
+                    arm=arm,
+                    frame_1m=frame_1m,
+                    frame_5m=prepared_5m,
+                    level_frame_1h=level_frame_1h,
+                    level_cache=level_cache,
+                    level_scan_config=level_scan_config,
+                    config=config,
+                )
                 match_rows.append(match)
                 for exit_policy in LARGE_RUNNER_EXIT_POLICIES:
                     trade_rows.append(_simulate_trade(match, frame_1m=frame_1m, exit_policy=exit_policy, config=config))
@@ -317,6 +336,8 @@ def run_large_runner_discovery(
         ("large_runner_skip_reasons.csv", _skip_reasons(trade_frame)),
         ("large_runner_top_dependency.csv", _top_dependency(trade_frame)),
         ("large_runner_portfolio_top_dependency.csv", _top_dependency(portfolio_frame)),
+        ("large_runner_stability_report.csv", _stability_report(portfolio_frame, config=config)),
+        ("large_runner_level_attack_candidates.csv", _level_attack_candidates(match_frame)),
         ("large_runner_nature_summary.csv", nature_summary_frame),
         ("large_runner_nature_by_week.csv", nature_by_week_frame),
         ("large_runner_nature_by_symbol.csv", nature_by_symbol_frame),
@@ -348,6 +369,8 @@ def run_large_runner_discovery(
                         "future_label_model": "anomaly_seed_close_target_before_seed_low_break_evaluation_only",
                         "candidate_model": "first_broad_plus_first_prefilter_pass_promotion_per_symbol_per_60m_cluster",
                         "top_growth_audit_model": "evaluation_only_first15_full_hour_and_pre60_windows",
+                        "level_attack_model": LEVEL_ATTACK_DISCOVERY_ID,
+                        "post_entry_validation_model": "entry_plus_1m_2m_3m_evaluation_only",
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                     }
                 ]
@@ -668,6 +691,10 @@ def _build_arm_match(
     *,
     arm: LargeRunnerArm,
     frame_1m: pd.DataFrame,
+    frame_5m: pd.DataFrame,
+    level_frame_1h: pd.DataFrame,
+    level_cache: dict[int, tuple[list[HourlyLevelMetric], str, str]],
+    level_scan_config: HourlyLevelScanConfig,
     config: LargeRunnerDiscoveryConfig,
 ) -> dict[str, object]:
     decision_ms = int(setup["seed_open_ms"]) + int(arm.decision_offset_minutes) * MINUTE_MS
@@ -712,7 +739,19 @@ def _build_arm_match(
         "large_runner_policy_id": LARGE_RUNNER_DISCOVERY_ID,
         "future_label_available_at_entry": False,
     }
+    result.update(_session_features(decision_ms))
+    result.update(
+        _level_attack_features(
+            result,
+            frame_5m=frame_5m,
+            level_frame_1h=level_frame_1h,
+            level_cache=level_cache,
+            level_scan_config=level_scan_config,
+        )
+    )
     result.update(evaluate_large_runner_nature(result).as_features())
+    # Evaluation-only: added after arm/nature-independent entry construction.
+    result.update(_post_entry_validation_features(result, frame_1m=frame_1m))
     return result
 
 
@@ -827,10 +866,399 @@ def _simulate_trade(
         "gross_return": float(gross_return),
         "net_return": float(net_return),
         "gross_r": float(_safe_divide(gross_return, risk_pct)),
+        "net_r": float(_safe_divide(net_return, risk_pct)),
         "initial_risk_pct": float(risk_pct),
         "win": bool(net_return > 0.0),
         "future_label_available_at_entry": False,
     }
+
+
+def _post_entry_validation_features(
+    match: Mapping[str, object],
+    *,
+    frame_1m: pd.DataFrame,
+) -> dict[str, object]:
+    """Evaluation-only 1m/2m/3m anti-fader labels."""
+    horizons = (1, 2, 3)
+    result: dict[str, object] = {
+        "post_entry_validation_model": "entry_plus_1m_2m_3m_evaluation_only",
+        "post_entry_validation_available_at_entry": False,
+    }
+    for minutes in horizons:
+        result.update(
+            {
+                f"entry_plus_{minutes}m_close_R": float("nan"),
+                f"entry_plus_{minutes}m_high_R": float("nan"),
+                f"entry_plus_{minutes}m_low_R": float("nan"),
+                f"new_HH_within_{minutes}m": False,
+                f"quote_retention_{minutes}m": float("nan"),
+                f"trade_retention_{minutes}m": float("nan"),
+                f"taker_buy_retention_{minutes}m": float("nan"),
+                f"oi_change_{minutes}m": float("nan"),
+            }
+        )
+    result.update(
+        {
+            "hit_0p25R_before_neg_0p35R_within_3m": False,
+            "hit_0p50R_before_neg_0p50R_within_3m": False,
+            "mfe_before_mae": False,
+            "post_entry_validation_status": "missing_or_invalid_entry",
+        }
+    )
+    if frame_1m.empty:
+        result["post_entry_validation_status"] = "missing_1m_frame"
+        return result
+
+    entry_ms = int(_float(match.get("entry_timestamp_ms")))
+    entry_price = _float(match.get("entry_price"))
+    initial_stop = _float(match.get("initial_stop"))
+    risk = entry_price - initial_stop
+    if not np.isfinite(entry_price) or not np.isfinite(risk) or risk <= 0.0:
+        return result
+
+    seed_open = int(_float(match.get("seed_open_ms")))
+    pre_entry = _window(frame_1m, seed_open, entry_ms)
+    previous_high = _float(match.get("high")) if pre_entry.empty else float(pd.to_numeric(pre_entry["high"], errors="coerce").max())
+    seed_quote = _float(match.get("m1_quote_sum"))
+    seed_trades = _float(match.get("m1_trades_sum"))
+    seed_taker_share = _float(match.get("m1_taker_buy_quote_share"))
+    seed_taker = seed_quote * seed_taker_share if np.isfinite(seed_quote) and np.isfinite(seed_taker_share) else float("nan")
+    entry_row = _row_at_timestamp(frame_1m, entry_ms)
+    entry_oi = _float(entry_row.get("open_interest")) if entry_row is not None and "open_interest" in entry_row.index else float("nan")
+    full_path = _window(frame_1m, entry_ms, entry_ms + 3 * MINUTE_MS)
+    if full_path.empty:
+        result["post_entry_validation_status"] = "missing_post_entry_1m_path"
+        return result
+
+    for minutes in horizons:
+        path = _window(frame_1m, entry_ms, entry_ms + int(minutes) * MINUTE_MS)
+        if path.empty:
+            continue
+        high = float(pd.to_numeric(path["high"], errors="coerce").max())
+        low = float(pd.to_numeric(path["low"], errors="coerce").min())
+        close = float(path.iloc[-1]["close"])
+        result[f"entry_plus_{minutes}m_close_R"] = float(_safe_divide(close - entry_price, risk))
+        result[f"entry_plus_{minutes}m_high_R"] = float(_safe_divide(high - entry_price, risk))
+        result[f"entry_plus_{minutes}m_low_R"] = float(_safe_divide(low - entry_price, risk))
+        result[f"new_HH_within_{minutes}m"] = bool(np.isfinite(previous_high) and high > previous_high)
+        quote_sum = float(_series(path, "quote_volume").sum())
+        trade_sum = float(_series(path, "number_of_trades").sum())
+        taker_sum = float(_series(path, "taker_buy_quote_volume").sum())
+        result[f"quote_retention_{minutes}m"] = float(_safe_divide(quote_sum, seed_quote))
+        result[f"trade_retention_{minutes}m"] = float(_safe_divide(trade_sum, seed_trades))
+        result[f"taker_buy_retention_{minutes}m"] = float(_safe_divide(taker_sum, seed_taker))
+        if "open_interest" in path.columns and np.isfinite(entry_oi):
+            end_oi = _float(path.iloc[-1].get("open_interest"))
+            result[f"oi_change_{minutes}m"] = float(_safe_divide(end_oi - entry_oi, entry_oi))
+
+    result["hit_0p25R_before_neg_0p35R_within_3m"] = _hit_positive_before_negative_r(
+        full_path,
+        entry_price=entry_price,
+        risk=risk,
+        positive_r=0.25,
+        negative_r=-0.35,
+    )
+    result["hit_0p50R_before_neg_0p50R_within_3m"] = _hit_positive_before_negative_r(
+        full_path,
+        entry_price=entry_price,
+        risk=risk,
+        positive_r=0.50,
+        negative_r=-0.50,
+    )
+    result["mfe_before_mae"] = _mfe_before_mae(full_path, entry_price=entry_price)
+    result["post_entry_validation_status"] = "ok" if len(full_path) >= 3 else "partial_1m_path"
+    return result
+
+
+def _hit_positive_before_negative_r(
+    path: pd.DataFrame,
+    *,
+    entry_price: float,
+    risk: float,
+    positive_r: float,
+    negative_r: float,
+) -> bool:
+    if path.empty or not np.isfinite(entry_price) or not np.isfinite(risk) or risk <= 0.0:
+        return False
+    positive_price = float(entry_price) + float(risk) * float(positive_r)
+    negative_price = float(entry_price) + float(risk) * float(negative_r)
+    for _, row in path.sort_values("timestamp").iterrows():
+        # Same-candle ambiguity is conservative: adverse move wins the tie.
+        if _float(row.get("low")) <= negative_price:
+            return False
+        if _float(row.get("high")) >= positive_price:
+            return True
+    return False
+
+
+def _mfe_before_mae(path: pd.DataFrame, *, entry_price: float) -> bool:
+    if path.empty or not np.isfinite(entry_price):
+        return False
+    for _, row in path.sort_values("timestamp").iterrows():
+        high = _float(row.get("high"))
+        low = _float(row.get("low"))
+        high_move = high - float(entry_price) if np.isfinite(high) else 0.0
+        low_move = float(entry_price) - low if np.isfinite(low) else 0.0
+        if low_move > 0.0 and low_move >= high_move:
+            return False
+        if high_move > 0.0 and high_move > low_move:
+            return True
+    return False
+
+
+def _level_attack_scan_config(config: LargeRunnerDiscoveryConfig) -> HourlyLevelScanConfig:
+    return HourlyLevelScanConfig(
+        cache_dir=config.cache_dir,
+        output_dir=config.output_dir / "_level_attack_internal",
+        source_timeframe=Timeframe.M5,
+        days=min(max(int(config.days), 30), 180),
+        lookback_bars=720,
+        chart_bars=0,
+        min_touches=2,
+        min_touch_spacing_hours=6,
+        min_target_room_pct=0.0,
+        max_overhead_distance_pct=0.60,
+        reject_downtrend_symbols=False,
+        reject_downtrend_levels=False,
+        reject_pierced_levels=False,
+        save_empty_charts=False,
+        fast_source_trim=True,
+    )
+
+
+def _aggregate_5m_to_1h(frame_5m: pd.DataFrame) -> pd.DataFrame:
+    if frame_5m.empty or "timestamp" not in frame_5m.columns:
+        return pd.DataFrame()
+    prepared = frame_5m.copy()
+    ts = pd.to_datetime(pd.to_numeric(prepared["timestamp"], errors="coerce"), unit="ms", utc=True)
+    prepared.index = ts
+    aggregation: dict[str, str] = {
+        "timestamp": "first",
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+    }
+    for column in ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume", "open_interest"):
+        if column in prepared.columns:
+            aggregation[column] = "sum" if column != "open_interest" else "last"
+    hourly = prepared.resample("1h", label="left", closed="left").agg(aggregation)
+    hourly = hourly.dropna(subset=["open", "high", "low", "close"]).copy()
+    if hourly.empty:
+        return pd.DataFrame()
+    hourly["timestamp"] = (hourly.index.view("int64") // 1_000_000).astype("int64")
+    return hourly.reset_index(drop=True)
+
+
+def _level_attack_features(
+    match: Mapping[str, object],
+    *,
+    frame_5m: pd.DataFrame,
+    level_frame_1h: pd.DataFrame,
+    level_cache: dict[int, tuple[list[HourlyLevelMetric], str, str]],
+    level_scan_config: HourlyLevelScanConfig,
+) -> dict[str, object]:
+    base = _empty_level_attack_features("missing_or_invalid")
+    if level_frame_1h.empty:
+        base["h1_level_attack_status"] = "missing_1h_level_frame"
+        return base
+    symbol = str(match.get("symbol", ""))
+    seed_open = int(_float(match.get("seed_open_ms")))
+    seed_hour = seed_open // HOUR_MS * HOUR_MS
+    if seed_hour not in level_cache:
+        history = level_frame_1h.loc[pd.to_numeric(level_frame_1h["timestamp"], errors="coerce") < seed_hour].tail(720).copy()
+        if history.empty:
+            level_cache[seed_hour] = ([], "unknown", "empty_closed_h1_history")
+        else:
+            level_cache[seed_hour] = find_hourly_overhead_levels(
+                history,
+                symbol=symbol,
+                config=level_scan_config,
+                chart_path="",
+            )
+    levels, trend, reason = level_cache[seed_hour]
+    if not levels:
+        base["h1_level_attack_status"] = f"no_level:{reason}"
+        base["h1_level_trend_state"] = trend
+        return base
+
+    seed_open_price = _float(match.get("open"))
+    seed_high = _float(match.get("high"))
+    seed_close = _float(match.get("close"))
+    entry_price = _float(match.get("entry_price"))
+    initial_risk_pct = _float(match.get("initial_risk_pct"))
+    risk_abs = entry_price * initial_risk_pct if np.isfinite(entry_price) and np.isfinite(initial_risk_pct) else float("nan")
+    reference_price = seed_open_price if np.isfinite(seed_open_price) and seed_open_price > 0 else seed_close
+    above_levels = [level for level in levels if level.level_price > reference_price]
+    if not above_levels:
+        base["h1_level_attack_status"] = "no_level_above_seed_open"
+        base["h1_level_trend_state"] = trend
+        return base
+    nearest = min(above_levels, key=lambda level: level.level_price - reference_price)
+    level_price = float(nearest.level_price)
+    tolerance = float(level_scan_config.touch_tolerance_pct)
+    history_1h = level_frame_1h.loc[pd.to_numeric(level_frame_1h["timestamp"], errors="coerce") < seed_hour].copy()
+    after_touch = history_1h.loc[pd.to_numeric(history_1h["timestamp"], errors="coerce") >= int(nearest.last_touch_timestamp_ms)].copy()
+    pullback_low = float(pd.to_numeric(after_touch["low"], errors="coerce").min()) if not after_touch.empty else float("nan")
+    pullback_size = _safe_divide(level_price - pullback_low, level_price)
+    progress = _safe_divide(seed_close - pullback_low, level_price - pullback_low)
+
+    crossed_high = bool(np.isfinite(seed_high) and seed_high >= level_price)
+    crossed_close = bool(np.isfinite(seed_close) and seed_close >= level_price)
+    entry_mode = _level_entry_mode(
+        entry_price=entry_price,
+        level_price=level_price,
+        seed_high_crossed=crossed_high,
+        seed_close_crossed=crossed_close,
+        tolerance_pct=tolerance,
+    )
+    prior_spike_count, quote_vs_prior, trades_vs_prior = _level_attack_flow_vs_prior(
+        frame_5m,
+        seed_open_ms=seed_open,
+        level_price=level_price,
+        tolerance_pct=tolerance,
+        current_quote=_float(match.get("early_quote_sum")),
+        current_trades=_float(match.get("early_trades_sum")),
+    )
+    level_dist_r = _safe_divide(level_price - entry_price, risk_abs)
+    result = {
+        **base,
+        "h1_level_attack_status": "ok",
+        "h1_level_trend_state": trend,
+        "h1_nearest_level_price": level_price,
+        "h1_nearest_level_context": nearest.context,
+        "h1_nearest_level_strength_score": float(nearest.strength_score),
+        "h1_nearest_level_valid_touch_count": int(nearest.valid_touch_count),
+        "h1_nearest_level_last_touch_timestamp_ms": int(nearest.last_touch_timestamp_ms),
+        "h1_nearest_level_last_touch_utc": nearest.last_touch_timestamp_utc,
+        "h1_nearest_level_distance_pct_from_seed_close": _safe_divide(level_price - seed_close, seed_close),
+        "h1_nearest_level_distance_R_from_entry": level_dist_r,
+        "h1_pullback_low_after_last_touch": pullback_low,
+        "h1_pullback_from_level_pct": pullback_size,
+        "h1_progress_to_level_from_pullback": progress,
+        "h1_is_in_attack_zone_70": bool(np.isfinite(progress) and progress >= 0.70 and seed_close <= level_price * (1.0 + tolerance)),
+        "h1_level_crossed_by_seed_high": crossed_high,
+        "h1_level_crossed_by_seed_close": crossed_close,
+        "h1_seed_close_above_level": crossed_close,
+        "h1_entry_mode_vs_nearest_level": entry_mode,
+        "h1_entry_before_level_break": bool(entry_mode == "advance_before_level"),
+        "h1_entry_in_level_crossing": bool(entry_mode in {"seed_high_crossing", "seed_close_crossing", "entry_in_level_band"}),
+        "h1_attack_prior_spike_count": int(prior_spike_count),
+        "h1_attack_quote_vs_prior_spike_max": quote_vs_prior,
+        "h1_attack_trades_vs_prior_spike_max": trades_vs_prior,
+    }
+    for r_value in (1, 2, 3):
+        result[f"h1_levels_above_within_{r_value}R"] = _levels_above_within_r(levels, entry_price=entry_price, risk_abs=risk_abs, r_value=float(r_value))
+    result["h1_remaining_overhead_level_count_3R"] = result["h1_levels_above_within_3R"]
+    result["h1_level_cascade_score_3R"] = _level_cascade_score(levels, entry_price=entry_price, risk_abs=risk_abs, max_r=3.0)
+    return result
+
+
+def _empty_level_attack_features(status: str) -> dict[str, object]:
+    result: dict[str, object] = {
+        "h1_level_attack_model": LEVEL_ATTACK_DISCOVERY_ID,
+        "h1_level_attack_available_at_entry": False,
+        "h1_level_attack_status": status,
+        "h1_level_trend_state": "unknown",
+        "h1_nearest_level_price": float("nan"),
+        "h1_nearest_level_context": "",
+        "h1_nearest_level_strength_score": float("nan"),
+        "h1_nearest_level_valid_touch_count": 0,
+        "h1_nearest_level_last_touch_timestamp_ms": float("nan"),
+        "h1_nearest_level_last_touch_utc": "",
+        "h1_nearest_level_distance_pct_from_seed_close": float("nan"),
+        "h1_nearest_level_distance_R_from_entry": float("nan"),
+        "h1_pullback_low_after_last_touch": float("nan"),
+        "h1_pullback_from_level_pct": float("nan"),
+        "h1_progress_to_level_from_pullback": float("nan"),
+        "h1_is_in_attack_zone_70": False,
+        "h1_level_crossed_by_seed_high": False,
+        "h1_level_crossed_by_seed_close": False,
+        "h1_seed_close_above_level": False,
+        "h1_entry_mode_vs_nearest_level": "no_level",
+        "h1_entry_before_level_break": False,
+        "h1_entry_in_level_crossing": False,
+        "h1_attack_prior_spike_count": 0,
+        "h1_attack_quote_vs_prior_spike_max": float("nan"),
+        "h1_attack_trades_vs_prior_spike_max": float("nan"),
+        "h1_remaining_overhead_level_count_3R": 0,
+        "h1_level_cascade_score_3R": float("nan"),
+    }
+    for r_value in (1, 2, 3):
+        result[f"h1_levels_above_within_{r_value}R"] = 0
+    return result
+
+
+def _level_entry_mode(
+    *,
+    entry_price: float,
+    level_price: float,
+    seed_high_crossed: bool,
+    seed_close_crossed: bool,
+    tolerance_pct: float,
+) -> str:
+    if not np.isfinite(entry_price) or not np.isfinite(level_price) or level_price <= 0.0:
+        return "unknown"
+    band = level_price * float(tolerance_pct)
+    if entry_price >= level_price + band:
+        return "after_level_break"
+    if abs(entry_price - level_price) <= band:
+        return "entry_in_level_band"
+    if seed_close_crossed:
+        return "seed_close_crossing"
+    if seed_high_crossed:
+        return "seed_high_crossing"
+    return "advance_before_level"
+
+
+def _level_attack_flow_vs_prior(
+    frame_5m: pd.DataFrame,
+    *,
+    seed_open_ms: int,
+    level_price: float,
+    tolerance_pct: float,
+    current_quote: float,
+    current_trades: float,
+) -> tuple[int, float, float]:
+    if frame_5m.empty or level_price <= 0.0:
+        return 0, float("nan"), float("nan")
+    timestamps = pd.to_numeric(frame_5m["timestamp"], errors="coerce")
+    history = frame_5m.loc[timestamps < int(seed_open_ms)].copy()
+    if history.empty:
+        return 0, float("nan"), float("nan")
+    band_low = level_price * (1.0 - max(float(tolerance_pct), 0.0))
+    band_high = level_price * (1.0 + max(float(tolerance_pct), 0.0))
+    highs = pd.to_numeric(history["high"], errors="coerce")
+    closes = pd.to_numeric(history["close"], errors="coerce")
+    attempts = history.loc[highs.between(band_low, band_high, inclusive="both") & closes.lt(band_high)].copy()
+    if attempts.empty:
+        return 0, float("nan"), float("nan")
+    quote = pd.to_numeric(attempts.get("quote_volume", pd.Series(index=attempts.index)), errors="coerce")
+    trades = pd.to_numeric(attempts.get("number_of_trades", pd.Series(index=attempts.index)), errors="coerce")
+    return int(len(attempts)), _safe_divide(current_quote, float(quote.max())), _safe_divide(current_trades, float(trades.max()))
+
+
+def _levels_above_within_r(levels: list[HourlyLevelMetric], *, entry_price: float, risk_abs: float, r_value: float) -> int:
+    if not np.isfinite(entry_price) or not np.isfinite(risk_abs) or risk_abs <= 0.0:
+        return 0
+    count = 0
+    for level in levels:
+        distance_r = _safe_divide(float(level.level_price) - entry_price, risk_abs)
+        if np.isfinite(distance_r) and 0.0 < distance_r <= float(r_value):
+            count += 1
+    return count
+
+
+def _level_cascade_score(levels: list[HourlyLevelMetric], *, entry_price: float, risk_abs: float, max_r: float) -> float:
+    if not np.isfinite(entry_price) or not np.isfinite(risk_abs) or risk_abs <= 0.0:
+        return float("nan")
+    score = 0.0
+    for level in levels:
+        distance_r = _safe_divide(float(level.level_price) - entry_price, risk_abs)
+        if np.isfinite(distance_r) and 0.0 < distance_r <= float(max_r):
+            score += float(level.strength_score) / (1.0 + distance_r)
+    return float(score)
+
 
 
 def _future_labels(
@@ -1975,6 +2403,157 @@ def _top_dependency(trades: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def _level_attack_candidates(matches: pd.DataFrame) -> pd.DataFrame:
+    if matches.empty:
+        return pd.DataFrame()
+    if "h1_level_attack_status" not in matches.columns:
+        return pd.DataFrame()
+    frame = matches.copy()
+    status = frame["h1_level_attack_status"].astype(str)
+    mask = status.eq("ok") & (
+        _bool_series(frame, "h1_is_in_attack_zone_70")
+        | _bool_series(frame, "h1_entry_before_level_break")
+        | _bool_series(frame, "h1_entry_in_level_crossing")
+        | _bool_series(frame, "h1_level_crossed_by_seed_high")
+        | _bool_series(frame, "h1_level_crossed_by_seed_close")
+    )
+    columns = [
+        "symbol",
+        "arm_id",
+        "entry_timestamp_utc",
+        "h1_level_attack_status",
+        "h1_entry_mode_vs_nearest_level",
+        "h1_is_in_attack_zone_70",
+        "h1_progress_to_level_from_pullback",
+        "h1_nearest_level_distance_R_from_entry",
+        "h1_nearest_level_distance_pct_from_seed_close",
+        "h1_level_crossed_by_seed_high",
+        "h1_level_crossed_by_seed_close",
+        "h1_attack_quote_vs_prior_spike_max",
+        "h1_attack_trades_vs_prior_spike_max",
+        "h1_remaining_overhead_level_count_3R",
+        "h1_level_cascade_score_3R",
+        "session_primary",
+        "hour_utc",
+    ]
+    return frame.loc[mask, [column for column in columns if column in frame.columns]].copy()
+
+
+def _stability_report(portfolio: pd.DataFrame, *, config: LargeRunnerDiscoveryConfig) -> pd.DataFrame:
+    if portfolio.empty or "status" not in portfolio.columns:
+        return pd.DataFrame()
+    closed = portfolio.loc[portfolio["status"].astype(str).eq("closed")].copy()
+    if closed.empty:
+        return pd.DataFrame()
+    if "net_r" not in closed.columns:
+        net = pd.to_numeric(closed.get("net_return", pd.Series(index=closed.index)), errors="coerce")
+        risk = pd.to_numeric(closed.get("initial_risk_pct", pd.Series(index=closed.index)), errors="coerce")
+        closed["net_r"] = net / risk.replace(0.0, np.nan)
+    frames: list[tuple[str, pd.DataFrame]] = [("portfolio_all", closed)]
+    exploded = _explode_multi_value(closed, "large_runner_nature_trade_rule_ids", "category_id")
+    if not exploded.empty:
+        for category_id, group in exploded.groupby("category_id", dropna=False):
+            frames.append((f"trade_rule:{category_id}", group.copy()))
+    rows: list[dict[str, object]] = []
+    for family_id, frame in frames:
+        rows.append({"family_id": family_id, "scope": "portfolio", **_stability_metrics(frame, days=config.days)})
+    return pd.DataFrame(rows)
+
+
+def _stability_metrics(frame: pd.DataFrame, *, days: int) -> dict[str, object]:
+    if frame.empty:
+        return {"closed_trades": 0}
+    work = frame.copy()
+    work["net_r"] = pd.to_numeric(work.get("net_r", pd.Series(index=work.index)), errors="coerce")
+    work = work.dropna(subset=["net_r"]).copy()
+    if work.empty:
+        return {"closed_trades": 0}
+    result: dict[str, object] = {
+        "closed_trades": int(len(work)),
+        "trades_per_day": _safe_divide(float(len(work)), float(days)),
+        "symbols": int(work["symbol"].nunique()) if "symbol" in work.columns else 0,
+        "win_rate": float(work["net_r"].gt(0.0).mean()),
+        "avg_r": float(work["net_r"].mean()),
+        "median_r": float(work["net_r"].median()),
+        "sum_r": float(work["net_r"].sum()),
+    }
+    for pct in (10, 20, 30, 40, 50):
+        result[f"remove_top_{pct}_pct_trades_R"] = _remove_top_pct_trades_sum_r(work, pct=pct)
+        result[f"remove_top_{pct}_pct_symbols_R"] = _remove_top_pct_symbols_sum_r(work, pct=pct)
+    if "entry_timestamp_ms" in work.columns:
+        ts = pd.to_datetime(pd.to_numeric(work["entry_timestamp_ms"], errors="coerce"), unit="ms", utc=True)
+        day_sum = work["net_r"].groupby(ts.dt.date).sum()
+        week_sum = work["net_r"].groupby(ts.dt.strftime("%G-W%V")).sum()
+        month_sum = work["net_r"].groupby(ts.dt.strftime("%Y-%m")).sum()
+        result.update(
+            {
+                "active_days": int(day_sum.size),
+                "positive_days": int(day_sum.gt(0.0).sum()),
+                "positive_day_rate": float(day_sum.gt(0.0).mean()) if day_sum.size else float("nan"),
+                "positive_weeks": int(week_sum.gt(0.0).sum()),
+                "positive_week_rate": float(week_sum.gt(0.0).mean()) if week_sum.size else float("nan"),
+                "positive_months": int(month_sum.gt(0.0).sum()),
+                "positive_month_rate": float(month_sum.gt(0.0).mean()) if month_sum.size else float("nan"),
+                "max_day_dd_R": float(min(0.0, day_sum.min())) if day_sum.size else float("nan"),
+                "max_week_dd_R": float(min(0.0, week_sum.min())) if week_sum.size else float("nan"),
+                "max_month_dd_R": float(min(0.0, month_sum.min())) if month_sum.size else float("nan"),
+            }
+        )
+    return result
+
+
+def _remove_top_pct_trades_sum_r(frame: pd.DataFrame, *, pct: int) -> float:
+    if frame.empty or "net_r" not in frame.columns:
+        return float("nan")
+    ordered = frame.sort_values("net_r", ascending=False)
+    drop_n = int(math.ceil(len(ordered) * float(pct) / 100.0))
+    return float(ordered.iloc[drop_n:]["net_r"].sum()) if drop_n < len(ordered) else 0.0
+
+
+def _remove_top_pct_symbols_sum_r(frame: pd.DataFrame, *, pct: int) -> float:
+    if frame.empty or "symbol" not in frame.columns or "net_r" not in frame.columns:
+        return float("nan")
+    by_symbol = frame.groupby("symbol", dropna=False)["net_r"].sum().sort_values(ascending=False)
+    drop_n = int(math.ceil(len(by_symbol) * float(pct) / 100.0))
+    kept_symbols = set(by_symbol.iloc[drop_n:].index.astype(str)) if drop_n < len(by_symbol) else set()
+    if not kept_symbols:
+        return 0.0
+    return float(frame.loc[frame["symbol"].astype(str).isin(kept_symbols), "net_r"].sum())
+
+
+def _session_features(timestamp_ms: int) -> dict[str, object]:
+    ts = pd.to_datetime(int(timestamp_ms), unit="ms", utc=True)
+    hour = int(ts.hour)
+    minute_of_day = hour * 60 + int(ts.minute)
+    sessions = {
+        "asia": (0, 8 * 60),
+        "europe": (7 * 60, 16 * 60),
+        "us": (13 * 60, 22 * 60),
+    }
+    active = {name: start <= minute_of_day < end for name, (start, end) in sessions.items()}
+    active_names = [name for name, enabled in active.items() if enabled]
+    primary = active_names[-1] if active_names else "off_session"
+    if primary in sessions:
+        start, end = sessions[primary]
+        from_open = minute_of_day - start
+        to_close = end - minute_of_day
+    else:
+        from_open = float("nan")
+        to_close = float("nan")
+    return {
+        "hour_utc": hour,
+        "weekday": int(ts.weekday()),
+        "session_asia": bool(active["asia"]),
+        "session_europe": bool(active["europe"]),
+        "session_us": bool(active["us"]),
+        "session_overlap": bool(sum(1 for value in active.values() if value) >= 2),
+        "session_primary": primary,
+        "minutes_from_session_open": from_open,
+        "minutes_to_session_close": to_close,
+    }
+
 
 
 def _feature_deciles(setups: pd.DataFrame) -> pd.DataFrame:

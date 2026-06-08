@@ -1,3 +1,21 @@
+## 2026-06-08 - P530 level-attack research path proposed
+
+Current commit: UNKNOWN. Status: PROPOSED.
+
+The next discovery run should test a distinct pump nature: old tested H1 levels as liquidity shelves. The hypothesis is that price approaches a level after a prior rejection/pullback, has already recovered roughly 70%+ of that pullback, and current quote/trade flow is stronger than previous attempts before or during the first crossing. This is not a resistance veto; it is a possible pre-breakout fuel signal.
+
+P530 adds fast closed-H1 level-attack observability to `run-large-runner-discovery` while keeping the existing entry/exit contract unchanged. It also keeps P529 post-entry/session/stability fields so rolling research can compare advance entries versus crossing entries and filter by session/post-entry validation.
+
+After applying, run a short smoke first, then evaluate:
+
+```text
+1. advance_before_level vs seed_high_crossing vs seed_close_crossing entries;
+2. progress_to_level_from_pullback >= 0.70;
+3. current quote/trades vs prior level attack spikes;
+4. H1 cascade counts within 1R/2R/3R;
+5. session effects and post-entry 1m/3m validation.
+```
+
 ## 2026-06-07 - P528 category robustness readout
 
 Current commit: 4416b2a9. Status: analysis only.
