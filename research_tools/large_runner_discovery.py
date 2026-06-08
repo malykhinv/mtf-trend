@@ -43,7 +43,7 @@ HOUR_MS = 60 * MINUTE_MS
 DAY_MS = 24 * HOUR_MS
 
 LARGE_RUNNER_DISCOVERY_ID = "large_runner_discovery_v1"
-LEVEL_ATTACK_DISCOVERY_ID = "multi_tf_level_attack_v2"
+LEVEL_ATTACK_DISCOVERY_ID = "multi_tf_level_attack_v3"
 LEVEL_ATTACK_TIMEFRAMES = ("h1", "h4", "d1")
 LEVEL_ATTACK_PRIMARY_PREFIX = "h1"
 
@@ -1244,6 +1244,7 @@ def _level_attack_features(
         **base,
         f"{prefix}_level_attack_status": "ok",
         f"{prefix}_level_trend_state": trend,
+        f"{prefix}_level_timeframe_bucket_ms": int(seed_bucket),
         f"{prefix}_nearest_level_price": level_price,
         f"{prefix}_nearest_level_context": nearest.context,
         f"{prefix}_nearest_level_strength_score": float(nearest.strength_score),
@@ -1267,6 +1268,7 @@ def _level_attack_features(
         f"{prefix}_attack_trades_vs_prior_spike_max": trades_vs_prior,
         f"{prefix}_attack_flow_beats_prior_spikes": flow_beats_prior,
     }
+    result.update(_level_attack_band_flags(result, prefix=prefix))
     result[f"{prefix}_level_attack_candidate"] = _is_level_attack_candidate(result, prefix=prefix)
     result[f"{prefix}_level_attack_reject_reason"] = _level_attack_reject_reason(result, prefix=prefix)
     for r_value in (1, 2, 3):
@@ -1278,24 +1280,34 @@ def _level_attack_features(
 
 def _combined_level_attack_features(features: Mapping[str, object]) -> dict[str, object]:
     candidate_prefixes = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if _bool(features.get(f"{prefix}_level_attack_candidate"))]
+    medium_prefixes = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if _bool(features.get(f"{prefix}_level_attack_medium_candidate"))]
+    strict_prefixes = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if _bool(features.get(f"{prefix}_level_attack_strict_candidate"))]
     ok_prefixes = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if str(features.get(f"{prefix}_level_attack_status", "")) == "ok"]
+    tier_score = {"strict": 3, "medium": 2, "loose": 1, "none": 0, "": 0}
     ranked = sorted(
         ok_prefixes,
         key=lambda prefix: (
-            1 if _bool(features.get(f"{prefix}_level_attack_candidate")) else 0,
+            tier_score.get(str(features.get(f"{prefix}_level_attack_tier", "none")), 0),
             _float(features.get(f"{prefix}_nearest_level_strength_score")),
             _float(features.get(f"{prefix}_progress_to_level_from_pullback")),
         ),
         reverse=True,
     )
     best = ranked[0] if ranked else ""
+    best_tier = str(features.get(f"{best}_level_attack_tier", "none")) if best else "none"
     return {
         "level_attack_model": LEVEL_ATTACK_DISCOVERY_ID,
         "level_attack_available_at_entry": False,
         "level_attack_any_tf_candidate": bool(candidate_prefixes),
+        "level_attack_any_loose_candidate": bool(candidate_prefixes),
+        "level_attack_any_medium_candidate": bool(medium_prefixes),
+        "level_attack_any_strict_candidate": bool(strict_prefixes),
         "level_attack_candidate_timeframes": "|".join(candidate_prefixes),
+        "level_attack_medium_timeframes": "|".join(medium_prefixes),
+        "level_attack_strict_timeframes": "|".join(strict_prefixes),
         "level_attack_ok_timeframes": "|".join(ok_prefixes),
         "level_attack_best_timeframe": best,
+        "level_attack_best_tier": best_tier,
         "level_attack_best_progress_to_level": _float(features.get(f"{best}_progress_to_level_from_pullback")) if best else float("nan"),
         "level_attack_best_strength_score": _float(features.get(f"{best}_nearest_level_strength_score")) if best else float("nan"),
         "level_attack_any_attack_zone70": any(_bool(features.get(f"{prefix}_is_in_attack_zone_70")) for prefix in LEVEL_ATTACK_TIMEFRAMES),
@@ -1332,44 +1344,102 @@ def _annotate_setup_level_attack(
     return row
 
 
-def _is_level_attack_candidate(features: Mapping[str, object], *, prefix: str = "h1") -> bool:
-    if str(features.get(f"{prefix}_level_attack_status", "")) != "ok":
-        return False
+def _level_attack_common_state(features: Mapping[str, object], *, prefix: str = "h1") -> dict[str, object]:
     progress = _float(features.get(f"{prefix}_progress_to_level_from_pullback"))
     distance_pct = _float(features.get(f"{prefix}_nearest_level_distance_pct_from_seed_close"))
     crossed_high = _bool(features.get(f"{prefix}_level_crossed_by_seed_high"))
     crossed_close = _bool(features.get(f"{prefix}_level_crossed_by_seed_close"))
-    in_band_or_before = str(features.get(f"{prefix}_entry_mode_vs_nearest_level", "")) in {
+    entry_mode = str(features.get(f"{prefix}_entry_mode_vs_nearest_level", ""))
+    in_band_or_before = entry_mode in {
         "advance_before_level",
         "entry_in_level_band",
         "seed_high_crossing",
         "seed_close_crossing",
     }
-    near_level = bool(np.isfinite(distance_pct) and -0.003 <= distance_pct <= 0.08)
-    progressed = bool(np.isfinite(progress) and progress >= 0.55)
     prior_spikes = _float(features.get(f"{prefix}_attack_prior_spike_count"))
-    flow_ok = _bool(features.get(f"{prefix}_attack_flow_beats_prior_spikes")) or (np.isfinite(prior_spikes) and prior_spikes == 0)
-    return bool((progressed or near_level or crossed_high or crossed_close) and in_band_or_before and flow_ok)
+    quote_vs_prior = _float(features.get(f"{prefix}_attack_quote_vs_prior_spike_max"))
+    trades_vs_prior = _float(features.get(f"{prefix}_attack_trades_vs_prior_spike_max"))
+    flow_beats = _bool(features.get(f"{prefix}_attack_flow_beats_prior_spikes"))
+    flow_near_prior = bool(
+        flow_beats
+        or (np.isfinite(prior_spikes) and prior_spikes == 0)
+        or (np.isfinite(quote_vs_prior) and quote_vs_prior >= 0.80)
+        or (np.isfinite(trades_vs_prior) and trades_vs_prior >= 0.80)
+    )
+    return {
+        "progress": progress,
+        "distance_pct": distance_pct,
+        "crossed_high": crossed_high,
+        "crossed_close": crossed_close,
+        "entry_mode": entry_mode,
+        "in_band_or_before": in_band_or_before,
+        "prior_spikes": prior_spikes,
+        "flow_beats": flow_beats,
+        "flow_near_prior": flow_near_prior,
+    }
+
+
+def _level_attack_band_flags(features: Mapping[str, object], *, prefix: str = "h1") -> dict[str, object]:
+    result = {
+        f"{prefix}_level_attack_loose_candidate": False,
+        f"{prefix}_level_attack_medium_candidate": False,
+        f"{prefix}_level_attack_strict_candidate": False,
+        f"{prefix}_level_attack_tier": "none",
+    }
+    if str(features.get(f"{prefix}_level_attack_status", "")) != "ok":
+        return result
+    state = _level_attack_common_state(features, prefix=prefix)
+    distance_pct = _float(state["distance_pct"])
+    progress = _float(state["progress"])
+    crossed_high = bool(state["crossed_high"])
+    crossed_close = bool(state["crossed_close"])
+    in_band_or_before = bool(state["in_band_or_before"])
+    if not in_band_or_before:
+        return result
+
+    loose_near = bool(np.isfinite(distance_pct) and -0.006 <= distance_pct <= 0.12)
+    medium_near = bool(np.isfinite(distance_pct) and -0.004 <= distance_pct <= 0.08)
+    strict_near = bool(np.isfinite(distance_pct) and -0.003 <= distance_pct <= 0.05)
+    loose_progress = bool(np.isfinite(progress) and progress >= 0.45)
+    medium_progress = bool(np.isfinite(progress) and progress >= 0.55)
+    strict_progress = bool(np.isfinite(progress) and progress >= 0.70)
+
+    loose = bool(loose_near or loose_progress or crossed_high or crossed_close)
+    medium = bool((medium_near or medium_progress or crossed_high or crossed_close) and bool(state["flow_near_prior"]))
+    strict = bool((strict_near or strict_progress or crossed_close) and bool(state["flow_beats"]))
+    result[f"{prefix}_level_attack_loose_candidate"] = loose
+    result[f"{prefix}_level_attack_medium_candidate"] = medium
+    result[f"{prefix}_level_attack_strict_candidate"] = strict
+    if strict:
+        result[f"{prefix}_level_attack_tier"] = "strict"
+    elif medium:
+        result[f"{prefix}_level_attack_tier"] = "medium"
+    elif loose:
+        result[f"{prefix}_level_attack_tier"] = "loose"
+    return result
+
+
+def _is_level_attack_candidate(features: Mapping[str, object], *, prefix: str = "h1") -> bool:
+    # Candidate means recall candidate. Quality is separated into loose/medium/strict tiers.
+    return _bool(features.get(f"{prefix}_level_attack_loose_candidate"))
 
 
 def _level_attack_reject_reason(features: Mapping[str, object], *, prefix: str = "h1") -> str:
     status = str(features.get(f"{prefix}_level_attack_status", ""))
     if status != "ok":
         return status or "not_computed"
-    if _is_level_attack_candidate(features, prefix=prefix):
-        return "candidate"
+    tier = str(features.get(f"{prefix}_level_attack_tier", "none"))
+    if tier in {"loose", "medium", "strict"}:
+        return f"candidate_{tier}"
     entry_mode = str(features.get(f"{prefix}_entry_mode_vs_nearest_level", ""))
     if entry_mode == "after_level_break":
         return "already_after_level_break"
     progress = _float(features.get(f"{prefix}_progress_to_level_from_pullback"))
     distance_pct = _float(features.get(f"{prefix}_nearest_level_distance_pct_from_seed_close"))
-    if np.isfinite(progress) and progress < 0.55:
+    if np.isfinite(progress) and progress < 0.45:
         return "progress_to_level_too_low"
-    if np.isfinite(distance_pct) and distance_pct > 0.08:
+    if np.isfinite(distance_pct) and distance_pct > 0.12:
         return "too_far_from_level"
-    prior_spikes = _float(features.get(f"{prefix}_attack_prior_spike_count"))
-    if np.isfinite(prior_spikes) and prior_spikes > 0 and not _bool(features.get(f"{prefix}_attack_flow_beats_prior_spikes")):
-        return "flow_weaker_than_prior_level_attacks"
     return "not_candidate"
 
 
@@ -1379,6 +1449,7 @@ def _empty_level_attack_features(status: str, *, prefix: str = "h1") -> dict[str
         f"{prefix}_level_attack_available_at_entry": False,
         f"{prefix}_level_attack_status": status,
         f"{prefix}_level_trend_state": "unknown",
+        f"{prefix}_level_timeframe_bucket_ms": float("nan"),
         f"{prefix}_nearest_level_price": float("nan"),
         f"{prefix}_nearest_level_context": "",
         f"{prefix}_nearest_level_strength_score": float("nan"),
@@ -1401,6 +1472,10 @@ def _empty_level_attack_features(status: str, *, prefix: str = "h1") -> dict[str
         f"{prefix}_attack_quote_vs_prior_spike_max": float("nan"),
         f"{prefix}_attack_trades_vs_prior_spike_max": float("nan"),
         f"{prefix}_attack_flow_beats_prior_spikes": False,
+        f"{prefix}_level_attack_loose_candidate": False,
+        f"{prefix}_level_attack_medium_candidate": False,
+        f"{prefix}_level_attack_strict_candidate": False,
+        f"{prefix}_level_attack_tier": "none",
         f"{prefix}_level_attack_candidate": False,
         f"{prefix}_level_attack_reject_reason": status,
         f"{prefix}_remaining_overhead_level_count_3R": 0,
@@ -2644,6 +2719,11 @@ def _level_attack_candidates(setups: pd.DataFrame) -> pd.DataFrame:
         "level_attack_candidate_timeframes",
         "level_attack_ok_timeframes",
         "level_attack_best_timeframe",
+        "level_attack_best_tier",
+        "level_attack_medium_timeframes",
+        "level_attack_strict_timeframes",
+        "level_attack_any_medium_candidate",
+        "level_attack_any_strict_candidate",
         "level_attack_best_progress_to_level",
         "level_attack_best_strength_score",
         "level_attack_any_attack_zone70",
@@ -2664,6 +2744,10 @@ def _level_attack_candidates(setups: pd.DataFrame) -> pd.DataFrame:
                 f"{prefix}_level_attack_reject_reason",
                 f"{prefix}_entry_mode_vs_nearest_level",
                 f"{prefix}_level_attack_candidate",
+                f"{prefix}_level_attack_tier",
+                f"{prefix}_level_attack_loose_candidate",
+                f"{prefix}_level_attack_medium_candidate",
+                f"{prefix}_level_attack_strict_candidate",
                 f"{prefix}_is_in_attack_zone_70",
                 f"{prefix}_progress_to_level_from_pullback",
                 f"{prefix}_nearest_level_price",
@@ -2687,13 +2771,15 @@ def _level_attack_candidates(setups: pd.DataFrame) -> pd.DataFrame:
 
 
 def _level_attack_reject_reasons(setups: pd.DataFrame) -> pd.DataFrame:
-    columns = ["timeframe", "level_attack_reject_reason", "setups", "symbols", "candidates", "prefilter_passed_setups"]
+    columns = ["timeframe", "level_attack_reject_reason", "setups", "symbols", "candidates", "medium_candidates", "strict_candidates", "prefilter_passed_setups"]
     if setups.empty:
         return pd.DataFrame(columns=columns)
     rows: list[pd.DataFrame] = []
     for prefix in LEVEL_ATTACK_TIMEFRAMES:
         reason_column = f"{prefix}_level_attack_reject_reason"
         candidate_column = f"{prefix}_level_attack_candidate"
+        medium_column = f"{prefix}_level_attack_medium_candidate"
+        strict_column = f"{prefix}_level_attack_strict_candidate"
         if reason_column not in setups.columns:
             continue
         frame = setups.copy()
@@ -2708,6 +2794,12 @@ def _level_attack_reject_reasons(setups: pd.DataFrame) -> pd.DataFrame:
             grouped = grouped.merge(candidates, how="left", left_on="level_attack_reject_reason", right_index=True)
         if "candidates" not in grouped.columns:
             grouped["candidates"] = 0
+        for band_column, output_column in ((medium_column, "medium_candidates"), (strict_column, "strict_candidates")):
+            if band_column in frame.columns:
+                band_counts = frame.loc[_bool_series(frame, band_column)].groupby(reason_column, dropna=False).size().rename(output_column)
+                grouped = grouped.merge(band_counts, how="left", left_on="level_attack_reject_reason", right_index=True)
+            if output_column not in grouped.columns:
+                grouped[output_column] = 0
         if "large_runner_5m_prefilter_passed" in frame.columns:
             passed = frame.loc[_bool_series(frame, "large_runner_5m_prefilter_passed")]
             passed_counts = passed.groupby(reason_column, dropna=False).size().rename("prefilter_passed_setups")
@@ -2715,6 +2807,8 @@ def _level_attack_reject_reasons(setups: pd.DataFrame) -> pd.DataFrame:
         if "prefilter_passed_setups" not in grouped.columns:
             grouped["prefilter_passed_setups"] = 0
         grouped["candidates"] = grouped["candidates"].fillna(0).astype(int)
+        grouped["medium_candidates"] = grouped["medium_candidates"].fillna(0).astype(int)
+        grouped["strict_candidates"] = grouped["strict_candidates"].fillna(0).astype(int)
         grouped["prefilter_passed_setups"] = grouped["prefilter_passed_setups"].fillna(0).astype(int)
         rows.append(grouped[columns])
     if not rows:
@@ -2729,6 +2823,10 @@ def _level_attack_by_session(setups: pd.DataFrame) -> pd.DataFrame:
         "setups",
         "candidates",
         "candidate_rate",
+        "medium_candidates",
+        "medium_candidate_rate",
+        "strict_candidates",
+        "strict_candidate_rate",
         "attack_zone70",
         "entry_before_level_break",
         "entry_in_level_crossing",
@@ -2746,6 +2844,8 @@ def _level_attack_by_session(setups: pd.DataFrame) -> pd.DataFrame:
             continue
         for session, group in setups.groupby("session_primary", dropna=False):
             candidates = group.loc[_bool_series(group, candidate_column)]
+            medium_candidates = group.loc[_bool_series(group, f"{prefix}_level_attack_medium_candidate")]
+            strict_candidates = group.loc[_bool_series(group, f"{prefix}_level_attack_strict_candidate")]
             rows.append(
                 {
                     "timeframe": prefix,
@@ -2753,6 +2853,10 @@ def _level_attack_by_session(setups: pd.DataFrame) -> pd.DataFrame:
                     "setups": int(len(group)),
                     "candidates": int(len(candidates)),
                     "candidate_rate": _safe_divide(float(len(candidates)), float(len(group))),
+                    "medium_candidates": int(len(medium_candidates)),
+                    "medium_candidate_rate": _safe_divide(float(len(medium_candidates)), float(len(group))),
+                    "strict_candidates": int(len(strict_candidates)),
+                    "strict_candidate_rate": _safe_divide(float(len(strict_candidates)), float(len(group))),
                     "attack_zone70": int(_bool_series(candidates, f"{prefix}_is_in_attack_zone_70").sum()) if not candidates.empty else 0,
                     "entry_before_level_break": int(_bool_series(candidates, f"{prefix}_entry_before_level_break").sum()) if not candidates.empty else 0,
                     "entry_in_level_crossing": int(_bool_series(candidates, f"{prefix}_entry_in_level_crossing").sum()) if not candidates.empty else 0,
@@ -2798,6 +2902,10 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
         "level_attack_prefilter_passed_setups",
         "level_attack_arm_matches",
         "level_attack_timeframes_seen",
+        "level_attack_medium_setups",
+        "level_attack_strict_setups",
+        "level_attack_medium_timeframes_seen",
+        "level_attack_strict_timeframes_seen",
         "h1_level_attack_setups",
         "h4_level_attack_setups",
         "d1_level_attack_setups",
@@ -2811,6 +2919,8 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
         "best_quote_vs_prior_spike",
         "best_trades_vs_prior_spike",
         "covered_by_level_attack_before_top",
+        "covered_by_medium_level_attack_before_top",
+        "covered_by_strict_level_attack_before_top",
         "coverage_stage",
     ]
     if top_growth.empty:
@@ -2845,6 +2955,10 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
             first_seed = int(pd.to_numeric(setup_window["seed_open_ms"], errors="coerce").min())
             first_offset = _safe_divide(first_seed - period_start, MINUTE_MS)
         tf_seen = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if not setup_window.empty and _bool_series(setup_window, f"{prefix}_level_attack_candidate").any()]
+        tf_medium_seen = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if not setup_window.empty and _bool_series(setup_window, f"{prefix}_level_attack_medium_candidate").any()]
+        tf_strict_seen = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if not setup_window.empty and _bool_series(setup_window, f"{prefix}_level_attack_strict_candidate").any()]
+        medium_setups = setup_window.loc[_bool_series(setup_window, "level_attack_any_medium_candidate")] if "level_attack_any_medium_candidate" in setup_window.columns else pd.DataFrame()
+        strict_setups = setup_window.loc[_bool_series(setup_window, "level_attack_any_strict_candidate")] if "level_attack_any_strict_candidate" in setup_window.columns else pd.DataFrame()
         session = _session_features(period_start).get("session_primary", "")
         rows.append(
             {
@@ -2861,6 +2975,10 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
                 "level_attack_prefilter_passed_setups": int(_bool_series(setup_window, "large_runner_5m_prefilter_passed").sum()) if not setup_window.empty else 0,
                 "level_attack_arm_matches": int(len(match_window)),
                 "level_attack_timeframes_seen": "|".join(tf_seen),
+                "level_attack_medium_setups": int(len(medium_setups)),
+                "level_attack_strict_setups": int(len(strict_setups)),
+                "level_attack_medium_timeframes_seen": "|".join(tf_medium_seen),
+                "level_attack_strict_timeframes_seen": "|".join(tf_strict_seen),
                 "h1_level_attack_setups": int(_bool_series(setup_window, "h1_level_attack_candidate").sum()) if not setup_window.empty else 0,
                 "h4_level_attack_setups": int(_bool_series(setup_window, "h4_level_attack_candidate").sum()) if not setup_window.empty else 0,
                 "d1_level_attack_setups": int(_bool_series(setup_window, "d1_level_attack_candidate").sum()) if not setup_window.empty else 0,
@@ -2874,6 +2992,8 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
                 "best_quote_vs_prior_spike": _max_across_columns(setup_window, [f"{prefix}_attack_quote_vs_prior_spike_max" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
                 "best_trades_vs_prior_spike": _max_across_columns(setup_window, [f"{prefix}_attack_trades_vs_prior_spike_max" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
                 "covered_by_level_attack_before_top": bool(not setup_window.empty),
+                "covered_by_medium_level_attack_before_top": bool(not medium_setups.empty),
+                "covered_by_strict_level_attack_before_top": bool(not strict_setups.empty),
                 "coverage_stage": coverage_stage,
             }
         )
