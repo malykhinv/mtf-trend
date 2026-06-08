@@ -2703,15 +2703,16 @@ def _level_attack_reject_reasons(setups: pd.DataFrame) -> pd.DataFrame:
             symbols=("symbol", "nunique"),
         ).reset_index().rename(columns={reason_column: "level_attack_reject_reason"})
         grouped["timeframe"] = prefix
-        grouped["candidates"] = 0
         if candidate_column in frame.columns:
             candidates = frame.loc[_bool_series(frame, candidate_column)].groupby(reason_column, dropna=False).size().rename("candidates")
             grouped = grouped.merge(candidates, how="left", left_on="level_attack_reject_reason", right_index=True)
+        if "candidates" not in grouped.columns:
+            grouped["candidates"] = 0
         if "large_runner_5m_prefilter_passed" in frame.columns:
             passed = frame.loc[_bool_series(frame, "large_runner_5m_prefilter_passed")]
             passed_counts = passed.groupby(reason_column, dropna=False).size().rename("prefilter_passed_setups")
             grouped = grouped.merge(passed_counts, how="left", left_on="level_attack_reject_reason", right_index=True)
-        else:
+        if "prefilter_passed_setups" not in grouped.columns:
             grouped["prefilter_passed_setups"] = 0
         grouped["candidates"] = grouped["candidates"].fillna(0).astype(int)
         grouped["prefilter_passed_setups"] = grouped["prefilter_passed_setups"].fillna(0).astype(int)
