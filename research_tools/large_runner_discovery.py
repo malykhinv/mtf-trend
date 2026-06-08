@@ -386,7 +386,7 @@ def run_large_runner_discovery(
                         "level_attack_model": LEVEL_ATTACK_DISCOVERY_ID,
                         "level_attack_candidate_source": "cluster_selected_setups_not_only_arm_matches",
                         "level_attack_top_growth_coverage_model": "setup_level_attack_lookback_60m_to_first15m",
-                        "level_attack_speed_model": "exact_htf_bucket_with_closed_history_recall_prefilter",
+                        "level_attack_speed_model": "exact_htf_bucket_vectorized_arrays_and_cached_prefilter",
                         "post_entry_validation_model": "entry_plus_1m_2m_3m_evaluation_only",
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                     }
@@ -1120,6 +1120,48 @@ def _level_attack_history(frame: pd.DataFrame, *, seed_bucket: int, lookback_bar
     return history
 
 
+def _level_attack_history_fast(
+    frame: pd.DataFrame,
+    arrays: Mapping[str, object],
+    *,
+    seed_bucket: int,
+    lookback_bars: int,
+) -> pd.DataFrame:
+    timestamps = arrays.get("timestamp") if isinstance(arrays, Mapping) else None
+    if frame.empty or not isinstance(timestamps, np.ndarray) or timestamps.size == 0:
+        return _level_attack_history(frame, seed_bucket=seed_bucket, lookback_bars=lookback_bars)
+    end_idx = int(np.searchsorted(timestamps, int(seed_bucket), side="left"))
+    if end_idx <= 0:
+        return pd.DataFrame()
+    start_idx = max(0, end_idx - max(int(lookback_bars), 1))
+    return frame.iloc[start_idx:end_idx].copy()
+
+
+def _pullback_low_after_touch_fast(
+    frame: pd.DataFrame,
+    arrays: Mapping[str, object],
+    *,
+    last_touch_timestamp_ms: int,
+    seed_bucket: int,
+) -> float:
+    timestamps = arrays.get("timestamp") if isinstance(arrays, Mapping) else None
+    lows = arrays.get("low") if isinstance(arrays, Mapping) else None
+    if isinstance(timestamps, np.ndarray) and isinstance(lows, np.ndarray) and timestamps.size and lows.size == timestamps.size:
+        start_idx = int(np.searchsorted(timestamps, int(last_touch_timestamp_ms), side="left"))
+        end_idx = int(np.searchsorted(timestamps, int(seed_bucket), side="left"))
+        if end_idx > start_idx:
+            values = lows[start_idx:end_idx]
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                return float(np.min(finite))
+        return float("nan")
+    if frame.empty or "timestamp" not in frame.columns or "low" not in frame.columns:
+        return float("nan")
+    timestamps_series = pd.to_numeric(frame["timestamp"], errors="coerce")
+    after_touch = frame.loc[(timestamps_series < int(seed_bucket)) & (timestamps_series >= int(last_touch_timestamp_ms))]
+    return float(pd.to_numeric(after_touch["low"], errors="coerce").min()) if not after_touch.empty else float("nan")
+
+
 def _should_run_level_attack_scan(
     history: pd.DataFrame,
     match: Mapping[str, object],
@@ -1178,22 +1220,55 @@ def _should_run_level_attack_scan(
                 return True
     return False
 
+def _frame_numeric_arrays(frame: pd.DataFrame, columns: tuple[str, ...]) -> dict[str, np.ndarray]:
+    arrays: dict[str, np.ndarray] = {}
+    if frame.empty:
+        return arrays
+    for column in columns:
+        if column in frame.columns:
+            arrays[column] = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float, copy=False)
+    if "timestamp" in arrays:
+        arrays["timestamp"] = arrays["timestamp"].astype("int64", copy=False)
+    return arrays
+
+
+def _level_frame_arrays(frame: pd.DataFrame) -> dict[str, np.ndarray]:
+    return _frame_numeric_arrays(frame, ("timestamp", "high", "low", "close"))
+
+
+def _flow_frame_arrays(frame_5m: pd.DataFrame) -> dict[str, np.ndarray]:
+    return _frame_numeric_arrays(
+        frame_5m,
+        ("timestamp", "high", "close", "quote_volume", "number_of_trades"),
+    )
+
+
 def _build_level_attack_contexts(frame_5m: pd.DataFrame, config: LargeRunnerDiscoveryConfig) -> dict[str, dict[str, object]]:
+    flow_arrays = _flow_frame_arrays(frame_5m)
+    h1_frame = _aggregate_5m_to_level_timeframe(frame_5m, "1h")
+    h4_frame = _aggregate_5m_to_level_timeframe(frame_5m, "4h")
+    d1_frame = _aggregate_5m_to_level_timeframe(frame_5m, "1d")
     return {
         "h1": {
-            "frame": _aggregate_5m_to_level_timeframe(frame_5m, "1h"),
+            "frame": h1_frame,
+            "arrays": _level_frame_arrays(h1_frame),
+            "flow_arrays": flow_arrays,
             "cache": {},
             "config": _level_attack_scan_config(config, timeframe_key="h1"),
             "timeframe_ms": HOUR_MS,
         },
         "h4": {
-            "frame": _aggregate_5m_to_level_timeframe(frame_5m, "4h"),
+            "frame": h4_frame,
+            "arrays": _level_frame_arrays(h4_frame),
+            "flow_arrays": flow_arrays,
             "cache": {},
             "config": _level_attack_scan_config(config, timeframe_key="h4"),
             "timeframe_ms": 4 * HOUR_MS,
         },
         "d1": {
-            "frame": _aggregate_5m_to_level_timeframe(frame_5m, "1d"),
+            "frame": d1_frame,
+            "arrays": _level_frame_arrays(d1_frame),
+            "flow_arrays": flow_arrays,
             "cache": {},
             "config": _level_attack_scan_config(config, timeframe_key="d1"),
             "timeframe_ms": DAY_MS,
@@ -1215,6 +1290,8 @@ def _multi_timeframe_level_attack_features(
                 match,
                 frame_5m=frame_5m,
                 level_frame=context.get("frame", pd.DataFrame()) if isinstance(context, Mapping) else pd.DataFrame(),
+                level_arrays=context.get("arrays", {}) if isinstance(context, Mapping) else {},
+                flow_arrays=context.get("flow_arrays", {}) if isinstance(context, Mapping) else {},
                 level_cache=context.get("cache", {}) if isinstance(context, Mapping) else {},
                 level_scan_config=context.get("config", _level_attack_scan_config(LargeRunnerDiscoveryConfig(), timeframe_key=prefix)) if isinstance(context, Mapping) else _level_attack_scan_config(LargeRunnerDiscoveryConfig(), timeframe_key=prefix),
                 timeframe_ms=int(context.get("timeframe_ms", HOUR_MS)) if isinstance(context, Mapping) else HOUR_MS,
@@ -1230,12 +1307,16 @@ def _level_attack_features(
     *,
     frame_5m: pd.DataFrame,
     level_frame: object,
+    level_arrays: object,
+    flow_arrays: object,
     level_cache: object,
     level_scan_config: object,
     timeframe_ms: int,
     prefix: str,
 ) -> dict[str, object]:
     frame = level_frame if isinstance(level_frame, pd.DataFrame) else pd.DataFrame()
+    arrays = level_arrays if isinstance(level_arrays, Mapping) else {}
+    flow = flow_arrays if isinstance(flow_arrays, Mapping) else {}
     cache = level_cache if isinstance(level_cache, dict) else {}
     scan_config = level_scan_config if isinstance(level_scan_config, HourlyLevelScanConfig) else _level_attack_scan_config(LargeRunnerDiscoveryConfig(), timeframe_key=prefix)
     base = _empty_level_attack_features("missing_or_invalid", prefix=prefix)
@@ -1253,7 +1334,7 @@ def _level_attack_features(
         base[f"{prefix}_level_attack_status"] = f"missing_{prefix}_seed_close"
         return base
 
-    history = _level_attack_history(frame, seed_bucket=seed_bucket, lookback_bars=int(scan_config.lookback_bars))
+    history = _level_attack_history_fast(frame, arrays, seed_bucket=seed_bucket, lookback_bars=int(scan_config.lookback_bars))
     if seed_bucket not in cache:
         if history.empty:
             cache[seed_bucket] = ([], "unknown", f"empty_closed_{prefix}_history")
@@ -1265,11 +1346,11 @@ def _level_attack_features(
                 chart_path="",
             )
         else:
-            base[f"{prefix}_level_attack_status"] = f"prefilter_no_near_{prefix}_high_cluster"
-            return base
+            cache[seed_bucket] = ([], "unknown", f"prefilter_no_near_{prefix}_high_cluster")
     levels, trend, reason = cache[seed_bucket]
     if not levels:
-        base[f"{prefix}_level_attack_status"] = f"no_level:{reason}"
+        reason_text = str(reason)
+        base[f"{prefix}_level_attack_status"] = reason_text if reason_text.startswith("prefilter_no_near_") else f"no_level:{reason_text}"
         base[f"{prefix}_level_trend_state"] = trend
         return base
 
@@ -1289,9 +1370,12 @@ def _level_attack_features(
     nearest = min(above_levels, key=lambda level: level.level_price - reference_price)
     level_price = float(nearest.level_price)
     tolerance = float(scan_config.touch_tolerance_pct)
-    history_tf = frame.loc[pd.to_numeric(frame["timestamp"], errors="coerce") < seed_bucket].copy()
-    after_touch = history_tf.loc[pd.to_numeric(history_tf["timestamp"], errors="coerce") >= int(nearest.last_touch_timestamp_ms)].copy()
-    pullback_low = float(pd.to_numeric(after_touch["low"], errors="coerce").min()) if not after_touch.empty else float("nan")
+    pullback_low = _pullback_low_after_touch_fast(
+        frame,
+        arrays,
+        last_touch_timestamp_ms=int(nearest.last_touch_timestamp_ms),
+        seed_bucket=seed_bucket,
+    )
     pullback_size = _safe_divide(level_price - pullback_low, level_price)
     progress = _safe_divide(seed_close - pullback_low, level_price - pullback_low)
 
@@ -1304,8 +1388,9 @@ def _level_attack_features(
         seed_close_crossed=crossed_close,
         tolerance_pct=tolerance,
     )
-    prior_spike_count, quote_vs_prior, trades_vs_prior = _level_attack_flow_vs_prior(
+    prior_spike_count, quote_vs_prior, trades_vs_prior = _level_attack_flow_vs_prior_fast(
         frame_5m,
+        flow,
         seed_open_ms=seed_open,
         level_price=level_price,
         tolerance_pct=tolerance,
@@ -1594,22 +1679,68 @@ def _level_attack_flow_vs_prior(
     current_quote: float,
     current_trades: float,
 ) -> tuple[int, float, float]:
-    if frame_5m.empty or level_price <= 0.0:
+    return _level_attack_flow_vs_prior_fast(
+        frame_5m,
+        {},
+        seed_open_ms=seed_open_ms,
+        level_price=level_price,
+        tolerance_pct=tolerance_pct,
+        current_quote=current_quote,
+        current_trades=current_trades,
+    )
+
+
+def _level_attack_flow_vs_prior_fast(
+    frame_5m: pd.DataFrame,
+    arrays: Mapping[str, object],
+    *,
+    seed_open_ms: int,
+    level_price: float,
+    tolerance_pct: float,
+    current_quote: float,
+    current_trades: float,
+) -> tuple[int, float, float]:
+    if level_price <= 0.0:
         return 0, float("nan"), float("nan")
-    timestamps = pd.to_numeric(frame_5m["timestamp"], errors="coerce")
-    history = frame_5m.loc[timestamps < int(seed_open_ms)].copy()
-    if history.empty:
+    timestamps = arrays.get("timestamp") if isinstance(arrays, Mapping) else None
+    highs = arrays.get("high") if isinstance(arrays, Mapping) else None
+    closes = arrays.get("close") if isinstance(arrays, Mapping) else None
+    quotes = arrays.get("quote_volume") if isinstance(arrays, Mapping) else None
+    trades = arrays.get("number_of_trades") if isinstance(arrays, Mapping) else None
+    if not (
+        isinstance(timestamps, np.ndarray)
+        and isinstance(highs, np.ndarray)
+        and isinstance(closes, np.ndarray)
+        and isinstance(quotes, np.ndarray)
+        and isinstance(trades, np.ndarray)
+        and timestamps.size == highs.size == closes.size == quotes.size == trades.size
+    ):
+        if frame_5m.empty or "timestamp" not in frame_5m.columns:
+            return 0, float("nan"), float("nan")
+        timestamps = pd.to_numeric(frame_5m["timestamp"], errors="coerce").to_numpy(dtype=float, copy=False).astype("int64", copy=False)
+        highs = pd.to_numeric(frame_5m.get("high", pd.Series(index=frame_5m.index)), errors="coerce").to_numpy(dtype=float, copy=False)
+        closes = pd.to_numeric(frame_5m.get("close", pd.Series(index=frame_5m.index)), errors="coerce").to_numpy(dtype=float, copy=False)
+        quotes = pd.to_numeric(frame_5m.get("quote_volume", pd.Series(index=frame_5m.index)), errors="coerce").to_numpy(dtype=float, copy=False)
+        trades = pd.to_numeric(frame_5m.get("number_of_trades", pd.Series(index=frame_5m.index)), errors="coerce").to_numpy(dtype=float, copy=False)
+    if timestamps.size == 0:
+        return 0, float("nan"), float("nan")
+    end_idx = int(np.searchsorted(timestamps, int(seed_open_ms), side="left"))
+    if end_idx <= 0:
         return 0, float("nan"), float("nan")
     band_low = level_price * (1.0 - max(float(tolerance_pct), 0.0))
     band_high = level_price * (1.0 + max(float(tolerance_pct), 0.0))
-    highs = pd.to_numeric(history["high"], errors="coerce")
-    closes = pd.to_numeric(history["close"], errors="coerce")
-    attempts = history.loc[highs.between(band_low, band_high, inclusive="both") & closes.lt(band_high)].copy()
-    if attempts.empty:
+    high_slice = highs[:end_idx]
+    close_slice = closes[:end_idx]
+    mask = (high_slice >= band_low) & (high_slice <= band_high) & (close_slice < band_high)
+    if not bool(np.any(mask)):
         return 0, float("nan"), float("nan")
-    quote = pd.to_numeric(attempts.get("quote_volume", pd.Series(index=attempts.index)), errors="coerce")
-    trades = pd.to_numeric(attempts.get("number_of_trades", pd.Series(index=attempts.index)), errors="coerce")
-    return int(len(attempts)), _safe_divide(current_quote, float(quote.max())), _safe_divide(current_trades, float(trades.max()))
+    quote_values = quotes[:end_idx][mask]
+    trade_values = trades[:end_idx][mask]
+    quote_values = quote_values[np.isfinite(quote_values)]
+    trade_values = trade_values[np.isfinite(trade_values)]
+    max_quote = float(np.max(quote_values)) if quote_values.size else float("nan")
+    max_trades = float(np.max(trade_values)) if trade_values.size else float("nan")
+    return int(np.sum(mask)), _safe_divide(current_quote, max_quote), _safe_divide(current_trades, max_trades)
 
 
 def _levels_above_within_r(levels: list[HourlyLevelMetric], *, entry_price: float, risk_abs: float, r_value: float) -> int:
