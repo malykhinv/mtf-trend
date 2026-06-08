@@ -1,3 +1,17 @@
+## 2026-06-08 - P531 level-attack recall layer
+
+Current commit: UNKNOWN. Status: PROPOSED.
+
+P530 should not be used as final 365d evidence yet because it only wrote
+level-attack candidates from arm matches. P531 moves the level-attack readout
+upstream to cluster-selected 5m setups, so the next run can answer the recall
+question: how many future top-growth pumps had an approach-to-level + stronger
+flow setup before the old strategy matched anything?
+
+The patch intentionally remains fast: H1 levels are still computed from closed
+hourly candles and cached by `(symbol, seed_hour)`. No full-market per-minute
+level scanner is added.
+
 ## 2026-06-08 - P530 level-attack research path proposed
 
 Current commit: UNKNOWN. Status: PROPOSED.

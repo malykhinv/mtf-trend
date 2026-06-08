@@ -1,3 +1,29 @@
+## 2026-06-08 - P531 level-attack coverage experiment
+
+Input:
+
+```text
+patch: P531 proposed
+scope: run-large-runner-discovery artifacts
+```
+
+Main question:
+
+```text
+Among future top-growth windows, how often did a broad H1 level-attack setup
+exist before the move, even when no old arm/PABC match existed?
+```
+
+Required output artifacts:
+
+```text
+large_runner_level_attack_candidates.csv
+large_runner_level_attack_reject_reasons.csv
+large_runner_level_attack_top_growth_coverage.csv
+```
+
+Status: not run yet.
+
 ## 2026-06-08 - P530 planned level-attack experiment
 
 Input:

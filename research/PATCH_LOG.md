@@ -1,3 +1,31 @@
+## 2026-06-08 - P531 level-attack recall coverage
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Purpose: stop measuring H1 level-attack only inside already matched
+large-runner arms. P530 proved that level fields were alive, but the artifact was
+still too narrow for the main research question: did the market give a
+level-attack setup before a top-growth pump even when the old arm/PABC gates
+missed it?
+
+Changes:
+
+- Attach H1 level-attack context to cluster-selected 5m setups before 1m
+  enrichment and before arm matching.
+- Keep the existing per-symbol/per-hour closed-H1 level cache; no per-tick level
+  scan is introduced.
+- Make `large_runner_level_attack_candidates.csv` source from wide setup rows,
+  not from narrow arm matches.
+- Add `large_runner_level_attack_reject_reasons.csv`.
+- Add `large_runner_level_attack_top_growth_coverage.csv` with a -60m..+15m
+  coverage window around each top-growth hour.
+
+Validation:
+
+```bash
+python -m compileall -q research_tools cli constants.py main.py
+```
+
 ## 2026-06-08 - P530 H1 level-attack observability for large-runner discovery
 
 Status: PROPOSED. Commit: UNKNOWN.
