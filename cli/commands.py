@@ -1946,6 +1946,25 @@ def run_large_runner_discovery(config: AppConfig, args: argparse.Namespace) -> i
     return _run_with_logging("run-large-runner-discovery", config, _run)
 
 
+def run_rolling_session_optimizer(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs rolling 30/60d session optimizer over existing large-runner artifacts."""
+
+    def _run() -> int:
+        from research_tools.rolling_session_optimizer import (
+            RollingSessionOptimizerConfig,
+            run_rolling_session_optimizer as run_optimizer,
+        )
+
+        days = int(getattr(args, "days", 30))
+        input_dir = config.backtest.results_dir / f"large_runner_discovery_{days}d"
+        optimizer_config = RollingSessionOptimizerConfig(input_dir=input_dir)
+        result_dir = run_optimizer(optimizer_config)
+        print(f"rolling session optimizer artifacts: {result_dir}", flush=True)
+        return 0
+
+    return _run_with_logging("run-rolling-session-optimizer", config, _run)
+
+
 def materialize_anomaly_subminute_cache(config: AppConfig, args: argparse.Namespace) -> int:
     """Materializes 1s-derived subminute anomaly entry caches."""
 

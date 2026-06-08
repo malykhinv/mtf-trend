@@ -255,6 +255,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     large_runner_discovery.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
 
+    rolling_session_optimizer = subparsers.add_parser(
+        "run-rolling-session-optimizer",
+        help="Run rolling 30/60d session optimizer over existing large-runner discovery artifacts",
+    )
+    rolling_session_optimizer.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
+
     materialize_subminute = subparsers.add_parser(
         "materialize-anomaly-subminute-cache",
         help="Materialize honest 1s-derived 5s/15s/30s anomaly entry caches",
@@ -459,6 +465,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-anomaly-lab": commands.run_anomaly_lab,
         "run-htf-ltf-runner-discovery": commands.run_htf_ltf_runner_discovery,
         "run-large-runner-discovery": commands.run_large_runner_discovery,
+        "run-rolling-session-optimizer": commands.run_rolling_session_optimizer,
         "materialize-anomaly-subminute-cache": commands.materialize_anomaly_subminute_cache,
         "backfill-anomaly-aggtrade-cache": commands.backfill_anomaly_aggtrade_cache,
         "run-anomaly-live2": commands.run_anomaly_live2,
