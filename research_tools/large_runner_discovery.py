@@ -43,7 +43,9 @@ HOUR_MS = 60 * MINUTE_MS
 DAY_MS = 24 * HOUR_MS
 
 LARGE_RUNNER_DISCOVERY_ID = "large_runner_discovery_v1"
-LEVEL_ATTACK_DISCOVERY_ID = "h1_level_attack_v1"
+LEVEL_ATTACK_DISCOVERY_ID = "multi_tf_level_attack_v2"
+LEVEL_ATTACK_TIMEFRAMES = ("h1", "h4", "d1")
+LEVEL_ATTACK_PRIMARY_PREFIX = "h1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,17 +188,13 @@ def run_large_runner_discovery(
         raw = _collect_raw_candidates(symbol=symbol, frame=prepared_5m, start_ms=start_ms, end_ms=end_ms, config=config)
         first_setups = _cluster_setups_with_prefilter(raw, frame_5m=prepared_5m, config=config)
         top_hours = _hourly_growth_rows(symbol=symbol, frame_5m=prepared_5m, start_ms=start_ms, end_ms=end_ms)
-        level_frame_1h = _aggregate_5m_to_1h(prepared_5m)
-        level_cache: dict[int, tuple[list[HourlyLevelMetric], str, str]] = {}
-        level_scan_config = _level_attack_scan_config(config)
+        level_contexts = _build_level_attack_contexts(prepared_5m, config)
         if first_setups:
             first_setups = [
                 _annotate_setup_level_attack(
                     setup,
                     frame_5m=prepared_5m,
-                    level_frame_1h=level_frame_1h,
-                    level_cache=level_cache,
-                    level_scan_config=level_scan_config,
+                    level_contexts=level_contexts,
                 )
                 for setup in first_setups
             ]
@@ -244,9 +242,7 @@ def run_large_runner_discovery(
                     arm=arm,
                     frame_1m=frame_1m,
                     frame_5m=prepared_5m,
-                    level_frame_1h=level_frame_1h,
-                    level_cache=level_cache,
-                    level_scan_config=level_scan_config,
+                    level_contexts=level_contexts,
                     config=config,
                 )
                 match_rows.append(match)
@@ -309,6 +305,7 @@ def run_large_runner_discovery(
     top_coverage_frame = _top_growth_coverage(top_growth_frame, match_frame)
     level_attack_candidates_frame = _level_attack_candidates(setup_frame)
     level_attack_reject_reasons_frame = _level_attack_reject_reasons(setup_frame)
+    level_attack_by_session_frame = _level_attack_by_session(setup_frame)
     level_attack_top_growth_coverage_frame = _level_attack_top_growth_coverage(top_growth_frame, setup_frame, match_frame)
     portfolio_frame, portfolio_events = _apply_research_portfolio(trade_frame, config=config)
     nature_summary_frame = _nature_summary(trade_frame, portfolio_frame, config=config)
@@ -353,6 +350,7 @@ def run_large_runner_discovery(
         ("large_runner_stability_report.csv", _stability_report(portfolio_frame, config=config)),
         ("large_runner_level_attack_candidates.csv", level_attack_candidates_frame),
         ("large_runner_level_attack_reject_reasons.csv", level_attack_reject_reasons_frame),
+        ("large_runner_level_attack_by_session.csv", level_attack_by_session_frame),
         ("large_runner_level_attack_top_growth_coverage.csv", level_attack_top_growth_coverage_frame),
         ("large_runner_nature_summary.csv", nature_summary_frame),
         ("large_runner_nature_by_week.csv", nature_by_week_frame),
@@ -710,9 +708,7 @@ def _build_arm_match(
     arm: LargeRunnerArm,
     frame_1m: pd.DataFrame,
     frame_5m: pd.DataFrame,
-    level_frame_1h: pd.DataFrame,
-    level_cache: dict[int, tuple[list[HourlyLevelMetric], str, str]],
-    level_scan_config: HourlyLevelScanConfig,
+    level_contexts: Mapping[str, dict[str, object]],
     config: LargeRunnerDiscoveryConfig,
 ) -> dict[str, object]:
     decision_ms = int(setup["seed_open_ms"]) + int(arm.decision_offset_minutes) * MINUTE_MS
@@ -759,12 +755,10 @@ def _build_arm_match(
     }
     result.update(_session_features(decision_ms))
     result.update(
-        _level_attack_features(
+        _multi_timeframe_level_attack_features(
             result,
             frame_5m=frame_5m,
-            level_frame_1h=level_frame_1h,
-            level_cache=level_cache,
-            level_scan_config=level_scan_config,
+            level_contexts=level_contexts,
         )
     )
     result.update(evaluate_large_runner_nature(result).as_features())
@@ -1024,18 +1018,60 @@ def _mfe_before_mae(path: pd.DataFrame, *, entry_price: float) -> bool:
     return False
 
 
-def _level_attack_scan_config(config: LargeRunnerDiscoveryConfig) -> HourlyLevelScanConfig:
+
+def _level_attack_scan_config(config: LargeRunnerDiscoveryConfig, *, timeframe_key: str = "h1") -> HourlyLevelScanConfig:
+    days = int(config.days)
+    if timeframe_key == "d1":
+        lookback_bars = max(90, min(days, 720))
+        min_touches = 2
+        min_spacing_hours = 72
+        touch_tolerance = 0.014
+        min_bounce = 0.10
+        pivot_side_bars = 2
+        break_hold_bars = 1
+        recent_move_bars = 14
+        bounce_lookahead = 5
+    elif timeframe_key == "h4":
+        lookback_bars = max(120, min(days * 6, 900))
+        min_touches = 2
+        min_spacing_hours = 24
+        touch_tolerance = 0.010
+        min_bounce = 0.075
+        pivot_side_bars = 2
+        break_hold_bars = 2
+        recent_move_bars = 18
+        bounce_lookahead = 8
+    else:
+        lookback_bars = min(max(days * 24, 120), 720)
+        min_touches = 3
+        min_spacing_hours = 6
+        touch_tolerance = 0.006
+        min_bounce = 0.05
+        pivot_side_bars = 3
+        break_hold_bars = 2
+        recent_move_bars = 24
+        bounce_lookahead = 12
     return HourlyLevelScanConfig(
         cache_dir=config.cache_dir,
-        output_dir=config.output_dir / "_level_attack_internal",
-        source_timeframe=Timeframe.M5,
-        days=min(max(int(config.days), 30), 180),
-        lookback_bars=720,
+        output_dir=config.output_dir / f"{timeframe_key}_level_attack_internal",
+        source_timeframe=Timeframe.H1,
+        days=max(days, 1),
+        lookback_bars=int(lookback_bars),
         chart_bars=0,
-        min_touches=2,
-        min_touch_spacing_hours=6,
+        min_touches=int(min_touches),
+        min_touch_spacing_hours=int(min_spacing_hours),
+        level_source_close_lookback_hours=12,
+        touch_tolerance_pct=float(touch_tolerance),
+        min_bounce_pct=float(min_bounce),
+        bounce_lookahead_bars=int(bounce_lookahead),
         min_target_room_pct=0.0,
-        max_overhead_distance_pct=0.60,
+        max_overhead_distance_pct=0.80,
+        min_recent_move_pct=0.0,
+        recent_move_lookback_bars=int(recent_move_bars),
+        reaction_to_move_threshold=0.0,
+        pivot_side_bars=int(pivot_side_bars),
+        break_close_tolerance_pct=0.004,
+        break_hold_bars=int(break_hold_bars),
         reject_downtrend_symbols=False,
         reject_downtrend_levels=False,
         reject_pierced_levels=False,
@@ -1044,7 +1080,7 @@ def _level_attack_scan_config(config: LargeRunnerDiscoveryConfig) -> HourlyLevel
     )
 
 
-def _aggregate_5m_to_1h(frame_5m: pd.DataFrame) -> pd.DataFrame:
+def _aggregate_5m_to_level_timeframe(frame_5m: pd.DataFrame, rule: str) -> pd.DataFrame:
     if frame_5m.empty or "timestamp" not in frame_5m.columns:
         return pd.DataFrame()
     prepared = frame_5m.copy()
@@ -1060,44 +1096,100 @@ def _aggregate_5m_to_1h(frame_5m: pd.DataFrame) -> pd.DataFrame:
     for column in ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume", "open_interest"):
         if column in prepared.columns:
             aggregation[column] = "sum" if column != "open_interest" else "last"
-    hourly = prepared.resample("1h", label="left", closed="left").agg(aggregation)
-    hourly = hourly.dropna(subset=["open", "high", "low", "close"]).copy()
-    if hourly.empty:
+    resolved = prepared.resample(rule, label="left", closed="left").agg(aggregation)
+    resolved = resolved.dropna(subset=["open", "high", "low", "close"]).copy()
+    if resolved.empty:
         return pd.DataFrame()
-    hourly["timestamp"] = (hourly.index.view("int64") // 1_000_000).astype("int64")
-    return hourly.reset_index(drop=True)
+    resolved["timestamp"] = (resolved.index.view("int64") // 1_000_000).astype("int64")
+    return resolved.reset_index(drop=True)
+
+
+def _aggregate_5m_to_1h(frame_5m: pd.DataFrame) -> pd.DataFrame:
+    return _aggregate_5m_to_level_timeframe(frame_5m, "1h")
+
+
+def _build_level_attack_contexts(frame_5m: pd.DataFrame, config: LargeRunnerDiscoveryConfig) -> dict[str, dict[str, object]]:
+    return {
+        "h1": {
+            "frame": _aggregate_5m_to_level_timeframe(frame_5m, "1h"),
+            "cache": {},
+            "config": _level_attack_scan_config(config, timeframe_key="h1"),
+            "timeframe_ms": HOUR_MS,
+        },
+        "h4": {
+            "frame": _aggregate_5m_to_level_timeframe(frame_5m, "4h"),
+            "cache": {},
+            "config": _level_attack_scan_config(config, timeframe_key="h4"),
+            "timeframe_ms": 4 * HOUR_MS,
+        },
+        "d1": {
+            "frame": _aggregate_5m_to_level_timeframe(frame_5m, "1d"),
+            "cache": {},
+            "config": _level_attack_scan_config(config, timeframe_key="d1"),
+            "timeframe_ms": DAY_MS,
+        },
+    }
+
+
+def _multi_timeframe_level_attack_features(
+    match: Mapping[str, object],
+    *,
+    frame_5m: pd.DataFrame,
+    level_contexts: Mapping[str, dict[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for prefix in LEVEL_ATTACK_TIMEFRAMES:
+        context = level_contexts.get(prefix, {})
+        result.update(
+            _level_attack_features(
+                match,
+                frame_5m=frame_5m,
+                level_frame=context.get("frame", pd.DataFrame()) if isinstance(context, Mapping) else pd.DataFrame(),
+                level_cache=context.get("cache", {}) if isinstance(context, Mapping) else {},
+                level_scan_config=context.get("config", _level_attack_scan_config(LargeRunnerDiscoveryConfig(), timeframe_key=prefix)) if isinstance(context, Mapping) else _level_attack_scan_config(LargeRunnerDiscoveryConfig(), timeframe_key=prefix),
+                timeframe_ms=int(context.get("timeframe_ms", HOUR_MS)) if isinstance(context, Mapping) else HOUR_MS,
+                prefix=prefix,
+            )
+        )
+    result.update(_combined_level_attack_features(result))
+    return result
 
 
 def _level_attack_features(
     match: Mapping[str, object],
     *,
     frame_5m: pd.DataFrame,
-    level_frame_1h: pd.DataFrame,
-    level_cache: dict[int, tuple[list[HourlyLevelMetric], str, str]],
-    level_scan_config: HourlyLevelScanConfig,
+    level_frame: object,
+    level_cache: object,
+    level_scan_config: object,
+    timeframe_ms: int,
+    prefix: str,
 ) -> dict[str, object]:
-    base = _empty_level_attack_features("missing_or_invalid")
-    if level_frame_1h.empty:
-        base["h1_level_attack_status"] = "missing_1h_level_frame"
+    frame = level_frame if isinstance(level_frame, pd.DataFrame) else pd.DataFrame()
+    cache = level_cache if isinstance(level_cache, dict) else {}
+    scan_config = level_scan_config if isinstance(level_scan_config, HourlyLevelScanConfig) else _level_attack_scan_config(LargeRunnerDiscoveryConfig(), timeframe_key=prefix)
+    base = _empty_level_attack_features("missing_or_invalid", prefix=prefix)
+    if frame.empty:
+        base[f"{prefix}_level_attack_status"] = f"missing_{prefix}_level_frame"
         return base
     symbol = str(match.get("symbol", ""))
     seed_open = int(_float(match.get("seed_open_ms")))
-    seed_hour = seed_open // HOUR_MS * HOUR_MS
-    if seed_hour not in level_cache:
-        history = level_frame_1h.loc[pd.to_numeric(level_frame_1h["timestamp"], errors="coerce") < seed_hour].tail(720).copy()
+    seed_bucket = seed_open // int(timeframe_ms) * int(timeframe_ms)
+    if seed_bucket not in cache:
+        history = frame.loc[pd.to_numeric(frame["timestamp"], errors="coerce") < seed_bucket].tail(int(scan_config.lookback_bars)).copy()
         if history.empty:
-            level_cache[seed_hour] = ([], "unknown", "empty_closed_h1_history")
+            cache[seed_bucket] = ([], "unknown", f"empty_closed_{prefix}_history")
         else:
-            level_cache[seed_hour] = find_hourly_overhead_levels(
+            cache[seed_bucket] = find_hourly_overhead_levels(
                 history,
                 symbol=symbol,
-                config=level_scan_config,
+                config=scan_config,
                 chart_path="",
             )
-    levels, trend, reason = level_cache[seed_hour]
+    levels, trend, reason = cache[seed_bucket]
     if not levels:
-        base["h1_level_attack_status"] = f"no_level:{reason}"
-        base["h1_level_trend_state"] = trend
+        base[f"{prefix}_level_attack_status"] = f"no_level:{reason}"
+        base[f"{prefix}_level_trend_state"] = trend
         return base
 
     seed_open_price = _float(match.get("open"))
@@ -1114,14 +1206,14 @@ def _level_attack_features(
     reference_price = seed_open_price if np.isfinite(seed_open_price) and seed_open_price > 0 else seed_close
     above_levels = [level for level in levels if level.level_price > reference_price]
     if not above_levels:
-        base["h1_level_attack_status"] = "no_level_above_seed_open"
-        base["h1_level_trend_state"] = trend
+        base[f"{prefix}_level_attack_status"] = "no_level_above_seed_open"
+        base[f"{prefix}_level_trend_state"] = trend
         return base
     nearest = min(above_levels, key=lambda level: level.level_price - reference_price)
     level_price = float(nearest.level_price)
-    tolerance = float(level_scan_config.touch_tolerance_pct)
-    history_1h = level_frame_1h.loc[pd.to_numeric(level_frame_1h["timestamp"], errors="coerce") < seed_hour].copy()
-    after_touch = history_1h.loc[pd.to_numeric(history_1h["timestamp"], errors="coerce") >= int(nearest.last_touch_timestamp_ms)].copy()
+    tolerance = float(scan_config.touch_tolerance_pct)
+    history_tf = frame.loc[pd.to_numeric(frame["timestamp"], errors="coerce") < seed_bucket].copy()
+    after_touch = history_tf.loc[pd.to_numeric(history_tf["timestamp"], errors="coerce") >= int(nearest.last_touch_timestamp_ms)].copy()
     pullback_low = float(pd.to_numeric(after_touch["low"], errors="coerce").min()) if not after_touch.empty else float("nan")
     pullback_size = _safe_divide(level_price - pullback_low, level_price)
     progress = _safe_divide(seed_close - pullback_low, level_price - pullback_low)
@@ -1150,79 +1242,104 @@ def _level_attack_features(
     )
     result = {
         **base,
-        "h1_level_attack_status": "ok",
-        "h1_level_trend_state": trend,
-        "h1_nearest_level_price": level_price,
-        "h1_nearest_level_context": nearest.context,
-        "h1_nearest_level_strength_score": float(nearest.strength_score),
-        "h1_nearest_level_valid_touch_count": int(nearest.valid_touch_count),
-        "h1_nearest_level_last_touch_timestamp_ms": int(nearest.last_touch_timestamp_ms),
-        "h1_nearest_level_last_touch_utc": nearest.last_touch_timestamp_utc,
-        "h1_nearest_level_distance_pct_from_seed_close": _safe_divide(level_price - seed_close, seed_close),
-        "h1_nearest_level_distance_R_from_entry": level_dist_r,
-        "h1_pullback_low_after_last_touch": pullback_low,
-        "h1_pullback_from_level_pct": pullback_size,
-        "h1_progress_to_level_from_pullback": progress,
-        "h1_is_in_attack_zone_70": bool(np.isfinite(progress) and progress >= 0.70 and seed_close <= level_price * (1.0 + tolerance)),
-        "h1_level_crossed_by_seed_high": crossed_high,
-        "h1_level_crossed_by_seed_close": crossed_close,
-        "h1_seed_close_above_level": crossed_close,
-        "h1_entry_mode_vs_nearest_level": entry_mode,
-        "h1_entry_before_level_break": bool(entry_mode == "advance_before_level"),
-        "h1_entry_in_level_crossing": bool(entry_mode in {"seed_high_crossing", "seed_close_crossing", "entry_in_level_band"}),
-        "h1_attack_prior_spike_count": int(prior_spike_count),
-        "h1_attack_quote_vs_prior_spike_max": quote_vs_prior,
-        "h1_attack_trades_vs_prior_spike_max": trades_vs_prior,
-        "h1_attack_flow_beats_prior_spikes": flow_beats_prior,
+        f"{prefix}_level_attack_status": "ok",
+        f"{prefix}_level_trend_state": trend,
+        f"{prefix}_nearest_level_price": level_price,
+        f"{prefix}_nearest_level_context": nearest.context,
+        f"{prefix}_nearest_level_strength_score": float(nearest.strength_score),
+        f"{prefix}_nearest_level_valid_touch_count": int(nearest.valid_touch_count),
+        f"{prefix}_nearest_level_last_touch_timestamp_ms": int(nearest.last_touch_timestamp_ms),
+        f"{prefix}_nearest_level_last_touch_utc": nearest.last_touch_timestamp_utc,
+        f"{prefix}_nearest_level_distance_pct_from_seed_close": _safe_divide(level_price - seed_close, seed_close),
+        f"{prefix}_nearest_level_distance_R_from_entry": level_dist_r,
+        f"{prefix}_pullback_low_after_last_touch": pullback_low,
+        f"{prefix}_pullback_from_level_pct": pullback_size,
+        f"{prefix}_progress_to_level_from_pullback": progress,
+        f"{prefix}_is_in_attack_zone_70": bool(np.isfinite(progress) and progress >= 0.70 and seed_close <= level_price * (1.0 + tolerance)),
+        f"{prefix}_level_crossed_by_seed_high": crossed_high,
+        f"{prefix}_level_crossed_by_seed_close": crossed_close,
+        f"{prefix}_seed_close_above_level": crossed_close,
+        f"{prefix}_entry_mode_vs_nearest_level": entry_mode,
+        f"{prefix}_entry_before_level_break": bool(entry_mode == "advance_before_level"),
+        f"{prefix}_entry_in_level_crossing": bool(entry_mode in {"seed_high_crossing", "seed_close_crossing", "entry_in_level_band"}),
+        f"{prefix}_attack_prior_spike_count": int(prior_spike_count),
+        f"{prefix}_attack_quote_vs_prior_spike_max": quote_vs_prior,
+        f"{prefix}_attack_trades_vs_prior_spike_max": trades_vs_prior,
+        f"{prefix}_attack_flow_beats_prior_spikes": flow_beats_prior,
     }
-    result["h1_level_attack_candidate"] = _is_level_attack_candidate(result)
-    result["h1_level_attack_reject_reason"] = _level_attack_reject_reason(result)
+    result[f"{prefix}_level_attack_candidate"] = _is_level_attack_candidate(result, prefix=prefix)
+    result[f"{prefix}_level_attack_reject_reason"] = _level_attack_reject_reason(result, prefix=prefix)
     for r_value in (1, 2, 3):
-        result[f"h1_levels_above_within_{r_value}R"] = _levels_above_within_r(levels, entry_price=entry_price, risk_abs=risk_abs, r_value=float(r_value))
-    result["h1_remaining_overhead_level_count_3R"] = result["h1_levels_above_within_3R"]
-    result["h1_level_cascade_score_3R"] = _level_cascade_score(levels, entry_price=entry_price, risk_abs=risk_abs, max_r=3.0)
+        result[f"{prefix}_levels_above_within_{r_value}R"] = _levels_above_within_r(levels, entry_price=entry_price, risk_abs=risk_abs, r_value=float(r_value))
+    result[f"{prefix}_remaining_overhead_level_count_3R"] = result[f"{prefix}_levels_above_within_3R"]
+    result[f"{prefix}_level_cascade_score_3R"] = _level_cascade_score(levels, entry_price=entry_price, risk_abs=risk_abs, max_r=3.0)
     return result
 
+
+def _combined_level_attack_features(features: Mapping[str, object]) -> dict[str, object]:
+    candidate_prefixes = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if _bool(features.get(f"{prefix}_level_attack_candidate"))]
+    ok_prefixes = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if str(features.get(f"{prefix}_level_attack_status", "")) == "ok"]
+    ranked = sorted(
+        ok_prefixes,
+        key=lambda prefix: (
+            1 if _bool(features.get(f"{prefix}_level_attack_candidate")) else 0,
+            _float(features.get(f"{prefix}_nearest_level_strength_score")),
+            _float(features.get(f"{prefix}_progress_to_level_from_pullback")),
+        ),
+        reverse=True,
+    )
+    best = ranked[0] if ranked else ""
+    return {
+        "level_attack_model": LEVEL_ATTACK_DISCOVERY_ID,
+        "level_attack_available_at_entry": False,
+        "level_attack_any_tf_candidate": bool(candidate_prefixes),
+        "level_attack_candidate_timeframes": "|".join(candidate_prefixes),
+        "level_attack_ok_timeframes": "|".join(ok_prefixes),
+        "level_attack_best_timeframe": best,
+        "level_attack_best_progress_to_level": _float(features.get(f"{best}_progress_to_level_from_pullback")) if best else float("nan"),
+        "level_attack_best_strength_score": _float(features.get(f"{best}_nearest_level_strength_score")) if best else float("nan"),
+        "level_attack_any_attack_zone70": any(_bool(features.get(f"{prefix}_is_in_attack_zone_70")) for prefix in LEVEL_ATTACK_TIMEFRAMES),
+        "level_attack_any_entry_before_level_break": any(_bool(features.get(f"{prefix}_entry_before_level_break")) for prefix in LEVEL_ATTACK_TIMEFRAMES),
+        "level_attack_any_entry_in_level_crossing": any(_bool(features.get(f"{prefix}_entry_in_level_crossing")) for prefix in LEVEL_ATTACK_TIMEFRAMES),
+        "level_attack_any_flow_beats_prior": any(_bool(features.get(f"{prefix}_attack_flow_beats_prior_spikes")) for prefix in LEVEL_ATTACK_TIMEFRAMES),
+    }
 
 
 def _annotate_setup_level_attack(
     setup: Mapping[str, object],
     *,
     frame_5m: pd.DataFrame,
-    level_frame_1h: pd.DataFrame,
-    level_cache: dict[int, tuple[list[HourlyLevelMetric], str, str]],
-    level_scan_config: HourlyLevelScanConfig,
+    level_contexts: Mapping[str, dict[str, object]],
 ) -> dict[str, object]:
-    """Attach cheap H1 level-attack context to a 5m setup before arm matching.
+    """Attach cheap multi-timeframe level-attack context before arm matching.
 
     This is the recall layer: it runs on cluster-selected setups, including
-    setups that fail the old large-runner 5m prefilter. It uses only closed H1
-    candles before the seed hour and 5m seed fields known at seed close.
+    setups that fail the old large-runner 5m prefilter. It uses only closed
+    H1/H4/D1 candles before the seed bucket and 5m seed fields known at seed
+    close.
     """
     row = dict(setup)
     seed_close_ms = int(_float(row.get("seed_close_ms")))
     if math.isfinite(seed_close_ms):
         row.update(_session_features(seed_close_ms))
     row.update(
-        _level_attack_features(
+        _multi_timeframe_level_attack_features(
             row,
             frame_5m=frame_5m,
-            level_frame_1h=level_frame_1h,
-            level_cache=level_cache,
-            level_scan_config=level_scan_config,
+            level_contexts=level_contexts,
         )
     )
     return row
 
 
-def _is_level_attack_candidate(features: Mapping[str, object]) -> bool:
-    if str(features.get("h1_level_attack_status", "")) != "ok":
+def _is_level_attack_candidate(features: Mapping[str, object], *, prefix: str = "h1") -> bool:
+    if str(features.get(f"{prefix}_level_attack_status", "")) != "ok":
         return False
-    progress = _float(features.get("h1_progress_to_level_from_pullback"))
-    distance_pct = _float(features.get("h1_nearest_level_distance_pct_from_seed_close"))
-    crossed_high = _bool(features.get("h1_level_crossed_by_seed_high"))
-    crossed_close = _bool(features.get("h1_level_crossed_by_seed_close"))
-    in_band_or_before = str(features.get("h1_entry_mode_vs_nearest_level", "")) in {
+    progress = _float(features.get(f"{prefix}_progress_to_level_from_pullback"))
+    distance_pct = _float(features.get(f"{prefix}_nearest_level_distance_pct_from_seed_close"))
+    crossed_high = _bool(features.get(f"{prefix}_level_crossed_by_seed_high"))
+    crossed_close = _bool(features.get(f"{prefix}_level_crossed_by_seed_close"))
+    in_band_or_before = str(features.get(f"{prefix}_entry_mode_vs_nearest_level", "")) in {
         "advance_before_level",
         "entry_in_level_band",
         "seed_high_crossing",
@@ -1230,66 +1347,67 @@ def _is_level_attack_candidate(features: Mapping[str, object]) -> bool:
     }
     near_level = bool(np.isfinite(distance_pct) and -0.003 <= distance_pct <= 0.08)
     progressed = bool(np.isfinite(progress) and progress >= 0.55)
-    prior_spikes = _float(features.get("h1_attack_prior_spike_count"))
-    flow_ok = _bool(features.get("h1_attack_flow_beats_prior_spikes")) or (np.isfinite(prior_spikes) and prior_spikes == 0)
+    prior_spikes = _float(features.get(f"{prefix}_attack_prior_spike_count"))
+    flow_ok = _bool(features.get(f"{prefix}_attack_flow_beats_prior_spikes")) or (np.isfinite(prior_spikes) and prior_spikes == 0)
     return bool((progressed or near_level or crossed_high or crossed_close) and in_band_or_before and flow_ok)
 
 
-def _level_attack_reject_reason(features: Mapping[str, object]) -> str:
-    status = str(features.get("h1_level_attack_status", ""))
+def _level_attack_reject_reason(features: Mapping[str, object], *, prefix: str = "h1") -> str:
+    status = str(features.get(f"{prefix}_level_attack_status", ""))
     if status != "ok":
         return status or "not_computed"
-    if _is_level_attack_candidate(features):
+    if _is_level_attack_candidate(features, prefix=prefix):
         return "candidate"
-    entry_mode = str(features.get("h1_entry_mode_vs_nearest_level", ""))
+    entry_mode = str(features.get(f"{prefix}_entry_mode_vs_nearest_level", ""))
     if entry_mode == "after_level_break":
         return "already_after_level_break"
-    progress = _float(features.get("h1_progress_to_level_from_pullback"))
-    distance_pct = _float(features.get("h1_nearest_level_distance_pct_from_seed_close"))
+    progress = _float(features.get(f"{prefix}_progress_to_level_from_pullback"))
+    distance_pct = _float(features.get(f"{prefix}_nearest_level_distance_pct_from_seed_close"))
     if np.isfinite(progress) and progress < 0.55:
         return "progress_to_level_too_low"
     if np.isfinite(distance_pct) and distance_pct > 0.08:
         return "too_far_from_level"
-    prior_spikes = _float(features.get("h1_attack_prior_spike_count"))
-    if np.isfinite(prior_spikes) and prior_spikes > 0 and not _bool(features.get("h1_attack_flow_beats_prior_spikes")):
+    prior_spikes = _float(features.get(f"{prefix}_attack_prior_spike_count"))
+    if np.isfinite(prior_spikes) and prior_spikes > 0 and not _bool(features.get(f"{prefix}_attack_flow_beats_prior_spikes")):
         return "flow_weaker_than_prior_level_attacks"
     return "not_candidate"
 
-def _empty_level_attack_features(status: str) -> dict[str, object]:
+
+def _empty_level_attack_features(status: str, *, prefix: str = "h1") -> dict[str, object]:
     result: dict[str, object] = {
-        "h1_level_attack_model": LEVEL_ATTACK_DISCOVERY_ID,
-        "h1_level_attack_available_at_entry": False,
-        "h1_level_attack_status": status,
-        "h1_level_trend_state": "unknown",
-        "h1_nearest_level_price": float("nan"),
-        "h1_nearest_level_context": "",
-        "h1_nearest_level_strength_score": float("nan"),
-        "h1_nearest_level_valid_touch_count": 0,
-        "h1_nearest_level_last_touch_timestamp_ms": float("nan"),
-        "h1_nearest_level_last_touch_utc": "",
-        "h1_nearest_level_distance_pct_from_seed_close": float("nan"),
-        "h1_nearest_level_distance_R_from_entry": float("nan"),
-        "h1_pullback_low_after_last_touch": float("nan"),
-        "h1_pullback_from_level_pct": float("nan"),
-        "h1_progress_to_level_from_pullback": float("nan"),
-        "h1_is_in_attack_zone_70": False,
-        "h1_level_crossed_by_seed_high": False,
-        "h1_level_crossed_by_seed_close": False,
-        "h1_seed_close_above_level": False,
-        "h1_entry_mode_vs_nearest_level": "no_level",
-        "h1_entry_before_level_break": False,
-        "h1_entry_in_level_crossing": False,
-        "h1_attack_prior_spike_count": 0,
-        "h1_attack_quote_vs_prior_spike_max": float("nan"),
-        "h1_attack_trades_vs_prior_spike_max": float("nan"),
-        "h1_attack_flow_beats_prior_spikes": False,
-        "h1_level_attack_candidate": False,
-        "h1_level_attack_reject_reason": status,
-        "h1_remaining_overhead_level_count_3R": 0,
-        "h1_level_cascade_score_3R": float("nan"),
+        f"{prefix}_level_attack_model": f"{prefix}_level_attack_v2",
+        f"{prefix}_level_attack_available_at_entry": False,
+        f"{prefix}_level_attack_status": status,
+        f"{prefix}_level_trend_state": "unknown",
+        f"{prefix}_nearest_level_price": float("nan"),
+        f"{prefix}_nearest_level_context": "",
+        f"{prefix}_nearest_level_strength_score": float("nan"),
+        f"{prefix}_nearest_level_valid_touch_count": 0,
+        f"{prefix}_nearest_level_last_touch_timestamp_ms": float("nan"),
+        f"{prefix}_nearest_level_last_touch_utc": "",
+        f"{prefix}_nearest_level_distance_pct_from_seed_close": float("nan"),
+        f"{prefix}_nearest_level_distance_R_from_entry": float("nan"),
+        f"{prefix}_pullback_low_after_last_touch": float("nan"),
+        f"{prefix}_pullback_from_level_pct": float("nan"),
+        f"{prefix}_progress_to_level_from_pullback": float("nan"),
+        f"{prefix}_is_in_attack_zone_70": False,
+        f"{prefix}_level_crossed_by_seed_high": False,
+        f"{prefix}_level_crossed_by_seed_close": False,
+        f"{prefix}_seed_close_above_level": False,
+        f"{prefix}_entry_mode_vs_nearest_level": "no_level",
+        f"{prefix}_entry_before_level_break": False,
+        f"{prefix}_entry_in_level_crossing": False,
+        f"{prefix}_attack_prior_spike_count": 0,
+        f"{prefix}_attack_quote_vs_prior_spike_max": float("nan"),
+        f"{prefix}_attack_trades_vs_prior_spike_max": float("nan"),
+        f"{prefix}_attack_flow_beats_prior_spikes": False,
+        f"{prefix}_level_attack_candidate": False,
+        f"{prefix}_level_attack_reject_reason": status,
+        f"{prefix}_remaining_overhead_level_count_3R": 0,
+        f"{prefix}_level_cascade_score_3R": float("nan"),
     }
     for r_value in (1, 2, 3):
-        result[f"h1_levels_above_within_{r_value}R"] = 0
+        result[f"{prefix}_levels_above_within_{r_value}R"] = 0
     return result
 
 
@@ -1362,8 +1480,6 @@ def _level_cascade_score(levels: list[HourlyLevelMetric], *, entry_price: float,
         if np.isfinite(distance_r) and 0.0 < distance_r <= float(max_r):
             score += float(level.strength_score) / (1.0 + distance_r)
     return float(score)
-
-
 
 def _future_labels(
     frame_1m: pd.DataFrame,
@@ -2509,66 +2625,161 @@ def _top_dependency(trades: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+
 def _level_attack_candidates(setups: pd.DataFrame) -> pd.DataFrame:
     if setups.empty:
         return pd.DataFrame()
-    if "h1_level_attack_candidate" not in setups.columns:
+    if "level_attack_any_tf_candidate" not in setups.columns:
         return pd.DataFrame()
     frame = setups.copy()
-    mask = _bool_series(frame, "h1_level_attack_candidate")
-    columns = [
+    mask = _bool_series(frame, "level_attack_any_tf_candidate")
+    base_columns = [
         "symbol",
         "seed_open_ms",
         "seed_close_utc",
         "setup_selection_model",
         "setup_cluster_raw_rank",
         "large_runner_5m_prefilter_passed",
-        "h1_level_attack_status",
-        "h1_level_attack_reject_reason",
-        "h1_entry_mode_vs_nearest_level",
-        "h1_level_attack_candidate",
-        "h1_is_in_attack_zone_70",
-        "h1_progress_to_level_from_pullback",
-        "h1_nearest_level_price",
-        "h1_nearest_level_distance_R_from_entry",
-        "h1_nearest_level_distance_pct_from_seed_close",
-        "h1_nearest_level_strength_score",
-        "h1_nearest_level_valid_touch_count",
-        "h1_pullback_from_level_pct",
-        "h1_level_crossed_by_seed_high",
-        "h1_level_crossed_by_seed_close",
-        "h1_attack_prior_spike_count",
-        "h1_attack_quote_vs_prior_spike_max",
-        "h1_attack_trades_vs_prior_spike_max",
-        "h1_attack_flow_beats_prior_spikes",
-        "h1_remaining_overhead_level_count_3R",
-        "h1_level_cascade_score_3R",
+        "level_attack_any_tf_candidate",
+        "level_attack_candidate_timeframes",
+        "level_attack_ok_timeframes",
+        "level_attack_best_timeframe",
+        "level_attack_best_progress_to_level",
+        "level_attack_best_strength_score",
+        "level_attack_any_attack_zone70",
+        "level_attack_any_entry_before_level_break",
+        "level_attack_any_entry_in_level_crossing",
+        "level_attack_any_flow_beats_prior",
         "early_return_pct",
         "early_quote_ratio_24h_scaled",
         "early_trade_ratio_24h_scaled",
         "session_primary",
         "hour_utc",
     ]
+    tf_columns: list[str] = []
+    for prefix in LEVEL_ATTACK_TIMEFRAMES:
+        tf_columns.extend(
+            [
+                f"{prefix}_level_attack_status",
+                f"{prefix}_level_attack_reject_reason",
+                f"{prefix}_entry_mode_vs_nearest_level",
+                f"{prefix}_level_attack_candidate",
+                f"{prefix}_is_in_attack_zone_70",
+                f"{prefix}_progress_to_level_from_pullback",
+                f"{prefix}_nearest_level_price",
+                f"{prefix}_nearest_level_distance_R_from_entry",
+                f"{prefix}_nearest_level_distance_pct_from_seed_close",
+                f"{prefix}_nearest_level_strength_score",
+                f"{prefix}_nearest_level_valid_touch_count",
+                f"{prefix}_pullback_from_level_pct",
+                f"{prefix}_level_crossed_by_seed_high",
+                f"{prefix}_level_crossed_by_seed_close",
+                f"{prefix}_attack_prior_spike_count",
+                f"{prefix}_attack_quote_vs_prior_spike_max",
+                f"{prefix}_attack_trades_vs_prior_spike_max",
+                f"{prefix}_attack_flow_beats_prior_spikes",
+                f"{prefix}_remaining_overhead_level_count_3R",
+                f"{prefix}_level_cascade_score_3R",
+            ]
+        )
+    columns = base_columns + tf_columns
     return frame.loc[mask, [column for column in columns if column in frame.columns]].copy()
 
 
 def _level_attack_reject_reasons(setups: pd.DataFrame) -> pd.DataFrame:
-    if setups.empty or "h1_level_attack_reject_reason" not in setups.columns:
-        return pd.DataFrame(columns=["h1_level_attack_reject_reason", "setups"])
-    frame = setups.copy()
-    frame["h1_level_attack_reject_reason"] = frame["h1_level_attack_reject_reason"].fillna("missing").astype(str)
-    grouped = frame.groupby("h1_level_attack_reject_reason", dropna=False).agg(
-        setups=("h1_level_attack_reject_reason", "size"),
-        symbols=("symbol", "nunique"),
-    ).reset_index()
-    if "large_runner_5m_prefilter_passed" in frame.columns:
-        passed = frame.loc[_bool_series(frame, "large_runner_5m_prefilter_passed")]
-        passed_counts = passed.groupby("h1_level_attack_reject_reason", dropna=False).size().rename("prefilter_passed_setups")
-        grouped = grouped.merge(passed_counts, how="left", on="h1_level_attack_reject_reason")
-    else:
-        grouped["prefilter_passed_setups"] = 0
-    grouped["prefilter_passed_setups"] = grouped["prefilter_passed_setups"].fillna(0).astype(int)
-    return grouped.sort_values("setups", ascending=False).reset_index(drop=True)
+    columns = ["timeframe", "level_attack_reject_reason", "setups", "symbols", "candidates", "prefilter_passed_setups"]
+    if setups.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[pd.DataFrame] = []
+    for prefix in LEVEL_ATTACK_TIMEFRAMES:
+        reason_column = f"{prefix}_level_attack_reject_reason"
+        candidate_column = f"{prefix}_level_attack_candidate"
+        if reason_column not in setups.columns:
+            continue
+        frame = setups.copy()
+        frame[reason_column] = frame[reason_column].fillna("missing").astype(str)
+        grouped = frame.groupby(reason_column, dropna=False).agg(
+            setups=(reason_column, "size"),
+            symbols=("symbol", "nunique"),
+        ).reset_index().rename(columns={reason_column: "level_attack_reject_reason"})
+        grouped["timeframe"] = prefix
+        grouped["candidates"] = 0
+        if candidate_column in frame.columns:
+            candidates = frame.loc[_bool_series(frame, candidate_column)].groupby(reason_column, dropna=False).size().rename("candidates")
+            grouped = grouped.merge(candidates, how="left", left_on="level_attack_reject_reason", right_index=True)
+        if "large_runner_5m_prefilter_passed" in frame.columns:
+            passed = frame.loc[_bool_series(frame, "large_runner_5m_prefilter_passed")]
+            passed_counts = passed.groupby(reason_column, dropna=False).size().rename("prefilter_passed_setups")
+            grouped = grouped.merge(passed_counts, how="left", left_on="level_attack_reject_reason", right_index=True)
+        else:
+            grouped["prefilter_passed_setups"] = 0
+        grouped["candidates"] = grouped["candidates"].fillna(0).astype(int)
+        grouped["prefilter_passed_setups"] = grouped["prefilter_passed_setups"].fillna(0).astype(int)
+        rows.append(grouped[columns])
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(rows, ignore_index=True).sort_values(["timeframe", "setups"], ascending=[True, False]).reset_index(drop=True)
+
+
+def _level_attack_by_session(setups: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "timeframe",
+        "session_primary",
+        "setups",
+        "candidates",
+        "candidate_rate",
+        "attack_zone70",
+        "entry_before_level_break",
+        "entry_in_level_crossing",
+        "flow_beats_prior",
+        "avg_progress_to_level",
+        "median_progress_to_level",
+        "avg_strength_score",
+    ]
+    if setups.empty or "session_primary" not in setups.columns:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for prefix in LEVEL_ATTACK_TIMEFRAMES:
+        candidate_column = f"{prefix}_level_attack_candidate"
+        if candidate_column not in setups.columns:
+            continue
+        for session, group in setups.groupby("session_primary", dropna=False):
+            candidates = group.loc[_bool_series(group, candidate_column)]
+            rows.append(
+                {
+                    "timeframe": prefix,
+                    "session_primary": str(session),
+                    "setups": int(len(group)),
+                    "candidates": int(len(candidates)),
+                    "candidate_rate": _safe_divide(float(len(candidates)), float(len(group))),
+                    "attack_zone70": int(_bool_series(candidates, f"{prefix}_is_in_attack_zone_70").sum()) if not candidates.empty else 0,
+                    "entry_before_level_break": int(_bool_series(candidates, f"{prefix}_entry_before_level_break").sum()) if not candidates.empty else 0,
+                    "entry_in_level_crossing": int(_bool_series(candidates, f"{prefix}_entry_in_level_crossing").sum()) if not candidates.empty else 0,
+                    "flow_beats_prior": int(_bool_series(candidates, f"{prefix}_attack_flow_beats_prior_spikes").sum()) if not candidates.empty else 0,
+                    "avg_progress_to_level": float(pd.to_numeric(candidates.get(f"{prefix}_progress_to_level_from_pullback", pd.Series(dtype=float)), errors="coerce").mean()) if not candidates.empty else float("nan"),
+                    "median_progress_to_level": float(pd.to_numeric(candidates.get(f"{prefix}_progress_to_level_from_pullback", pd.Series(dtype=float)), errors="coerce").median()) if not candidates.empty else float("nan"),
+                    "avg_strength_score": float(pd.to_numeric(candidates.get(f"{prefix}_nearest_level_strength_score", pd.Series(dtype=float)), errors="coerce").mean()) if not candidates.empty else float("nan"),
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _max_across_columns(frame: pd.DataFrame, columns: Iterable[str]) -> float:
+    available = [column for column in columns if column in frame.columns]
+    if frame.empty or not available:
+        return float("nan")
+    values = pd.concat([pd.to_numeric(frame[column], errors="coerce") for column in available], axis=0)
+    return float(values.max()) if not values.empty else float("nan")
+
+
+def _sum_bool_across_columns(frame: pd.DataFrame, columns: Iterable[str]) -> int:
+    if frame.empty:
+        return 0
+    total = 0
+    for column in columns:
+        if column in frame.columns:
+            total += int(_bool_series(frame, column).sum())
+    return int(total)
 
 
 def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataFrame, matches: pd.DataFrame) -> pd.DataFrame:
@@ -2576,6 +2787,7 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
         "symbol",
         "period_start_ms",
         "period_start_utc",
+        "session_primary",
         "hour_high_return_pct",
         "first15_high_return_pct",
         "lookback_start_ms",
@@ -2584,6 +2796,10 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
         "level_attack_first_offset_min",
         "level_attack_prefilter_passed_setups",
         "level_attack_arm_matches",
+        "level_attack_timeframes_seen",
+        "h1_level_attack_setups",
+        "h4_level_attack_setups",
+        "d1_level_attack_setups",
         "level_attack_advance_before_level",
         "level_attack_entry_in_crossing",
         "level_attack_seed_high_crossed",
@@ -2600,12 +2816,12 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
         return pd.DataFrame(columns=columns)
     setup_frame = setups.copy()
     match_frame = matches.copy()
-    if not setup_frame.empty and "h1_level_attack_candidate" in setup_frame.columns:
-        setup_frame = setup_frame.loc[_bool_series(setup_frame, "h1_level_attack_candidate")].copy()
+    if not setup_frame.empty and "level_attack_any_tf_candidate" in setup_frame.columns:
+        setup_frame = setup_frame.loc[_bool_series(setup_frame, "level_attack_any_tf_candidate")].copy()
     else:
         setup_frame = pd.DataFrame()
-    if not match_frame.empty and "h1_level_attack_candidate" in match_frame.columns:
-        match_frame = match_frame.loc[_bool_series(match_frame, "h1_level_attack_candidate")].copy()
+    if not match_frame.empty and "level_attack_any_tf_candidate" in match_frame.columns:
+        match_frame = match_frame.loc[_bool_series(match_frame, "level_attack_any_tf_candidate")].copy()
     else:
         match_frame = pd.DataFrame()
 
@@ -2627,11 +2843,14 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
         if not setup_window.empty:
             first_seed = int(pd.to_numeric(setup_window["seed_open_ms"], errors="coerce").min())
             first_offset = _safe_divide(first_seed - period_start, MINUTE_MS)
+        tf_seen = [prefix for prefix in LEVEL_ATTACK_TIMEFRAMES if not setup_window.empty and _bool_series(setup_window, f"{prefix}_level_attack_candidate").any()]
+        session = _session_features(period_start).get("session_primary", "")
         rows.append(
             {
                 "symbol": symbol,
                 "period_start_ms": period_start,
                 "period_start_utc": top.get("period_start_utc", ""),
+                "session_primary": session,
                 "hour_high_return_pct": top.get("hour_high_return_pct", float("nan")),
                 "first15_high_return_pct": top.get("first15_high_return_pct", float("nan")),
                 "lookback_start_ms": int(lookback_start),
@@ -2640,21 +2859,24 @@ def _level_attack_top_growth_coverage(top_growth: pd.DataFrame, setups: pd.DataF
                 "level_attack_first_offset_min": first_offset,
                 "level_attack_prefilter_passed_setups": int(_bool_series(setup_window, "large_runner_5m_prefilter_passed").sum()) if not setup_window.empty else 0,
                 "level_attack_arm_matches": int(len(match_window)),
-                "level_attack_advance_before_level": int(_string_equals_series(setup_window, "h1_entry_mode_vs_nearest_level", "advance_before_level").sum()) if not setup_window.empty else 0,
-                "level_attack_entry_in_crossing": int(_bool_series(setup_window, "h1_entry_in_level_crossing").sum()) if not setup_window.empty else 0,
-                "level_attack_seed_high_crossed": int(_bool_series(setup_window, "h1_level_crossed_by_seed_high").sum()) if not setup_window.empty else 0,
-                "level_attack_seed_close_crossed": int(_bool_series(setup_window, "h1_level_crossed_by_seed_close").sum()) if not setup_window.empty else 0,
-                "level_attack_attack_zone70": int(_bool_series(setup_window, "h1_is_in_attack_zone_70").sum()) if not setup_window.empty else 0,
-                "level_attack_flow_beats_prior": int(_bool_series(setup_window, "h1_attack_flow_beats_prior_spikes").sum()) if not setup_window.empty else 0,
-                "best_progress_to_level": float(pd.to_numeric(setup_window.get("h1_progress_to_level_from_pullback", pd.Series(dtype=float)), errors="coerce").max()) if not setup_window.empty else float("nan"),
-                "best_quote_vs_prior_spike": float(pd.to_numeric(setup_window.get("h1_attack_quote_vs_prior_spike_max", pd.Series(dtype=float)), errors="coerce").max()) if not setup_window.empty else float("nan"),
-                "best_trades_vs_prior_spike": float(pd.to_numeric(setup_window.get("h1_attack_trades_vs_prior_spike_max", pd.Series(dtype=float)), errors="coerce").max()) if not setup_window.empty else float("nan"),
+                "level_attack_timeframes_seen": "|".join(tf_seen),
+                "h1_level_attack_setups": int(_bool_series(setup_window, "h1_level_attack_candidate").sum()) if not setup_window.empty else 0,
+                "h4_level_attack_setups": int(_bool_series(setup_window, "h4_level_attack_candidate").sum()) if not setup_window.empty else 0,
+                "d1_level_attack_setups": int(_bool_series(setup_window, "d1_level_attack_candidate").sum()) if not setup_window.empty else 0,
+                "level_attack_advance_before_level": _sum_bool_across_columns(setup_window, [f"{prefix}_entry_before_level_break" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "level_attack_entry_in_crossing": _sum_bool_across_columns(setup_window, [f"{prefix}_entry_in_level_crossing" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "level_attack_seed_high_crossed": _sum_bool_across_columns(setup_window, [f"{prefix}_level_crossed_by_seed_high" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "level_attack_seed_close_crossed": _sum_bool_across_columns(setup_window, [f"{prefix}_level_crossed_by_seed_close" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "level_attack_attack_zone70": _sum_bool_across_columns(setup_window, [f"{prefix}_is_in_attack_zone_70" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "level_attack_flow_beats_prior": _sum_bool_across_columns(setup_window, [f"{prefix}_attack_flow_beats_prior_spikes" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "best_progress_to_level": _max_across_columns(setup_window, [f"{prefix}_progress_to_level_from_pullback" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "best_quote_vs_prior_spike": _max_across_columns(setup_window, [f"{prefix}_attack_quote_vs_prior_spike_max" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
+                "best_trades_vs_prior_spike": _max_across_columns(setup_window, [f"{prefix}_attack_trades_vs_prior_spike_max" for prefix in LEVEL_ATTACK_TIMEFRAMES]),
                 "covered_by_level_attack_before_top": bool(not setup_window.empty),
                 "coverage_stage": coverage_stage,
             }
         )
     return pd.DataFrame(rows, columns=columns)
-
 
 def _stability_report(portfolio: pd.DataFrame, *, config: LargeRunnerDiscoveryConfig) -> pd.DataFrame:
     if portfolio.empty or "status" not in portfolio.columns:
