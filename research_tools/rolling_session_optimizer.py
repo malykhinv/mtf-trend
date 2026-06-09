@@ -5,13 +5,15 @@ levels, or resimulates exits.  It reads the existing large-runner trade ledger,
 selects rules from past windows only, applies them to the next OOS day, and
 writes enough audit artifacts to see whether adaptation is stable or just noise.
 
-P540 methodology:
+P541 methodology updates P540:
 * session buckets are separated: asia_only, asia_europe_overlap, europe_only,
   europe_us_overlap, us_only, off_session;
 * 15/30/60d windows have different roles: recency / main / robustness;
 * rules are assigned states: core, strong, tactical, challenger, cooldown,
   rejected;
+* train, stress and OOS use the same anti-clone portfolio contract;
 * selected trades are weighted by state and protected against clones;
+* sparse active-day illusions are blocked with minimum active-day gates;
 * stress folds, window agreement, OOS memory and cooldowns are first-class
   artifacts.
 """
@@ -53,6 +55,8 @@ OPTIMIZER_RISK_PER_TRADE_PCT = 0.03
 # would turn the selector into a museum exhibit.
 MIN_TRADES_BY_WINDOW = {15: 5, 30: 12, 60: 20}
 SOFT_MIN_TRADES_BY_WINDOW = {15: 3, 30: 8, 60: 12}
+MIN_ACTIVE_DAYS_BY_WINDOW = {15: 3, 30: 7, 60: 12}
+SOFT_MIN_ACTIVE_DAYS_BY_WINDOW = {15: 2, 30: 5, 60: 8}
 
 # Main gates.
 MAIN_MIN_WIN_RATE = 0.50
@@ -255,12 +259,12 @@ def run_rolling_session_optimizer(config: RollingSessionOptimizerConfig) -> Path
                 "ledger_rows": int(len(ledger)),
                 "atoms": int(len(atoms)),
                 "oos_days": int(len(oos_days)),
-                "optimizer_model": "rolling_session_optimizer_v4_professional_15_30_60_tiered_oos_memory",
-                "selection_model": "30d_candidates_15d_recency_60d_robustness_session_buckets_no_future_data",
+                "optimizer_model": "rolling_session_optimizer_v5_train_oos_contract_dedup_active_day_gates",
+                "selection_model": "30d_candidates_15d_recency_60d_robustness_train_equals_oos_contract",
                 "session_model": "asia_only_asia_europe_overlap_europe_only_europe_us_overlap_us_only_off_session",
                 "state_model": "core_strong_tactical_challenger_cooldown_rejected_weighted_oos",
-                "stress_model": "first_second_half_odd_even_mod3_week_folds_no_future_data",
-                "anti_clone_model": "max_one_symbol_session_max_two_rule_session_max_five_session_day",
+                "stress_model": "portfolio_dedup_first_second_half_odd_even_mod3_week_folds_no_future_data",
+                "anti_clone_model": "train_stress_oos_max_one_symbol_session_max_two_rule_session_max_five_session_day",
                 "runtime_seconds": round(time.monotonic() - started, 3),
             }
         ]
@@ -550,6 +554,7 @@ def _select_rules_for_session_day(
             **_prefix_metrics(window_metrics[15], "w15"),
             **_prefix_metrics(window_metrics[30], "w30"),
             **_prefix_metrics(window_metrics[60], "w60"),
+            "window_agreement_score": _window_agreement_score(window_metrics),
             **{f"stress_{key}": value for key, value in stress.items()},
             **_memory_summary(memory_state),
         }
@@ -629,7 +634,8 @@ def _beam_candidate_rules(context: _LedgerContext, train_mask: np.ndarray, *, wi
                     continue
                 seen.add(rule_id)
                 mask = base.mask & atom_rule.mask
-                if int((train_mask & mask).sum()) < min_trades:
+                metrics_probe = _metrics(context, train_mask & mask, window_days=window_days, risk_per_trade_pct=config.risk_per_trade_pct)
+                if int(metrics_probe.get("trades", 0)) < min_trades:
                     continue
                 conditions_by_id = {aid: label for aid, label in zip(base.atom_ids, base.conditions)}
                 columns_by_id = {aid: column for aid, column in zip(base.atom_ids, base.columns)}
@@ -642,7 +648,7 @@ def _beam_candidate_rules(context: _LedgerContext, train_mask: np.ndarray, *, wi
                     columns=tuple(columns_by_id[aid] for aid in atom_ids),
                     mask=mask,
                 )
-                metrics = _metrics(context, train_mask & rule.mask, window_days=window_days, risk_per_trade_pct=config.risk_per_trade_pct)
+                metrics = metrics_probe
                 score = _soft_score(metrics) - 0.03 * (len(rule.atom_ids) - 1)
                 next_candidates.append((score, rule, metrics))
         next_candidates.sort(key=lambda item: item[0], reverse=True)
@@ -685,9 +691,11 @@ def _selection_state(
     robust_not_dead = _robust_not_dead(m60)
     stress_ok = _bool(stress.get("stress_pass"))
     memory_ok = _memory_ok(memory_state)
-    if main_strong and recency_alive and robust_strong and stress_ok and memory_ok:
+    agreement = _window_agreement_score(window_metrics)
+    agreement_ok = agreement >= 0.55
+    if main_strong and recency_alive and robust_strong and stress_ok and memory_ok and agreement_ok:
         return "core", "selected_core", None
-    if main_strong and recency_alive and robust_not_dead and stress_ok and memory_ok:
+    if main_strong and recency_alive and robust_not_dead and stress_ok and memory_ok and agreement_ok:
         return "strong", "selected_strong", None
     if recency_strong and _not_dead(m30) and _not_catastrophic(m60) and stress_ok and memory_ok:
         return "tactical", "selected_tactical_recency", None
@@ -702,14 +710,45 @@ def _selection_state(
         reasons.append("robust60_dead")
     if not stress_ok:
         reasons.append("stress_failed")
+    if not agreement_ok:
+        reasons.append("windows_disagree")
     if not memory_ok:
         reasons.append("oos_memory_bad")
     return "rejected", "+".join(reasons) or "rejected", None
 
 
+def _has_enough_support(m: Mapping[str, object], window: int, *, hard: bool) -> bool:
+    trade_min = (MIN_TRADES_BY_WINDOW if hard else SOFT_MIN_TRADES_BY_WINDOW).get(int(window), 0)
+    active_min = (MIN_ACTIVE_DAYS_BY_WINDOW if hard else SOFT_MIN_ACTIVE_DAYS_BY_WINDOW).get(int(window), 0)
+    return bool(int(m.get("trades", 0)) >= int(trade_min) and int(m.get("active_days", 0)) >= int(active_min))
+
+
+def _window_agreement_score(window_metrics: Mapping[int, Mapping[str, object]]) -> float:
+    windows = [15, 30, 60]
+    signs = []
+    health_values = []
+    for window in windows:
+        metrics = window_metrics.get(window, {})
+        if not metrics:
+            continue
+        sum_r = float(metrics.get("sum_r", 0.0))
+        signs.append(1 if sum_r > 0.0 else (-1 if sum_r < 0.0 else 0))
+        health_values.append(_health_score(metrics))
+    if len(signs) < 2:
+        return 0.0
+    nonnegative_rate = sum(1 for sign in signs if sign >= 0) / len(signs)
+    positive_rate = sum(1 for sign in signs if sign > 0) / len(signs)
+    if len(health_values) >= 2:
+        spread = max(health_values) - min(health_values)
+        stability = 1.0 / (1.0 + max(0.0, spread))
+    else:
+        stability = 0.0
+    return float(0.55 * nonnegative_rate + 0.30 * positive_rate + 0.15 * stability)
+
+
 def _main_strong(m: Mapping[str, object]) -> bool:
     return bool(
-        int(m.get("trades", 0)) >= MIN_TRADES_BY_WINDOW[30]
+        _has_enough_support(m, 30, hard=True)
         and float(m.get("sum_r", 0.0)) > 0.0
         and float(m.get("win_rate", 0.0)) >= MAIN_MIN_WIN_RATE
         and float(m.get("positive_active_day_rate", 0.0)) >= MAIN_MIN_POSITIVE_DAY_RATE
@@ -721,7 +760,7 @@ def _main_strong(m: Mapping[str, object]) -> bool:
 
 def _recency_alive(m: Mapping[str, object]) -> bool:
     return bool(
-        int(m.get("trades", 0)) >= MIN_TRADES_BY_WINDOW[15]
+        _has_enough_support(m, 15, hard=True)
         and float(m.get("sum_r", 0.0)) > 0.0
         and float(m.get("win_rate", 0.0)) >= RECENCY_ALIVE_MIN_WIN_RATE
         and float(m.get("positive_active_day_rate", 0.0)) >= RECENCY_ALIVE_MIN_POSITIVE_DAY_RATE
@@ -735,7 +774,7 @@ def _recency_strong(m: Mapping[str, object]) -> bool:
 
 def _robust_strong(m: Mapping[str, object]) -> bool:
     return bool(
-        int(m.get("trades", 0)) >= MIN_TRADES_BY_WINDOW[60]
+        _has_enough_support(m, 60, hard=True)
         and float(m.get("sum_r", 0.0)) > 0.0
         and float(m.get("win_rate", 0.0)) >= ROBUST_MIN_WIN_RATE
         and float(m.get("positive_active_day_rate", 0.0)) >= ROBUST_MIN_POSITIVE_DAY_RATE
@@ -747,7 +786,7 @@ def _robust_strong(m: Mapping[str, object]) -> bool:
 
 def _robust_not_dead(m: Mapping[str, object]) -> bool:
     return bool(
-        int(m.get("trades", 0)) >= SOFT_MIN_TRADES_BY_WINDOW[60]
+        _has_enough_support(m, 60, hard=False)
         and float(m.get("sum_r", 0.0)) >= 0.0
         and float(m.get("win_rate", 0.0)) >= ROBUST_NOT_DEAD_MIN_WIN_RATE
         and float(m.get("positive_active_day_rate", 0.0)) >= ROBUST_NOT_DEAD_MIN_POSITIVE_DAY_RATE
@@ -758,7 +797,7 @@ def _robust_not_dead(m: Mapping[str, object]) -> bool:
 
 def _not_dead(m: Mapping[str, object]) -> bool:
     return bool(
-        int(m.get("trades", 0)) >= SOFT_MIN_TRADES_BY_WINDOW[30]
+        _has_enough_support(m, 30, hard=False)
         and float(m.get("sum_r", 0.0)) >= 0.0
         and float(m.get("win_rate", 0.0)) >= 0.42
         and float(m.get("positive_active_day_rate", 0.0)) >= 0.55
@@ -799,16 +838,18 @@ def _final_score(
         + 0.8 * _health_score(m60)
     )
     stress_mult = max(0.0, min(1.2, float(stress.get("stress_pass_rate", 0.0)) + 0.25))
+    agreement_mult = max(0.25, min(1.15, _window_agreement_score(window_metrics) + 0.25))
     memory_mult = 1.0 if _memory_ok(memory_state) else 0.2
     state_mult = {"core": 1.25, "strong": 1.0, "tactical": 0.75, "challenger": 0.5}.get(state, 0.1)
-    return float(base * stress_mult * memory_mult * state_mult)
+    return float(base * stress_mult * agreement_mult * memory_mult * state_mult)
 
 
 def _health_score(m: Mapping[str, object]) -> float:
     trades = float(m.get("trades", 0.0))
     return float(
         1.8 * float(m.get("win_rate", 0.0))
-        + 1.6 * float(m.get("positive_active_day_rate", 0.0))
+        + 1.1 * float(m.get("positive_active_day_rate", 0.0))
+        + 0.5 * float(m.get("positive_calendar_day_rate", 0.0))
         + 0.015 * min(100.0, float(m.get("top_trade_independence_pct", 0.0)))
         + 0.010 * min(100.0, float(m.get("top_symbol_independence_pct", 0.0)))
         + 0.25 * math.tanh(trades / 20.0)
@@ -823,9 +864,14 @@ def _soft_score(metrics: Mapping[str, object]) -> float:
 
 
 def _metrics(context: _LedgerContext, mask: np.ndarray, *, window_days: int, risk_per_trade_pct: float) -> dict[str, object]:
-    idx = np.flatnonzero(mask)
-    if idx.size == 0:
+    raw_idx = np.flatnonzero(mask)
+    if raw_idx.size == 0:
         return _empty_metrics(window_days)
+    idx = _portfolio_rule_indices(context, raw_idx)
+    if idx.size == 0:
+        metrics = _empty_metrics(window_days)
+        metrics["raw_trades"] = int(raw_idx.size)
+        return metrics
     r = context.net_r[idx]
     days = context.day_ord[idx]
     symbols = context.symbol_code[idx]
@@ -836,30 +882,61 @@ def _metrics(context: _LedgerContext, mask: np.ndarray, *, window_days: int, ris
     drawdown = running_max - equity
     max_dd = float(np.max(drawdown)) if drawdown.size else 0.0
     symbol_sums = _group_sum_int(symbols, r)
+    positive_days = int(sum(1 for value in day_sums.values() if value > 0.0))
     return {
         "window_days": int(window_days),
+        "raw_trades": int(raw_idx.size),
         "trades": int(idx.size),
         "active_days": int(active_days),
+        "active_day_rate": float(active_days / max(int(window_days), 1)),
         "trades_per_day": float(idx.size / max(int(window_days), 1)),
         "win_rate": float(np.mean(r > 0.0)),
         "avg_r": float(np.mean(r)),
         "median_r": float(np.median(r)),
         "sum_r": float(np.sum(r)),
-        "positive_active_days": int(sum(1 for value in day_sums.values() if value > 0.0)),
-        "positive_active_day_rate": float(sum(1 for value in day_sums.values() if value > 0.0) / max(active_days, 1)),
-        "positive_calendar_day_rate": float(sum(1 for value in day_sums.values() if value > 0.0) / max(int(window_days), 1)),
+        "positive_active_days": positive_days,
+        "positive_active_day_rate": float(positive_days / max(active_days, 1)),
+        "positive_calendar_day_rate": float(positive_days / max(int(window_days), 1)),
         "max_drawdown_pct": max_dd,
         "top_trade_independence_pct": _top_trade_independence_pct(r),
         "top_symbol_independence_pct": _top_symbol_independence_pct(symbol_sums),
         "symbols": int(len(symbol_sums)),
+        "metrics_contract": "portfolio_dedup_like_oos",
     }
+
+
+def _portfolio_rule_indices(context: _LedgerContext, raw_idx: np.ndarray) -> np.ndarray:
+    if raw_idx.size == 0:
+        return raw_idx.astype("int64", copy=False)
+    ordered = sorted((int(idx) for idx in raw_idx.tolist()), key=lambda idx: (int(context.day_ord[idx]), int(context.timestamp[idx]), str(context.symbols[idx]), str(context.trade_key[idx])))
+    emitted: list[int] = []
+    used_day_symbol: set[tuple[int, str]] = set()
+    used_day_trade_key: set[tuple[int, str]] = set()
+    day_counts: dict[int, int] = {}
+    for idx in ordered:
+        day = int(context.day_ord[idx])
+        symbol = str(context.symbols[idx])
+        trade_key = str(context.trade_key[idx])
+        if (day, trade_key) in used_day_trade_key:
+            continue
+        if (day, symbol) in used_day_symbol:
+            continue
+        if day_counts.get(day, 0) >= min(OPTIMIZER_MAX_TRADES_PER_RULE_SESSION_DAY, OPTIMIZER_MAX_TRADES_PER_SESSION_DAY):
+            continue
+        emitted.append(idx)
+        used_day_trade_key.add((day, trade_key))
+        used_day_symbol.add((day, symbol))
+        day_counts[day] = day_counts.get(day, 0) + 1
+    return np.array(emitted, dtype="int64")
 
 
 def _empty_metrics(window_days: int) -> dict[str, object]:
     return {
         "window_days": int(window_days),
+        "raw_trades": 0,
         "trades": 0,
         "active_days": 0,
+        "active_day_rate": 0.0,
         "trades_per_day": 0.0,
         "win_rate": 0.0,
         "avg_r": 0.0,
@@ -872,6 +949,7 @@ def _empty_metrics(window_days: int) -> dict[str, object]:
         "top_trade_independence_pct": 0.0,
         "top_symbol_independence_pct": 0.0,
         "symbols": 0,
+        "metrics_contract": "portfolio_dedup_like_oos",
     }
 
 
@@ -922,6 +1000,7 @@ def _stress_metrics(context: _LedgerContext, train_mask: np.ndarray, rule: Candi
         metrics = _metrics(context, fold_mask & rule.mask, window_days=max(int(fold_days), 1), risk_per_trade_pct=context.config.risk_per_trade_pct)
         passed = bool(
             int(metrics.get("trades", 0)) >= max(2, min(5, MIN_TRADES_BY_WINDOW[15]))
+            and int(metrics.get("active_days", 0)) >= 1
             and float(metrics.get("sum_r", 0.0)) >= STRESS_WORST_FOLD_SUM_R_MIN
             and float(metrics.get("win_rate", 0.0)) >= STRESS_MIN_FOLD_WIN_RATE
         )
@@ -1075,10 +1154,11 @@ def _update_oos_memory(
         state = memory.setdefault(key, OosMemoryState([], []))
         day_values = by_rule.get(rule_id, [])
         day_sum = float(sum(day_values))
-        state.selected_day_rs.append(day_sum)
-        state.selected_day_rs[:] = state.selected_day_rs[-20:]
-        state.trade_rs.extend(day_values)
-        state.trade_rs[:] = state.trade_rs[-50:]
+        if day_values:
+            state.selected_day_rs.append(day_sum)
+            state.selected_day_rs[:] = state.selected_day_rs[-20:]
+            state.trade_rs.extend(day_values)
+            state.trade_rs[:] = state.trade_rs[-50:]
         cooldown_reason = ""
         if len(state.selected_day_rs) >= 5 and sum(state.selected_day_rs[-5:]) < OOS_BAD_LAST_SELECTED_DAY_SUM_R:
             state.cooldown_until_day = max(state.cooldown_until_day, int(test_day) + OOS_COOLDOWN_DAYS)
@@ -1102,6 +1182,7 @@ def _update_oos_memory(
                 "rule_id": rule_id,
                 "selected_day_r": day_sum,
                 "selected_day_trades": int(len(day_values)),
+                "memory_updated": bool(day_values),
                 "last_5_selected_days_sum_r": float(sum(state.selected_day_rs[-5:])),
                 "last_10_trade_wr": _win_rate(state.trade_rs[-10:]),
                 "cooldown_until_day": int(state.cooldown_until_day),
