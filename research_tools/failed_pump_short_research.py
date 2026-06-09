@@ -57,6 +57,15 @@ SESSION_BUCKETS = (
     "off_session",
 )
 ROLLING_WINDOWS = (15, 30, 60)
+PARTIAL_FLUSH_SYMBOLS = 25
+PARTIAL_FLUSH_SECONDS = 10.0
+PARTIAL_ARTIFACT_FILES = {
+    "setups": "failed_pump_short_setups.partial.csv",
+    "signals": "failed_pump_short_signals.partial.csv",
+    "trades": "failed_pump_short_trade_grid.partial.csv",
+    "quality": "failed_pump_short_data_quality.partial.csv",
+}
+PROGRESS_LOG_FILE = "failed_pump_short_progress.csv"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +77,8 @@ class FailedPumpShortResearchConfig:
     symbol_workers: int = 1
     fail_on_empty_input: bool = True
     cache_read_mode: str = "read_only"
+    partial_flush_symbols: int = PARTIAL_FLUSH_SYMBOLS
+    partial_flush_seconds: float = PARTIAL_FLUSH_SECONDS
 
     # Setup discovery: deliberately broad.  These constants are not optimized by
     # the command line; changing them should create a new research_id/config row.
@@ -119,6 +130,10 @@ class FailedPumpShortResearchConfig:
             raise ValueError("max_hold_minutes must be > 0")
         if int(self.trail_lookback_1m) <= 0:
             raise ValueError("trail_lookback_1m must be > 0")
+        if int(self.partial_flush_symbols) <= 0:
+            raise ValueError("partial_flush_symbols must be > 0")
+        if float(self.partial_flush_seconds) <= 0:
+            raise ValueError("partial_flush_seconds must be > 0")
 
 
 class _ProgressLine:
@@ -157,8 +172,25 @@ def run_failed_pump_short_research(
 
     started_at = time.monotonic()
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    _reset_partial_artifacts(config.output_dir)
+    _write_progress_event(
+        config.output_dir,
+        stage="start",
+        message="failed-pump short research started",
+        elapsed_seconds=0.0,
+    )
+    print(f"{progress_label}: output_dir={config.output_dir}", flush=True)
+    print(f"{progress_label}: cache_dir={config.cache_dir} mode=read_only", flush=True)
+
+    _print_stage(progress_label, "resolving symbols and cache coverage", started_at)
     selected_symbols = tuple(_resolve_symbols(config.cache_dir, symbols))
     if not selected_symbols:
+        _write_progress_event(
+            config.output_dir,
+            stage="failed",
+            message="no symbols with both 1m and 5m cache were found",
+            elapsed_seconds=time.monotonic() - started_at,
+        )
         raise RuntimeError(
             "No symbols with both 1m and 5m cache were found. "
             f"cache_dir={Path(config.cache_dir)}; cache is not modified by this command."
@@ -170,12 +202,30 @@ def run_failed_pump_short_research(
     warmup_ms = max(2 * DAY_MS, int(config.baseline_5m_candles) * FIVE_MINUTE_MS)
     load_start_ms = int(start_ms) - int(warmup_ms)
     load_end_ms = int(end_ms) + (int(config.max_hold_minutes) + int(config.post_pump_observation_minutes) + 10) * MINUTE_MS
+    print(
+        f"{progress_label}: window={_fmt_ts(start_ms)}..{_fmt_ts(end_ms)} "
+        f"symbols={len(selected_symbols)} latest_cache_5m={cache_coverage.get('max_5m_time_utc', '')}",
+        flush=True,
+    )
+    _write_progress_event(
+        config.output_dir,
+        stage="scan_started",
+        message=f"symbols={len(selected_symbols)} window={_fmt_ts(start_ms)}..{_fmt_ts(end_ms)}",
+        elapsed_seconds=time.monotonic() - started_at,
+        symbols=len(selected_symbols),
+    )
 
     progress = _ProgressLine(progress_label, len(selected_symbols))
     all_setups: list[dict[str, object]] = []
     all_signals: list[dict[str, object]] = []
     all_trades: list[dict[str, object]] = []
     all_quality: list[dict[str, object]] = []
+    pending_setups: list[dict[str, object]] = []
+    pending_signals: list[dict[str, object]] = []
+    pending_trades: list[dict[str, object]] = []
+    pending_quality: list[dict[str, object]] = []
+    last_flush_at = time.monotonic()
+    last_flush_index = 0
 
     for index, symbol in enumerate(selected_symbols, start=1):
         progress.update(index=index, item=symbol)
@@ -188,12 +238,58 @@ def run_failed_pump_short_research(
             load_start_ms=load_start_ms,
             load_end_ms=load_end_ms,
         )
-        all_setups.extend(result["setups"])
-        all_signals.extend(result["signals"])
-        all_trades.extend(result["trades"])
-        all_quality.extend(result["quality"])
+        symbol_setups = result["setups"]
+        symbol_signals = result["signals"]
+        symbol_trades = result["trades"]
+        symbol_quality = result["quality"]
+        all_setups.extend(symbol_setups)
+        all_signals.extend(symbol_signals)
+        all_trades.extend(symbol_trades)
+        all_quality.extend(symbol_quality)
+        pending_setups.extend(symbol_setups)
+        pending_signals.extend(symbol_signals)
+        pending_trades.extend(symbol_trades)
+        pending_quality.extend(symbol_quality)
+
+        now = time.monotonic()
+        should_flush = (
+            index == len(selected_symbols)
+            or index - last_flush_index >= int(config.partial_flush_symbols)
+            or now - last_flush_at >= float(config.partial_flush_seconds)
+        )
+        if should_flush:
+            _flush_partial_artifacts(
+                output_dir=config.output_dir,
+                setups=pending_setups,
+                signals=pending_signals,
+                trades=pending_trades,
+                quality=pending_quality,
+            )
+            pending_setups.clear()
+            pending_signals.clear()
+            pending_trades.clear()
+            pending_quality.clear()
+            last_flush_index = index
+            last_flush_at = now
+            _write_progress_event(
+                config.output_dir,
+                stage="scan_flush",
+                message="partial raw artifacts flushed",
+                elapsed_seconds=now - started_at,
+                symbols=index,
+                setups=len(all_setups),
+                signals=len(all_signals),
+                trades=len(all_trades),
+            )
+            print(
+                f"{progress_label}: flushed partial raw artifacts "
+                f"symbols={index}/{len(selected_symbols)} setups={len(all_setups):,} "
+                f"signals={len(all_signals):,} trades={len(all_trades):,}",
+                flush=True,
+            )
     progress.finish()
 
+    _print_stage(progress_label, "building raw dataframes", started_at)
     setups = pd.DataFrame(all_setups)
     signals = pd.DataFrame(all_signals)
     trade_grid = pd.DataFrame(all_trades)
@@ -206,6 +302,29 @@ def run_failed_pump_short_research(
     if not setups.empty:
         setups = _sort_frame(setups, ["seed_open_ms", "symbol"])
 
+    _print_stage(progress_label, "writing raw core artifacts before rolling", started_at)
+    _write_csv(config.output_dir / "failed_pump_short_setups.csv", setups)
+    _write_csv(config.output_dir / "failed_pump_short_signals.csv", signals)
+    _write_csv(config.output_dir / "failed_pump_short_trade_grid.csv", trade_grid)
+    _write_csv(config.output_dir / "failed_pump_short_data_quality.csv", quality)
+    _write_progress_event(
+        config.output_dir,
+        stage="raw_core_written",
+        message="setups/signals/trade_grid/data_quality were written before summaries and rolling",
+        elapsed_seconds=time.monotonic() - started_at,
+        setups=len(setups),
+        signals=len(signals),
+        trades=len(trade_grid),
+    )
+    print(
+        f"{progress_label}: raw artifacts on disk setups={len(setups):,} "
+        f"signals={len(signals):,} trades={len(trade_grid):,}",
+        flush=True,
+    )
+
+    _fail_fast_on_empty_input(config=config, quality=quality)
+
+    _print_stage(progress_label, "building summary metrics", started_at)
     by_family = _group_metrics(trade_grid, ["signal_family"])
     by_session = _group_metrics(trade_grid, ["session_bucket"])
     by_session_family = _group_metrics(trade_grid, ["session_bucket", "signal_family"])
@@ -217,8 +336,17 @@ def run_failed_pump_short_research(
     by_day = _daily_metrics(trade_grid)
     top_dependency = _top_dependency_report(trade_grid)
 
+    _print_stage(progress_label, "running rolling walk-forward protocol", started_at)
     rolling = _run_rolling_protocol(trade_grid, config=config)
+    _write_progress_event(
+        config.output_dir,
+        stage="rolling_done",
+        message="rolling walk-forward protocol finished",
+        elapsed_seconds=time.monotonic() - started_at,
+        oos_trades=len(rolling.get("oos_trades", pd.DataFrame())),
+    )
 
+    _print_stage(progress_label, "building run config and final artifacts", started_at)
     run_config = _run_config_frame(
         config=config,
         selected_symbols=selected_symbols,
@@ -256,8 +384,16 @@ def run_failed_pump_short_research(
     _write_csv(config.output_dir / "failed_pump_short_rolling_selection_drift.csv", rolling["selection_drift"])
     _write_csv(config.output_dir / "failed_pump_short_rolling_fluctuation_stress.csv", rolling["fluctuation_stress"])
     _write_csv(config.output_dir / "failed_pump_short_rolling_run_config.csv", rolling_run_config)
-
-    _fail_fast_on_empty_input(config=config, quality=quality)
+    _write_progress_event(
+        config.output_dir,
+        stage="finished",
+        message="all final artifacts written",
+        elapsed_seconds=time.monotonic() - started_at,
+        setups=len(setups),
+        signals=len(signals),
+        trades=len(trade_grid),
+    )
+    print(f"{progress_label}: all final artifacts written in {_format_duration(time.monotonic() - started_at)}", flush=True)
 
     return config.output_dir
 
@@ -2218,6 +2354,72 @@ def _sort_frame(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     if not existing:
         return frame.reset_index(drop=True)
     return frame.sort_values(existing).reset_index(drop=True)
+
+
+def _print_stage(label: str, stage: str, started_at: float) -> None:
+    print(f"{label}: {stage} elapsed={_format_duration(time.monotonic() - started_at)}", flush=True)
+
+
+def _reset_partial_artifacts(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for filename in [*PARTIAL_ARTIFACT_FILES.values(), PROGRESS_LOG_FILE]:
+        path = output_dir / filename
+        if path.exists() and path.is_file():
+            path.unlink()
+
+
+def _flush_partial_artifacts(
+    *,
+    output_dir: Path,
+    setups: list[dict[str, object]],
+    signals: list[dict[str, object]],
+    trades: list[dict[str, object]],
+    quality: list[dict[str, object]],
+) -> None:
+    _append_rows_csv(output_dir / PARTIAL_ARTIFACT_FILES["setups"], setups)
+    _append_rows_csv(output_dir / PARTIAL_ARTIFACT_FILES["signals"], signals)
+    _append_rows_csv(output_dir / PARTIAL_ARTIFACT_FILES["trades"], trades)
+    _append_rows_csv(output_dir / PARTIAL_ARTIFACT_FILES["quality"], quality)
+
+
+def _append_rows_csv(path: Path, rows: list[dict[str, object]]) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame = pd.DataFrame(rows)
+    frame.to_csv(
+        path,
+        mode="a",
+        header=not path.exists(),
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+
+def _write_progress_event(
+    output_dir: Path,
+    *,
+    stage: str,
+    message: str,
+    elapsed_seconds: float,
+    symbols: int | None = None,
+    setups: int | None = None,
+    signals: int | None = None,
+    trades: int | None = None,
+    oos_trades: int | None = None,
+) -> None:
+    row = {
+        "time_utc": _fmt_ts(int(datetime.now(tz=UTC).timestamp() * 1000)),
+        "stage": stage,
+        "message": message,
+        "elapsed_seconds": round(float(elapsed_seconds), 3),
+        "symbols": "" if symbols is None else int(symbols),
+        "setups": "" if setups is None else int(setups),
+        "signals": "" if signals is None else int(signals),
+        "trades": "" if trades is None else int(trades),
+        "oos_trades": "" if oos_trades is None else int(oos_trades),
+    }
+    _append_rows_csv(output_dir / PROGRESS_LOG_FILE, [row])
 
 
 def _write_csv(path: Path, frame: pd.DataFrame) -> None:
