@@ -448,6 +448,12 @@ def build_parser() -> argparse.ArgumentParser:
     hourly_levels.add_argument("--progress-min-seconds", type=float, default=5.0)
     hourly_levels.add_argument("--output-dir", default=None)
 
+    failed_pump_short = subparsers.add_parser(
+        "run-failed-pump-short-research",
+        help="Run isolated cache-only failed-pump short research with rolling OOS",
+    )
+    failed_pump_short.add_argument("--days", type=_positive_int_for("--days"), default=365)
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -472,6 +478,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-live-order-smoke": commands.run_live_order_smoke,
         "run-anomaly-top-growth": commands.run_anomaly_top_growth,
         "run-hourly-levels": commands.run_hourly_levels,
+        "run-failed-pump-short-research": commands.run_failed_pump_short_research,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }

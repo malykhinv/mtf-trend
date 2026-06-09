@@ -1965,6 +1965,29 @@ def run_rolling_session_optimizer(config: AppConfig, args: argparse.Namespace) -
     return _run_with_logging("run-rolling-session-optimizer", config, _run)
 
 
+def run_failed_pump_short_research(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs isolated cache-only failed-pump short research with rolling OOS."""
+
+    def _run() -> int:
+        from research_tools.failed_pump_short_research import (
+            FailedPumpShortResearchConfig,
+            run_failed_pump_short_research as run_research,
+        )
+
+        days = int(getattr(args, "days", 365))
+        output_dir = config.backtest.results_dir / f"failed_pump_short_research_{days}d"
+        research_config = FailedPumpShortResearchConfig(
+            cache_dir=config.backtest.cache_dir,
+            output_dir=output_dir,
+            days=days,
+        )
+        result_dir = run_research(research_config, progress_label="failed-pump short research")
+        print(f"failed-pump short research artifacts: {result_dir}", flush=True)
+        return 0
+
+    return _run_with_logging("run-failed-pump-short-research", config, _run)
+
+
 def materialize_anomaly_subminute_cache(config: AppConfig, args: argparse.Namespace) -> int:
     """Materializes 1s-derived subminute anomaly entry caches."""
 
