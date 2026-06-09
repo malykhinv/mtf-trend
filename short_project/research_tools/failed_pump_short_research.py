@@ -41,7 +41,12 @@ SIGNAL_FAMILIES = (
 )
 EXIT_POLICIES = (
     "short_trail_all_lower_highs",
+    "short_tp0p75r_close50_trail",
     "short_tp1r_close50_trail",
+)
+SIGNAL_VARIANTS = (
+    "structural_low_break",
+    "simple_pump_fade_without_low_break_audit",
 )
 SESSION_BUCKETS = (
     "asia_only",
@@ -77,10 +82,12 @@ class FailedPumpShortResearchConfig:
     flow_baseline_minutes: int = 30
     weak_close_max_position: float = 0.35
     taker_share_norm_mult: float = 0.90
-    taker_share_hard_ceiling: float = 0.50
+    max_confirm_taker_buy_share_for_research: float = 0.65
     min_1m_quote_ratio: float = 1.20
     min_1m_trade_ratio: float = 1.00
     oi_change_threshold_pct: float = 0.0015
+    oi_strong_change_threshold_pct: float = 0.0040
+    simple_fade_min_drawdown_from_pump_high_pct: float = 0.0030
     max_initial_risk_pct: float = 0.08
     structural_stop_buffer_pct: float = 0.0005
     entry_slippage_pct: float = 0.0005
@@ -195,6 +202,10 @@ def run_failed_pump_short_research(
     by_session = _group_metrics(trade_grid, ["session_bucket"])
     by_session_family = _group_metrics(trade_grid, ["session_bucket", "signal_family"])
     by_exit = _group_metrics(trade_grid, ["exit_policy"])
+    by_signal_variant = _group_metrics(trade_grid, ["signal_variant"])
+    by_taker_bucket = _group_metrics(trade_grid, ["confirm_taker_buy_bucket"])
+    by_oi_strength = _group_metrics(trade_grid, ["oi_strength_bucket"])
+    by_distribution = _group_metrics(trade_grid, ["post_pump_preconfirm_distribution_bucket"])
     by_day = _daily_metrics(trade_grid)
     top_dependency = _top_dependency_report(trade_grid)
 
@@ -219,6 +230,10 @@ def run_failed_pump_short_research(
     _write_csv(config.output_dir / "failed_pump_short_by_session.csv", by_session)
     _write_csv(config.output_dir / "failed_pump_short_by_session_family.csv", by_session_family)
     _write_csv(config.output_dir / "failed_pump_short_by_exit_policy.csv", by_exit)
+    _write_csv(config.output_dir / "failed_pump_short_by_signal_variant.csv", by_signal_variant)
+    _write_csv(config.output_dir / "failed_pump_short_by_taker_bucket.csv", by_taker_bucket)
+    _write_csv(config.output_dir / "failed_pump_short_by_oi_strength.csv", by_oi_strength)
+    _write_csv(config.output_dir / "failed_pump_short_by_distribution.csv", by_distribution)
     _write_csv(config.output_dir / "failed_pump_short_by_day.csv", by_day)
     _write_csv(config.output_dir / "failed_pump_short_top_dependency.csv", top_dependency)
     _write_csv(config.output_dir / "failed_pump_short_data_quality.csv", quality)
@@ -282,11 +297,17 @@ def _process_symbol(
         setup_rows.append(enriched)
         if str(enriched.get("enrichment_status")) != "ok":
             continue
-        signal = _find_first_failed_pump_signal(enriched, frame_1m=frame_1m, oi_5m=oi_5m, config=config)
-        if signal is None:
-            continue
-        signal_rows.append(signal)
-        trade_rows.extend(_simulate_signal_trade_grid(signal, frame_1m=frame_1m, config=config))
+        signals = [
+            signal
+            for signal in (
+                _find_first_failed_pump_signal(enriched, frame_1m=frame_1m, oi_5m=oi_5m, config=config),
+                _find_first_simple_pump_fade_signal(enriched, frame_1m=frame_1m, oi_5m=oi_5m, config=config),
+            )
+            if signal is not None
+        ]
+        for signal in signals:
+            signal_rows.append(signal)
+            trade_rows.extend(_simulate_signal_trade_grid(signal, frame_1m=frame_1m, config=config))
 
     qrow.update(
         {
@@ -409,6 +430,11 @@ def _enrich_setup_with_1m_structure(
     structural_high = float(highs.loc[high_idx])
     low_ts = int(struct.loc[low_idx, "timestamp"])
     high_ts = int(struct.loc[high_idx, "timestamp"])
+    seed_1m = frame_1m.loc[
+        (_numeric_series(frame_1m, "timestamp") >= seed_open_ms)
+        & (_numeric_series(frame_1m, "timestamp") < seed_close_ms)
+    ].sort_values("timestamp").reset_index(drop=True)
+    seed_shape = _seed_1m_shape_features(seed_1m, seed_open_ms=seed_open_ms, seed_close_ms=seed_close_ms)
     enriched.update(
         {
             "enrichment_status": "ok",
@@ -420,6 +446,7 @@ def _enrich_setup_with_1m_structure(
             "prepump_structural_high_time_utc": _fmt_ts(high_ts),
             "post_pump_observation_start_ms": seed_close_ms,
             "post_pump_observation_end_ms": seed_close_ms + int(config.post_pump_observation_minutes) * MINUTE_MS,
+            **seed_shape,
         }
     )
     return enriched
@@ -474,11 +501,16 @@ def _find_first_failed_pump_signal(
         if quote_ratio < float(config.min_1m_quote_ratio) or trade_ratio < float(config.min_1m_trade_ratio):
             continue
         taker_share = _float(_taker_buy_share(pd.DataFrame([candle])).iloc[0])
-        taker_threshold = min(float(config.taker_share_hard_ceiling), baseline_taker_share * float(config.taker_share_norm_mult))
+        taker_threshold = float(config.max_confirm_taker_buy_share_for_research)
         if not math.isfinite(taker_share) or taker_share > taker_threshold:
             continue
 
-        oi_context = _closed_5m_oi_context(oi_5m, asof_timestamp_ms=confirm_close_ms, threshold_pct=float(config.oi_change_threshold_pct))
+        oi_context = _closed_5m_oi_context(
+            oi_5m,
+            asof_timestamp_ms=confirm_close_ms,
+            threshold_pct=float(config.oi_change_threshold_pct),
+            strong_threshold_pct=float(config.oi_strong_change_threshold_pct),
+        )
         family = str(oi_context["signal_family"])
         next_row = window.iloc[pos + 1]
         entry_open_ms = int(next_row["timestamp"])
@@ -504,13 +536,17 @@ def _find_first_failed_pump_signal(
             continue
 
         session = _session_features(entry_open_ms)
-        signal_id = f"{setup['setup_id']}:{confirm_open_ms}:{family}"
+        shape = _post_pump_signal_shape_features(setup, frame_1m=frame_1m, confirm_open_ms=confirm_open_ms, confirm_close=c)
+        signal_variant = "structural_low_break"
+        signal_id = f"{setup['setup_id']}:{confirm_open_ms}:{signal_variant}:{family}"
         return {
             **_honesty_fields(),
             "research_id": RESEARCH_ID,
             "signal_id": signal_id,
             "setup_id": setup["setup_id"],
             "symbol": setup["symbol"],
+            "signal_variant": signal_variant,
+            "selection_eligible": True,
             "seed_open_ms": int(setup["seed_open_ms"]),
             "seed_close_ms": int(setup["seed_close_ms"]),
             "confirm_timestamp_ms": confirm_open_ms,
@@ -545,21 +581,195 @@ def _find_first_failed_pump_signal(
             "confirm_taker_buy_share": taker_share,
             "confirm_taker_buy_share_norm": baseline_taker_share,
             "confirm_taker_buy_share_threshold": taker_threshold,
+            "confirm_taker_buy_bucket": _taker_buy_bucket(taker_share),
+            "confirm_taker_buy_vs_norm_pct": taker_share - baseline_taker_share,
+            "confirm_taker_buy_norm_ratio": taker_share / baseline_taker_share if baseline_taker_share > 0 else np.nan,
+            "confirm_taker_buy_below_norm_flag": bool(taker_share <= baseline_taker_share * float(config.taker_share_norm_mult)),
             **oi_context,
+            **shape,
+            **_setup_shape_passthrough(setup),
         }
     return None
 
 
-def _closed_5m_oi_context(oi_5m: pd.DataFrame, *, asof_timestamp_ms: int, threshold_pct: float) -> dict[str, object]:
+def _find_first_simple_pump_fade_signal(
+    setup: dict[str, object],
+    *,
+    frame_1m: pd.DataFrame,
+    oi_5m: pd.DataFrame,
+    config: FailedPumpShortResearchConfig,
+) -> dict[str, object] | None:
+    """Control-group fade after pump without a structural-low break.
+
+    This is intentionally marked ``selection_eligible=False``.  It is written to
+    artifacts and simulated with the same execution model so that the structural
+    break edge can be compared against a non-break fade baseline without letting
+    the rolling selector promote the audit baseline into a trading candidate.
+    """
+
+    structural_low = float(setup.get("structural_low", np.nan))
+    pump_high = float(setup.get("pump_high", setup.get("seed_high", np.nan)))
+    if not math.isfinite(structural_low) or structural_low <= 0 or not math.isfinite(pump_high) or pump_high <= 0:
+        return None
+    start = int(setup["post_pump_observation_start_ms"])
+    end = int(setup["post_pump_observation_end_ms"])
+    ts = _numeric_series(frame_1m, "timestamp")
+    window = frame_1m.loc[(ts >= start) & (ts < end)].sort_values("timestamp").reset_index(drop=True)
+    if len(window) < 2:
+        return None
+    flow_baseline_start = max(int(setup["seed_open_ms"]) - int(config.flow_baseline_minutes) * MINUTE_MS, 0)
+    flow_baseline = frame_1m.loc[(ts >= flow_baseline_start) & (ts < start)]
+    baseline_taker_share = _safe_median(_taker_buy_share(flow_baseline))
+    baseline_quote = _safe_median(_numeric_series(flow_baseline, "quote_volume"))
+    baseline_trades = _safe_median(_numeric_series(flow_baseline, "number_of_trades"))
+    if baseline_taker_share <= 0 or baseline_quote <= 0 or baseline_trades <= 0:
+        return None
+
+    for pos in range(0, len(window) - 1):
+        candle = window.iloc[pos]
+        confirm_open_ms = int(candle["timestamp"])
+        confirm_close_ms = confirm_open_ms + MINUTE_MS
+        o = _float(candle.get("open"))
+        h = _float(candle.get("high"))
+        l = _float(candle.get("low"))
+        c = _float(candle.get("close"))
+        if not all(math.isfinite(v) and v > 0 for v in (o, h, l, c)):
+            continue
+        if c < structural_low:
+            continue
+        if c >= o:
+            continue
+        drawdown_from_pump_high = c / pump_high - 1.0
+        if abs(drawdown_from_pump_high) < float(config.simple_fade_min_drawdown_from_pump_high_pct):
+            continue
+        range_abs = max(h - l, 0.0)
+        close_pos = (c - l) / range_abs if range_abs > 0 else 1.0
+        if close_pos > float(config.weak_close_max_position):
+            continue
+        quote_now = _float(candle.get("quote_volume"))
+        trades_now = _float(candle.get("number_of_trades"))
+        quote_ratio = quote_now / baseline_quote if baseline_quote > 0 else 0.0
+        trade_ratio = trades_now / baseline_trades if baseline_trades > 0 else 0.0
+        if quote_ratio < float(config.min_1m_quote_ratio) or trade_ratio < float(config.min_1m_trade_ratio):
+            continue
+        taker_share = _float(_taker_buy_share(pd.DataFrame([candle])).iloc[0])
+        taker_threshold = float(config.max_confirm_taker_buy_share_for_research)
+        if not math.isfinite(taker_share) or taker_share > taker_threshold:
+            continue
+
+        oi_context = _closed_5m_oi_context(
+            oi_5m,
+            asof_timestamp_ms=confirm_close_ms,
+            threshold_pct=float(config.oi_change_threshold_pct),
+            strong_threshold_pct=float(config.oi_strong_change_threshold_pct),
+        )
+        family = str(oi_context["signal_family"])
+        next_row = window.iloc[pos + 1]
+        entry_open_ms = int(next_row["timestamp"])
+        if entry_open_ms < confirm_close_ms:
+            continue
+        entry_open = _float(next_row.get("open"))
+        if not math.isfinite(entry_open) or entry_open <= 0:
+            continue
+        structural_high_window = frame_1m.loc[
+            (_numeric_series(frame_1m, "timestamp") >= int(setup["seed_open_ms"]))
+            & (_numeric_series(frame_1m, "timestamp") <= confirm_open_ms)
+        ]
+        last_structural_high = _safe_max(_numeric_series(structural_high_window, "high"))
+        if last_structural_high <= 0:
+            last_structural_high = max(pump_high, h)
+        stop_price = max(last_structural_high, h, entry_open) * (1.0 + float(config.structural_stop_buffer_pct))
+        entry_price = entry_open * (1.0 - float(config.entry_slippage_pct))
+        risk_abs = stop_price - entry_price
+        if risk_abs <= 0:
+            continue
+        initial_risk_pct = risk_abs / entry_price
+        if initial_risk_pct > float(config.max_initial_risk_pct):
+            continue
+
+        session = _session_features(entry_open_ms)
+        shape = _post_pump_signal_shape_features(setup, frame_1m=frame_1m, confirm_open_ms=confirm_open_ms, confirm_close=c)
+        signal_variant = "simple_pump_fade_without_low_break_audit"
+        signal_id = f"{setup['setup_id']}:{confirm_open_ms}:{signal_variant}:{family}"
+        return {
+            **_honesty_fields(),
+            "research_id": RESEARCH_ID,
+            "signal_id": signal_id,
+            "setup_id": setup["setup_id"],
+            "symbol": setup["symbol"],
+            "signal_variant": signal_variant,
+            "selection_eligible": False,
+            "seed_open_ms": int(setup["seed_open_ms"]),
+            "seed_close_ms": int(setup["seed_close_ms"]),
+            "confirm_timestamp_ms": confirm_open_ms,
+            "confirm_close_timestamp_ms": confirm_close_ms,
+            "confirm_time_utc": _fmt_ts(confirm_open_ms),
+            "confirm_close_time_utc": _fmt_ts(confirm_close_ms),
+            "entry_timestamp_ms": entry_open_ms,
+            "entry_time_utc": _fmt_ts(entry_open_ms),
+            "signal_family": family,
+            "session_bucket": session["session_bucket"],
+            "session_primary": session["session_primary"],
+            "session_overlap": session["session_overlap"],
+            "hour_utc": session["hour_utc"],
+            "weekday": session["weekday"],
+            "structural_low": structural_low,
+            "last_structural_high": last_structural_high,
+            "stop_price": stop_price,
+            "entry_open": entry_open,
+            "entry_price": entry_price,
+            "initial_risk_abs": risk_abs,
+            "initial_risk_pct": initial_risk_pct,
+            "confirm_open": o,
+            "confirm_high": h,
+            "confirm_low": l,
+            "confirm_close": c,
+            "confirm_return_pct": c / o - 1.0 if o > 0 else np.nan,
+            "confirm_close_position": close_pos,
+            "confirm_quote_volume": quote_now,
+            "confirm_number_of_trades": trades_now,
+            "confirm_quote_ratio_vs_norm": quote_ratio,
+            "confirm_trade_ratio_vs_norm": trade_ratio,
+            "confirm_taker_buy_share": taker_share,
+            "confirm_taker_buy_share_norm": baseline_taker_share,
+            "confirm_taker_buy_share_threshold": taker_threshold,
+            "confirm_taker_buy_bucket": _taker_buy_bucket(taker_share),
+            "confirm_taker_buy_vs_norm_pct": taker_share - baseline_taker_share,
+            "confirm_taker_buy_norm_ratio": taker_share / baseline_taker_share if baseline_taker_share > 0 else np.nan,
+            "confirm_taker_buy_below_norm_flag": bool(taker_share <= baseline_taker_share * float(config.taker_share_norm_mult)),
+            **oi_context,
+            **shape,
+            **_setup_shape_passthrough(setup),
+        }
+    return None
+
+
+def _closed_5m_oi_context(
+    oi_5m: pd.DataFrame,
+    *,
+    asof_timestamp_ms: int,
+    threshold_pct: float,
+    strong_threshold_pct: float,
+) -> dict[str, object]:
     base = {
         "oi_model": OI_MODEL,
         "oi_available": False,
         "oi_current_timestamp_ms": np.nan,
         "oi_current_available_timestamp_ms": np.nan,
         "oi_previous_timestamp_ms": np.nan,
+        "oi_two_back_timestamp_ms": np.nan,
+        "oi_three_back_timestamp_ms": np.nan,
         "oi_current": np.nan,
         "oi_previous": np.nan,
+        "oi_two_back": np.nan,
+        "oi_three_back": np.nan,
         "oi_change_pct": np.nan,
+        "oi_change_pct_1x5m": np.nan,
+        "oi_change_pct_2x5m": np.nan,
+        "oi_change_pct_3x5m": np.nan,
+        "oi_age_ms": np.nan,
+        "oi_status": "missing",
+        "oi_strength_bucket": "missing",
         "oi_regime": "missing_closed_5m_oi",
         "signal_family": "no_oi_confirmation",
     }
@@ -581,11 +791,17 @@ def _closed_5m_oi_context(oi_5m: pd.DataFrame, *, asof_timestamp_ms: int, thresh
         return base
     current = known.iloc[-1]
     previous = known.iloc[-2]
+    two_back = known.iloc[-3] if len(known) >= 3 else None
+    three_back = known.iloc[-4] if len(known) >= 4 else None
     oi_current = _float(current.get("open_interest"))
     oi_previous = _float(previous.get("open_interest"))
     if oi_previous <= 0 or not math.isfinite(oi_current) or not math.isfinite(oi_previous):
         return base
     change_pct = oi_current / oi_previous - 1.0
+    oi_two_back = _float(two_back.get("open_interest")) if two_back is not None else float("nan")
+    oi_three_back = _float(three_back.get("open_interest")) if three_back is not None else float("nan")
+    change_pct_2x5m = oi_current / oi_two_back - 1.0 if math.isfinite(oi_two_back) and oi_two_back > 0 else np.nan
+    change_pct_3x5m = oi_current / oi_three_back - 1.0 if math.isfinite(oi_three_back) and oi_three_back > 0 else np.nan
     if change_pct <= -abs(threshold_pct):
         regime = "oi_drop_position_exit"
         family = "oi_drop_position_exit"
@@ -595,15 +811,27 @@ def _closed_5m_oi_context(oi_5m: pd.DataFrame, *, asof_timestamp_ms: int, thresh
     else:
         regime = "oi_flat_or_below_threshold"
         family = "no_oi_confirmation"
+    oi_age_ms = int(asof_timestamp_ms) - int(current["oi_available_timestamp_ms"])
+    oi_status = "ok" if 0 <= oi_age_ms <= 2 * FIVE_MINUTE_MS else "stale"
     return {
         "oi_model": OI_MODEL,
         "oi_available": True,
         "oi_current_timestamp_ms": int(current["timestamp"]),
         "oi_current_available_timestamp_ms": int(current["oi_available_timestamp_ms"]),
         "oi_previous_timestamp_ms": int(previous["timestamp"]),
+        "oi_two_back_timestamp_ms": int(two_back["timestamp"]) if two_back is not None else np.nan,
+        "oi_three_back_timestamp_ms": int(three_back["timestamp"]) if three_back is not None else np.nan,
         "oi_current": oi_current,
         "oi_previous": oi_previous,
+        "oi_two_back": oi_two_back,
+        "oi_three_back": oi_three_back,
         "oi_change_pct": change_pct,
+        "oi_change_pct_1x5m": change_pct,
+        "oi_change_pct_2x5m": change_pct_2x5m,
+        "oi_change_pct_3x5m": change_pct_3x5m,
+        "oi_age_ms": oi_age_ms,
+        "oi_status": oi_status,
+        "oi_strength_bucket": _oi_strength_bucket(change_pct, weak_threshold_pct=threshold_pct, strong_threshold_pct=strong_threshold_pct),
         "oi_regime": regime,
         "signal_family": family,
     }
@@ -646,7 +874,12 @@ def _simulate_short_trade(
     open_fraction = 1.0
     realized_r = 0.0
     partial_taken = False
-    tp_price = entry_price - initial_risk_abs if exit_policy == "short_tp1r_close50_trail" else np.nan
+    if exit_policy == "short_tp0p75r_close50_trail":
+        tp_price = entry_price - 0.75 * initial_risk_abs
+    elif exit_policy == "short_tp1r_close50_trail":
+        tp_price = entry_price - initial_risk_abs
+    else:
+        tp_price = np.nan
     mfe_r = 0.0
     mae_r = 0.0
     exit_ts = int(path.iloc[-1]["timestamp"])
@@ -667,7 +900,7 @@ def _simulate_short_trade(
         mae_r = max(mae_r, (h - entry_price) / initial_risk_abs)
 
         if h >= stop:
-            stop_first_conservative = bool(exit_policy == "short_tp1r_close50_trail" and not partial_taken and math.isfinite(tp_price) and l <= tp_price)
+            stop_first_conservative = bool(exit_policy in {"short_tp0p75r_close50_trail", "short_tp1r_close50_trail"} and not partial_taken and math.isfinite(tp_price) and l <= tp_price)
             fill = stop * (1.0 + float(config.exit_slippage_pct))
             realized_r += _short_leg_r(entry_price, fill, open_fraction, initial_risk_abs, float(config.fee_rate))
             exit_ts = candle_ts
@@ -676,7 +909,7 @@ def _simulate_short_trade(
             open_fraction = 0.0
             break
 
-        if exit_policy == "short_tp1r_close50_trail" and not partial_taken and math.isfinite(tp_price) and l <= tp_price:
+        if exit_policy in {"short_tp0p75r_close50_trail", "short_tp1r_close50_trail"} and not partial_taken and math.isfinite(tp_price) and l <= tp_price:
             fill = tp_price * (1.0 + float(config.exit_slippage_pct))
             close_fraction = 0.50
             realized_r += _short_leg_r(entry_price, fill, close_fraction, initial_risk_abs, float(config.fee_rate))
@@ -712,6 +945,8 @@ def _simulate_short_trade(
         "signal_id": signal["signal_id"],
         "setup_id": signal["setup_id"],
         "symbol": signal["symbol"],
+        "signal_variant": signal.get("signal_variant", "structural_low_break"),
+        "selection_eligible": bool(signal.get("selection_eligible", True)),
         "signal_family": signal["signal_family"],
         "exit_policy": exit_policy,
         "session_bucket": signal["session_bucket"],
@@ -741,14 +976,41 @@ def _simulate_short_trade(
         "stop_first_conservative": stop_first_conservative,
         "oi_regime": signal.get("oi_regime", ""),
         "oi_change_pct": signal.get("oi_change_pct", np.nan),
+        "oi_change_pct_1x5m": signal.get("oi_change_pct_1x5m", np.nan),
+        "oi_change_pct_2x5m": signal.get("oi_change_pct_2x5m", np.nan),
+        "oi_change_pct_3x5m": signal.get("oi_change_pct_3x5m", np.nan),
+        "oi_age_ms": signal.get("oi_age_ms", np.nan),
+        "oi_status": signal.get("oi_status", ""),
+        "oi_strength_bucket": signal.get("oi_strength_bucket", ""),
         "confirm_timestamp_ms": signal["confirm_timestamp_ms"],
         "confirm_close_timestamp_ms": signal["confirm_close_timestamp_ms"],
         "confirm_taker_buy_share": signal.get("confirm_taker_buy_share", np.nan),
         "confirm_taker_buy_share_norm": signal.get("confirm_taker_buy_share_norm", np.nan),
+        "confirm_taker_buy_bucket": signal.get("confirm_taker_buy_bucket", ""),
+        "confirm_taker_buy_vs_norm_pct": signal.get("confirm_taker_buy_vs_norm_pct", np.nan),
+        "confirm_taker_buy_norm_ratio": signal.get("confirm_taker_buy_norm_ratio", np.nan),
+        "confirm_taker_buy_below_norm_flag": signal.get("confirm_taker_buy_below_norm_flag", False),
         "confirm_quote_ratio_vs_norm": signal.get("confirm_quote_ratio_vs_norm", np.nan),
         "confirm_trade_ratio_vs_norm": signal.get("confirm_trade_ratio_vs_norm", np.nan),
         "structural_low": signal.get("structural_low", np.nan),
         "last_structural_high": signal.get("last_structural_high", np.nan),
+        "has_lower_high_before_break": signal.get("has_lower_high_before_break", False),
+        "last_lower_high_price": signal.get("last_lower_high_price", np.nan),
+        "failed_retest_distance_pct": signal.get("failed_retest_distance_pct", np.nan),
+        "pump_high_to_confirm_drawdown_pct": signal.get("pump_high_to_confirm_drawdown_pct", np.nan),
+        "structural_break_depth_pct": signal.get("structural_break_depth_pct", np.nan),
+        "minutes_from_seed_to_break": signal.get("minutes_from_seed_to_break", np.nan),
+        "pre_confirm_return_from_seed_close_pct": signal.get("pre_confirm_return_from_seed_close_pct", np.nan),
+        "post_pump_preconfirm_quote_top1_share": signal.get("post_pump_preconfirm_quote_top1_share", np.nan),
+        "post_pump_preconfirm_trade_top1_share": signal.get("post_pump_preconfirm_trade_top1_share", np.nan),
+        "post_pump_preconfirm_distribution_bucket": signal.get("post_pump_preconfirm_distribution_bucket", ""),
+        "seed_1m_quote_top1_share": signal.get("seed_1m_quote_top1_share", np.nan),
+        "seed_1m_trade_top1_share": signal.get("seed_1m_trade_top1_share", np.nan),
+        "seed_1m_distribution_bucket": signal.get("seed_1m_distribution_bucket", ""),
+        "pump_high_timing_pct": signal.get("pump_high_timing_pct", np.nan),
+        "seed_first_half_return_pct": signal.get("seed_first_half_return_pct", np.nan),
+        "seed_second_half_return_pct": signal.get("seed_second_half_return_pct", np.nan),
+        "seed_last_2m_return_pct": signal.get("seed_last_2m_return_pct", np.nan),
     }
     return row
 
@@ -766,8 +1028,26 @@ def _prepare_trade_grid_for_reporting(frame: pd.DataFrame) -> pd.DataFrame:
     work["date"] = pd.to_datetime(work["entry_timestamp_ms"], unit="ms", utc=True).dt.strftime("%Y-%m-%d")
     work["day_ord"] = (pd.to_numeric(work["entry_timestamp_ms"], errors="coerce") // DAY_MS).astype("Int64")
     work["is_win"] = pd.to_numeric(work["r_multiple"], errors="coerce") > 0
+    if "selection_eligible" not in work.columns:
+        work["selection_eligible"] = True
     work["rule_id"] = work.apply(
-        lambda row: _rule_id(str(row.get("signal_family", "")), str(row.get("session_bucket", "")), str(row.get("exit_policy", ""))),
+        lambda row: _rule_id(
+            str(row.get("signal_family", "")),
+            str(row.get("session_bucket", "")),
+            str(row.get("exit_policy", "")),
+        ),
+        axis=1,
+    )
+    work["extended_rule_id"] = work.apply(
+        lambda row: _extended_rule_id(
+            str(row.get("signal_family", "")),
+            str(row.get("session_bucket", "")),
+            str(row.get("exit_policy", "")),
+            str(row.get("confirm_taker_buy_bucket", "unknown")),
+            str(row.get("oi_strength_bucket", "unknown")),
+            str(row.get("post_pump_preconfirm_distribution_bucket", "unknown")),
+            str(bool(row.get("has_lower_high_before_break", False))),
+        ),
         axis=1,
     )
     return _sort_frame(work, ["entry_timestamp_ms", "symbol", "signal_family", "exit_policy"])
@@ -787,6 +1067,11 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
     trades = trade_grid.copy()
     trades["day_ord"] = pd.to_numeric(trades["day_ord"], errors="coerce").astype("Int64")
     trades = trades.loc[trades["day_ord"].notna()].copy()
+    if "selection_eligible" in trades.columns:
+        selection_trades = trades.loc[trades["selection_eligible"].astype(bool)].copy()
+    else:
+        selection_trades = trades.copy()
+    trades = selection_trades
     if trades.empty:
         return empty
     min_day = int(trades["day_ord"].min())
@@ -924,6 +1209,49 @@ def _candidate_rules(trades: pd.DataFrame) -> list[dict[str, str]]:
                         "exit_policy": exit_policy,
                     }
                 )
+    # Extended rules are evaluated for health/drift diagnostics only.  The OOS
+    # selector below still promotes only the 30d session_specific core scope, so
+    # these finer buckets cannot silently overfit the trading decision.
+    extended_cols = {
+        "confirm_taker_buy_bucket": "all_taker_buckets",
+        "oi_strength_bucket": "all_oi_strengths",
+        "post_pump_preconfirm_distribution_bucket": "all_distribution_buckets",
+        "has_lower_high_before_break": "all_lower_high_states",
+    }
+    if all(col in trades.columns for col in extended_cols):
+        for (family, session, exit_policy, taker_bucket, oi_bucket, dist_bucket, lower_high), _group in trades.groupby(
+            [
+                "signal_family",
+                "session_bucket",
+                "exit_policy",
+                "confirm_taker_buy_bucket",
+                "oi_strength_bucket",
+                "post_pump_preconfirm_distribution_bucket",
+                "has_lower_high_before_break",
+            ],
+            dropna=False,
+        ):
+            rows.append(
+                {
+                    "scope": "extended_flow_oi_distribution_audit",
+                    "rule_id": _extended_rule_id(
+                        str(family),
+                        str(session),
+                        str(exit_policy),
+                        str(taker_bucket),
+                        str(oi_bucket),
+                        str(dist_bucket),
+                        str(bool(lower_high)),
+                    ),
+                    "signal_family": str(family),
+                    "session_bucket": str(session),
+                    "exit_policy": str(exit_policy),
+                    "confirm_taker_buy_bucket": str(taker_bucket),
+                    "oi_strength_bucket": str(oi_bucket),
+                    "post_pump_preconfirm_distribution_bucket": str(dist_bucket),
+                    "has_lower_high_before_break": str(bool(lower_high)),
+                }
+            )
     return rows
 
 
@@ -931,11 +1259,39 @@ def _rule_mask(trades: pd.DataFrame, rule: dict[str, str]) -> pd.Series:
     mask = (trades["signal_family"].astype(str) == rule["signal_family"]) & (trades["exit_policy"].astype(str) == rule["exit_policy"])
     if rule["session_bucket"] != "all_sessions":
         mask &= trades["session_bucket"].astype(str) == rule["session_bucket"]
+    for col in ("confirm_taker_buy_bucket", "oi_strength_bucket", "post_pump_preconfirm_distribution_bucket", "has_lower_high_before_break"):
+        if col in rule and col in trades.columns:
+            if col == "has_lower_high_before_break":
+                mask &= trades[col].astype(bool).astype(str) == rule[col]
+            else:
+                mask &= trades[col].astype(str) == rule[col]
     return mask
 
 
 def _rule_id(signal_family: str, session_bucket: str, exit_policy: str) -> str:
     return f"{signal_family}|{session_bucket}|{exit_policy}"
+
+
+def _extended_rule_id(
+    signal_family: str,
+    session_bucket: str,
+    exit_policy: str,
+    taker_bucket: str,
+    oi_strength_bucket: str,
+    distribution_bucket: str,
+    lower_high_state: str,
+) -> str:
+    return "|".join(
+        (
+            signal_family,
+            session_bucket,
+            exit_policy,
+            f"taker={taker_bucket}",
+            f"oi={oi_strength_bucket}",
+            f"distribution={distribution_bucket}",
+            f"lower_high={lower_high_state}",
+        )
+    )
 
 
 def _rule_status(metrics: dict[str, object], *, window: int, config: FailedPumpShortResearchConfig) -> str:
@@ -1043,7 +1399,18 @@ def _rolling_fluctuation_stress(oos_frame: pd.DataFrame, *, full_trade_grid: pd.
             rows.append({"source": source_name, "stress": "remove_top_1_trade", **_metrics_dict(_remove_top_n_trades(work, 1))})
             rows.append({"source": source_name, "stress": "remove_top_3_trades", **_metrics_dict(_remove_top_n_trades(work, 3))})
             rows.append({"source": source_name, "stress": "remove_top_1_symbol", **_metrics_dict(_remove_top_n_symbols(work, 1))})
-            for group_col in ("month", "week", "session_bucket", "signal_family", "exit_policy", "symbol"):
+            for group_col in (
+                "month",
+                "week",
+                "session_bucket",
+                "signal_variant",
+                "signal_family",
+                "exit_policy",
+                "confirm_taker_buy_bucket",
+                "oi_strength_bucket",
+                "post_pump_preconfirm_distribution_bucket",
+                "symbol",
+            ):
                 if group_col not in work.columns:
                     continue
                 for value, group in work.groupby(group_col, dropna=False):
@@ -1123,7 +1490,16 @@ def _daily_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 def _top_dependency_report(frame: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     scopes = [([], "all")]
-    for cols, name in [(["signal_family"], "signal_family"), (["session_bucket"], "session"), (["session_bucket", "signal_family"], "session_family"), (["exit_policy"], "exit_policy")]:
+    for cols, name in [
+        (["signal_variant"], "signal_variant"),
+        (["signal_family"], "signal_family"),
+        (["session_bucket"], "session"),
+        (["session_bucket", "signal_family"], "session_family"),
+        (["exit_policy"], "exit_policy"),
+        (["confirm_taker_buy_bucket"], "confirm_taker_buy_bucket"),
+        (["oi_strength_bucket"], "oi_strength_bucket"),
+        (["post_pump_preconfirm_distribution_bucket"], "distribution_bucket"),
+    ]:
         scopes.append((cols, name))
     if frame.empty:
         return pd.DataFrame(columns=["scope", "key", "top_trade_independence_pct", "top_symbol_independence_pct", "sum_r", "trades"])
@@ -1215,6 +1591,154 @@ def _remove_top_n_symbols(frame: pd.DataFrame, n: int) -> pd.DataFrame:
     symbol_r = pd.to_numeric(frame["r_multiple"], errors="coerce").groupby(frame["symbol"].astype(str)).sum().sort_values(ascending=False)
     drop_symbols = set(symbol_r.head(max(0, int(n))).index.astype(str))
     return frame.loc[~frame["symbol"].astype(str).isin(drop_symbols)].copy()
+
+
+def _seed_1m_shape_features(seed_1m: pd.DataFrame, *, seed_open_ms: int, seed_close_ms: int) -> dict[str, object]:
+    base = {
+        "seed_1m_quote_top1_share": np.nan,
+        "seed_1m_trade_top1_share": np.nan,
+        "seed_1m_distribution_bucket": "missing",
+        "pump_high_timing_pct": np.nan,
+        "seed_first_half_return_pct": np.nan,
+        "seed_second_half_return_pct": np.nan,
+        "seed_last_2m_return_pct": np.nan,
+    }
+    if seed_1m.empty:
+        return base
+    work = seed_1m.sort_values("timestamp").reset_index(drop=True)
+    quote_top1 = _top1_share(_numeric_series(work, "quote_volume"))
+    trade_top1 = _top1_share(_numeric_series(work, "number_of_trades"))
+    high = _numeric_series(work, "high")
+    if high.dropna().empty:
+        high_timing = np.nan
+    else:
+        high_ts = int(work.loc[high.idxmax(), "timestamp"])
+        high_timing = (high_ts - int(seed_open_ms)) / max(1, int(seed_close_ms) - int(seed_open_ms))
+    first = work.iloc[: max(1, len(work) // 2)]
+    second = work.iloc[max(0, len(work) // 2) :]
+    last2 = work.iloc[-2:]
+    return {
+        "seed_1m_quote_top1_share": quote_top1,
+        "seed_1m_trade_top1_share": trade_top1,
+        "seed_1m_distribution_bucket": _distribution_bucket(quote_top1, trade_top1),
+        "pump_high_timing_pct": high_timing,
+        "seed_first_half_return_pct": _window_return_pct(first),
+        "seed_second_half_return_pct": _window_return_pct(second),
+        "seed_last_2m_return_pct": _window_return_pct(last2),
+    }
+
+
+def _post_pump_signal_shape_features(
+    setup: dict[str, object],
+    *,
+    frame_1m: pd.DataFrame,
+    confirm_open_ms: int,
+    confirm_close: float,
+) -> dict[str, object]:
+    seed_open_ms = int(setup["seed_open_ms"])
+    seed_close_ms = int(setup["seed_close_ms"])
+    structural_low = float(setup.get("structural_low", np.nan))
+    seed_close = float(setup.get("seed_close", np.nan))
+    seed_pump_high = float(setup.get("pump_high", setup.get("seed_high", np.nan)))
+    ts = _numeric_series(frame_1m, "timestamp")
+    preconfirm = frame_1m.loc[(ts >= seed_close_ms) & (ts <= int(confirm_open_ms))].sort_values("timestamp").reset_index(drop=True)
+    quote_top1 = _top1_share(_numeric_series(preconfirm, "quote_volume"))
+    trade_top1 = _top1_share(_numeric_series(preconfirm, "number_of_trades"))
+    high_series = _numeric_series(preconfirm, "high")
+    post_high = _safe_max(high_series)
+    pump_high = max(seed_pump_high if math.isfinite(seed_pump_high) else 0.0, post_high)
+    has_lower_high = bool(post_high > 0 and pump_high > 0 and post_high < pump_high * 0.999)
+    failed_retest_distance = (pump_high - post_high) / pump_high if has_lower_high and pump_high > 0 else np.nan
+    structural_break_depth = (structural_low - float(confirm_close)) / structural_low if math.isfinite(structural_low) and structural_low > 0 else np.nan
+    return {
+        "has_lower_high_before_break": has_lower_high,
+        "last_lower_high_price": post_high if has_lower_high else np.nan,
+        "failed_retest_distance_pct": failed_retest_distance,
+        "pump_high_to_confirm_drawdown_pct": float(confirm_close) / pump_high - 1.0 if pump_high > 0 else np.nan,
+        "structural_break_depth_pct": structural_break_depth,
+        "minutes_from_seed_to_break": (int(confirm_open_ms) - seed_open_ms) / MINUTE_MS,
+        "pre_confirm_return_from_seed_close_pct": float(confirm_close) / seed_close - 1.0 if math.isfinite(seed_close) and seed_close > 0 else np.nan,
+        "post_pump_preconfirm_quote_top1_share": quote_top1,
+        "post_pump_preconfirm_trade_top1_share": trade_top1,
+        "post_pump_preconfirm_distribution_bucket": _distribution_bucket(quote_top1, trade_top1),
+    }
+
+
+def _setup_shape_passthrough(setup: dict[str, object]) -> dict[str, object]:
+    keys = (
+        "seed_1m_quote_top1_share",
+        "seed_1m_trade_top1_share",
+        "seed_1m_distribution_bucket",
+        "pump_high_timing_pct",
+        "seed_first_half_return_pct",
+        "seed_second_half_return_pct",
+        "seed_last_2m_return_pct",
+    )
+    return {key: setup.get(key, np.nan if key != "seed_1m_distribution_bucket" else "missing") for key in keys}
+
+
+def _top1_share(series: pd.Series) -> float:
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    total = float(values.sum()) if not values.empty else 0.0
+    if total <= 0:
+        return float("nan")
+    return float(values.max() / total)
+
+
+def _distribution_bucket(quote_top1_share: float, trade_top1_share: float) -> str:
+    values = [value for value in (quote_top1_share, trade_top1_share) if math.isfinite(float(value))]
+    if not values:
+        return "missing"
+    top1 = max(float(value) for value in values)
+    if top1 <= 0.25:
+        return "distributed_top1_le25"
+    if top1 >= 0.60:
+        return "one_print_like_top1_ge60"
+    return "mixed_top1_25_60"
+
+
+def _window_return_pct(frame: pd.DataFrame) -> float:
+    if frame.empty:
+        return float("nan")
+    open_price = _float(frame.iloc[0].get("open"))
+    close_price = _float(frame.iloc[-1].get("close"))
+    if not math.isfinite(open_price) or not math.isfinite(close_price) or open_price <= 0:
+        return float("nan")
+    return close_price / open_price - 1.0
+
+
+def _taker_buy_bucket(value: float) -> str:
+    if not math.isfinite(float(value)):
+        return "missing"
+    pct = float(value)
+    if pct <= 0.45:
+        return "le45"
+    if pct <= 0.50:
+        return "45_50"
+    if pct <= 0.55:
+        return "50_55"
+    if pct <= 0.60:
+        return "55_60"
+    if pct <= 0.65:
+        return "60_65"
+    return "gt65_danger"
+
+
+def _oi_strength_bucket(value: float, *, weak_threshold_pct: float, strong_threshold_pct: float) -> str:
+    if not math.isfinite(float(value)):
+        return "missing"
+    change = float(value)
+    weak = abs(float(weak_threshold_pct))
+    strong = abs(float(strong_threshold_pct))
+    if change <= -strong:
+        return "strong_drop"
+    if change <= -weak:
+        return "drop"
+    if change >= strong:
+        return "strong_rise"
+    if change >= weak:
+        return "rise"
+    return "flat"
 
 
 def _prepare_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1341,9 +1865,11 @@ def _run_config_frame(
         "trades": int(len(trade_grid)),
         "elapsed_seconds": round(time.monotonic() - started_at, 3),
         "signal_families": ",".join(SIGNAL_FAMILIES),
+        "signal_variants": ",".join(SIGNAL_VARIANTS),
         "exit_policies": ",".join(EXIT_POLICIES),
         "session_buckets": ",".join(SESSION_BUCKETS),
         "rolling_windows": ",".join(str(v) for v in ROLLING_WINDOWS),
+        "simple_fade_baseline_selection_eligible": False,
     }
     for key, value in list(row.items()):
         if isinstance(value, Path):
@@ -1358,7 +1884,10 @@ def _rolling_run_config_frame(*, config: FailedPumpShortResearchConfig, trade_gr
                 "research_id": RESEARCH_ID,
                 "rolling_model": "daily_walk_forward_train_15_30_60_test_one_day_no_day_overlap",
                 "selection_model": "session_specific_rule_selection_by_past_30d_status_core_strong_tactical",
+                "selection_eligible_only": True,
                 "all_session_rules_evaluated_for_health_only": True,
+                "extended_flow_oi_distribution_rules_evaluated_for_health_only": True,
+                "simple_fade_baseline_selection_eligible": False,
                 "train_windows": ",".join(str(v) for v in ROLLING_WINDOWS),
                 "entry_model": ENTRY_MODEL,
                 "oi_model": OI_MODEL,
