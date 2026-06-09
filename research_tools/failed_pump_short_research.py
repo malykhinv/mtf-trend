@@ -1838,21 +1838,39 @@ def _load_frame_result(storage: ParquetStorage, symbol: str, timeframe: str, *, 
 
 
 def _resolve_symbols(cache_dir: Path, symbols: Iterable[str] | None) -> list[str]:
-    explicit = [normalize_symbol(str(symbol)) for symbol in symbols or [] if str(symbol).strip()]
-    if explicit:
-        return sorted(set(explicit))
+    """Resolve symbols without losing the exact cache path identity.
+
+    The futures cache is commonly stored as encoded CCXT symbols such as
+    ``BTC%2FUSDT%3AUSDT`` (``BTC/USDT:USDT``).  ``normalize_symbol`` strips the
+    settlement suffix for comparison, but using the normalized value for storage
+    lookup changes the path to ``BTC%2FUSDT`` and makes an existing cache look
+    empty.  Return the exact decoded cache symbol for reads, while allowing
+    explicit user symbols to match by normalized form.
+    """
+
     base = Path(cache_dir)
     if not base.exists():
         return []
-    resolved: list[str] = []
-    for path in base.iterdir():
+
+    available: dict[str, str] = {}
+    for path in sorted(base.iterdir()):
         if not path.is_dir():
             continue
         has_5m = (path / "5m" / "data.parquet").exists() or (path / "5m" / "delta").exists()
         has_1m = (path / "1m" / "data.parquet").exists() or (path / "1m" / "delta").exists()
-        if has_5m and has_1m:
-            resolved.append(normalize_symbol(ParquetStorage.decode_symbol_from_path(path.name)))
-    return sorted(set(resolved))
+        if not (has_5m and has_1m):
+            continue
+        decoded = ParquetStorage.decode_symbol_from_path(path.name)
+        normalized = normalize_symbol(decoded)
+        # Keep the exact cache symbol value as the read key.  If duplicate cache
+        # dirs normalize to the same market, prefer the lexicographically first
+        # decoded path for deterministic runs.
+        available.setdefault(normalized, decoded)
+
+    requested = [normalize_symbol(str(symbol)) for symbol in symbols or [] if str(symbol).strip()]
+    if requested:
+        return sorted({available[value] for value in requested if value in available})
+    return sorted(available.values())
 
 
 def _resolve_end_timestamp_ms(config: FailedPumpShortResearchConfig, cache_coverage: dict[str, object]) -> int:
