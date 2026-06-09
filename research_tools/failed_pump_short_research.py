@@ -118,6 +118,10 @@ class FailedPumpShortResearchConfig:
     min_positive_active_day_share: float = 0.50
     min_top_trade_independence_pct: float = 0.02
     min_top_symbol_independence_pct: float = 0.20
+    shadow_oos_max_rules_per_day: int = 10
+    shadow_oos_min_train_trades: int = 6
+    shadow_oos_min_train_active_days: int = 2
+    shadow_oos_min_train_sum_r: float = 0.0
 
     def __post_init__(self) -> None:
         if int(self.days) <= 0:
@@ -134,6 +138,12 @@ class FailedPumpShortResearchConfig:
             raise ValueError("partial_flush_symbols must be > 0")
         if float(self.partial_flush_seconds) <= 0:
             raise ValueError("partial_flush_seconds must be > 0")
+        if int(self.shadow_oos_max_rules_per_day) <= 0:
+            raise ValueError("shadow_oos_max_rules_per_day must be > 0")
+        if int(self.shadow_oos_min_train_trades) <= 0:
+            raise ValueError("shadow_oos_min_train_trades must be > 0")
+        if int(self.shadow_oos_min_train_active_days) <= 0:
+            raise ValueError("shadow_oos_min_train_active_days must be > 0")
 
 
 class _ProgressLine:
@@ -383,6 +393,7 @@ def run_failed_pump_short_research(
     _write_csv(config.output_dir / "failed_pump_short_rolling_window_health.csv", rolling["window_health"])
     _write_csv(config.output_dir / "failed_pump_short_rolling_selection_drift.csv", rolling["selection_drift"])
     _write_csv(config.output_dir / "failed_pump_short_rolling_fluctuation_stress.csv", rolling["fluctuation_stress"])
+    _write_csv(config.output_dir / "failed_pump_short_rolling_shadow_oos_audit.csv", rolling["shadow_oos_audit"])
     _write_csv(config.output_dir / "failed_pump_short_rolling_run_config.csv", rolling_run_config)
     _write_progress_event(
         config.output_dir,
@@ -1215,14 +1226,7 @@ def _prepare_trade_grid_for_reporting(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortResearchConfig) -> dict[str, pd.DataFrame]:
-    empty = {
-        "daily_summary": pd.DataFrame(),
-        "rule_health": pd.DataFrame(),
-        "oos_trades": pd.DataFrame(),
-        "window_health": pd.DataFrame(),
-        "selection_drift": pd.DataFrame(),
-        "fluctuation_stress": pd.DataFrame(),
-    }
+    empty = _empty_rolling_outputs(trade_grid)
     if trade_grid.empty:
         return empty
     trades = trade_grid.copy()
@@ -1234,18 +1238,21 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
         selection_trades = trades.copy()
     trades = selection_trades
     if trades.empty:
-        return empty
+        return _empty_rolling_outputs(trade_grid)
     min_day = int(trades["day_ord"].min())
     max_day = int(trades["day_ord"].max())
-    # Need at least the shortest window behind the first evaluated day.
+    # Need at least the shortest window behind the first evaluated day.  Longer
+    # windows are still reported as incomplete until the full requested history
+    # exists; incomplete windows are never allowed to select live/OOS trades.
     oos_days = list(range(min_day + min(ROLLING_WINDOWS), max_day + 1))
     if not oos_days:
-        return empty
+        return _empty_rolling_outputs(trade_grid)
 
     rule_health_rows: list[dict[str, object]] = []
     oos_rows: list[dict[str, object]] = []
     drift_rows: list[dict[str, object]] = []
     window_health_rows: list[dict[str, object]] = []
+    shadow_rows: list[dict[str, object]] = []
     all_rules = _candidate_rules(trades)
 
     for test_day in oos_days:
@@ -1253,23 +1260,58 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
         selected_rules: set[str] = set()
         for rule in all_rules:
             for window in ROLLING_WINDOWS:
-                train_mask = (trades["day_ord"].astype(int) >= test_day - int(window)) & (trades["day_ord"].astype(int) < test_day)
+                window_start = int(test_day) - int(window)
+                train_window_days_available = max(0, int(test_day) - max(int(min_day), window_start))
+                train_window_complete = bool(train_window_days_available >= int(window))
+                train_mask = (trades["day_ord"].astype(int) >= window_start) & (trades["day_ord"].astype(int) < test_day)
                 scope_mask = _rule_mask(trades, rule)
                 train = trades.loc[train_mask & scope_mask]
                 metrics = _metrics_dict(train)
                 status = _rule_status(metrics, window=window, config=config)
+                selection_allowed = bool(
+                    train_window_complete
+                    and rule["scope"] == "session_specific"
+                    and int(window) == 30
+                    and status in {"core", "strong", "tactical"}
+                )
+                block_reason = _selection_block_reason(
+                    status=status,
+                    metrics=metrics,
+                    train_window_complete=train_window_complete,
+                    rule_scope=str(rule["scope"]),
+                    window=int(window),
+                    config=config,
+                )
                 health = {
                     "date": _date_from_day_ord(test_day),
                     "test_day_ord": int(test_day),
                     "window_days": int(window),
+                    "train_start_day_ord": int(window_start),
+                    "train_end_day_ord": int(test_day) - 1,
+                    "train_start_date": _date_from_day_ord(window_start),
+                    "train_end_date": _date_from_day_ord(int(test_day) - 1),
+                    "train_window_days_requested": int(window),
+                    "train_window_days_available": int(train_window_days_available),
+                    "train_window_complete": train_window_complete,
                     "rule_scope": rule["scope"],
                     "rule_id": rule["rule_id"],
                     "signal_family": rule["signal_family"],
                     "session_bucket": rule["session_bucket"],
                     "exit_policy": rule["exit_policy"],
+                    "selection_model_window": bool(int(window) == 30 and rule["scope"] == "session_specific"),
+                    "selection_allowed": selection_allowed,
+                    "selection_block_reason": block_reason,
                     "status": status,
                     **metrics,
                 }
+                for extra_col in (
+                    "confirm_taker_buy_bucket",
+                    "oi_strength_bucket",
+                    "post_pump_preconfirm_distribution_bucket",
+                    "has_lower_high_before_break",
+                ):
+                    if extra_col in rule:
+                        health[extra_col] = rule[extra_col]
                 rule_health_rows.append(health)
                 day_health.append(health)
                 window_health_rows.append(
@@ -1277,21 +1319,32 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
                         "date": _date_from_day_ord(test_day),
                         "test_day_ord": int(test_day),
                         "window_days": int(window),
+                        "train_window_days_requested": int(window),
+                        "train_window_days_available": int(train_window_days_available),
+                        "train_window_complete": train_window_complete,
                         "rule_scope": rule["scope"],
                         "status": status,
+                        "selection_block_reason": block_reason,
                         "rules": 1,
-                        "tradeable": int(status in {"core", "strong", "tactical"}),
+                        "tradeable": int(selection_allowed),
                         "cooldown_or_rejected": int(status in {"cooldown", "rejected"}),
                     }
                 )
 
-        main_health = [row for row in day_health if int(row["window_days"]) == 30 and row["rule_scope"] == "session_specific"]
+        main_health = [
+            row
+            for row in day_health
+            if int(row["window_days"]) == 30
+            and row["rule_scope"] == "session_specific"
+            and bool(row.get("train_window_complete", False))
+        ]
         by_rule = {str(row["rule_id"]): row for row in main_health}
         for rule_id, row in by_rule.items():
-            if str(row["status"]) in {"core", "strong", "tactical"}:
+            if bool(row.get("selection_allowed", False)):
                 selected_rules.add(rule_id)
 
-        test_trades = trades.loc[trades["day_ord"].astype(int) == test_day].copy()
+        test_all_trades = trades.loc[trades["day_ord"].astype(int) == test_day].copy()
+        test_trades = test_all_trades.copy()
         if selected_rules:
             test_trades = test_trades.loc[test_trades["rule_id"].astype(str).isin(selected_rules)].copy()
         else:
@@ -1308,15 +1361,36 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
                         "selected_rule_train_trades": health.get("trades", 0),
                         "selected_rule_train_avg_r": health.get("avg_r", np.nan),
                         "selected_rule_train_sum_r": health.get("sum_r", np.nan),
+                        "selected_rule_train_window_days_requested": health.get("train_window_days_requested", 30),
+                        "selected_rule_train_window_days_available": health.get("train_window_days_available", 0),
+                        "selected_rule_train_window_complete": health.get("train_window_complete", False),
+                        "selected_rule_block_reason": health.get("selection_block_reason", ""),
                     }
                 )
                 oos_rows.append(source)
-        status_counts = pd.Series([str(row["status"]) for row in main_health]).value_counts().to_dict() if main_health else {}
+
+        shadow_rows.extend(
+            _shadow_oos_audit_rows(
+                day_health=day_health,
+                test_trades=test_all_trades,
+                test_day=int(test_day),
+                config=config,
+            )
+        )
+
+        main_including_incomplete = [row for row in day_health if int(row["window_days"]) == 30 and row["rule_scope"] == "session_specific"]
+        status_counts = pd.Series([str(row["status"]) for row in main_including_incomplete]).value_counts().to_dict() if main_including_incomplete else {}
+        incomplete_main = [row for row in main_including_incomplete if not bool(row.get("train_window_complete", False))]
+        block_counts = pd.Series([str(row.get("selection_block_reason", "")) for row in main_including_incomplete]).value_counts().to_dict() if main_including_incomplete else {}
         drift_rows.append(
             {
                 "date": _date_from_day_ord(test_day),
                 "test_day_ord": int(test_day),
-                "candidate_rules": int(len(main_health)),
+                "selection_rule_scope": "session_specific",
+                "selection_window_days": 30,
+                "candidate_rules": int(len(main_including_incomplete)),
+                "candidate_rules_complete_train": int(len(main_health)),
+                "candidate_rules_incomplete_train": int(len(incomplete_main)),
                 "selected_rules": int(len(selected_rules)),
                 "core_rules": int(status_counts.get("core", 0)),
                 "strong_rules": int(status_counts.get("strong", 0)),
@@ -1324,27 +1398,342 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
                 "challenger_rules": int(status_counts.get("challenger", 0)),
                 "cooldown_rules": int(status_counts.get("cooldown", 0)),
                 "rejected_rules": int(status_counts.get("rejected", 0)),
+                "blocked_incomplete_train_window": int(block_counts.get("incomplete_train_window", 0)),
+                "blocked_not_tradeable_status": int(block_counts.get("not_tradeable_status", 0)),
+                "blocked_non_selection_scope": int(block_counts.get("non_selection_scope", 0)),
+                "blocked_non_selection_window": int(block_counts.get("non_selection_window", 0)),
                 "test_trades": int(len(test_trades)),
+                "test_all_selection_eligible_trades": int(len(test_all_trades)),
                 "test_sum_r": float(pd.to_numeric(test_trades.get("r_multiple", pd.Series(dtype=float)), errors="coerce").sum()) if not test_trades.empty else 0.0,
             }
         )
 
-    oos_frame = pd.DataFrame(oos_rows)
+    oos_frame = _ensure_columns(pd.DataFrame(oos_rows), _rolling_oos_columns(trade_grid))
     if not oos_frame.empty:
         oos_frame = _sort_frame(oos_frame, ["entry_timestamp_ms", "symbol", "rule_id"])
     daily_summary = _rolling_daily_summary(oos_frame, oos_days=oos_days)
-    rule_health = pd.DataFrame(rule_health_rows)
+    rule_health = _ensure_columns(pd.DataFrame(rule_health_rows), _rolling_rule_health_columns())
     window_health = _aggregate_window_health(pd.DataFrame(window_health_rows))
-    selection_drift = pd.DataFrame(drift_rows)
+    window_health = _ensure_columns(window_health, _rolling_window_health_columns())
+    selection_drift = _ensure_columns(pd.DataFrame(drift_rows), _rolling_selection_drift_columns())
     fluctuation_stress = _rolling_fluctuation_stress(oos_frame, full_trade_grid=trades)
+    shadow_oos_audit = _ensure_columns(pd.DataFrame(shadow_rows), _rolling_shadow_oos_audit_columns())
     return {
-        "daily_summary": daily_summary,
+        "daily_summary": _ensure_columns(daily_summary, _rolling_daily_summary_columns()),
         "rule_health": _sort_frame(rule_health, ["test_day_ord", "window_days", "rule_scope", "rule_id"]),
         "oos_trades": oos_frame,
         "window_health": window_health,
         "selection_drift": _sort_frame(selection_drift, ["test_day_ord"]),
         "fluctuation_stress": fluctuation_stress,
+        "shadow_oos_audit": _sort_frame(shadow_oos_audit, ["test_day_ord", "shadow_rank"]),
     }
+
+
+def _empty_rolling_outputs(trade_grid: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    return {
+        "daily_summary": pd.DataFrame(columns=_rolling_daily_summary_columns()),
+        "rule_health": pd.DataFrame(columns=_rolling_rule_health_columns()),
+        "oos_trades": pd.DataFrame(columns=_rolling_oos_columns(trade_grid)),
+        "window_health": pd.DataFrame(columns=_rolling_window_health_columns()),
+        "selection_drift": pd.DataFrame(columns=_rolling_selection_drift_columns()),
+        "fluctuation_stress": pd.DataFrame(columns=_rolling_fluctuation_stress_columns()),
+        "shadow_oos_audit": pd.DataFrame(columns=_rolling_shadow_oos_audit_columns()),
+    }
+
+
+def _ensure_columns(frame: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(columns=list(columns))
+    work = frame.copy()
+    for col in columns:
+        if col not in work.columns:
+            work[col] = np.nan
+    ordered = list(columns) + [col for col in work.columns if col not in columns]
+    return work.loc[:, ordered]
+
+
+def _rolling_oos_columns(trade_grid: pd.DataFrame) -> list[str]:
+    base = list(trade_grid.columns) if isinstance(trade_grid, pd.DataFrame) else []
+    extras = [
+        "test_date",
+        "test_day_ord",
+        "selected_rule_status",
+        "selected_rule_train_trades",
+        "selected_rule_train_avg_r",
+        "selected_rule_train_sum_r",
+        "selected_rule_train_window_days_requested",
+        "selected_rule_train_window_days_available",
+        "selected_rule_train_window_complete",
+        "selected_rule_block_reason",
+    ]
+    return [*base, *[col for col in extras if col not in base]]
+
+
+def _rolling_rule_health_columns() -> list[str]:
+    return [
+        "date",
+        "test_day_ord",
+        "window_days",
+        "train_start_day_ord",
+        "train_end_day_ord",
+        "train_start_date",
+        "train_end_date",
+        "train_window_days_requested",
+        "train_window_days_available",
+        "train_window_complete",
+        "rule_scope",
+        "rule_id",
+        "signal_family",
+        "session_bucket",
+        "exit_policy",
+        "confirm_taker_buy_bucket",
+        "oi_strength_bucket",
+        "post_pump_preconfirm_distribution_bucket",
+        "has_lower_high_before_break",
+        "selection_model_window",
+        "selection_allowed",
+        "selection_block_reason",
+        "status",
+        *_metrics_columns(),
+    ]
+
+
+def _rolling_window_health_columns() -> list[str]:
+    return [
+        "date",
+        "test_day_ord",
+        "window_days",
+        "train_window_days_requested",
+        "train_window_days_available",
+        "train_window_complete",
+        "rule_scope",
+        "status",
+        "selection_block_reason",
+        "rules",
+        "tradeable",
+        "cooldown_or_rejected",
+    ]
+
+
+def _rolling_selection_drift_columns() -> list[str]:
+    return [
+        "date",
+        "test_day_ord",
+        "selection_rule_scope",
+        "selection_window_days",
+        "candidate_rules",
+        "candidate_rules_complete_train",
+        "candidate_rules_incomplete_train",
+        "selected_rules",
+        "core_rules",
+        "strong_rules",
+        "tactical_rules",
+        "challenger_rules",
+        "cooldown_rules",
+        "rejected_rules",
+        "blocked_incomplete_train_window",
+        "blocked_not_tradeable_status",
+        "blocked_non_selection_scope",
+        "blocked_non_selection_window",
+        "test_trades",
+        "test_all_selection_eligible_trades",
+        "test_sum_r",
+    ]
+
+
+def _rolling_daily_summary_columns() -> list[str]:
+    return [
+        "date",
+        "test_day_ord",
+        "trades",
+        "active_day",
+        "sum_r",
+        "avg_r",
+        "winrate",
+        "cumulative_oos_r",
+        "oos_drawdown",
+        "positive_day",
+        "cumulative_oos_positive_days",
+        "cumulative_oos_active_days",
+        "cumulative_oos_positive_active_days",
+        "cumulative_oos_positive_active_day_share",
+    ]
+
+
+def _rolling_fluctuation_stress_columns() -> list[str]:
+    return ["source", "stress", *_metrics_columns()]
+
+
+def _rolling_shadow_oos_audit_columns() -> list[str]:
+    return [
+        "date",
+        "test_day_ord",
+        "shadow_rank",
+        "shadow_rule_id",
+        "rule_scope",
+        "signal_family",
+        "session_bucket",
+        "exit_policy",
+        "confirm_taker_buy_bucket",
+        "oi_strength_bucket",
+        "post_pump_preconfirm_distribution_bucket",
+        "has_lower_high_before_break",
+        "train_window_days_requested",
+        "train_window_days_available",
+        "train_window_complete",
+        "train_trades",
+        "train_active_days",
+        "train_sum_r",
+        "train_avg_r",
+        "train_median_r",
+        "train_winrate",
+        "train_positive_active_day_share",
+        "train_top_trade_independence_pct",
+        "train_top_symbol_independence_pct",
+        "test_trades",
+        "test_sum_r",
+        "test_avg_r",
+        "test_median_r",
+        "test_winrate",
+        "audit_model",
+        "selection_eligible",
+    ]
+
+
+def _metrics_columns() -> list[str]:
+    return list(_metrics_dict(pd.DataFrame()).keys())
+
+
+def _selection_block_reason(
+    *,
+    status: str,
+    metrics: dict[str, object],
+    train_window_complete: bool,
+    rule_scope: str,
+    window: int,
+    config: FailedPumpShortResearchConfig,
+) -> str:
+    if not train_window_complete:
+        return "incomplete_train_window"
+    if rule_scope != "session_specific":
+        return "non_selection_scope"
+    if int(window) != 30:
+        return "non_selection_window"
+    if status in {"core", "strong", "tactical"}:
+        return "selected"
+    return _rule_rejection_reason(metrics=metrics, status=status, config=config)
+
+
+def _rule_rejection_reason(*, metrics: dict[str, object], status: str, config: FailedPumpShortResearchConfig) -> str:
+    trades = int(metrics.get("trades", 0) or 0)
+    active_days = int(metrics.get("active_days", 0) or 0)
+    avg_r = float(metrics.get("avg_r", 0.0) or 0.0)
+    sum_r = float(metrics.get("sum_r", 0.0) or 0.0)
+    pos_active_share = float(metrics.get("positive_active_day_share", 0.0) or 0.0)
+    top_trade_ind = float(metrics.get("top_trade_independence_pct", 0.0) or 0.0)
+    top_symbol_ind = float(metrics.get("top_symbol_independence_pct", 0.0) or 0.0)
+    if trades <= 0:
+        return "no_train_trades"
+    if trades < int(config.min_train_trades):
+        return "too_few_train_trades"
+    if active_days < int(config.min_train_active_days):
+        return "too_few_active_train_days"
+    if sum_r <= 0:
+        return "non_positive_train_sum_r"
+    if avg_r <= 0:
+        return "non_positive_train_avg_r"
+    if pos_active_share < float(config.min_positive_active_day_share):
+        return "weak_positive_active_day_share"
+    if top_trade_ind < float(config.min_top_trade_independence_pct):
+        return "top_trade_dependency"
+    if top_symbol_ind < float(config.min_top_symbol_independence_pct):
+        return "top_symbol_dependency"
+    if status == "challenger":
+        return "below_tactical_avg_r"
+    if status == "cooldown":
+        return "cooldown_status"
+    if status == "rejected":
+        return "rejected_status"
+    return "not_tradeable_status"
+
+
+def _shadow_oos_audit_rows(
+    *,
+    day_health: Sequence[dict[str, object]],
+    test_trades: pd.DataFrame,
+    test_day: int,
+    config: FailedPumpShortResearchConfig,
+) -> list[dict[str, object]]:
+    candidates = [
+        row
+        for row in day_health
+        if row.get("rule_scope") == "extended_flow_oi_distribution_audit"
+        and int(row.get("window_days", 0) or 0) == 30
+        and bool(row.get("train_window_complete", False))
+        and int(row.get("trades", 0) or 0) >= int(config.shadow_oos_min_train_trades)
+        and int(row.get("active_days", 0) or 0) >= int(config.shadow_oos_min_train_active_days)
+        and float(row.get("sum_r", 0.0) or 0.0) > float(config.shadow_oos_min_train_sum_r)
+    ]
+    if not candidates:
+        return []
+    candidates.sort(
+        key=lambda row: (
+            float(row.get("avg_r", 0.0) or 0.0),
+            float(row.get("sum_r", 0.0) or 0.0),
+            int(row.get("trades", 0) or 0),
+        ),
+        reverse=True,
+    )
+    rows: list[dict[str, object]] = []
+    for rank, candidate in enumerate(candidates[: int(config.shadow_oos_max_rules_per_day)], start=1):
+        rule = {
+            "signal_family": str(candidate.get("signal_family", "")),
+            "session_bucket": str(candidate.get("session_bucket", "")),
+            "exit_policy": str(candidate.get("exit_policy", "")),
+            "confirm_taker_buy_bucket": str(candidate.get("confirm_taker_buy_bucket", "")),
+            "oi_strength_bucket": str(candidate.get("oi_strength_bucket", "")),
+            "post_pump_preconfirm_distribution_bucket": str(candidate.get("post_pump_preconfirm_distribution_bucket", "")),
+            "has_lower_high_before_break": str(candidate.get("has_lower_high_before_break", "")),
+        }
+        matched = test_trades.loc[_rule_mask(test_trades, rule)].copy() if not test_trades.empty else test_trades
+        test_metrics = _metrics_dict(matched)
+        rows.append(
+            {
+                "date": _date_from_day_ord(test_day),
+                "test_day_ord": int(test_day),
+                "shadow_rank": int(rank),
+                "shadow_rule_id": str(candidate.get("rule_id", "")),
+                "rule_scope": "extended_flow_oi_distribution_audit",
+                "signal_family": candidate.get("signal_family", ""),
+                "session_bucket": candidate.get("session_bucket", ""),
+                "exit_policy": candidate.get("exit_policy", ""),
+                "confirm_taker_buy_bucket": candidate.get("confirm_taker_buy_bucket", ""),
+                "oi_strength_bucket": candidate.get("oi_strength_bucket", ""),
+                "post_pump_preconfirm_distribution_bucket": candidate.get("post_pump_preconfirm_distribution_bucket", ""),
+                "has_lower_high_before_break": candidate.get("has_lower_high_before_break", ""),
+                "train_window_days_requested": int(candidate.get("train_window_days_requested", 30) or 30),
+                "train_window_days_available": int(candidate.get("train_window_days_available", 0) or 0),
+                "train_window_complete": bool(candidate.get("train_window_complete", False)),
+                "train_trades": int(candidate.get("trades", 0) or 0),
+                "train_active_days": int(candidate.get("active_days", 0) or 0),
+                "train_sum_r": float(candidate.get("sum_r", 0.0) or 0.0),
+                "train_avg_r": float(candidate.get("avg_r", 0.0) or 0.0),
+                "train_median_r": float(candidate.get("median_r", 0.0) or 0.0),
+                "train_winrate": float(candidate.get("winrate", 0.0) or 0.0),
+                "train_positive_active_day_share": float(candidate.get("positive_active_day_share", 0.0) or 0.0),
+                "train_top_trade_independence_pct": float(candidate.get("top_trade_independence_pct", 0.0) or 0.0),
+                "train_top_symbol_independence_pct": float(candidate.get("top_symbol_independence_pct", 0.0) or 0.0),
+                "test_trades": int(test_metrics.get("trades", 0) or 0),
+                "test_sum_r": float(test_metrics.get("sum_r", 0.0) or 0.0),
+                "test_avg_r": float(test_metrics.get("avg_r", 0.0) or 0.0),
+                "test_median_r": float(test_metrics.get("median_r", 0.0) or 0.0),
+                "test_winrate": float(test_metrics.get("winrate", 0.0) or 0.0),
+                "audit_model": "shadow_extended_bucket_oos_not_used_for_trading_selection",
+                "selection_eligible": False,
+            }
+        )
+    return rows
+
 
 
 def _candidate_rules(trades: pd.DataFrame) -> list[dict[str, str]]:
@@ -1529,13 +1918,24 @@ def _rolling_daily_summary(oos_frame: pd.DataFrame, *, oos_days: Sequence[int]) 
 
 def _aggregate_window_health(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
-        return frame
-    grouped = frame.groupby(["date", "test_day_ord", "window_days", "rule_scope", "status"], dropna=False).agg(
+        return _ensure_columns(frame, _rolling_window_health_columns())
+    group_cols = [
+        "date",
+        "test_day_ord",
+        "window_days",
+        "train_window_days_requested",
+        "train_window_days_available",
+        "train_window_complete",
+        "rule_scope",
+        "status",
+        "selection_block_reason",
+    ]
+    grouped = frame.groupby(group_cols, dropna=False).agg(
         rules=("rules", "sum"),
         tradeable=("tradeable", "sum"),
         cooldown_or_rejected=("cooldown_or_rejected", "sum"),
     ).reset_index()
-    return _sort_frame(grouped, ["test_day_ord", "window_days", "rule_scope", "status"])
+    return _sort_frame(grouped, ["test_day_ord", "window_days", "rule_scope", "status", "selection_block_reason"])
 
 
 def _rolling_fluctuation_stress(oos_frame: pd.DataFrame, *, full_trade_grid: pd.DataFrame) -> pd.DataFrame:
@@ -2266,6 +2666,11 @@ def _rolling_run_config_frame(*, config: FailedPumpShortResearchConfig, trade_gr
                 "selection_eligible_only": True,
                 "all_session_rules_evaluated_for_health_only": True,
                 "extended_flow_oi_distribution_rules_evaluated_for_health_only": True,
+                "shadow_oos_audit_model": "best_extended_30d_rules_tested_oos_not_used_for_trading_selection",
+                "shadow_oos_max_rules_per_day": int(config.shadow_oos_max_rules_per_day),
+                "shadow_oos_min_train_trades": int(config.shadow_oos_min_train_trades),
+                "shadow_oos_min_train_active_days": int(config.shadow_oos_min_train_active_days),
+                "shadow_oos_min_train_sum_r": float(config.shadow_oos_min_train_sum_r),
                 "simple_fade_baseline_selection_eligible": False,
                 "train_windows": ",".join(str(v) for v in ROLLING_WINDOWS),
                 "entry_model": ENTRY_MODEL,
@@ -2274,6 +2679,9 @@ def _rolling_run_config_frame(*, config: FailedPumpShortResearchConfig, trade_gr
                 "short_confirm_closed_before_entry": True,
                 "source_trades": int(len(trade_grid)),
                 "oos_trades": int(len(rolling.get("oos_trades", pd.DataFrame()))),
+                "shadow_oos_audit_rows": int(len(rolling.get("shadow_oos_audit", pd.DataFrame()))),
+                "empty_oos_trades_csv_has_headers": True,
+                "incomplete_train_windows_never_select_trades": True,
                 "min_train_trades": int(config.min_train_trades),
                 "min_train_active_days": int(config.min_train_active_days),
                 "statuses": "core,strong,tactical,challenger,cooldown,rejected",
