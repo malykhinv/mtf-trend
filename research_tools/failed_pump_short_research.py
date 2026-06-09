@@ -48,6 +48,13 @@ SIGNAL_VARIANTS = (
     "structural_low_break",
     "simple_pump_fade_without_low_break_audit",
 )
+PUMP_TIERS = (
+    "broad",
+    "strong_pump",
+    "anomaly_pump",
+    "extreme_pump",
+)
+OPPORTUNITY_THRESHOLDS_R = (0.50, 0.75, 1.00, 1.50, 2.00, 3.00, 5.00)
 SESSION_BUCKETS = (
     "asia_only",
     "asia_europe_overlap",
@@ -87,6 +94,15 @@ class FailedPumpShortResearchConfig:
     broad_min_high_return_pct: float = 0.008
     broad_min_quote_ratio: float = 3.0
     broad_min_trade_ratio: float = 2.0
+    strong_pump_min_high_return_pct: float = 0.015
+    strong_pump_min_quote_ratio: float = 5.0
+    strong_pump_min_trade_ratio: float = 3.0
+    anomaly_pump_min_high_return_pct: float = 0.025
+    anomaly_pump_min_quote_ratio: float = 8.0
+    anomaly_pump_min_trade_ratio: float = 5.0
+    extreme_pump_min_high_return_pct: float = 0.040
+    extreme_pump_min_quote_ratio: float = 12.0
+    extreme_pump_min_trade_ratio: float = 8.0
     setup_cluster_minutes: int = 60
 
     # Confirmation and execution.
@@ -130,6 +146,12 @@ class FailedPumpShortResearchConfig:
             raise ValueError("baseline_5m_candles must be > 0")
         if int(self.post_pump_observation_minutes) <= 0:
             raise ValueError("post_pump_observation_minutes must be > 0")
+        if not (0 < float(self.strong_pump_min_high_return_pct) <= float(self.anomaly_pump_min_high_return_pct) <= float(self.extreme_pump_min_high_return_pct)):
+            raise ValueError("pump tier high-return thresholds must be positive and ordered")
+        if not (float(self.broad_min_quote_ratio) <= float(self.strong_pump_min_quote_ratio) <= float(self.anomaly_pump_min_quote_ratio) <= float(self.extreme_pump_min_quote_ratio)):
+            raise ValueError("pump tier quote-ratio thresholds must be ordered")
+        if not (float(self.broad_min_trade_ratio) <= float(self.strong_pump_min_trade_ratio) <= float(self.anomaly_pump_min_trade_ratio) <= float(self.extreme_pump_min_trade_ratio)):
+            raise ValueError("pump tier trade-ratio thresholds must be ordered")
         if int(self.max_hold_minutes) <= 0:
             raise ValueError("max_hold_minutes must be > 0")
         if int(self.trail_lookback_1m) <= 0:
@@ -343,6 +365,9 @@ def run_failed_pump_short_research(
     by_taker_bucket = _group_metrics(trade_grid, ["confirm_taker_buy_bucket"])
     by_oi_strength = _group_metrics(trade_grid, ["oi_strength_bucket"])
     by_distribution = _group_metrics(trade_grid, ["post_pump_preconfirm_distribution_bucket"])
+    by_pump_tier = _group_metrics(trade_grid, ["pump_tier"])
+    by_pump_tier_session_family = _group_metrics(trade_grid, ["pump_tier", "session_bucket", "signal_family"])
+    opportunity_audit = _opportunity_audit(trade_grid)
     by_day = _daily_metrics(trade_grid)
     top_dependency = _top_dependency_report(trade_grid)
 
@@ -382,6 +407,9 @@ def run_failed_pump_short_research(
     _write_csv(config.output_dir / "failed_pump_short_by_taker_bucket.csv", by_taker_bucket)
     _write_csv(config.output_dir / "failed_pump_short_by_oi_strength.csv", by_oi_strength)
     _write_csv(config.output_dir / "failed_pump_short_by_distribution.csv", by_distribution)
+    _write_csv(config.output_dir / "failed_pump_short_by_pump_tier.csv", by_pump_tier)
+    _write_csv(config.output_dir / "failed_pump_short_by_pump_tier_session_family.csv", by_pump_tier_session_family)
+    _write_csv(config.output_dir / "failed_pump_short_opportunity_audit.csv", opportunity_audit)
     _write_csv(config.output_dir / "failed_pump_short_by_day.csv", by_day)
     _write_csv(config.output_dir / "failed_pump_short_top_dependency.csv", top_dependency)
     _write_csv(config.output_dir / "failed_pump_short_data_quality.csv", quality)
@@ -512,6 +540,15 @@ def _collect_broad_pump_setups(
     low = _numeric_series(frame, "low")
     ts = _numeric_series(frame, "timestamp").astype("int64")
     baseline = int(config.baseline_5m_candles)
+    if len(frame) <= baseline:
+        return []
+
+    # Critical speed path for 365d: compute rolling baselines once instead of
+    # taking a fresh median slice for every candidate candle.  This preserves the
+    # no-lookahead contract because the median is shifted by one closed 5m bar.
+    quote_baseline = quote.rolling(window=baseline, min_periods=baseline).median().shift(1)
+    trade_baseline = trades.rolling(window=baseline, min_periods=baseline).median().shift(1)
+
     last_seed_ms: int | None = None
     cluster_ms = int(config.setup_cluster_minutes) * MINUTE_MS
 
@@ -533,14 +570,20 @@ def _collect_broad_pump_setups(
             continue
         if seed_return_pct < float(config.broad_min_seed_return_pct) and high_return_pct < float(config.broad_min_high_return_pct):
             continue
-        q_med = _safe_median(quote.iloc[i - baseline : i])
-        t_med = _safe_median(trades.iloc[i - baseline : i])
+        q_med = _float(quote_baseline.iat[i])
+        t_med = _float(trade_baseline.iat[i])
         q_now = float(quote.iat[i]) if math.isfinite(float(quote.iat[i])) else 0.0
         t_now = float(trades.iat[i]) if math.isfinite(float(trades.iat[i])) else 0.0
         quote_ratio = q_now / q_med if q_med > 0 else 0.0
         trade_ratio = t_now / t_med if t_med > 0 else 0.0
         if quote_ratio < float(config.broad_min_quote_ratio) or trade_ratio < float(config.broad_min_trade_ratio):
             continue
+        pump_tier = _pump_tier(
+            high_return_pct=high_return_pct,
+            quote_ratio=quote_ratio,
+            trade_ratio=trade_ratio,
+            config=config,
+        )
         setup_id = f"{_compact_symbol(symbol)}:{seed_open_ms}"
         last_seed_ms = seed_open_ms
         rows.append(
@@ -557,6 +600,10 @@ def _collect_broad_pump_setups(
                 "seed_low": l,
                 "seed_close": c,
                 "pump_high": h,
+                "pump_tier": pump_tier,
+                "is_strong_pump_tier": pump_tier in {"strong_pump", "anomaly_pump", "extreme_pump"},
+                "is_anomaly_pump_tier": pump_tier in {"anomaly_pump", "extreme_pump"},
+                "is_extreme_pump_tier": pump_tier == "extreme_pump",
                 "seed_return_pct": seed_return_pct,
                 "seed_high_return_pct": high_return_pct,
                 "seed_range_pct": h / l - 1.0 if l > 0 else np.nan,
@@ -564,7 +611,7 @@ def _collect_broad_pump_setups(
                 "seed_number_of_trades": t_now,
                 "seed_quote_ratio": quote_ratio,
                 "seed_trade_ratio": trade_ratio,
-                "setup_model": "broad_5m_pump_awakening_cache_only",
+                "setup_model": "broad_5m_pump_awakening_cache_only_with_pump_tiers",
                 "future_label_available_at_entry": False,
                 "short_confirm_closed_before_entry": True,
                 "entry_model": ENTRY_MODEL,
@@ -572,7 +619,6 @@ def _collect_broad_pump_setups(
             }
         )
     return rows
-
 
 def _enrich_setup_with_1m_structure(
     setup: dict[str, object],
@@ -583,10 +629,7 @@ def _enrich_setup_with_1m_structure(
     seed_open_ms = int(setup["seed_open_ms"])
     seed_close_ms = int(setup["seed_close_ms"])
     lookback_start = seed_open_ms - int(config.structural_lookback_minutes) * MINUTE_MS
-    struct = frame_1m.loc[
-        (_numeric_series(frame_1m, "timestamp") >= lookback_start)
-        & (_numeric_series(frame_1m, "timestamp") < seed_close_ms)
-    ].copy()
+    struct = _time_window(frame_1m, start_ms=lookback_start, end_ms=seed_close_ms, include_end=False).copy()
     enriched = dict(setup)
     if struct.empty:
         enriched.update({"enrichment_status": "missing_1m_structural_window"})
@@ -602,10 +645,7 @@ def _enrich_setup_with_1m_structure(
     structural_high = float(highs.loc[high_idx])
     low_ts = int(struct.loc[low_idx, "timestamp"])
     high_ts = int(struct.loc[high_idx, "timestamp"])
-    seed_1m = frame_1m.loc[
-        (_numeric_series(frame_1m, "timestamp") >= seed_open_ms)
-        & (_numeric_series(frame_1m, "timestamp") < seed_close_ms)
-    ].sort_values("timestamp").reset_index(drop=True)
+    seed_1m = _time_window(frame_1m, start_ms=seed_open_ms, end_ms=seed_close_ms, include_end=False)
     seed_shape = _seed_1m_shape_features(seed_1m, seed_open_ms=seed_open_ms, seed_close_ms=seed_close_ms)
     enriched.update(
         {
@@ -636,12 +676,11 @@ def _find_first_failed_pump_signal(
         return None
     start = int(setup["post_pump_observation_start_ms"])
     end = int(setup["post_pump_observation_end_ms"])
-    ts = _numeric_series(frame_1m, "timestamp")
-    window = frame_1m.loc[(ts >= start) & (ts < end)].sort_values("timestamp").reset_index(drop=True)
+    window = _time_window(frame_1m, start_ms=start, end_ms=end, include_end=False)
     if len(window) < 2:
         return None
     flow_baseline_start = max(int(setup["seed_open_ms"]) - int(config.flow_baseline_minutes) * MINUTE_MS, 0)
-    flow_baseline = frame_1m.loc[(ts >= flow_baseline_start) & (ts < start)]
+    flow_baseline = _time_window(frame_1m, start_ms=flow_baseline_start, end_ms=start, include_end=False)
     baseline_taker_share = _safe_median(_taker_buy_share(flow_baseline))
     baseline_quote = _safe_median(_numeric_series(flow_baseline, "quote_volume"))
     baseline_trades = _safe_median(_numeric_series(flow_baseline, "number_of_trades"))
@@ -672,7 +711,7 @@ def _find_first_failed_pump_signal(
         trade_ratio = trades_now / baseline_trades if baseline_trades > 0 else 0.0
         if quote_ratio < float(config.min_1m_quote_ratio) or trade_ratio < float(config.min_1m_trade_ratio):
             continue
-        taker_share = _float(_taker_buy_share(pd.DataFrame([candle])).iloc[0])
+        taker_share = _candle_taker_buy_share(candle)
         taker_threshold = float(config.max_confirm_taker_buy_share_for_research)
         if not math.isfinite(taker_share) or taker_share > taker_threshold:
             continue
@@ -691,10 +730,12 @@ def _find_first_failed_pump_signal(
         entry_open = _float(next_row.get("open"))
         if not math.isfinite(entry_open) or entry_open <= 0:
             continue
-        structural_high_window = frame_1m.loc[
-            (_numeric_series(frame_1m, "timestamp") >= int(setup["seed_open_ms"]))
-            & (_numeric_series(frame_1m, "timestamp") <= confirm_open_ms)
-        ]
+        structural_high_window = _time_window(
+            frame_1m,
+            start_ms=int(setup["seed_open_ms"]),
+            end_ms=confirm_open_ms,
+            include_end=True,
+        )
         last_structural_high = _safe_max(_numeric_series(structural_high_window, "high"))
         if last_structural_high <= 0:
             last_structural_high = max(float(setup.get("pump_high", 0.0)), h)
@@ -785,12 +826,11 @@ def _find_first_simple_pump_fade_signal(
         return None
     start = int(setup["post_pump_observation_start_ms"])
     end = int(setup["post_pump_observation_end_ms"])
-    ts = _numeric_series(frame_1m, "timestamp")
-    window = frame_1m.loc[(ts >= start) & (ts < end)].sort_values("timestamp").reset_index(drop=True)
+    window = _time_window(frame_1m, start_ms=start, end_ms=end, include_end=False)
     if len(window) < 2:
         return None
     flow_baseline_start = max(int(setup["seed_open_ms"]) - int(config.flow_baseline_minutes) * MINUTE_MS, 0)
-    flow_baseline = frame_1m.loc[(ts >= flow_baseline_start) & (ts < start)]
+    flow_baseline = _time_window(frame_1m, start_ms=flow_baseline_start, end_ms=start, include_end=False)
     baseline_taker_share = _safe_median(_taker_buy_share(flow_baseline))
     baseline_quote = _safe_median(_numeric_series(flow_baseline, "quote_volume"))
     baseline_trades = _safe_median(_numeric_series(flow_baseline, "number_of_trades"))
@@ -824,7 +864,7 @@ def _find_first_simple_pump_fade_signal(
         trade_ratio = trades_now / baseline_trades if baseline_trades > 0 else 0.0
         if quote_ratio < float(config.min_1m_quote_ratio) or trade_ratio < float(config.min_1m_trade_ratio):
             continue
-        taker_share = _float(_taker_buy_share(pd.DataFrame([candle])).iloc[0])
+        taker_share = _candle_taker_buy_share(candle)
         taker_threshold = float(config.max_confirm_taker_buy_share_for_research)
         if not math.isfinite(taker_share) or taker_share > taker_threshold:
             continue
@@ -843,10 +883,12 @@ def _find_first_simple_pump_fade_signal(
         entry_open = _float(next_row.get("open"))
         if not math.isfinite(entry_open) or entry_open <= 0:
             continue
-        structural_high_window = frame_1m.loc[
-            (_numeric_series(frame_1m, "timestamp") >= int(setup["seed_open_ms"]))
-            & (_numeric_series(frame_1m, "timestamp") <= confirm_open_ms)
-        ]
+        structural_high_window = _time_window(
+            frame_1m,
+            start_ms=int(setup["seed_open_ms"]),
+            end_ms=confirm_open_ms,
+            include_end=True,
+        )
         last_structural_high = _safe_max(_numeric_series(structural_high_window, "high"))
         if last_structural_high <= 0:
             last_structural_high = max(pump_high, h)
@@ -1032,8 +1074,7 @@ def _simulate_short_trade(
 ) -> dict[str, object] | None:
     entry_ts = int(signal["entry_timestamp_ms"])
     end_ts = entry_ts + int(config.max_hold_minutes) * MINUTE_MS
-    ts = _numeric_series(frame_1m, "timestamp")
-    path = frame_1m.loc[(ts >= entry_ts) & (ts <= end_ts)].sort_values("timestamp").reset_index(drop=True)
+    path = _time_window(frame_1m, start_ms=entry_ts, end_ms=end_ts, include_end=True)
     if path.empty:
         return None
     entry_price = float(signal["entry_price"])
@@ -1118,6 +1159,10 @@ def _simulate_short_trade(
         "setup_id": signal["setup_id"],
         "symbol": signal["symbol"],
         "signal_variant": signal.get("signal_variant", "structural_low_break"),
+        "pump_tier": signal.get("pump_tier", "missing"),
+        "is_strong_pump_tier": bool(signal.get("is_strong_pump_tier", False)),
+        "is_anomaly_pump_tier": bool(signal.get("is_anomaly_pump_tier", False)),
+        "is_extreme_pump_tier": bool(signal.get("is_extreme_pump_tier", False)),
         "selection_eligible": bool(signal.get("selection_eligible", True)),
         "signal_family": signal["signal_family"],
         "exit_policy": exit_policy,
@@ -1202,27 +1247,45 @@ def _prepare_trade_grid_for_reporting(frame: pd.DataFrame) -> pd.DataFrame:
     work["is_win"] = pd.to_numeric(work["r_multiple"], errors="coerce") > 0
     if "selection_eligible" not in work.columns:
         work["selection_eligible"] = True
-    work["rule_id"] = work.apply(
-        lambda row: _rule_id(
-            str(row.get("signal_family", "")),
-            str(row.get("session_bucket", "")),
-            str(row.get("exit_policy", "")),
-        ),
-        axis=1,
+    for col, default in (
+        ("signal_family", ""),
+        ("session_bucket", ""),
+        ("exit_policy", ""),
+        ("confirm_taker_buy_bucket", "unknown"),
+        ("oi_strength_bucket", "unknown"),
+        ("post_pump_preconfirm_distribution_bucket", "unknown"),
+        ("pump_tier", "missing"),
+    ):
+        if col not in work.columns:
+            work[col] = default
+    family = work["signal_family"].astype(str)
+    session = work["session_bucket"].astype(str)
+    exit_policy = work["exit_policy"].astype(str)
+    taker = work["confirm_taker_buy_bucket"].astype(str)
+    oi = work["oi_strength_bucket"].astype(str)
+    distribution = work["post_pump_preconfirm_distribution_bucket"].astype(str)
+    lower_high = work.get("has_lower_high_before_break", pd.Series(False, index=work.index)).astype(bool).astype(str)
+    pump_tier = work["pump_tier"].astype(str)
+    work["rule_id"] = family + "|" + session + "|" + exit_policy
+    work["pump_tier_rule_id"] = family + "|" + session + "|" + exit_policy + "|pump_tier=" + pump_tier
+    work["extended_rule_id"] = (
+        family
+        + "|"
+        + session
+        + "|"
+        + exit_policy
+        + "|taker="
+        + taker
+        + "|oi="
+        + oi
+        + "|distribution="
+        + distribution
+        + "|lower_high="
+        + lower_high
     )
-    work["extended_rule_id"] = work.apply(
-        lambda row: _extended_rule_id(
-            str(row.get("signal_family", "")),
-            str(row.get("session_bucket", "")),
-            str(row.get("exit_policy", "")),
-            str(row.get("confirm_taker_buy_bucket", "unknown")),
-            str(row.get("oi_strength_bucket", "unknown")),
-            str(row.get("post_pump_preconfirm_distribution_bucket", "unknown")),
-            str(bool(row.get("has_lower_high_before_break", False))),
-        ),
-        axis=1,
-    )
+    work["extended_pump_tier_rule_id"] = work["extended_rule_id"] + "|pump_tier=" + pump_tier
     return _sort_frame(work, ["entry_timestamp_ms", "symbol", "signal_family", "exit_policy"])
+
 
 
 def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortResearchConfig) -> dict[str, pd.DataFrame]:
@@ -1232,6 +1295,8 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
     trades = trade_grid.copy()
     trades["day_ord"] = pd.to_numeric(trades["day_ord"], errors="coerce").astype("Int64")
     trades = trades.loc[trades["day_ord"].notna()].copy()
+    trades["day_ord_i"] = trades["day_ord"].astype(int)
+    _add_rule_match_columns(trades)
     if "selection_eligible" in trades.columns:
         selection_trades = trades.loc[trades["selection_eligible"].astype(bool)].copy()
     else:
@@ -1239,8 +1304,8 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
     trades = selection_trades
     if trades.empty:
         return _empty_rolling_outputs(trade_grid)
-    min_day = int(trades["day_ord"].min())
-    max_day = int(trades["day_ord"].max())
+    min_day = int(trades["day_ord_i"].min())
+    max_day = int(trades["day_ord_i"].max())
     # Need at least the shortest window behind the first evaluated day.  Longer
     # windows are still reported as incomplete until the full requested history
     # exists; incomplete windows are never allowed to select live/OOS trades.
@@ -1254,17 +1319,19 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
     window_health_rows: list[dict[str, object]] = []
     shadow_rows: list[dict[str, object]] = []
     all_rules = _candidate_rules(trades)
+    rolling_started_at = time.monotonic()
+    last_rolling_emit_at = 0.0
 
-    for test_day in oos_days:
+    for day_index, test_day in enumerate(oos_days, start=1):
         day_health: list[dict[str, object]] = []
         selected_rules: set[str] = set()
         for rule in all_rules:
+            scope_mask = _rule_mask(trades, rule)
             for window in ROLLING_WINDOWS:
                 window_start = int(test_day) - int(window)
                 train_window_days_available = max(0, int(test_day) - max(int(min_day), window_start))
                 train_window_complete = bool(train_window_days_available >= int(window))
-                train_mask = (trades["day_ord"].astype(int) >= window_start) & (trades["day_ord"].astype(int) < test_day)
-                scope_mask = _rule_mask(trades, rule)
+                train_mask = (trades["day_ord_i"] >= window_start) & (trades["day_ord_i"] < test_day)
                 train = trades.loc[train_mask & scope_mask]
                 metrics = _metrics_dict(train)
                 status = _rule_status(metrics, window=window, config=config)
@@ -1309,6 +1376,7 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
                     "oi_strength_bucket",
                     "post_pump_preconfirm_distribution_bucket",
                     "has_lower_high_before_break",
+                    "pump_tier",
                 ):
                     if extra_col in rule:
                         health[extra_col] = rule[extra_col]
@@ -1343,7 +1411,7 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
             if bool(row.get("selection_allowed", False)):
                 selected_rules.add(rule_id)
 
-        test_all_trades = trades.loc[trades["day_ord"].astype(int) == test_day].copy()
+        test_all_trades = trades.loc[trades["day_ord_i"] == test_day].copy()
         test_trades = test_all_trades.copy()
         if selected_rules:
             test_trades = test_trades.loc[test_trades["rule_id"].astype(str).isin(selected_rules)].copy()
@@ -1351,7 +1419,11 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
             test_trades = test_trades.iloc[0:0].copy()
         if not test_trades.empty:
             for _, trade in test_trades.iterrows():
-                source = trade.to_dict()
+                source = {
+                    key: value
+                    for key, value in trade.to_dict().items()
+                    if not str(key).startswith("__rule_") and key != "day_ord_i"
+                }
                 health = by_rule.get(str(source.get("rule_id")), {})
                 source.update(
                     {
@@ -1407,6 +1479,25 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
                 "test_sum_r": float(pd.to_numeric(test_trades.get("r_multiple", pd.Series(dtype=float)), errors="coerce").sum()) if not test_trades.empty else 0.0,
             }
         )
+
+        now = time.monotonic()
+        if day_index == 1 or day_index == len(oos_days) or now - last_rolling_emit_at >= 10.0:
+            last_rolling_emit_at = now
+            print(
+                "failed-pump short research: rolling "
+                f"{day_index}/{len(oos_days)} date={_date_from_day_ord(test_day)} "
+                f"selected_rules={len(selected_rules)} oos_trades={len(test_trades)} "
+                f"elapsed={_format_duration(now - rolling_started_at)}",
+                flush=True,
+            )
+            _write_progress_event(
+                config.output_dir,
+                stage="rolling_progress",
+                message=f"day={day_index}/{len(oos_days)} date={_date_from_day_ord(test_day)}",
+                elapsed_seconds=now - rolling_started_at,
+                trades=len(test_trades),
+                oos_trades=len(oos_rows),
+            )
 
     oos_frame = _ensure_columns(pd.DataFrame(oos_rows), _rolling_oos_columns(trade_grid))
     if not oos_frame.empty:
@@ -1486,6 +1577,7 @@ def _rolling_rule_health_columns() -> list[str]:
         "signal_family",
         "session_bucket",
         "exit_policy",
+        "pump_tier",
         "confirm_taker_buy_bucket",
         "oi_strength_bucket",
         "post_pump_preconfirm_distribution_bucket",
@@ -1574,6 +1666,7 @@ def _rolling_shadow_oos_audit_columns() -> list[str]:
         "signal_family",
         "session_bucket",
         "exit_policy",
+        "pump_tier",
         "confirm_taker_buy_bucket",
         "oi_strength_bucket",
         "post_pump_preconfirm_distribution_bucket",
@@ -1694,6 +1787,7 @@ def _shadow_oos_audit_rows(
             "oi_strength_bucket": str(candidate.get("oi_strength_bucket", "")),
             "post_pump_preconfirm_distribution_bucket": str(candidate.get("post_pump_preconfirm_distribution_bucket", "")),
             "has_lower_high_before_break": str(candidate.get("has_lower_high_before_break", "")),
+            "pump_tier": str(candidate.get("pump_tier", "")),
         }
         matched = test_trades.loc[_rule_mask(test_trades, rule)].copy() if not test_trades.empty else test_trades
         test_metrics = _metrics_dict(matched)
@@ -1707,6 +1801,7 @@ def _shadow_oos_audit_rows(
                 "signal_family": candidate.get("signal_family", ""),
                 "session_bucket": candidate.get("session_bucket", ""),
                 "exit_policy": candidate.get("exit_policy", ""),
+                "pump_tier": candidate.get("pump_tier", ""),
                 "confirm_taker_buy_bucket": candidate.get("confirm_taker_buy_bucket", ""),
                 "oi_strength_bucket": candidate.get("oi_strength_bucket", ""),
                 "post_pump_preconfirm_distribution_bucket": candidate.get("post_pump_preconfirm_distribution_bucket", ""),
@@ -1759,6 +1854,22 @@ def _candidate_rules(trades: pd.DataFrame) -> list[dict[str, str]]:
                         "exit_policy": exit_policy,
                     }
                 )
+    if "pump_tier" in trades.columns:
+        for (family, session, exit_policy, pump_tier), _group in trades.groupby(
+            ["signal_family", "session_bucket", "exit_policy", "pump_tier"],
+            dropna=False,
+        ):
+            rows.append(
+                {
+                    "scope": "pump_tier_session_audit",
+                    "rule_id": _pump_tier_rule_id(str(family), str(session), str(exit_policy), str(pump_tier)),
+                    "signal_family": str(family),
+                    "session_bucket": str(session),
+                    "exit_policy": str(exit_policy),
+                    "pump_tier": str(pump_tier),
+                }
+            )
+
     # Extended rules are evaluated for health/drift diagnostics only.  The OOS
     # selector below still promotes only the 30d session_specific core scope, so
     # these finer buckets cannot silently overfit the trading decision.
@@ -1769,18 +1880,24 @@ def _candidate_rules(trades: pd.DataFrame) -> list[dict[str, str]]:
         "has_lower_high_before_break": "all_lower_high_states",
     }
     if all(col in trades.columns for col in extended_cols):
-        for (family, session, exit_policy, taker_bucket, oi_bucket, dist_bucket, lower_high), _group in trades.groupby(
-            [
-                "signal_family",
-                "session_bucket",
-                "exit_policy",
-                "confirm_taker_buy_bucket",
-                "oi_strength_bucket",
-                "post_pump_preconfirm_distribution_bucket",
-                "has_lower_high_before_break",
-            ],
-            dropna=False,
-        ):
+        group_cols = [
+            "signal_family",
+            "session_bucket",
+            "exit_policy",
+            "confirm_taker_buy_bucket",
+            "oi_strength_bucket",
+            "post_pump_preconfirm_distribution_bucket",
+            "has_lower_high_before_break",
+        ]
+        include_pump_tier = "pump_tier" in trades.columns
+        if include_pump_tier:
+            group_cols.append("pump_tier")
+        for key, _group in trades.groupby(group_cols, dropna=False):
+            if include_pump_tier:
+                family, session, exit_policy, taker_bucket, oi_bucket, dist_bucket, lower_high, pump_tier = key
+            else:
+                family, session, exit_policy, taker_bucket, oi_bucket, dist_bucket, lower_high = key
+                pump_tier = "all_pump_tiers"
             rows.append(
                 {
                     "scope": "extended_flow_oi_distribution_audit",
@@ -1792,7 +1909,7 @@ def _candidate_rules(trades: pd.DataFrame) -> list[dict[str, str]]:
                         str(oi_bucket),
                         str(dist_bucket),
                         str(bool(lower_high)),
-                    ),
+                    ) + f"|pump_tier={pump_tier}",
                     "signal_family": str(family),
                     "session_bucket": str(session),
                     "exit_policy": str(exit_policy),
@@ -1800,26 +1917,55 @@ def _candidate_rules(trades: pd.DataFrame) -> list[dict[str, str]]:
                     "oi_strength_bucket": str(oi_bucket),
                     "post_pump_preconfirm_distribution_bucket": str(dist_bucket),
                     "has_lower_high_before_break": str(bool(lower_high)),
+                    "pump_tier": str(pump_tier),
                 }
             )
     return rows
 
 
 def _rule_mask(trades: pd.DataFrame, rule: dict[str, str]) -> pd.Series:
-    mask = (trades["signal_family"].astype(str) == rule["signal_family"]) & (trades["exit_policy"].astype(str) == rule["exit_policy"])
+    mask = (_rule_value_series(trades, "signal_family") == rule["signal_family"]) & (_rule_value_series(trades, "exit_policy") == rule["exit_policy"])
     if rule["session_bucket"] != "all_sessions":
-        mask &= trades["session_bucket"].astype(str) == rule["session_bucket"]
-    for col in ("confirm_taker_buy_bucket", "oi_strength_bucket", "post_pump_preconfirm_distribution_bucket", "has_lower_high_before_break"):
+        mask &= _rule_value_series(trades, "session_bucket") == rule["session_bucket"]
+    for col in ("confirm_taker_buy_bucket", "oi_strength_bucket", "post_pump_preconfirm_distribution_bucket", "has_lower_high_before_break", "pump_tier"):
         if col in rule and col in trades.columns:
-            if col == "has_lower_high_before_break":
-                mask &= trades[col].astype(bool).astype(str) == rule[col]
-            else:
-                mask &= trades[col].astype(str) == rule[col]
+            mask &= _rule_value_series(trades, col) == rule[col]
     return mask
+
+
+def _add_rule_match_columns(frame: pd.DataFrame) -> None:
+    for col in (
+        "signal_family",
+        "exit_policy",
+        "session_bucket",
+        "confirm_taker_buy_bucket",
+        "oi_strength_bucket",
+        "post_pump_preconfirm_distribution_bucket",
+        "pump_tier",
+    ):
+        if col in frame.columns:
+            frame[f"__rule_{col}"] = frame[col].astype(str)
+    if "has_lower_high_before_break" in frame.columns:
+        frame["__rule_has_lower_high_before_break"] = frame["has_lower_high_before_break"].astype(bool).astype(str)
+
+
+def _rule_value_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    fast_col = f"__rule_{column}"
+    if fast_col in frame.columns:
+        return frame[fast_col].astype(str)
+    if column not in frame.columns:
+        return pd.Series("", index=frame.index, dtype=object)
+    if column == "has_lower_high_before_break":
+        return frame[column].astype(bool).astype(str)
+    return frame[column].astype(str)
 
 
 def _rule_id(signal_family: str, session_bucket: str, exit_policy: str) -> str:
     return f"{signal_family}|{session_bucket}|{exit_policy}"
+
+
+def _pump_tier_rule_id(signal_family: str, session_bucket: str, exit_policy: str, pump_tier: str) -> str:
+    return f"{signal_family}|{session_bucket}|{exit_policy}|pump_tier={pump_tier}"
 
 
 def _extended_rule_id(
@@ -1965,6 +2111,7 @@ def _rolling_fluctuation_stress(oos_frame: pd.DataFrame, *, full_trade_grid: pd.
                 "week",
                 "session_bucket",
                 "signal_variant",
+                "pump_tier",
                 "signal_family",
                 "exit_policy",
                 "confirm_taker_buy_bucket",
@@ -2029,6 +2176,118 @@ def _group_metrics(frame: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
             key = (key,)
         rows.append({**dict(zip(group_cols, key)), **_metrics_dict(group)})
     return pd.DataFrame(rows).sort_values(group_cols + ["sum_r"], ascending=[True] * len(group_cols) + [False]).reset_index(drop=True)
+
+
+def _opportunity_audit(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "signal_id" not in frame.columns:
+        return pd.DataFrame(columns=_opportunity_audit_columns())
+    work = frame.copy()
+    work["mfe_r"] = pd.to_numeric(work.get("mfe_r", np.nan), errors="coerce")
+    work["mae_r"] = pd.to_numeric(work.get("mae_r", np.nan), errors="coerce")
+    work["r_multiple"] = pd.to_numeric(work.get("r_multiple", np.nan), errors="coerce")
+    first_cols = [
+        "signal_variant",
+        "pump_tier",
+        "signal_family",
+        "session_bucket",
+        "confirm_taker_buy_bucket",
+        "oi_strength_bucket",
+        "post_pump_preconfirm_distribution_bucket",
+        "has_lower_high_before_break",
+        "symbol",
+        "date",
+    ]
+    agg_spec: dict[str, tuple[str, str]] = {
+        "mfe_r": ("mfe_r", "max"),
+        "mae_r": ("mae_r", "max"),
+        "best_exit_r": ("r_multiple", "max"),
+        "worst_exit_r": ("r_multiple", "min"),
+        "exit_policy_count": ("exit_policy", "nunique"),
+    }
+    for col in first_cols:
+        if col in work.columns:
+            agg_spec[col] = (col, "first")
+    signals = work.groupby("signal_id", dropna=False).agg(**agg_spec).reset_index()
+    if signals.empty:
+        return pd.DataFrame(columns=_opportunity_audit_columns())
+    rows: list[dict[str, object]] = []
+    group_defs = [
+        ("all", []),
+        ("signal_variant", ["signal_variant"]),
+        ("pump_tier", ["pump_tier"]),
+        ("signal_family", ["signal_family"]),
+        ("session", ["session_bucket"]),
+        ("pump_tier_session_family", ["pump_tier", "session_bucket", "signal_family"]),
+        ("pump_tier_family_distribution", ["pump_tier", "signal_family", "post_pump_preconfirm_distribution_bucket"]),
+        ("pump_tier_family_taker_oi", ["pump_tier", "signal_family", "confirm_taker_buy_bucket", "oi_strength_bucket"]),
+    ]
+    for scope, cols in group_defs:
+        if any(col not in signals.columns for col in cols):
+            continue
+        groups = [((), signals)] if not cols else signals.groupby(cols, dropna=False)
+        for key, group in groups:
+            key_values = () if not cols else (key if isinstance(key, tuple) else (key,))
+            row = _opportunity_metrics_row(group, audit_scope=scope)
+            for col, value in zip(cols, key_values, strict=False):
+                row[col] = value
+            rows.append(row)
+    result = pd.DataFrame(rows)
+    return _ensure_columns(_sort_frame(result, ["audit_scope", "pump_tier", "session_bucket", "signal_family"]), _opportunity_audit_columns())
+
+
+def _opportunity_metrics_row(group: pd.DataFrame, *, audit_scope: str) -> dict[str, object]:
+    mfe = pd.to_numeric(group.get("mfe_r", pd.Series(dtype=float)), errors="coerce").dropna()
+    mae = pd.to_numeric(group.get("mae_r", pd.Series(dtype=float)), errors="coerce").dropna()
+    best = pd.to_numeric(group.get("best_exit_r", pd.Series(dtype=float)), errors="coerce").dropna()
+    row: dict[str, object] = {
+        "audit_scope": audit_scope,
+        "signals": int(len(group)),
+        "avg_mfe_r": float(mfe.mean()) if not mfe.empty else 0.0,
+        "median_mfe_r": float(mfe.median()) if not mfe.empty else 0.0,
+        "avg_mae_r": float(mae.mean()) if not mae.empty else 0.0,
+        "median_mae_r": float(mae.median()) if not mae.empty else 0.0,
+        "avg_best_exit_r": float(best.mean()) if not best.empty else 0.0,
+        "median_best_exit_r": float(best.median()) if not best.empty else 0.0,
+        "positive_best_exit_rate": float((best > 0).mean()) if not best.empty else 0.0,
+    }
+    for threshold in OPPORTUNITY_THRESHOLDS_R:
+        name = _threshold_name(threshold)
+        hits = int((mfe >= float(threshold)).sum()) if not mfe.empty else 0
+        row[f"mfe_ge_{name}_signals"] = hits
+        row[f"mfe_ge_{name}_rate"] = hits / len(group) if len(group) else 0.0
+    return row
+
+
+def _opportunity_audit_columns() -> list[str]:
+    base = [
+        "audit_scope",
+        "pump_tier",
+        "signal_variant",
+        "signal_family",
+        "session_bucket",
+        "confirm_taker_buy_bucket",
+        "oi_strength_bucket",
+        "post_pump_preconfirm_distribution_bucket",
+        "has_lower_high_before_break",
+        "signals",
+        "avg_mfe_r",
+        "median_mfe_r",
+        "avg_mae_r",
+        "median_mae_r",
+        "avg_best_exit_r",
+        "median_best_exit_r",
+        "positive_best_exit_rate",
+    ]
+    threshold_cols: list[str] = []
+    for threshold in OPPORTUNITY_THRESHOLDS_R:
+        name = _threshold_name(threshold)
+        threshold_cols.extend([f"mfe_ge_{name}_signals", f"mfe_ge_{name}_rate"])
+    return [*base, *threshold_cols]
+
+
+def _threshold_name(value: float) -> str:
+    text = f"{float(value):g}".replace(".", "p")
+    return f"{text}r"
 
 
 def _daily_metrics(frame: pd.DataFrame) -> pd.DataFrame:
@@ -2201,8 +2460,7 @@ def _post_pump_signal_shape_features(
     structural_low = float(setup.get("structural_low", np.nan))
     seed_close = float(setup.get("seed_close", np.nan))
     seed_pump_high = float(setup.get("pump_high", setup.get("seed_high", np.nan)))
-    ts = _numeric_series(frame_1m, "timestamp")
-    preconfirm = frame_1m.loc[(ts >= seed_close_ms) & (ts <= int(confirm_open_ms))].sort_values("timestamp").reset_index(drop=True)
+    preconfirm = _time_window(frame_1m, start_ms=seed_close_ms, end_ms=int(confirm_open_ms), include_end=True)
     quote_top1 = _top1_share(_numeric_series(preconfirm, "quote_volume"))
     trade_top1 = _top1_share(_numeric_series(preconfirm, "number_of_trades"))
     high_series = _numeric_series(preconfirm, "high")
@@ -2227,6 +2485,10 @@ def _post_pump_signal_shape_features(
 
 def _setup_shape_passthrough(setup: dict[str, object]) -> dict[str, object]:
     keys = (
+        "pump_tier",
+        "is_strong_pump_tier",
+        "is_anomaly_pump_tier",
+        "is_extreme_pump_tier",
         "seed_1m_quote_top1_share",
         "seed_1m_trade_top1_share",
         "seed_1m_distribution_bucket",
@@ -2235,7 +2497,12 @@ def _setup_shape_passthrough(setup: dict[str, object]) -> dict[str, object]:
         "seed_second_half_return_pct",
         "seed_last_2m_return_pct",
     )
-    return {key: setup.get(key, np.nan if key != "seed_1m_distribution_bucket" else "missing") for key in keys}
+    string_defaults = {"seed_1m_distribution_bucket", "pump_tier"}
+    bool_defaults = {"is_strong_pump_tier", "is_anomaly_pump_tier", "is_extreme_pump_tier"}
+    return {
+        key: setup.get(key, False if key in bool_defaults else ("missing" if key in string_defaults else np.nan))
+        for key in keys
+    }
 
 
 def _top1_share(series: pd.Series) -> float:
@@ -2256,6 +2523,34 @@ def _distribution_bucket(quote_top1_share: float, trade_top1_share: float) -> st
     if top1 >= 0.60:
         return "one_print_like_top1_ge60"
     return "mixed_top1_25_60"
+
+
+def _pump_tier(
+    *,
+    high_return_pct: float,
+    quote_ratio: float,
+    trade_ratio: float,
+    config: FailedPumpShortResearchConfig,
+) -> str:
+    if (
+        high_return_pct >= float(config.extreme_pump_min_high_return_pct)
+        and quote_ratio >= float(config.extreme_pump_min_quote_ratio)
+        and trade_ratio >= float(config.extreme_pump_min_trade_ratio)
+    ):
+        return "extreme_pump"
+    if (
+        high_return_pct >= float(config.anomaly_pump_min_high_return_pct)
+        and quote_ratio >= float(config.anomaly_pump_min_quote_ratio)
+        and trade_ratio >= float(config.anomaly_pump_min_trade_ratio)
+    ):
+        return "anomaly_pump"
+    if (
+        high_return_pct >= float(config.strong_pump_min_high_return_pct)
+        and quote_ratio >= float(config.strong_pump_min_quote_ratio)
+        and trade_ratio >= float(config.strong_pump_min_trade_ratio)
+    ):
+        return "strong_pump"
+    return "broad"
 
 
 def _window_return_pct(frame: pd.DataFrame) -> float:
@@ -2340,6 +2635,14 @@ def _taker_buy_share(frame: pd.DataFrame) -> pd.Series:
     quote = pd.to_numeric(frame["quote_volume"], errors="coerce")
     taker = pd.to_numeric(frame["taker_buy_quote_volume"], errors="coerce")
     return taker / quote.replace(0, np.nan)
+
+
+def _candle_taker_buy_share(candle: pd.Series) -> float:
+    quote = _float(candle.get("quote_volume"))
+    taker = _float(candle.get("taker_buy_quote_volume"))
+    if not math.isfinite(quote) or quote <= 0 or not math.isfinite(taker):
+        return float("nan")
+    return taker / quote
 
 
 def parse_research_end_timestamp_ms(value: object) -> int | None:
@@ -2739,6 +3042,18 @@ def _safe_max(series: pd.Series) -> float:
     if values.empty:
         return 0.0
     return float(values.max())
+
+
+def _time_window(frame: pd.DataFrame, *, start_ms: int, end_ms: int, include_end: bool) -> pd.DataFrame:
+    if frame.empty or "timestamp" not in frame.columns:
+        return frame.iloc[0:0].copy()
+    ts = frame["timestamp"].to_numpy(dtype="int64", copy=False)
+    left = int(np.searchsorted(ts, int(start_ms), side="left"))
+    right_side = "right" if include_end else "left"
+    right = int(np.searchsorted(ts, int(end_ms), side=right_side))
+    if right <= left:
+        return frame.iloc[0:0].copy()
+    return frame.iloc[left:right].reset_index(drop=True)
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
