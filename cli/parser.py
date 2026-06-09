@@ -463,6 +463,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Read-only parquet cache directory. Default: configured backtest cache_dir",
     )
+    failed_pump_short.add_argument(
+        "--workers",
+        type=_positive_int_for("--workers"),
+        default=4,
+        help="Symbol-level read-only worker processes for failed-pump short research. Use --workers 1 for sequential diagnostics.",
+    )
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")

@@ -8,9 +8,11 @@ research artifacts that are shaped to be reusable for later live/backtest parity
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import math
+import os
 from pathlib import Path
 import time
 from typing import Iterable, Sequence
@@ -81,7 +83,7 @@ class FailedPumpShortResearchConfig:
     output_dir: Path = Path(DEFAULT_RESULTS_DIR) / "failed_pump_short_research"
     days: int = 365
     end_timestamp_ms: int | None = None
-    symbol_workers: int = 1
+    symbol_workers: int = min(4, max(1, os.cpu_count() or 1))
     fail_on_empty_input: bool = True
     cache_read_mode: str = "read_only"
     partial_flush_symbols: int = PARTIAL_FLUSH_SYMBOLS
@@ -156,6 +158,8 @@ class FailedPumpShortResearchConfig:
             raise ValueError("max_hold_minutes must be > 0")
         if int(self.trail_lookback_1m) <= 0:
             raise ValueError("trail_lookback_1m must be > 0")
+        if int(self.symbol_workers) <= 0:
+            raise ValueError("symbol_workers must be > 0")
         if int(self.partial_flush_symbols) <= 0:
             raise ValueError("partial_flush_symbols must be > 0")
         if float(self.partial_flush_seconds) <= 0:
@@ -166,6 +170,17 @@ class FailedPumpShortResearchConfig:
             raise ValueError("shadow_oos_min_train_trades must be > 0")
         if int(self.shadow_oos_min_train_active_days) <= 0:
             raise ValueError("shadow_oos_min_train_active_days must be > 0")
+
+
+@dataclass(frozen=True, slots=True)
+class _OiLookup:
+    timestamp_ms: np.ndarray
+    available_ms: np.ndarray
+    open_interest: np.ndarray
+
+    @property
+    def empty(self) -> bool:
+        return len(self.open_interest) == 0
 
 
 class _ProgressLine:
@@ -259,17 +274,9 @@ def run_failed_pump_short_research(
     last_flush_at = time.monotonic()
     last_flush_index = 0
 
-    for index, symbol in enumerate(selected_symbols, start=1):
+    def _consume_symbol_result(index: int, symbol: str, result: dict[str, list[dict[str, object]]]) -> None:
+        nonlocal last_flush_at, last_flush_index
         progress.update(index=index, item=symbol)
-        result = _process_symbol(
-            symbol=symbol,
-            storage=storage,
-            config=config,
-            start_ms=start_ms,
-            end_ms=end_ms,
-            load_start_ms=load_start_ms,
-            load_end_ms=load_end_ms,
-        )
         symbol_setups = result["setups"]
         symbol_signals = result["signals"]
         symbol_trades = result["trades"]
@@ -319,6 +326,39 @@ def run_failed_pump_short_research(
                 f"signals={len(all_signals):,} trades={len(all_trades):,}",
                 flush=True,
             )
+
+    workers = max(1, int(config.symbol_workers))
+    print(f"{progress_label}: symbol_workers={workers} cache_mode=read_only", flush=True)
+    if workers <= 1:
+        for index, symbol in enumerate(selected_symbols, start=1):
+            result = _process_symbol(
+                symbol=symbol,
+                storage=storage,
+                config=config,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                load_start_ms=load_start_ms,
+                load_end_ms=load_end_ms,
+            )
+            _consume_symbol_result(index, symbol, result)
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            future_to_symbol = {
+                executor.submit(
+                    _process_symbol_parallel_worker,
+                    symbol,
+                    Path(config.cache_dir),
+                    config,
+                    int(start_ms),
+                    int(end_ms),
+                    int(load_start_ms),
+                    int(load_end_ms),
+                ): symbol
+                for symbol in selected_symbols
+            }
+            for index, future in enumerate(as_completed(future_to_symbol), start=1):
+                symbol = future_to_symbol[future]
+                _consume_symbol_result(index, symbol, future.result())
     progress.finish()
 
     _print_stage(progress_label, "building raw dataframes", started_at)
@@ -333,6 +373,8 @@ def run_failed_pump_short_research(
         signals = _sort_frame(signals, ["confirm_timestamp_ms", "symbol", "signal_family"])
     if not setups.empty:
         setups = _sort_frame(setups, ["seed_open_ms", "symbol"])
+    if not quality.empty:
+        quality = _sort_frame(quality, ["symbol"])
 
     _print_stage(progress_label, "writing raw core artifacts before rolling", started_at)
     _write_csv(config.output_dir / "failed_pump_short_setups.csv", setups)
@@ -396,9 +438,9 @@ def run_failed_pump_short_research(
     )
     rolling_run_config = _rolling_run_config_frame(config=config, trade_grid=trade_grid, rolling=rolling)
 
-    _write_csv(config.output_dir / "failed_pump_short_setups.csv", setups)
-    _write_csv(config.output_dir / "failed_pump_short_signals.csv", signals)
-    _write_csv(config.output_dir / "failed_pump_short_trade_grid.csv", trade_grid)
+    # Raw core artifacts were already written before rolling.  Rewriting the large
+    # setup/signal/trade CSVs here doubles final IO on 365d without changing
+    # content, so finalization writes only derived artifacts.
     _write_csv(config.output_dir / "failed_pump_short_by_signal_family.csv", by_family)
     _write_csv(config.output_dir / "failed_pump_short_by_session.csv", by_session)
     _write_csv(config.output_dir / "failed_pump_short_by_session_family.csv", by_session_family)
@@ -436,6 +478,29 @@ def run_failed_pump_short_research(
 
     return config.output_dir
 
+
+
+def _process_symbol_parallel_worker(
+    symbol: str,
+    cache_dir: Path,
+    config: FailedPumpShortResearchConfig,
+    start_ms: int,
+    end_ms: int,
+    load_start_ms: int,
+    load_end_ms: int,
+) -> dict[str, list[dict[str, object]]]:
+    # Worker processes only read parquet cache.  They never write artifacts or
+    # mutate .output/cache; all output flushing remains in the parent process.
+    storage = ParquetStorage(Path(cache_dir))
+    return _process_symbol(
+        symbol=symbol,
+        storage=storage,
+        config=config,
+        start_ms=int(start_ms),
+        end_ms=int(end_ms),
+        load_start_ms=int(load_start_ms),
+        load_end_ms=int(load_end_ms),
+    )
 
 def _process_symbol(
     *,
@@ -477,6 +542,7 @@ def _process_symbol(
     frame_5m = _prepare_ohlcv(frame_5m_raw)
     frame_1m = _prepare_ohlcv(frame_1m_raw)
     oi_5m = _prepare_oi(oi_5m_raw)
+    oi_lookup = _prepare_oi_lookup(oi_5m)
 
     missing_required_5m = sorted(set(["timestamp", "open", "high", "low", "close"]) - set(frame_5m.columns))
     missing_required_1m = sorted(set(["timestamp", "open", "high", "low", "close"]) - set(frame_1m.columns))
@@ -500,8 +566,8 @@ def _process_symbol(
         signals = [
             signal
             for signal in (
-                _find_first_failed_pump_signal(enriched, frame_1m=frame_1m, oi_5m=oi_5m, config=config),
-                _find_first_simple_pump_fade_signal(enriched, frame_1m=frame_1m, oi_5m=oi_5m, config=config),
+                _find_first_failed_pump_signal(enriched, frame_1m=frame_1m, oi_5m=oi_lookup, config=config),
+                _find_first_simple_pump_fade_signal(enriched, frame_1m=frame_1m, oi_5m=oi_lookup, config=config),
             )
             if signal is not None
         ]
@@ -959,7 +1025,7 @@ def _find_first_simple_pump_fade_signal(
 
 
 def _closed_5m_oi_context(
-    oi_5m: pd.DataFrame,
+    oi_5m: _OiLookup | pd.DataFrame,
     *,
     asof_timestamp_ms: int,
     threshold_pct: float,
@@ -987,33 +1053,19 @@ def _closed_5m_oi_context(
         "oi_regime": "missing_closed_5m_oi",
         "signal_family": "no_oi_confirmation",
     }
-    if oi_5m.empty or "open_interest" not in oi_5m.columns or "timestamp" not in oi_5m.columns:
+    lookup = oi_5m if isinstance(oi_5m, _OiLookup) else _prepare_oi_lookup(_prepare_oi(oi_5m))
+    if lookup.empty:
         return base
-    work = oi_5m.copy()
-    work["timestamp"] = pd.to_numeric(work["timestamp"], errors="coerce")
-    work["open_interest"] = pd.to_numeric(work["open_interest"], errors="coerce")
-    work = work.loc[work["timestamp"].notna() & work["open_interest"].notna()].sort_values("timestamp").reset_index(drop=True)
-    if work.empty:
+    idx = int(np.searchsorted(lookup.available_ms, int(asof_timestamp_ms), side="right")) - 1
+    if idx < 1:
         return base
-    if "available_timestamp_ms" in work.columns:
-        available = pd.to_numeric(work["available_timestamp_ms"], errors="coerce")
-    else:
-        available = work["timestamp"] + FIVE_MINUTE_MS
-    work["oi_available_timestamp_ms"] = available
-    known = work.loc[work["oi_available_timestamp_ms"] <= int(asof_timestamp_ms)].copy()
-    if len(known) < 2:
-        return base
-    current = known.iloc[-1]
-    previous = known.iloc[-2]
-    two_back = known.iloc[-3] if len(known) >= 3 else None
-    three_back = known.iloc[-4] if len(known) >= 4 else None
-    oi_current = _float(current.get("open_interest"))
-    oi_previous = _float(previous.get("open_interest"))
+    oi_current = float(lookup.open_interest[idx])
+    oi_previous = float(lookup.open_interest[idx - 1])
     if oi_previous <= 0 or not math.isfinite(oi_current) or not math.isfinite(oi_previous):
         return base
     change_pct = oi_current / oi_previous - 1.0
-    oi_two_back = _float(two_back.get("open_interest")) if two_back is not None else float("nan")
-    oi_three_back = _float(three_back.get("open_interest")) if three_back is not None else float("nan")
+    oi_two_back = float(lookup.open_interest[idx - 2]) if idx >= 2 else float("nan")
+    oi_three_back = float(lookup.open_interest[idx - 3]) if idx >= 3 else float("nan")
     change_pct_2x5m = oi_current / oi_two_back - 1.0 if math.isfinite(oi_two_back) and oi_two_back > 0 else np.nan
     change_pct_3x5m = oi_current / oi_three_back - 1.0 if math.isfinite(oi_three_back) and oi_three_back > 0 else np.nan
     if change_pct <= -abs(threshold_pct):
@@ -1025,16 +1077,16 @@ def _closed_5m_oi_context(
     else:
         regime = "oi_flat_or_below_threshold"
         family = "no_oi_confirmation"
-    oi_age_ms = int(asof_timestamp_ms) - int(current["oi_available_timestamp_ms"])
+    oi_age_ms = int(asof_timestamp_ms) - int(lookup.available_ms[idx])
     oi_status = "ok" if 0 <= oi_age_ms <= 2 * FIVE_MINUTE_MS else "stale"
     return {
         "oi_model": OI_MODEL,
         "oi_available": True,
-        "oi_current_timestamp_ms": int(current["timestamp"]),
-        "oi_current_available_timestamp_ms": int(current["oi_available_timestamp_ms"]),
-        "oi_previous_timestamp_ms": int(previous["timestamp"]),
-        "oi_two_back_timestamp_ms": int(two_back["timestamp"]) if two_back is not None else np.nan,
-        "oi_three_back_timestamp_ms": int(three_back["timestamp"]) if three_back is not None else np.nan,
+        "oi_current_timestamp_ms": int(lookup.timestamp_ms[idx]),
+        "oi_current_available_timestamp_ms": int(lookup.available_ms[idx]),
+        "oi_previous_timestamp_ms": int(lookup.timestamp_ms[idx - 1]),
+        "oi_two_back_timestamp_ms": int(lookup.timestamp_ms[idx - 2]) if idx >= 2 else np.nan,
+        "oi_three_back_timestamp_ms": int(lookup.timestamp_ms[idx - 3]) if idx >= 3 else np.nan,
         "oi_current": oi_current,
         "oi_previous": oi_previous,
         "oi_two_back": oi_two_back,
@@ -1057,24 +1109,28 @@ def _simulate_signal_trade_grid(
     frame_1m: pd.DataFrame,
     config: FailedPumpShortResearchConfig,
 ) -> list[dict[str, object]]:
+    entry_ts = int(signal["entry_timestamp_ms"])
+    end_ts = entry_ts + int(config.max_hold_minutes) * MINUTE_MS
+    path = _time_window(frame_1m, start_ms=entry_ts, end_ms=end_ts, include_end=True)
+    if path.empty:
+        return []
     rows: list[dict[str, object]] = []
     for policy in EXIT_POLICIES:
-        trade = _simulate_short_trade(signal, frame_1m=frame_1m, config=config, exit_policy=policy)
+        trade = _simulate_short_trade_on_path(signal, path=path, config=config, exit_policy=policy)
         if trade is not None:
             rows.append(trade)
     return rows
 
 
-def _simulate_short_trade(
+
+def _simulate_short_trade_on_path(
     signal: dict[str, object],
     *,
-    frame_1m: pd.DataFrame,
+    path: pd.DataFrame,
     config: FailedPumpShortResearchConfig,
     exit_policy: str,
 ) -> dict[str, object] | None:
     entry_ts = int(signal["entry_timestamp_ms"])
-    end_ts = entry_ts + int(config.max_hold_minutes) * MINUTE_MS
-    path = _time_window(frame_1m, start_ms=entry_ts, end_ms=end_ts, include_end=True)
     if path.empty:
         return None
     entry_price = float(signal["entry_price"])
@@ -1232,6 +1288,19 @@ def _simulate_short_trade(
     return row
 
 
+
+def _simulate_short_trade(
+    signal: dict[str, object],
+    *,
+    frame_1m: pd.DataFrame,
+    config: FailedPumpShortResearchConfig,
+    exit_policy: str,
+) -> dict[str, object] | None:
+    entry_ts = int(signal["entry_timestamp_ms"])
+    end_ts = entry_ts + int(config.max_hold_minutes) * MINUTE_MS
+    path = _time_window(frame_1m, start_ms=entry_ts, end_ms=end_ts, include_end=True)
+    return _simulate_short_trade_on_path(signal, path=path, config=config, exit_policy=exit_policy)
+
 def _short_leg_r(entry_price: float, exit_price: float, fraction: float, risk_abs: float, fee_rate: float) -> float:
     if risk_abs <= 0 or fraction <= 0:
         return 0.0
@@ -1319,6 +1388,9 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
     window_health_rows: list[dict[str, object]] = []
     shadow_rows: list[dict[str, object]] = []
     all_rules = _candidate_rules(trades)
+    # Rule masks are independent of day/window.  Precompute once instead of
+    # rebuilding the same pandas boolean masks for every rolling day.
+    rule_masks = {str(rule["rule_id"]): _rule_mask(trades, rule) for rule in all_rules}
     rolling_started_at = time.monotonic()
     last_rolling_emit_at = 0.0
 
@@ -1326,7 +1398,7 @@ def _run_rolling_protocol(trade_grid: pd.DataFrame, *, config: FailedPumpShortRe
         day_health: list[dict[str, object]] = []
         selected_rules: set[str] = set()
         for rule in all_rules:
-            scope_mask = _rule_mask(trades, rule)
+            scope_mask = rule_masks[str(rule["rule_id"])]
             for window in ROLLING_WINDOWS:
                 window_start = int(test_day) - int(window)
                 train_window_days_available = max(0, int(test_day) - max(int(min_day), window_start))
@@ -2625,6 +2697,29 @@ def _prepare_oi(frame: pd.DataFrame) -> pd.DataFrame:
     return work.loc[work["open_interest"].notna()].sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
 
 
+def _prepare_oi_lookup(frame: pd.DataFrame) -> _OiLookup:
+    if frame.empty or "timestamp" not in frame.columns or "open_interest" not in frame.columns:
+        empty = np.array([], dtype=np.float64)
+        return _OiLookup(timestamp_ms=empty.astype(np.int64), available_ms=empty.astype(np.int64), open_interest=empty)
+    ts = pd.to_numeric(frame["timestamp"], errors="coerce")
+    oi = pd.to_numeric(frame["open_interest"], errors="coerce")
+    if "available_timestamp_ms" in frame.columns:
+        available = pd.to_numeric(frame["available_timestamp_ms"], errors="coerce")
+    else:
+        available = ts + FIVE_MINUTE_MS
+    work = pd.DataFrame({"timestamp": ts, "available": available, "open_interest": oi})
+    work = work.loc[work["timestamp"].notna() & work["available"].notna() & work["open_interest"].notna()]
+    if work.empty:
+        empty = np.array([], dtype=np.float64)
+        return _OiLookup(timestamp_ms=empty.astype(np.int64), available_ms=empty.astype(np.int64), open_interest=empty)
+    work = work.sort_values("available").drop_duplicates("available", keep="last")
+    return _OiLookup(
+        timestamp_ms=work["timestamp"].to_numpy(dtype=np.int64, copy=True),
+        available_ms=work["available"].to_numpy(dtype=np.int64, copy=True),
+        open_interest=work["open_interest"].to_numpy(dtype=np.float64, copy=True),
+    )
+
+
 def _has_real_flow(frame: pd.DataFrame) -> bool:
     return "quote_volume" in frame.columns and "number_of_trades" in frame.columns and "taker_buy_quote_volume" in frame.columns
 
@@ -3046,14 +3141,17 @@ def _safe_max(series: pd.Series) -> float:
 
 def _time_window(frame: pd.DataFrame, *, start_ms: int, end_ms: int, include_end: bool) -> pd.DataFrame:
     if frame.empty or "timestamp" not in frame.columns:
-        return frame.iloc[0:0].copy()
+        return frame.iloc[0:0]
     ts = frame["timestamp"].to_numpy(dtype="int64", copy=False)
     left = int(np.searchsorted(ts, int(start_ms), side="left"))
     right_side = "right" if include_end else "left"
     right = int(np.searchsorted(ts, int(end_ms), side=right_side))
     if right <= left:
-        return frame.iloc[0:0].copy()
-    return frame.iloc[left:right].reset_index(drop=True)
+        return frame.iloc[0:0]
+    # Keep original index and avoid reset_index/copy here.  This function is on
+    # the hottest path; callers use iloc or label-aware loc after idxmin/idxmax,
+    # so preserving the parent index is safe and substantially faster.
+    return frame.iloc[left:right]
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -3147,7 +3245,7 @@ def _write_progress_event(
 
 def _write_csv(path: Path, frame: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    frame.to_csv(path, index=False, encoding="utf-8-sig", chunksize=100_000)
 
 
 def _fmt_ts(timestamp_ms: int | float | object) -> str:

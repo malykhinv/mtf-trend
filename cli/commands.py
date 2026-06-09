@@ -1984,6 +1984,7 @@ def run_failed_pump_short_research(config: AppConfig, args: argparse.Namespace) 
             output_dir=output_dir,
             days=days,
             end_timestamp_ms=end_timestamp_ms,
+            symbol_workers=int(getattr(args, "workers", 4)),
         )
         result_dir = run_research(research_config, progress_label="failed-pump short research")
         print(f"failed-pump short research artifacts: {result_dir}", flush=True)
