@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from constants import DEFAULT_CACHE_DIR, DEFAULT_RESULTS_DIR
-from data.storage.parquet_storage import ParquetStorage
+from data.storage.parquet_storage import ParquetLoadResult, ParquetStorage
 from domain.enums.timeframe import Timeframe
 from utils.symbols import normalize_symbol
 
@@ -66,6 +66,8 @@ class FailedPumpShortResearchConfig:
     days: int = 365
     end_timestamp_ms: int | None = None
     symbol_workers: int = 1
+    fail_on_empty_input: bool = True
+    cache_read_mode: str = "read_only"
 
     # Setup discovery: deliberately broad.  These constants are not optimized by
     # the command line; changing them should create a new research_id/config row.
@@ -156,8 +158,14 @@ def run_failed_pump_short_research(
     started_at = time.monotonic()
     config.output_dir.mkdir(parents=True, exist_ok=True)
     selected_symbols = tuple(_resolve_symbols(config.cache_dir, symbols))
+    if not selected_symbols:
+        raise RuntimeError(
+            "No symbols with both 1m and 5m cache were found. "
+            f"cache_dir={Path(config.cache_dir)}; cache is not modified by this command."
+        )
     storage = ParquetStorage(config.cache_dir)
-    end_ms = _resolve_end_timestamp_ms(config, storage, selected_symbols)
+    cache_coverage = _cache_coverage_summary(config.cache_dir, selected_symbols)
+    end_ms = _resolve_end_timestamp_ms(config, cache_coverage)
     start_ms = int(end_ms) - int(config.days) * DAY_MS
     warmup_ms = max(2 * DAY_MS, int(config.baseline_5m_candles) * FIVE_MINUTE_MS)
     load_start_ms = int(start_ms) - int(warmup_ms)
@@ -220,6 +228,8 @@ def run_failed_pump_short_research(
         setups=setups,
         signals=signals,
         trade_grid=trade_grid,
+        quality=quality,
+        cache_coverage=cache_coverage,
     )
     rolling_run_config = _rolling_run_config_frame(config=config, trade_grid=trade_grid, rolling=rolling)
 
@@ -247,6 +257,8 @@ def run_failed_pump_short_research(
     _write_csv(config.output_dir / "failed_pump_short_rolling_fluctuation_stress.csv", rolling["fluctuation_stress"])
     _write_csv(config.output_dir / "failed_pump_short_rolling_run_config.csv", rolling_run_config)
 
+    _fail_fast_on_empty_input(config=config, quality=quality)
+
     return config.output_dir
 
 
@@ -261,13 +273,26 @@ def _process_symbol(
     load_end_ms: int,
 ) -> dict[str, list[dict[str, object]]]:
     quality: list[dict[str, object]] = []
-    frame_5m_raw = _load_frame(storage, symbol, "5m", start_ms=load_start_ms, end_ms=load_end_ms)
-    frame_1m_raw = _load_frame(storage, symbol, "1m", start_ms=load_start_ms, end_ms=load_end_ms)
-    oi_5m_raw = _load_frame(storage, symbol, "5m", start_ms=load_start_ms, end_ms=load_end_ms)
-    # OI is often stored in the same timeframe path by the fetcher as an extra
-    # column.  The loader above is cache-only; no exchange clients are touched.
+    frame_5m_result = _load_frame_result(storage, symbol, "5m", start_ms=load_start_ms, end_ms=load_end_ms)
+    frame_1m_result = _load_frame_result(storage, symbol, "1m", start_ms=load_start_ms, end_ms=load_end_ms)
+    oi_5m_result = frame_5m_result
+    frame_5m_raw = frame_5m_result.frame if frame_5m_result.ok else pd.DataFrame()
+    frame_1m_raw = frame_1m_result.frame if frame_1m_result.ok else pd.DataFrame()
+    oi_5m_raw = oi_5m_result.frame if oi_5m_result.ok else pd.DataFrame()
+    # OI is stored in the same 5m cache frame as an extra column when available.
+    # These calls are read-only; no exchange clients or cache write APIs are used.
 
-    qrow = _data_quality_row(symbol, frame_5m_raw, frame_1m_raw, oi_5m_raw)
+    qrow = _data_quality_row(
+        symbol=symbol,
+        frame_5m=frame_5m_raw,
+        frame_1m=frame_1m_raw,
+        oi_5m=oi_5m_raw,
+        frame_5m_result=frame_5m_result,
+        frame_1m_result=frame_1m_result,
+        oi_5m_result=oi_5m_result,
+        load_start_ms=load_start_ms,
+        load_end_ms=load_end_ms,
+    )
     quality.append(qrow)
 
     if frame_5m_raw.empty or frame_1m_raw.empty:
@@ -1781,10 +1806,35 @@ def _taker_buy_share(frame: pd.DataFrame) -> pd.Series:
     return taker / quote.replace(0, np.nan)
 
 
-def _load_frame(storage: ParquetStorage, symbol: str, timeframe: str, *, start_ms: int, end_ms: int) -> pd.DataFrame:
+def parse_research_end_timestamp_ms(value: object) -> int | None:
+    """Parse CLI end timestamp.
+
+    ``latest-cache``/``latest``/empty means: choose the latest closed 5m cache
+    timestamp by reading parquet metadata/timestamp columns only. Date-only input
+    means the end of that UTC day.
+    """
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"latest", "latest-cache", "cache-latest"}:
+        return None
+    if text.isdigit():
+        raw = int(text)
+        return raw * 1000 if raw < 10_000_000_000 else raw
+    if len(text) == 10 and text[4] == "-" and text[7] == "-":
+        dt = datetime.fromisoformat(text).replace(tzinfo=UTC)
+        return int(dt.timestamp() * 1000) + DAY_MS - 1
+    normalized = text.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return int(dt.timestamp() * 1000)
+
+
+def _load_frame_result(storage: ParquetStorage, symbol: str, timeframe: str, *, start_ms: int, end_ms: int) -> ParquetLoadResult:
     tf = Timeframe(timeframe)
-    result = storage.load_window_result(symbol, tf, int(start_ms), int(end_ms))
-    return result.frame if result.ok else pd.DataFrame()
+    return storage.load_window_result(symbol, tf, int(start_ms), int(end_ms))
 
 
 def _resolve_symbols(cache_dir: Path, symbols: Iterable[str] | None) -> list[str]:
@@ -1805,34 +1855,187 @@ def _resolve_symbols(cache_dir: Path, symbols: Iterable[str] | None) -> list[str
     return sorted(set(resolved))
 
 
-def _resolve_end_timestamp_ms(config: FailedPumpShortResearchConfig, storage: ParquetStorage, symbols: Sequence[str]) -> int:
+def _resolve_end_timestamp_ms(config: FailedPumpShortResearchConfig, cache_coverage: dict[str, object]) -> int:
     if config.end_timestamp_ms is not None:
         return int(config.end_timestamp_ms)
-    timestamps: list[int] = []
-    for symbol in symbols:
-        value = storage.get_last_timestamp(symbol, Timeframe.M5)
-        if value is not None:
-            timestamps.append(int(value))
-    if timestamps:
-        return max(timestamps)
-    return int(datetime.now(tz=UTC).timestamp() * 1000)
+    latest = _finite_int_or_none(cache_coverage.get("max_5m_timestamp_ms"))
+    if latest is None:
+        raise RuntimeError(
+            "Cannot resolve research end time from cache: no readable 5m timestamp coverage. "
+            f"cache_dir={Path(config.cache_dir)}; cache is not modified by this command."
+        )
+    return int(latest)
 
 
-def _data_quality_row(symbol: str, frame_5m: pd.DataFrame, frame_1m: pd.DataFrame, oi_5m: pd.DataFrame) -> dict[str, object]:
+def _cache_coverage_summary(cache_dir: Path, symbols: Sequence[str]) -> dict[str, object]:
+    probes_5m = [_cache_timeframe_probe(cache_dir, symbol, Timeframe.M5) for symbol in symbols]
+    probes_1m = [_cache_timeframe_probe(cache_dir, symbol, Timeframe.M1) for symbol in symbols]
+    first_5m = [value for value in (_finite_int_or_none(row.get("first_timestamp_ms")) for row in probes_5m) if value is not None]
+    last_5m = [value for value in (_finite_int_or_none(row.get("last_timestamp_ms")) for row in probes_5m) if value is not None]
+    first_1m = [value for value in (_finite_int_or_none(row.get("first_timestamp_ms")) for row in probes_1m) if value is not None]
+    last_1m = [value for value in (_finite_int_or_none(row.get("last_timestamp_ms")) for row in probes_1m) if value is not None]
+    return {
+        "cache_dir": str(Path(cache_dir)),
+        "cache_read_mode": "read_only",
+        "probed_symbols": int(len(symbols)),
+        "symbols_with_5m_timestamp": int(len(last_5m)),
+        "symbols_with_1m_timestamp": int(len(last_1m)),
+        "min_5m_timestamp_ms": min(first_5m) if first_5m else np.nan,
+        "max_5m_timestamp_ms": max(last_5m) if last_5m else np.nan,
+        "min_1m_timestamp_ms": min(first_1m) if first_1m else np.nan,
+        "max_1m_timestamp_ms": max(last_1m) if last_1m else np.nan,
+        "min_5m_time_utc": _fmt_ts(min(first_5m)) if first_5m else "",
+        "max_5m_time_utc": _fmt_ts(max(last_5m)) if last_5m else "",
+        "min_1m_time_utc": _fmt_ts(min(first_1m)) if first_1m else "",
+        "max_1m_time_utc": _fmt_ts(max(last_1m)) if last_1m else "",
+        "cache_probe_model": "read_parquet_timestamp_column_only_no_writes",
+    }
+
+
+def _cache_timeframe_probe(cache_dir: Path, symbol: str, timeframe: Timeframe) -> dict[str, object]:
+    encoded = ParquetStorage.encode_symbol_for_path(symbol)
+    tf_dir = Path(cache_dir) / encoded / timeframe.value
+    base_path = tf_dir / "data.parquet"
+    delta_dir = tf_dir / "delta"
+    timestamp_frames: list[pd.Series] = []
+    status_parts: list[str] = []
+    paths_read = 0
+
+    paths = [base_path]
+    if delta_dir.exists():
+        paths.extend(sorted(delta_dir.glob("*.parquet")))
+    for path in paths:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            ts = pd.read_parquet(path, columns=["timestamp"])["timestamp"]
+        except Exception as exc:
+            status_parts.append(f"{path.name}:read_failed:{type(exc).__name__}")
+            continue
+        paths_read += 1
+        numeric = pd.to_numeric(ts, errors="coerce").dropna()
+        if not numeric.empty:
+            timestamp_frames.append(numeric.astype("int64"))
+
+    if not timestamp_frames:
+        status = "missing_or_no_timestamp"
+        if status_parts:
+            status = ";".join(status_parts[:3])
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe.value,
+            "path": str(base_path),
+            "paths_read": int(paths_read),
+            "status": status,
+            "first_timestamp_ms": np.nan,
+            "last_timestamp_ms": np.nan,
+        }
+    merged = pd.concat(timestamp_frames, ignore_index=True)
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe.value,
+        "path": str(base_path),
+        "paths_read": int(paths_read),
+        "status": "ok",
+        "first_timestamp_ms": int(merged.min()),
+        "last_timestamp_ms": int(merged.max()),
+    }
+
+
+def _data_quality_row(
+    *,
+    symbol: str,
+    frame_5m: pd.DataFrame,
+    frame_1m: pd.DataFrame,
+    oi_5m: pd.DataFrame,
+    frame_5m_result: ParquetLoadResult,
+    frame_1m_result: ParquetLoadResult,
+    oi_5m_result: ParquetLoadResult,
+    load_start_ms: int,
+    load_end_ms: int,
+) -> dict[str, object]:
     return {
         "research_id": RESEARCH_ID,
         "symbol": symbol,
+        "cache_read_mode": "read_only",
+        "cache_write_model": "no_cache_writes_outputs_only_to_results_dir",
+        "load_start_timestamp_ms": int(load_start_ms),
+        "load_end_timestamp_ms": int(load_end_ms),
+        "load_start_time_utc": _fmt_ts(load_start_ms),
+        "load_end_time_utc": _fmt_ts(load_end_ms),
         "5m_rows": int(len(frame_5m)),
         "1m_rows": int(len(frame_1m)),
         "5m_oi_rows": int(len(oi_5m.loc[oi_5m.get("open_interest", pd.Series(dtype=float)).notna()])) if not oi_5m.empty and "open_interest" in oi_5m.columns else 0,
+        "5m_load_ok": bool(frame_5m_result.ok),
+        "1m_load_ok": bool(frame_1m_result.ok),
+        "5m_load_status": str(frame_5m_result.status),
+        "1m_load_status": str(frame_1m_result.status),
+        "5m_load_reason": str(frame_5m_result.reason),
+        "1m_load_reason": str(frame_1m_result.reason),
+        "5m_attempted_path": str(frame_5m_result.path),
+        "1m_attempted_path": str(frame_1m_result.path),
+        "5m_loaded_first_timestamp_ms": _frame_min_timestamp(frame_5m),
+        "5m_loaded_last_timestamp_ms": _frame_max_timestamp(frame_5m),
+        "1m_loaded_first_timestamp_ms": _frame_min_timestamp(frame_1m),
+        "1m_loaded_last_timestamp_ms": _frame_max_timestamp(frame_1m),
+        "5m_loaded_first_time_utc": _fmt_optional_ts(_frame_min_timestamp(frame_5m)),
+        "5m_loaded_last_time_utc": _fmt_optional_ts(_frame_max_timestamp(frame_5m)),
+        "1m_loaded_first_time_utc": _fmt_optional_ts(_frame_min_timestamp(frame_1m)),
+        "1m_loaded_last_time_utc": _fmt_optional_ts(_frame_max_timestamp(frame_1m)),
         "5m_has_quote_volume": bool("quote_volume" in frame_5m.columns),
         "5m_has_number_of_trades": bool("number_of_trades" in frame_5m.columns),
         "1m_has_quote_volume": bool("quote_volume" in frame_1m.columns),
         "1m_has_number_of_trades": bool("number_of_trades" in frame_1m.columns),
         "1m_has_taker_buy_quote_volume": bool("taker_buy_quote_volume" in frame_1m.columns),
+        "oi_load_ok": bool(oi_5m_result.ok),
+        "oi_load_status": str(oi_5m_result.status),
+        "oi_load_reason": str(oi_5m_result.reason),
+        "oi_attempted_path": str(oi_5m_result.path),
         "oi_model": OI_MODEL,
         "data_access_model": DATA_ACCESS_MODEL,
     }
+
+
+def _frame_min_timestamp(frame: pd.DataFrame) -> int | float:
+    if frame.empty or "timestamp" not in frame.columns:
+        return np.nan
+    values = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+    return int(values.min()) if not values.empty else np.nan
+
+
+def _frame_max_timestamp(frame: pd.DataFrame) -> int | float:
+    if frame.empty or "timestamp" not in frame.columns:
+        return np.nan
+    values = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+    return int(values.max()) if not values.empty else np.nan
+
+
+def _fmt_optional_ts(value: object) -> str:
+    parsed = _finite_int_or_none(value)
+    return _fmt_ts(parsed) if parsed is not None else ""
+
+
+def _finite_int_or_none(value: object) -> int | None:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return int(parsed)
+
+
+def _fail_fast_on_empty_input(*, config: FailedPumpShortResearchConfig, quality: pd.DataFrame) -> None:
+    if not bool(config.fail_on_empty_input):
+        return
+    total_5m = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
+    total_1m = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
+    if total_5m <= 0 or total_1m <= 0:
+        raise RuntimeError(
+            "Failed-pump short research loaded no usable market cache rows "
+            f"for the requested window: total_5m_rows={total_5m}, total_1m_rows={total_1m}. "
+            f"Diagnostics were written to {Path(config.output_dir)}. Cache was read-only and was not modified."
+        )
 
 
 def _run_config_frame(
@@ -1845,11 +2048,33 @@ def _run_config_frame(
     setups: pd.DataFrame,
     signals: pd.DataFrame,
     trade_grid: pd.DataFrame,
+    quality: pd.DataFrame,
+    cache_coverage: dict[str, object],
 ) -> pd.DataFrame:
+    total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
+    total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
+    total_5m_oi_rows = int(pd.to_numeric(quality.get("5m_oi_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
         "data_access_model": DATA_ACCESS_MODEL,
+        "cache_read_mode": "read_only",
+        "cache_write_model": "no_cache_writes_outputs_only_to_results_dir",
+        "cache_dir": str(Path(config.cache_dir)),
+        "cache_probe_model": str(cache_coverage.get("cache_probe_model", "")),
+        "cache_symbols_with_5m_timestamp": int(cache_coverage.get("symbols_with_5m_timestamp", 0)),
+        "cache_symbols_with_1m_timestamp": int(cache_coverage.get("symbols_with_1m_timestamp", 0)),
+        "cache_min_5m_timestamp_ms": cache_coverage.get("min_5m_timestamp_ms", np.nan),
+        "cache_max_5m_timestamp_ms": cache_coverage.get("max_5m_timestamp_ms", np.nan),
+        "cache_min_1m_timestamp_ms": cache_coverage.get("min_1m_timestamp_ms", np.nan),
+        "cache_max_1m_timestamp_ms": cache_coverage.get("max_1m_timestamp_ms", np.nan),
+        "cache_min_5m_time_utc": str(cache_coverage.get("min_5m_time_utc", "")),
+        "cache_max_5m_time_utc": str(cache_coverage.get("max_5m_time_utc", "")),
+        "cache_min_1m_time_utc": str(cache_coverage.get("min_1m_time_utc", "")),
+        "cache_max_1m_time_utc": str(cache_coverage.get("max_1m_time_utc", "")),
+        "total_loaded_5m_rows": total_5m_rows,
+        "total_loaded_1m_rows": total_1m_rows,
+        "total_loaded_5m_oi_rows": total_5m_oi_rows,
         "entry_model": ENTRY_MODEL,
         "oi_model": OI_MODEL,
         "future_label_available_at_entry": False,

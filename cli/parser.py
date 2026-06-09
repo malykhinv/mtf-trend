@@ -453,6 +453,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run isolated cache-only failed-pump short research with rolling OOS",
     )
     failed_pump_short.add_argument("--days", type=_positive_int_for("--days"), default=365)
+    failed_pump_short.add_argument(
+        "--end-date",
+        default="latest-cache",
+        help="UTC research end time: latest-cache (default), YYYY-MM-DD, ISO datetime, or timestamp ms",
+    )
+    failed_pump_short.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Read-only parquet cache directory. Default: configured backtest cache_dir",
+    )
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")

@@ -1971,15 +1971,19 @@ def run_failed_pump_short_research(config: AppConfig, args: argparse.Namespace) 
     def _run() -> int:
         from research_tools.failed_pump_short_research import (
             FailedPumpShortResearchConfig,
+            parse_research_end_timestamp_ms,
             run_failed_pump_short_research as run_research,
         )
 
         days = int(getattr(args, "days", 365))
+        cache_dir = Path(getattr(args, "cache_dir", None) or config.backtest.cache_dir)
+        end_timestamp_ms = parse_research_end_timestamp_ms(getattr(args, "end_date", "latest-cache"))
         output_dir = config.backtest.results_dir / f"failed_pump_short_research_{days}d"
         research_config = FailedPumpShortResearchConfig(
-            cache_dir=config.backtest.cache_dir,
+            cache_dir=cache_dir,
             output_dir=output_dir,
             days=days,
+            end_timestamp_ms=end_timestamp_ms,
         )
         result_dir = run_research(research_config, progress_label="failed-pump short research")
         print(f"failed-pump short research artifacts: {result_dir}", flush=True)
