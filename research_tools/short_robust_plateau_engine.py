@@ -34,6 +34,7 @@ from research_tools.session_edge_workbench import _top_remove_pct_to_negative
 
 
 DEFAULT_OUTPUT_DIR = Path(".output/research_cache/short_robust_plateau_engine")
+RUN_365D_OUTPUT_DIR = Path(".output/research_cache/short_robust_plateau_engine_365d")
 DEFAULT_ARCHIVE_DIR = Path("research/archive/2026-06-11_short_fade_manual_research")
 MANUAL_RESEARCH_DOCS = [
     Path("research/SHORT_FADE_CORE_EDGE.md"),
@@ -695,21 +696,197 @@ def _candidate_mask(df: pd.DataFrame, spec: CandidateSpec, trigger_masks: dict[s
     return mask.fillna(False)
 
 
+def _ordered_existing(preferred: list[str], available: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in preferred + available:
+        if item in seen or item not in available:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _cap_specs_balanced(specs: list[CandidateSpec], max_specs: int | None) -> list[CandidateSpec]:
+    if max_specs is None or len(specs) <= int(max_specs):
+        return specs
+
+    source_order: dict[str, int] = {}
+    ranks: dict[tuple[str, str, str], int] = {}
+    for spec in specs:
+        source_order.setdefault(spec.source, len(source_order))
+        for axis, value in [
+            ("nature_id", spec.nature_id),
+            ("session_rule", spec.session_rule),
+            ("stop_model", spec.stop_model),
+            ("management_id", spec.management_id),
+            ("risk_bucket", spec.risk_bucket),
+            ("trigger_rule", spec.trigger_rule),
+        ]:
+            key = (spec.source, axis, value)
+            ranks.setdefault(key, len([existing for existing in ranks if existing[0] == spec.source and existing[1] == axis]))
+
+    def layer_sort_key(spec: CandidateSpec) -> tuple:
+        axis_ranks = [
+            ranks[(spec.source, "nature_id", spec.nature_id)],
+            ranks[(spec.source, "session_rule", spec.session_rule)],
+            ranks[(spec.source, "stop_model", spec.stop_model)],
+            ranks[(spec.source, "management_id", spec.management_id)],
+            ranks[(spec.source, "risk_bucket", spec.risk_bucket)],
+            ranks[(spec.source, "trigger_rule", spec.trigger_rule)],
+        ]
+        return (
+            max(axis_ranks),
+            sum(axis_ranks),
+            source_order.get(spec.source, 99),
+            *axis_ranks,
+            spec.candidate_id,
+        )
+
+    def bucket_sort_key(key: tuple[str, str, str, str, str]) -> tuple:
+        source, session, stop, management, risk = key
+        axis_ranks = [
+            ranks.get((source, "session_rule", session), 99),
+            ranks.get((source, "stop_model", stop), 99),
+            ranks.get((source, "management_id", management), 99),
+            ranks.get((source, "risk_bucket", risk), 99),
+        ]
+        return (
+            max(axis_ranks),
+            sum(axis_ranks),
+            source_order.get(source, 99),
+            *axis_ranks,
+            key,
+        )
+
+    buckets: dict[tuple[str, str, str, str, str], list[CandidateSpec]] = {}
+    for spec in specs:
+        key = (spec.source, spec.session_rule, spec.stop_model, spec.management_id, spec.risk_bucket)
+        buckets.setdefault(key, []).append(spec)
+    keys = sorted(buckets, key=bucket_sort_key)
+    execution_grid: list[CandidateSpec] = []
+    while len(execution_grid) < int(max_specs):
+        added = False
+        for key in keys:
+            bucket = buckets[key]
+            if not bucket:
+                continue
+            execution_grid.append(bucket.pop(0))
+            added = True
+            if len(execution_grid) >= int(max_specs):
+                break
+        if not added:
+            break
+
+    layer_grid = sorted(specs, key=layer_sort_key)
+    selected: list[CandidateSpec] = []
+    seen: set[str] = set()
+    i = 0
+    j = 0
+    while len(selected) < int(max_specs) and (i < len(execution_grid) or j < len(layer_grid)):
+        for grid_name in ["execution", "layer"]:
+            if len(selected) >= int(max_specs):
+                break
+            grid = execution_grid if grid_name == "execution" else layer_grid
+            cursor = i if grid_name == "execution" else j
+            while cursor < len(grid) and grid[cursor].candidate_id in seen:
+                cursor += 1
+            if cursor >= len(grid):
+                if grid_name == "execution":
+                    i = cursor
+                else:
+                    j = cursor
+                continue
+            spec = grid[cursor]
+            selected.append(spec)
+            seen.add(spec.candidate_id)
+            cursor += 1
+            if grid_name == "execution":
+                i = cursor
+            else:
+                j = cursor
+    return selected
+
+
+def _axis_values_for_source(
+    source: str,
+    source_df: pd.DataFrame,
+    trigger_masks: dict[str, pd.Series],
+    *,
+    max_natures_per_source: int,
+    candidate_profile: str,
+) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str]]:
+    natures = ["ALL"] + source_df["nature_id"].value_counts().head(max_natures_per_source).index.astype(str).tolist()
+    stops_available = ["ALL"] + source_df["stop_model"].value_counts().head(12).index.astype(str).tolist()
+    managements_available = ["ALL"] + source_df["management_id"].value_counts().head(12).index.astype(str).tolist()
+    all_sessions = list(SESSION_RULES)
+    all_risks = list(RISK_BUCKETS)
+    trigger_prefix = "failed_" if source == "failed_pump_structural" else "large_"
+    source_triggers = [name for name in trigger_masks if name == "trigger_all" or name.startswith(trigger_prefix)]
+
+    if candidate_profile == "balanced_365d":
+        sessions = _ordered_existing(
+            ["all", "not_asia_overlap", "non_us", "asia_only", "europe_only", "europe_us_overlap", "us_only"],
+            all_sessions,
+        )
+        risks = _ordered_existing(["risk_all", "risk_2_5", "risk_3_8", "risk_5_12", "risk_1_3"], all_risks)
+        if source == "failed_pump_structural":
+            triggers = _ordered_existing(
+                [
+                    "trigger_all",
+                    "failed_break_le_15",
+                    "failed_break_ge_2p0",
+                    "failed_fast_break_retest",
+                    "failed_break_le_20",
+                    "failed_break_ge_1p5",
+                    "failed_retest_ge_0p8",
+                    "failed_taker_45_55",
+                ],
+                source_triggers,
+            )
+        else:
+            triggers = _ordered_existing(
+                [
+                    "trigger_all",
+                    "large_fader15",
+                    "large_close10_le2",
+                    "large_last2_trade_le45",
+                    "large_fader15_no_base",
+                    "large_close15_le0",
+                    "large_taker_45_55",
+                    "large_pre60_down",
+                ],
+                source_triggers,
+            )
+        stops = stops_available[:6]
+        managements = managements_available[:7]
+        return natures, sessions, stops, managements, risks, triggers
+
+    return natures, all_sessions, stops_available[:9], managements_available[:9], all_risks, source_triggers
+
+
 def generate_candidates(
-    df: pd.DataFrame, *, max_natures_per_source: int = 12, max_specs: int | None = None
+    df: pd.DataFrame,
+    *,
+    max_natures_per_source: int = 12,
+    max_specs: int | None = None,
+    candidate_profile: str = "exhaustive",
 ) -> list[CandidateSpec]:
     specs: list[CandidateSpec] = []
     trigger_masks = _trigger_rules(df)
     for source, source_df in df.groupby("source", dropna=False):
-        natures = ["ALL"] + source_df["nature_id"].value_counts().head(max_natures_per_source).index.astype(str).tolist()
-        stops = ["ALL"] + source_df["stop_model"].value_counts().head(8).index.astype(str).tolist()
-        managements = ["ALL"] + source_df["management_id"].value_counts().head(8).index.astype(str).tolist()
-        source_triggers = [name for name in trigger_masks if name == "trigger_all" or name.startswith("failed_" if source == "failed_pump_structural" else "large_")]
+        natures, sessions, stops, managements, risks, source_triggers = _axis_values_for_source(
+            str(source),
+            source_df,
+            trigger_masks,
+            max_natures_per_source=max_natures_per_source,
+            candidate_profile=candidate_profile,
+        )
         for nature in natures:
-            for session in SESSION_RULES:
+            for session in sessions:
                 for stop in stops:
                     for management in managements:
-                        for risk in RISK_BUCKETS:
+                        for risk in risks:
                             for trigger in source_triggers:
                                 cid = "|".join([str(source), nature, session, stop, management, risk, trigger])
                                 specs.append(
@@ -724,8 +901,10 @@ def generate_candidates(
                                         trigger_rule=trigger,
                                     )
                                 )
-                                if max_specs is not None and len(specs) >= int(max_specs):
-                                    return specs
+    if candidate_profile == "balanced_365d":
+        return _cap_specs_balanced(specs, max_specs)
+    if max_specs is not None:
+        return specs[: int(max_specs)]
     return specs
 
 
@@ -756,7 +935,22 @@ def _date_windows(
 
 
 def _window_frame(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    return df[(df["date"] >= start) & (df["date"] < end)].copy()
+    return df[(df["date"] >= start) & (df["date"] < end)]
+
+
+def _prefilter_candidate(cand: pd.DataFrame, min_is_trades: int) -> str | None:
+    if len(cand) < min_is_trades:
+        return "too_few_total_rows"
+    min_breadth = max(4, min_is_trades // 5)
+    if cand["symbol"].nunique() < min_breadth:
+        return "too_few_symbols"
+    if cand["date"].nunique() < min_breadth:
+        return "too_few_days"
+    cost_avg = float(pd.to_numeric(cand["cost10_r"], errors="coerce").mean())
+    median_r = float(pd.to_numeric(cand["net_r"], errors="coerce").median())
+    if np.isfinite(cost_avg) and np.isfinite(median_r) and cost_avg < -0.35 and median_r < -0.45:
+        return "weak_full_distribution"
+    return None
 
 
 def scan_plateaus(
@@ -770,13 +964,37 @@ def scan_plateaus(
     min_oos_trades: int = 8,
     max_candidates: int | None = None,
     max_natures_per_source: int = 12,
+    candidate_profile: str = "exhaustive",
+    progress_every: int = 0,
 ) -> None:
     df = _load_outcomes(output_dir)
     trigger_masks = _trigger_rules(df)
-    specs = generate_candidates(df, max_natures_per_source=max_natures_per_source, max_specs=max_candidates)
+    specs = generate_candidates(
+        df,
+        max_natures_per_source=max_natures_per_source,
+        max_specs=max_candidates,
+        candidate_profile=candidate_profile,
+    )
     windows = _date_windows(df, is_days=is_days, oos_days=oos_days, step_days=step_days, final_holdout_days=final_holdout_days)
     if not windows:
         raise ValueError("Not enough date coverage for requested WFA windows.")
+    pd.DataFrame([spec.__dict__ for spec in specs]).to_csv(output_dir / "candidate_universe.csv", index=False)
+    _write_json(
+        output_dir / "scan_config.json",
+        {
+            "is_days": is_days,
+            "oos_days": oos_days,
+            "step_days": step_days,
+            "final_holdout_days": final_holdout_days,
+            "min_is_trades": min_is_trades,
+            "min_oos_trades": min_oos_trades,
+            "max_candidates": max_candidates,
+            "max_natures_per_source": max_natures_per_source,
+            "candidate_profile": candidate_profile,
+            "candidate_universe_rows": len(specs),
+            "wfa_windows": len(windows),
+        },
+    )
 
     wfa_rows: list[dict] = []
     candidate_rows: list[dict] = []
@@ -784,10 +1002,13 @@ def scan_plateaus(
     ledgers: dict[str, pd.DataFrame] = {}
 
     for idx, spec in enumerate(specs):
+        if progress_every and (idx == 0 or (idx + 1) % progress_every == 0 or idx + 1 == len(specs)):
+            print(f"scan_progress={idx + 1}/{len(specs)} analyzed={len(candidate_rows)} rejected={len(rejected_rows)}", flush=True)
         mask = _candidate_mask(df, spec, trigger_masks)
-        cand = df[mask].copy()
-        if len(cand) < min_is_trades:
-            rejected_rows.append({"candidate_id": spec.candidate_id, "reason": "too_few_total_rows", "rows": int(len(cand))})
+        cand = df[mask]
+        prefilter_reason = _prefilter_candidate(cand, min_is_trades)
+        if prefilter_reason:
+            rejected_rows.append({"candidate_id": spec.candidate_id, "reason": prefilter_reason, "rows": int(len(cand))})
             continue
         oos_parts = []
         is_scores = []
@@ -902,15 +1123,17 @@ def scan_plateaus(
     clusters = _build_plateau_clusters(candidates)
     portfolio, portfolio_trades = _build_portfolio(candidates, ledgers)
     lookahead = _lookahead_audit(df, candidates)
+    axis_summary = _build_candidate_axis_summary(candidates)
 
     wfa.to_csv(output_dir / "wfa_results.csv", index=False)
     candidates.to_csv(output_dir / "plateau_candidates.csv", index=False)
     clusters.to_csv(output_dir / "plateau_clusters.csv", index=False)
+    axis_summary.to_csv(output_dir / "candidate_axis_summary.csv", index=False)
     rejected.to_csv(output_dir / "rejected_reasons.csv", index=False)
     portfolio.to_csv(output_dir / "portfolio_candidates.csv", index=False)
     portfolio_trades.to_csv(output_dir / "portfolio_oos_trades.csv", index=False)
     lookahead.to_csv(output_dir / "lookahead_audit.csv", index=False)
-    _write_final_report(output_dir, candidates, clusters, portfolio, lookahead, windows)
+    _write_final_report(output_dir, candidates, clusters, portfolio, rejected, axis_summary, lookahead, windows)
 
 
 def _reject_reason(row: dict) -> str:
@@ -960,7 +1183,7 @@ def _build_plateau_clusters(candidates: pd.DataFrame) -> pd.DataFrame:
             "risk_buckets": ",".join(sorted(group["risk_bucket"].astype(str).unique())),
             "best_candidate_id": best["candidate_id"],
             "best_candidate_score": float(best["candidate_score"]),
-            "plateau_pass": bool(len(group) >= 2 or str(best["risk_bucket"]) == "risk_all"),
+            "plateau_pass": bool(len(group) >= 2),
         }
         for col, value in zip(group_cols, keys if isinstance(keys, tuple) else (keys,)):
             row[col] = value
@@ -977,6 +1200,46 @@ def _summary_from_candidate_group(group: pd.DataFrame) -> dict[str, float]:
         "member_top_trade_ind_median": float(pd.to_numeric(group["oos_top_trade_independence_pct"], errors="coerce").median()),
         "member_top_symbol_ind_median": float(pd.to_numeric(group["oos_top_symbol_independence_pct"], errors="coerce").median()),
     }
+
+
+def _build_candidate_axis_summary(candidates: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame(
+            columns=[
+                "axis",
+                "value",
+                "candidate_rows",
+                "promoted_rows",
+                "best_is_promoted",
+                "best_candidate_score",
+                "best_oos_cost10_avg_r",
+                "best_oos_trades",
+                "best_candidate_id",
+            ]
+        )
+    rows = []
+    for axis in ["source", "session_rule", "trigger_rule", "risk_bucket", "stop_model", "management_id"]:
+        if axis not in candidates.columns:
+            continue
+        for value, group in candidates.groupby(axis, dropna=False):
+            promoted = group[group["promoted"].astype(bool)]
+            best_pool = promoted if not promoted.empty else group
+            best = best_pool.sort_values(["candidate_score", "oos_cost10_sum_r"], ascending=[False, False]).iloc[0]
+            rows.append(
+                {
+                    "axis": axis,
+                    "value": value,
+                    "candidate_rows": int(len(group)),
+                    "promoted_rows": int(len(promoted)),
+                    "best_is_promoted": bool(best["promoted"]),
+                    "best_candidate_score": float(best["candidate_score"]),
+                    "best_oos_cost10_avg_r": float(best["oos_cost10_avg_r"]),
+                    "best_oos_trades": int(best["oos_trades"]),
+                    "best_candidate_id": best["candidate_id"],
+                }
+            )
+    out = pd.DataFrame(rows)
+    return out.sort_values(["axis", "promoted_rows", "best_candidate_score"], ascending=[True, False, False])
 
 
 def _remove_collisions(candidate: pd.DataFrame, selected: pd.DataFrame, *, window_ms: int = 60 * 60_000) -> pd.DataFrame:
@@ -1081,9 +1344,19 @@ def _write_final_report(
     candidates: pd.DataFrame,
     clusters: pd.DataFrame,
     portfolio: pd.DataFrame,
+    rejected: pd.DataFrame,
+    axis_summary: pd.DataFrame,
     lookahead: pd.DataFrame,
     windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
 ) -> None:
+    scan_config = {}
+    metadata = {}
+    scan_config_path = output_dir / "scan_config.json"
+    metadata_path = output_dir / "metadata.json"
+    if scan_config_path.exists():
+        scan_config = json.loads(scan_config_path.read_text(encoding="utf-8"))
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     cand_cols = [
         "candidate_id",
         "promoted",
@@ -1121,9 +1394,35 @@ def _write_final_report(
         "marginal_cost10_avg_r",
         "marginal_top_trade_independence_pct",
     ]
+    axis_cols = [
+        "axis",
+        "value",
+        "candidate_rows",
+        "promoted_rows",
+        "best_is_promoted",
+        "best_candidate_score",
+        "best_oos_cost10_avg_r",
+        "best_oos_trades",
+        "best_candidate_id",
+    ]
+    rejected_summary = rejected["reason"].value_counts().head(20).to_string() if not rejected.empty and "reason" in rejected.columns else "none"
     text = f"""# Short Robust Plateau Engine Report
 
 Status: automated plateau/WFA postprocess over immutable replay event store.
+
+Event store:
+
+```text
+rows={metadata.get('rows', 'unknown')}
+events={metadata.get('events', 'unknown')}
+sources={metadata.get('sources', 'unknown')}
+```
+
+Scan config:
+
+```json
+{json.dumps(scan_config, indent=2, sort_keys=True) if scan_config else '{}'}
+```
 
 WFA windows:
 
@@ -1167,10 +1466,22 @@ Top plateau clusters:
 {clusters.head(25)[[c for c in cluster_cols if c in clusters.columns]].to_string(index=False) if not clusters.empty else 'none'}
 ```
 
+Candidate axis summary:
+
+```text
+{axis_summary.head(40)[[c for c in axis_cols if c in axis_summary.columns]].to_string(index=False) if not axis_summary.empty else 'none'}
+```
+
 Portfolio candidates:
 
 ```text
 {portfolio.head(20)[[c for c in port_cols if c in portfolio.columns]].to_string(index=False) if not portfolio.empty else 'none'}
+```
+
+Top rejected reasons:
+
+```text
+{rejected_summary}
 ```
 
 Interpretation:
@@ -1222,14 +1533,17 @@ H003 large-runner 15m fader context + fresh lower-high retest, not yet replayed
 
 def run_all(args: argparse.Namespace) -> None:
     if args.archive:
+        print("stage=archive_manual_knowledge", flush=True)
         archive_manual_knowledge(Path(args.archive_dir))
         update_registry()
+    print("stage=build_event_store", flush=True)
     build_event_store(
         Path(args.failed_dir),
         Path(args.large_dir),
         Path(args.output_dir),
         max_rows_per_source=args.max_rows_per_source,
     )
+    print("stage=scan_plateaus", flush=True)
     scan_plateaus(
         Path(args.output_dir),
         is_days=args.is_days,
@@ -1240,15 +1554,43 @@ def run_all(args: argparse.Namespace) -> None:
         min_oos_trades=args.min_oos_trades,
         max_candidates=args.max_candidates,
         max_natures_per_source=args.max_natures_per_source,
+        candidate_profile=args.candidate_profile,
+        progress_every=args.progress_every,
     )
 
 
-def _add_common_args(parser: argparse.ArgumentParser) -> None:
+def _add_common_args(parser: argparse.ArgumentParser, *, output_dir: Path | str = DEFAULT_OUTPUT_DIR) -> None:
     parser.add_argument("--failed-dir", default=".output/results/failed_pump_short_research_365d")
     parser.add_argument("--large-dir", default=".output/results/large_runner_discovery_365d")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--output-dir", default=str(output_dir))
     parser.add_argument("--archive-dir", default=str(DEFAULT_ARCHIVE_DIR))
     parser.add_argument("--max-rows-per-source", type=int, default=None)
+
+
+def _add_scan_args(
+    parser: argparse.ArgumentParser,
+    *,
+    is_days: int = 90,
+    oos_days: int = 30,
+    step_days: int = 30,
+    final_holdout_days: int = 30,
+    min_is_trades: int = 25,
+    min_oos_trades: int = 8,
+    max_candidates: int | None = None,
+    max_natures_per_source: int = 12,
+    candidate_profile: str = "exhaustive",
+    progress_every: int = 0,
+) -> None:
+    parser.add_argument("--is-days", type=int, default=is_days)
+    parser.add_argument("--oos-days", type=int, default=oos_days)
+    parser.add_argument("--step-days", type=int, default=step_days)
+    parser.add_argument("--final-holdout-days", type=int, default=final_holdout_days)
+    parser.add_argument("--min-is-trades", type=int, default=min_is_trades)
+    parser.add_argument("--min-oos-trades", type=int, default=min_oos_trades)
+    parser.add_argument("--max-candidates", type=int, default=max_candidates)
+    parser.add_argument("--max-natures-per-source", type=int, default=max_natures_per_source)
+    parser.add_argument("--candidate-profile", choices=["exhaustive", "balanced_365d"], default=candidate_profile)
+    parser.add_argument("--progress-every", type=int, default=progress_every)
 
 
 def main() -> None:
@@ -1263,26 +1605,31 @@ def main() -> None:
 
     scan = sub.add_parser("scan-plateaus")
     scan.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
-    scan.add_argument("--is-days", type=int, default=90)
-    scan.add_argument("--oos-days", type=int, default=30)
-    scan.add_argument("--step-days", type=int, default=30)
-    scan.add_argument("--final-holdout-days", type=int, default=30)
-    scan.add_argument("--min-is-trades", type=int, default=25)
-    scan.add_argument("--min-oos-trades", type=int, default=8)
-    scan.add_argument("--max-candidates", type=int, default=None)
-    scan.add_argument("--max-natures-per-source", type=int, default=12)
+    _add_scan_args(scan)
 
     all_cmd = sub.add_parser("all")
     _add_common_args(all_cmd)
     all_cmd.add_argument("--archive", action="store_true")
-    all_cmd.add_argument("--is-days", type=int, default=90)
-    all_cmd.add_argument("--oos-days", type=int, default=30)
-    all_cmd.add_argument("--step-days", type=int, default=30)
-    all_cmd.add_argument("--final-holdout-days", type=int, default=30)
-    all_cmd.add_argument("--min-is-trades", type=int, default=25)
-    all_cmd.add_argument("--min-oos-trades", type=int, default=8)
-    all_cmd.add_argument("--max-candidates", type=int, default=None)
-    all_cmd.add_argument("--max-natures-per-source", type=int, default=12)
+    _add_scan_args(all_cmd)
+
+    run365 = sub.add_parser("run-365d")
+    _add_common_args(run365, output_dir=RUN_365D_OUTPUT_DIR)
+    run365.set_defaults(
+        archive=True,
+    )
+    _add_scan_args(
+        run365,
+        is_days=90,
+        oos_days=30,
+        step_days=30,
+        final_holdout_days=30,
+        min_is_trades=25,
+        min_oos_trades=8,
+        max_candidates=5000,
+        max_natures_per_source=8,
+        candidate_profile="balanced_365d",
+        progress_every=250,
+    )
 
     smoke = sub.add_parser("smoke")
     _add_common_args(smoke)
@@ -1296,6 +1643,8 @@ def main() -> None:
         min_oos_trades=3,
         max_candidates=350,
         max_natures_per_source=4,
+        candidate_profile="balanced_365d",
+        progress_every=0,
     )
 
     args = parser.parse_args()
@@ -1323,9 +1672,11 @@ def main() -> None:
             min_oos_trades=args.min_oos_trades,
             max_candidates=args.max_candidates,
             max_natures_per_source=args.max_natures_per_source,
+            candidate_profile=args.candidate_profile,
+            progress_every=args.progress_every,
         )
         print(f"report={Path(args.output_dir) / 'final_report.md'}")
-    elif args.command in {"all", "smoke"}:
+    elif args.command in {"all", "smoke", "run-365d"}:
         if args.command == "smoke" and args.output_dir == str(DEFAULT_OUTPUT_DIR):
             args.output_dir = ".output/research_cache/short_robust_plateau_engine_smoke"
         run_all(args)

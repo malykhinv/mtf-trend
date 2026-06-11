@@ -12753,3 +12753,50 @@ watchlist ranking. Proxy rows for BE/time-stop are upper-bound triage only and
 must not be treated as executable edge until a real 1m path replay confirms
 event order.
 ```
+
+## 2026-06-11 - P559 one-command 365d robust plateau preset
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `run-365d` command to `research_tools/short_robust_plateau_engine.py`.
+- Added `balanced_365d` hybrid candidate selection:
+  execution-grid coverage plus feature-layer coverage.
+- Added scan progress logging, `scan_config.json`, `candidate_universe.csv`,
+  and `candidate_axis_summary.csv`.
+- Tightened `plateau_pass` so a strict plateau requires at least two adjacent
+  promoted risk-bucket members instead of a single broad `risk_all` row.
+- Updated final report with event-store metadata, scan config, axis summary and
+  rejection reason summary.
+- Updated `research/SHORT_ROBUST_PLATEAU_ENGINE.md`,
+  `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md` and
+  `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+python research_tools/short_robust_plateau_engine.py run-365d
+
+event_store=.output/research_cache/short_robust_plateau_engine_365d
+candidate_rows=2587
+promoted=78
+report=.output/research_cache/short_robust_plateau_engine_365d/final_report.md
+```
+
+Lookahead:
+
+```text
+feature_available_at_or_before_entry: 0 / 179299 violations
+evaluation_only_columns_not_in_trigger_rules: 0 / 7 violations
+large_close15_requires_delay15: 0 / 61372 violations
+large_close10_requires_delay10: 0 / 61372 violations
+```
+
+Risk:
+
+```text
+Research tooling only. This does not make the inspected 365d window fresh OOS.
+The engine should be used for repeatable discovery/filtering and then judged on
+future unseen/live-forward data or a newly built period.
+```

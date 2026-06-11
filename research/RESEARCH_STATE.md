@@ -6443,3 +6443,53 @@ Strategy verdict:
 6. Averaging down has no support from current evidence; only staged entry after
    break + failed retest should be tested, with fixed total risk.
 ```
+
+## 2026-06-11 - P559 robust plateau engine 365d preset
+
+Status: implemented and verified locally.
+
+Command:
+
+```text
+python research_tools/short_robust_plateau_engine.py run-365d
+```
+
+The command now performs the full current mechanism in one pass:
+
+```text
+archive manual 365d knowledge
+build immutable event/outcome cache from current replay artifacts
+run balanced rolling IS/OOS plateau scan
+write lookahead audit, axis summaries, rejection funnel and portfolio checks
+```
+
+Final local output:
+
+```text
+.output/research_cache/short_robust_plateau_engine_365d/final_report.md
+event_outcome_rows: 179299
+events: 3283
+WFA: 8 windows, 90d IS / 30d OOS / 30d step / 30d holdout
+candidate_universe: 5000 balanced candidates
+candidate_rows: 2587
+promoted: 78
+strict plateau_pass clusters: 10
+lookahead violations: 0
+```
+
+Read:
+
+```text
+The mechanism is now operational and reproducible. It found several promising
+failed-pump structural short-fade sleeves, especially around Asia-only and
+not-Asia-overlap sessions, local-high stops, full025/full05 management and
+risk_3_8/risk_5_12 buckets.
+```
+
+Important limitation:
+
+```text
+This is still not fresh proof. The 365d artifacts have been heavily inspected.
+Use this engine as the repeatable discovery/filtering mechanism and treat the
+final judge as future unseen/live-forward data or a newly built period.
+```

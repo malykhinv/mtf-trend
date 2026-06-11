@@ -8677,3 +8677,82 @@ full025/full05, BE after closed +0.5R, no-continuation exit if MFE<0.25R after
 5/10m, and optional staged entry only after failed retest. Promotion target
 remains positive median, enough sample, and 50%+ top-trade/top-symbol
 independence.
+
+## 2026-06-11 - P559 robust plateau engine 365d run
+
+Command:
+
+```text
+python research_tools/short_robust_plateau_engine.py run-365d
+```
+
+Artifacts:
+
+```text
+.output/research_cache/short_robust_plateau_engine_365d/events.parquet
+.output/research_cache/short_robust_plateau_engine_365d/event_outcomes.parquet
+.output/research_cache/short_robust_plateau_engine_365d/metadata.json
+.output/research_cache/short_robust_plateau_engine_365d/scan_config.json
+.output/research_cache/short_robust_plateau_engine_365d/candidate_universe.csv
+.output/research_cache/short_robust_plateau_engine_365d/wfa_results.csv
+.output/research_cache/short_robust_plateau_engine_365d/plateau_candidates.csv
+.output/research_cache/short_robust_plateau_engine_365d/plateau_clusters.csv
+.output/research_cache/short_robust_plateau_engine_365d/candidate_axis_summary.csv
+.output/research_cache/short_robust_plateau_engine_365d/portfolio_candidates.csv
+.output/research_cache/short_robust_plateau_engine_365d/portfolio_oos_trades.csv
+.output/research_cache/short_robust_plateau_engine_365d/rejected_reasons.csv
+.output/research_cache/short_robust_plateau_engine_365d/lookahead_audit.csv
+.output/research_cache/short_robust_plateau_engine_365d/final_report.md
+```
+
+Config:
+
+```text
+candidate_profile=balanced_365d
+candidate_universe_rows=5000
+is_days=90
+oos_days=30
+step_days=30
+final_holdout_days=30
+min_is_trades=25
+min_oos_trades=8
+wfa_windows=8
+```
+
+Output:
+
+```text
+event_outcome_rows=179299
+events=3283
+candidate_rows=2587
+promoted=78
+plateau_clusters=64
+strict plateau_pass clusters=10
+lookahead violations=0
+```
+
+Key read:
+
+```text
+Promoted rows are dominated by failed_pump_structural. Session effects are
+visible: asia_only had 46 promoted rows, all had 11, non_us had 9,
+not_asia_overlap had 8. Large-runner rows appeared, but the best top row had
+only 8 OOS trades and was not accepted by the marginal portfolio step after
+collision removal.
+```
+
+Best portfolio-accepted marginal row:
+
+```text
+failed_pump_structural|ALL|not_asia_overlap|last_lower_high|full025|risk_5_12|failed_break_le_15
+42 trades, avg +0.123R, median +0.227R, cost10 avg +0.106R,
+top-trade independence 67.65%.
+```
+
+Conclusion:
+
+```text
+The mechanism is ready to run by one command on the current 365d replay
+artifacts. It is a robust discovery/filtering engine, not final fresh OOS
+proof, because the current 365d data has been heavily inspected.
+```
