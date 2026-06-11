@@ -10,6 +10,32 @@ Targeted runner discovery remains a staged data-loading process, not a trading f
 
 This preserves the decision invariant: cache acceleration can reduce repeated fetch/processing, but it must not change `PumpDecisionCore` verdicts for the same real snapshot.
 
+## 2026-06-11 - P552 short-fade core research candidate
+
+The closest honest failed-pump short result is frozen in:
+
+```text
+research/SHORT_FADE_CORE_EDGE.md
+```
+
+It is a research-only short sleeve, not a live-approved strategy:
+
+```text
+A_plus_fast + not_asia_overlap + recent5 + tp075_full + risk_3_8pct
+best guard: m5_mfe025
+```
+
+Second-half OOS result:
+
+```text
+34 trades, avg +0.268R, median +0.477R, WR 61.8%,
+top-trade independence 61.9%, top-symbol independence 65.0%.
+```
+
+The rule must not be broadened on the same OOS half. Promotion requires
+entry-delay stress, extra cost stress, recent5 stop-source verification, and a
+new unseen/live-forward sample.
+
 ## Live2 shared-core-only signal adapter - P470 update
 
 After P470, live2 signal selection must not have a live-only C/A/S matcher, confirm-backward scanner, or baseline-free prefilter outside the shared decision core. The only signal-decision path is:

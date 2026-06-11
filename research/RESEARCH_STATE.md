@@ -1,3 +1,1341 @@
+## 2026-06-11 - P552 IS-max / OOS verification
+
+Current commit: UNKNOWN. Status: analysis only / OOS consumed for tested
+shortlists.
+
+The first 180 days were used to rank and freeze the best entry-known feature
+shortlists. The second 180 days were then evaluated once. Post-entry features
+were not allowed as hindsight filters; when tested, they were treated as
+executable management checks that exit at the selected minute if continuation
+is missing.
+
+Generated:
+
+```text
+research_tools/short_is_oos_max_verifier.py
+.output/results/failed_pump_short_research_365d/short_is_oos_max_verification_candidates.csv
+.output/results/failed_pump_short_research_365d/short_is_oos_max_verification_portfolios.csv
+.output/results/failed_pump_short_research_365d/short_is_oos_max_verification_report.md
+.output/results/failed_pump_short_research_365d/short_is_oos_guard_expansion_sanity.csv
+.output/results/failed_pump_short_research_365d/short_is_oos_guard_expansion_sanity_report.md
+```
+
+Anchored period:
+
+```text
+IS:  2025-06-06 -> 2025-12-03
+OOS: 2025-12-03 -> 2026-06-02
+selected frozen candidates: 160
+OOS passing candidates: 38
+OOS passing rank portfolios: 3
+```
+
+Best OOS core after guard expansion:
+
+```text
+A_plus_fast
+session_filter=not_asia_overlap
+stop_model=recent5
+base_policy=tp075_full
+feature=risk_3_8pct
+guard plateau: m5_mfe025 / m10_mfe025 / m10_mfe050 / m15_mfe050
+```
+
+Best independence row:
+
+```text
+A_plus_fast + not_asia_overlap + recent5 + tp075_full + m5_mfe025 + risk_3_8pct
+IS:  33 trades, avg +0.237R, median +0.710R
+OOS: 34 trades, avg +0.268R, median +0.477R, WR 61.8%
+OOS positive-day rate 62.1%
+OOS top-trade independence 61.9%
+OOS top-symbol independence 65.0%
+OOS avg after 10bps extra cost proxy +0.226R
+```
+
+Score-leading variants:
+
+```text
+m10_mfe050: OOS 34 trades, avg +0.264R, median +0.491R, WR 70.6%,
+top-trade 54.2%, top-symbol 59.1%.
+
+m15_mfe050: OOS 34 trades, avg +0.256R, median +0.710R, WR 67.6%,
+top-trade 52.2%, top-symbol 54.5%.
+
+m10_mfe025: OOS 34 trades, avg +0.252R, median +0.713R, WR 67.6%,
+top-trade 52.2%, top-symbol 54.5%.
+```
+
+Portfolio read:
+
+```text
+entry_top3:  OOS 89 trades, avg +0.041R, median +0.218R, WR 55.1%.
+entry_top5:  OOS 136 trades, avg +0.045R, median +0.118R, WR 53.7%.
+entry_top10: OOS 140 trades, avg +0.040R, median +0.090R, WR 52.9%.
+```
+
+These portfolios pass loose OOS positivity but fail cost stress:
+
+```text
+entry_top3 cost10bps avg -0.015R
+entry_top5 cost10bps avg -0.012R
+entry_top10 cost10bps avg -0.016R
+```
+
+Interpretation:
+
+The strongest verified edge is narrow but real-looking: a low-frequency
+`A_plus_fast` fade sleeve, outside Asia overlap, with risk between 3-8%, recent
+local-high stop, no profit exit before 0.75R, and an MFE continuation guard.
+It finally meets the user's 50%+ top-removal target on the second 180d half.
+
+The attempt to expand frequency by combining many IS-ranked candidates degrades
+quickly and is not robust after realistic extra cost. The target of 3-15 trades
+per day is not supported by this sleeve alone.
+
+Next:
+
+Do not tune this OOS further. Convert the best core into one explicit strategy
+spec and run only stress/live-forward checks: exact exchange-like entry delay,
+extra slippage/fees, monthly non-overlap, and a new unseen period when data is
+available.
+
+Follow-up:
+
+The frozen core and lookahead audit were written to:
+
+```text
+research/SHORT_FADE_CORE_EDGE.md
+.output/results/failed_pump_short_research_365d/short_core_lookahead_audit.csv
+```
+
+Lookahead audit summary for the exact frozen core:
+
+```text
+core rows: 67
+IS rows: 33
+OOS rows: 34
+future_label_available_at_entry true: 0
+short_confirm_closed_before_entry false: 0
+entry before confirm close: 0
+non-60s confirm candles: 0
+selection_eligible false: 0
+entry_minus_confirm_close_ms: 0 for all rows
+```
+
+## 2026-06-11 - P554 diversified short-fade sleeves
+
+Current commit: UNKNOWN. Status: analysis only / OOS consumed for tested
+diversified sleeves.
+
+The search was extended beyond the frozen core to find genuinely different
+fader natures. The key check was marginal OOS performance after removing signal
+ids already traded by the core.
+
+Generated:
+
+```text
+research/SHORT_FADE_DIVERSIFIED_SLEEVES.md
+.output/results/failed_pump_short_research_365d/short_other_nature_marginal_screen.csv
+.output/results/failed_pump_short_research_365d/short_diversified_sleeve_report.md
+.output/results/failed_pump_short_research_365d/short_diversified_portfolio_summary.csv
+.output/results/failed_pump_short_research_365d/short_diversified_portfolio_sleeves.csv
+.output/results/failed_pump_short_research_365d/short_diversified_portfolio_oos_trades.csv
+```
+
+OOS portfolio:
+
+```text
+A_plus_fast + not_asia_overlap + recent5 + tp075_full + m5_mfe025 + risk_3_8pct
+deep04 + non_us + last_lower_high + tp075_full + no_guard + taker_45_55
+deep08 + all + last_lower_high + tp1_full + no_guard + break_5_20m
+```
+
+Metrics:
+
+```text
+109 OOS trades
+80 symbols
+76 active days
+avg +0.171R
+median +0.261R
+WR 60.6%
+positive-day rate 63.2%
+top-trade independence 30.3%
+top-symbol independence 33.3%
+cost10 avg +0.124R
+trades/day across OOS calendar 0.60
+```
+
+Interpretation:
+
+Diversification improves frequency by roughly 3.2x versus the core alone but
+reduces average R and top-removal independence. This is a useful portfolio
+candidate, not yet the desired 3-15 trades/day solution.
+
+## 2026-06-11 - P555 short-fade frontier optimizer
+
+Current commit: UNKNOWN. Status: analysis only / research frontier, not fresh
+OOS proof.
+
+Added a portfolio frontier optimizer over existing candidate screens:
+
+```text
+research_tools/short_diversified_frontier_optimizer.py
+```
+
+Generated:
+
+```text
+.output/results/failed_pump_short_research_365d/short_frontier_candidates.csv
+.output/results/failed_pump_short_research_365d/short_frontier_portfolios.csv
+.output/results/failed_pump_short_research_365d/short_frontier_sleeves.csv
+.output/results/failed_pump_short_research_365d/short_frontier_oos_trades.csv
+.output/results/failed_pump_short_research_365d/short_frontier_report.md
+```
+
+Best balanced OOS frontier:
+
+```text
+113 trades
+82 symbols
+80 active days
+avg +0.176R
+median +0.250R
+WR 59.3%
+positive-day rate 61.3%
+top-trade independence 31.3%
+top-symbol independence 37.3%
+cost10 avg +0.130R
+trades/day 0.62
+```
+
+Sleeves:
+
+```text
+A_plus_fast + not_asia_overlap + recent5 + tp075_full + m5_mfe025 + risk_3_8pct
+deep08 + all + last_lower_high + tp1_full + no_guard + break_5_20m
+deep04 + not_asia_overlap + last_lower_high + tp1_full + no_guard + taker_45_55
+```
+
+Frequency frontier:
+
+```text
+133 trades
+avg +0.153R
+median +0.212R
+cost10 avg +0.107R
+top-trade independence 27.3%
+top-symbol independence 29.1%
+trades/day 0.73
+```
+
+Interpretation:
+
+Balanced frontier is the current best tradeoff. Frequency can be pushed to
+~0.73 trades/day, but robustness and independence degrade. The next search
+should find new independent sleeves rather than keep adding marginally related
+deep04/deep08 variants.
+
+## 2026-06-11 - P556 cross-source large-runner sleeve search
+
+Current commit: UNKNOWN. Status: analysis only / no promotable new sleeve.
+
+Added a cross-source sleeve search:
+
+```text
+research_tools/short_cross_source_sleeve_search.py
+research/SHORT_FADE_CROSS_SOURCE_SLEEVES.md
+```
+
+Generated:
+
+```text
+.output/results/large_runner_discovery_365d/short_cross_source_sleeve_candidates.csv
+.output/results/large_runner_discovery_365d/short_cross_source_sleeve_oos_candidates.csv
+.output/results/large_runner_discovery_365d/short_cross_source_sleeves.csv
+.output/results/large_runner_discovery_365d/short_cross_source_portfolio_oos_trades.csv
+.output/results/large_runner_discovery_365d/short_cross_source_sleeve_report.md
+```
+
+Result:
+
+```text
+IS candidate rows: 2941
+IS pass rows: 5
+OOS marginal candidate rows: 5
+OOS pass rows: 0
+selected large-runner sleeves: 0
+```
+
+Main finding:
+
+The large-runner fader classifier is a real separate phenomenon, but the
+current local-high executable replay does not convert it into a robust sleeve.
+In OOS, many fader-labeled rows had already faded before entry and still lost:
+
+```text
+already_faded_before_entry: 26224 trades, avg -0.277R, median -0.489R,
+WR 27.3%, fader_rate 99.1%.
+```
+
+Next:
+
+Do not add large-runner local-high sleeves to the portfolio yet. The useful
+next test is a true path replay for a fresh post-classifier failed retest /
+lower-high entry after 15m, requiring that the base was not already touched
+before entry.
+
+## 2026-06-11 - P557 session timing deep dive
+
+Current commit: UNKNOWN. Status: analysis only / no session-only sleeve.
+
+Added:
+
+```text
+research_tools/short_session_timing_deep_dive.py
+research/SHORT_FADE_SESSION_TIMING_DEEP_DIVE.md
+```
+
+Generated:
+
+```text
+.output/results/large_runner_discovery_365d/short_session_timing_by_session.csv
+.output/results/large_runner_discovery_365d/short_session_close15_bands.csv
+.output/results/large_runner_discovery_365d/short_session_entry_known_oos_slices.csv
+.output/results/large_runner_discovery_365d/short_failed_frontier_by_session.csv
+.output/results/large_runner_discovery_365d/short_session_timing_deep_dive.md
+```
+
+Output:
+
+```text
+session_timing_rows=64
+setup_band_rows=15
+entry_known_slice_rows=276
+promotion_candidates=0
+failed_session_rows=15
+```
+
+Main finding:
+
+Session matters mostly through timing, not as a standalone alpha filter. For
+the 15m fader classifier, most OOS trades were already faded before entry:
+
+```text
+asia_europe_overlap: 82.3% already faded, +0.178R weighted avg
+europe_only:         89.7% already faded, -0.095R weighted avg
+europe_us_overlap:   83.9% already faded, -0.232R weighted avg
+us_only:             85.9% already faded, -0.308R weighted avg
+off_session:         94.4% already faded, -0.343R weighted avg
+asia_only:           87.5% already faded, -0.505R weighted avg
+```
+
+Interpretation:
+
+Weak `close15` is useful for classifying fader context, but it usually fires
+after the base touch. A session-aware strategy should use it as context/veto,
+then wait for a fresh failed retest / lower high if the base was not already
+touched.
+
+## 2026-06-11 - P558 neutral robust plateau engine
+
+Current commit: UNKNOWN. Status: implemented MVP / smoke passed.
+
+Added:
+
+```text
+research_tools/short_robust_plateau_engine.py
+research/SHORT_ROBUST_PLATEAU_ENGINE.md
+research/HYPOTHESIS_REGISTRY.md
+research/archive/2026-06-11_short_fade_manual_research/
+```
+
+Purpose:
+
+```text
+Machine A: build immutable event/outcome store from replay artifacts.
+Machine B: scan entry-known rule plateaus with rolling WFA, cost stress,
+top-removal, session/symbol breadth and marginal portfolio construction.
+```
+
+Smoke command:
+
+```text
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000
+```
+
+Smoke output:
+
+```text
+event_store=.output/research_cache/short_robust_plateau_engine_smoke
+candidate_rows=265
+promoted=21
+report=.output/research_cache/short_robust_plateau_engine_smoke/final_report.md
+```
+
+Smoke artifacts:
+
+```text
+.output/research_cache/short_robust_plateau_engine_smoke/events.parquet
+.output/research_cache/short_robust_plateau_engine_smoke/event_outcomes.parquet
+.output/research_cache/short_robust_plateau_engine_smoke/wfa_results.csv
+.output/research_cache/short_robust_plateau_engine_smoke/plateau_candidates.csv
+.output/research_cache/short_robust_plateau_engine_smoke/plateau_clusters.csv
+.output/research_cache/short_robust_plateau_engine_smoke/portfolio_candidates.csv
+.output/research_cache/short_robust_plateau_engine_smoke/portfolio_oos_trades.csv
+.output/research_cache/short_robust_plateau_engine_smoke/rejected_reasons.csv
+.output/research_cache/short_robust_plateau_engine_smoke/lookahead_audit.csv
+.output/research_cache/short_robust_plateau_engine_smoke/final_report.md
+```
+
+Lookahead audit passed:
+
+```text
+feature_available_at_or_before_entry: 0 violations / 14825 rows
+evaluation_only_columns_not_in_trigger_rules: 0 violations / 7 rules
+large_close15_requires_delay15: 0 violations / 6861 rows
+large_close10_requires_delay10: 0 violations / 6861 rows
+```
+
+Limit:
+
+The engine is complete for neutral plateau search over existing replay
+artifacts. It still needs a new event source for the fresh lower-high /
+failed-retest path replay before that hypothesis can be evaluated.
+
+## 2026-06-11 - P551 first-180d feature combo search
+
+Current commit: UNKNOWN. Status: analysis only / IS candidates, OOS untouched.
+
+The next search was constrained to the first 180 days only. The goal was not to
+prove an edge, but to build a large feature table and find candidate
+regularities without looking at the second 180d half.
+
+Generated:
+
+```text
+research_tools/short_is_feature_combo_search.py
+.output/results/failed_pump_short_research_365d/short_is_feature_combo_screen.csv
+.output/results/failed_pump_short_research_365d/short_is_feature_combo_feature_leaders.csv
+.output/results/failed_pump_short_research_365d/short_is_feature_combo_report.md
+```
+
+Run:
+
+```text
+IS: 2025-06-06 -> 2025-12-03
+candidate rows: 74208
+passes: 37491
+entry/base passes: 8427
+post-entry-management passes: 29064
+```
+
+Important boundary:
+
+```text
+entry_known features may be used for entry selection.
+post_entry_management features are only known after entry and may only be used
+for hold/exit/derisk decisions.
+```
+
+Entry-known themes worth freezing for OOS:
+
+```text
+- A_plus_fast / A_fast_deep08 / deep04 remain the useful structure families.
+- `confirm_close_low_third`, negative confirm candle, and real quote/trade
+  expansion help when combined with structural break quality.
+- `risk_3_8pct` appears in good A_plus_fast rows.
+- `taker_45_55` looks better than extreme taker in several rows, suggesting
+  buyer exhaustion/neutralization rather than pure seller aggression.
+- `pump_high_early` and `pump_high_late` both appear, likely representing
+  different pump/fade natures rather than one universal timing rule.
+```
+
+Strong IS-only entry examples:
+
+```text
+deep04 + non_us + recent10 + tp075_full + pump_high_late:
+29 trades, avg +0.408R, median +0.699R, WR 82.8%.
+
+A_fast_deep08 + all/not_asia_overlap + recent10 + tp075_full + pump_high_early:
+34 trades, avg +0.308R, median +0.698R, WR 73.5%.
+
+A_plus_fast + not_asia_overlap + last_lower_high + tp1_full/tp1_be075 +
+confirm_close_low_third:
+32 trades, avg +0.343R, median +0.730R, WR 75.0%.
+
+A_plus_fast + not_asia_overlap + existing_stop + tp075_full + risk_3_8pct:
+36 trades, avg +0.280R, median +0.712R, WR 75.0%.
+```
+
+Post-entry management read:
+
+The strongest systematic separator is quick downside acceptance after entry:
+
+```text
+m5/m10/m15 close_r > 0
+m5/m10 MFE >= 0.25R or 0.50R
+red share >= 60%
+MAE controlled in the first 10-15m
+```
+
+This supports a trader-readable rule:
+
+```text
+Enter only after failed retest/lower high.
+Do not take profit before 0.75R.
+After 5-10 minutes, keep the short only if price accepts below entry and has
+already produced some MFE; otherwise cut or derisk as "static/no continuation".
+```
+
+Risk:
+
+These are IS-only discoveries. The second 180d half must now be used only once
+with frozen definitions. Do not tune on the OOS half.
+
+Next:
+
+Freeze 10-20 entry-known candidates plus 2-3 post-entry management guards, then
+run a single anchored OOS evaluation on the second 180d half with added
+slippage/fees and top-trade/top-symbol removal.
+
+## 2026-06-11 - P550 anchored 180d IS / 180d OOS split
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The user correctly flagged that finding a plateau on the full 365d sample and
+then running WFA inside the same sample is not true OOS. A stricter anchored
+split was added:
+
+```text
+IS:  first 180 days only for candidate selection
+OOS: second half evaluated once with frozen candidate definitions
+```
+
+Generated:
+
+```text
+research_tools/short_anchored_is_oos_split.py
+.output/results/failed_pump_short_research_365d/short_anchored_is_candidates.csv
+.output/results/failed_pump_short_research_365d/short_anchored_is_oos_result.csv
+.output/results/failed_pump_short_research_365d/short_anchored_is_oos_report.md
+```
+
+Run:
+
+```text
+IS:  2025-06-06 -> 2025-12-03
+OOS: 2025-12-03 -> 2026-06-02
+IS rows: 5295
+OOS rows: 6429
+IS candidate rows: 3744
+selected IS candidates: 40
+OOS passes: 20
+```
+
+The OOS survivors mostly confirm the P549 plateau, not a completely different
+shape:
+
+```text
+family_group: mostly A_plus_fast
+base_policy: mostly tp075_full
+guard: mostly m10_mfe050, with some m10_mfe025 / m15_mfe050
+stop_model: last_lower_high, existing_stop, recent5
+session: all or not_asia_overlap
+```
+
+Best OOS rows:
+
+```text
+A_oneprint + not_asia_overlap + existing_stop + tp075_full + m5_mfe025:
+IS 26 trades, avg +0.178R, median +0.008R
+OOS 32 trades, avg +0.195R, median +0.041R, WR 56.3%
+OOS top-trade independence 50.0%, top-symbol independence 52.9%
+
+A_plus_fast + not_asia_overlap + last_lower_high + tp075_full + m10_mfe050:
+IS 38 trades, avg +0.183R, median +0.436R
+OOS 48 trades, avg +0.149R, median +0.136R, WR 62.5%
+OOS top-trade independence 33.3%, top-symbol independence 35.7%
+
+A_plus_fast + all + last_lower_high + tp075_full + m10_mfe050:
+IS 41 trades, avg +0.137R, median +0.170R
+OOS 52 trades, avg +0.140R, median +0.136R, WR 61.5%
+OOS top-trade independence 34.4%, top-symbol independence 34.5%
+```
+
+Interpretation:
+
+Anchored OOS reduces the risk of same-window self-deception and still leaves a
+real candidate family. The result is not a proof of live edge, but it is much
+more credible than the full-period plateau alone. The strongest frozen rule
+shape remains:
+
+```text
+A_plus_fast
+short after failed retest / lower high
+SL around structural/retest high
+no profit exit before 0.75R
+10m no-continuation guard: require MFE >= 0.50R, otherwise exit/derisk
+```
+
+Remaining limitation: frequency is still low. OOS survivors have roughly
+`32-52` trades over the second 180d half, not `3-15/day`. This is a potential
+core sleeve, not the full portfolio.
+
+Next:
+
+Freeze the best 2-3 anchored OOS survivors and run stress tests only on OOS:
+extra fees/slippage, random entry delay, non-overlapping monthly blocks, and
+top-trade/top-symbol removal on OOS rows only.
+
+## 2026-06-11 - P549 short WFA plateau engine
+
+Current commit: UNKNOWN. Status: analysis only.
+
+Added a bounded WFA/plateau engine around the structural failed-retest short
+idea. This is the first step away from single full-period "pretty rows" toward
+engineering filtration:
+
+```text
+failed retest / lower high -> short
+SL above structural/retest high variant
+no profit exit before 0.75R
+optional no-continuation guard after 3/5/10/15m
+train window -> next OOS window -> rolling shift
+```
+
+Generated:
+
+```text
+research_tools/short_wfa_plateau_engine.py
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_candidates.csv
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_heatmap.csv
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_matrix.csv
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_report.md
+```
+
+Full-period plateau screen:
+
+```text
+base rows: 11724
+candidates: 3744
+full passes: 331
+plateau passes: 73
+```
+
+The plateau is not random across all parameters. It clusters around:
+
+```text
+family: A_plus_fast = A_post_oneprint_break1p5_retest0p8 + fast_deep_break_taker_above
+base policy: tp075_full
+guard: 10m MFE >= 0.25R or 0.50R
+stop variants: existing_stop, last_lower_high, recent5
+session: all or not_asia_overlap
+```
+
+Representative full-period plateau rows:
+
+```text
+A_plus_fast + not_asia_overlap + last_lower_high + tp075_full + m10_mfe050:
+86 trades, 75 symbols, 73 days
+avg +0.164R, median +0.164R, WR 60.5%
+positive-day rate 58.9%
+top-trade independence 38.5%, top-symbol independence 41.3%
+
+A_plus_fast + all + existing_stop + tp075_full + m10_mfe050:
+93 trades, 77 symbols, 79 days
+avg +0.144R, median +0.084R, WR 58.1%
+positive-day rate 55.7%
+top-trade independence 35.2%, top-symbol independence 35.6%
+```
+
+Walk-forward matrix:
+
+```text
+WFA rows: 67
+WFA passes: 18
+```
+
+The durable WFA rows mostly require longer train windows:
+
+```text
+60d train -> 7/14d OOS: only 2 pass rows, weak frequency.
+90d train -> 7d OOS: 1 pass row.
+120d train -> 14/30d OOS: 15 pass rows, best stability.
+```
+
+Best WFA shapes:
+
+```text
+A_plus_fast + all + existing_stop + tp075_full + m10_mfe050
+120d train -> 30d OOS:
+93 selected windows, 83.9% positive OOS windows,
+median OOS window +1.77R, avg 8.37 trades / 30d window.
+
+A_plus_fast + not_asia_overlap + last_lower_high + tp075_full + m10_mfe050
+120d train -> 30d OOS:
+39 selected windows, 89.7% positive OOS windows,
+median OOS window +0.57R, avg 7.77 trades / 30d window.
+
+A_plus_fast + not_asia_overlap + existing_stop + tp075_full + m10_mfe025
+120d train -> 30d OOS:
+35 selected windows, 85.7% positive OOS windows,
+median OOS window +1.92R, avg 8.31 trades / 30d window.
+```
+
+Interpretation:
+
+This is a real plateau candidate, not a single best point. The robust core is
+not "fast_deep only"; it is `A_plus_fast` with a 10-minute no-continuation
+guard and profit target not before 0.75R. However, it is still a low-frequency
+core: the best 30d OOS windows average roughly `8` trades per 30 calendar days,
+not `3-15` trades per day. Current evidence supports core-quality research, not
+live high-frequency scale.
+
+Next:
+
+Convert the best WFA shape into a one-trade-per-signal replay with exact
+execution order, then run a non-overlapping OOS/Monte Carlo stress layer:
+random entry delay, extra slippage, fee expansion, and top-trade/symbol removal
+on OOS-only trades.
+
+## 2026-06-11 - P548 structural 0.75R path replay and 1m win/loss anatomy
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The structural short replay was extended with a true 1m path postprocess that
+does not take profit before `0.75R`. Early exits are allowed only as defensive
+no-continuation exits, not as early profit taking.
+
+Generated:
+
+```text
+research_tools/short_structural_075_path_replay.py
+.output/results/failed_pump_short_research_365d/short_structural_075_path_replay_trades.csv
+.output/results/failed_pump_short_research_365d/short_structural_075_path_replay_summary.csv
+.output/results/failed_pump_short_research_365d/short_structural_075_path_micro_win_loss.csv
+.output/results/failed_pump_short_research_365d/short_structural_075_path_replay.md
+```
+
+Scope:
+
+```text
+families replayed:
+- A_post_oneprint_break1p5_retest0p8
+- fast_deep_break_taker_above
+- deep_break_retest0p8
+- deep_break_retest0p4
+
+base unique signal/family/stop rows: 3908
+replayed rows: 31264
+closed rows: 31264
+```
+
+Broad result:
+
+```text
+All four families together are not a robust portfolio with 0.75R+ exits.
+tp075_full: 3908 rows, avg -0.013R, median +0.071R, WR 53.2%.
+tp1_full: 3908 rows, avg -0.008R, median -0.004R, WR 49.7%.
+Broad deep_break_retest0p4 is a frequency source but negative in aggregate.
+```
+
+The useful result is concentrated in `fast_deep_break_taker_above` and, more
+modestly, structural `A`.
+
+Fast-deep:
+
+```text
+family aggregate, all stop models:
+tp075_full: 124 rows, avg +0.216R, median +0.488R, WR 69.4%
+tp1_be075: 124 rows, avg +0.282R, median +0.249R, WR 65.3%
+tp1_full: 124 rows, avg +0.251R, median +0.249R, WR 66.1%
+
+best row:
+fast_deep + recent5 + tp1_be075
+31 trades, 31 symbols, 28 days
+avg +0.302R, median +0.439R, WR 67.7%
+top-trade independence 47.6%, top-symbol independence 47.6%
+```
+
+Structural A:
+
+```text
+family aggregate, all stop models:
+tp075_full: 252 rows, avg +0.075R, median +0.223R, WR 58.3%
+tp1_full: 252 rows, avg +0.107R, median +0.131R, WR 54.8%
+tp075_full_time15_no_mfe05: 252 rows, avg +0.098R, median +0.024R, WR 52.0%
+
+best defensive row:
+A + existing_stop + tp075_full_time10_no_mfe025
+64 trades, avg +0.126R, median +0.043R, WR 53.1%
+top-trade independence 35.3%, top-symbol independence 41.4%
+```
+
+1m win/loss anatomy:
+
+```text
+Winners are not defined by OI or a subtle taker ratio here. They are defined by
+immediate post-entry price acceptance:
+
+- more red 1m closes in the first 3-5 minutes;
+- meaningful MFE by minute 3-5;
+- close remains below entry by minute 5;
+- losers often print early adverse excursion toward the retest high/stop.
+```
+
+Simple management diagnostics on `tp075_full`:
+
+```text
+fast_deep:
+all rows: 124, avg +0.216R, median +0.488R, WR 69.4%
+m5_mfe>=0.50R: 42 rows, avg +0.675R, median +0.725R, WR 100%
+m5_mfe<0.25R: 66 rows, avg -0.094R, median -0.0067R
+
+A:
+all rows: 252, avg +0.075R, median +0.223R, WR 58.3%
+m5_mfe>=0.50R: 89 rows, avg +0.590R, median +0.724R, WR 95.5%
+m5_mfe<0.25R: 114 rows, avg -0.255R, median -0.273R
+
+deep_break_retest0p8:
+all rows: 1032, avg -0.0049R, median +0.096R
+m5_mfe>=0.50R: 226 rows, avg +0.504R, median +0.718R, WR 89.8%
+m5_mfe<0.25R: 598 rows, avg -0.210R, median -0.159R
+```
+
+Interpretation:
+
+Holding for `0.75R` is plausible only when the first 3-5 minutes after entry
+confirm downside acceptance. The strategy should not blindly hold every failed
+retest to `0.75R`. A professional rule would be:
+
+```text
+enter on failed retest / lower high;
+SL above retest high;
+do not take profit before 0.75R;
+but if after 5m MFE is <0.25R or the 5m close is not below entry, treat it as a
+static/failed-continuation short and cut/derisk.
+```
+
+This is still research-only until converted into a single live-like replay rule
+with one trade per signal and rolling/OOS selection.
+
+## 2026-06-11 - P547 short portfolio frequency search
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The short-side candidates from P545/P546 were combined into deduplicated
+portfolios to test the user's desired frequency target: roughly `3-15` trades
+per active day, preferably with more if the edge survives. This used existing
+365d artifacts only; no new multi-hour 365d rerun was launched.
+
+Generated:
+
+```text
+research_tools/short_portfolio_combination_search.py
+.output/results/large_runner_discovery_365d/short_portfolio_candidate_library.csv
+.output/results/large_runner_discovery_365d/short_portfolio_combination_search.csv
+.output/results/large_runner_discovery_365d/short_portfolio_top_trades.csv
+.output/results/large_runner_discovery_365d/short_portfolio_combination_search.md
+```
+
+Screen output:
+
+```text
+candidate rows: 3397
+usable candidate rows: 618
+portfolios evaluated: 794
+frequency target passes: 0
+strict portfolio passes: 0
+```
+
+Main finding: with current candidate generation, simply combining the best
+known short pockets does not produce a robust `3-15/day` portfolio. The
+high-quality structural candidates remain around `1.1-1.2` trades per active
+day. The higher-frequency positive portfolios reach only about `1.8-2.0` per
+active day, and quality/top-independence weakens sharply.
+
+Best quality portfolios:
+
+```text
+pair/triple structural A + fast_deep variants:
+56 trades, 54 symbols, 50 active days, 6 sessions
+1.12 trades/active day
+avg +0.103R, median +0.450R, WR 62.5%
+top-trade independence 37.1%, top-symbol independence 38.2%
+max drawdown -1.82R
+
+larger structural pair:
+93 trades, 77 symbols, 79 active days, 6 sessions
+1.18 trades/active day
+avg +0.096R, median +0.451R, WR 61.3%
+top-trade independence 33.3%, top-symbol independence 34.1%
+max drawdown -2.49R
+```
+
+Best frequency with positive average and median:
+
+```text
+large_runner_local_high_top_3:
+168 trades, 81 symbols, 86 active days
+1.95 trades/active day
+avg +0.170R, median +0.040R, WR 53.6%
+top-trade independence 11.1%, top-symbol independence 14.3%
+max drawdown -9.35R
+
+deep_break_retest0p4 family:
+419 trades, 219 symbols, 230 active days
+1.82 trades/active day
+avg +0.005R, median +0.205R, WR 63.0%
+top-trade independence about 1.9%, top-symbol independence about 1.6%
+max drawdown -3.71R
+```
+
+Interpretation: the 3-15/day objective is not reachable by portfolio blending
+alone without admitting diluted or top-dependent trades. To raise frequency
+honestly, the next work must expand signal generation and management, especially
+a real 1m path replay for structural `A` / `fast_deep` no-continuation exits,
+rather than lowering quality thresholds.
+
+Action: keep three research tiers only:
+
+```text
+Core: structural A / fast_deep, low frequency but best balance.
+Tactical: deep_break_retest0p8, moderate frequency, weaker independence.
+Scout: deep_break_retest0p4/local-high fader, frequency source only after
+       strict time/no-continuation replay proves it can stop bleeding.
+```
+
+Do not promote the scout tier live from current evidence.
+
+## 2026-06-11 - P542 fader/runner/static session readout
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The fader/runner/static outcome study was extended with the project session
+model (`asia_only`, `asia_europe_overlap`, `europe_only`,
+`europe_us_overlap`, `us_only`, `off_session`). Sessions materially change the
+base mix:
+
+```text
+europe_only: fast fader 24.6%, runner 27.4%, upper static 33.5%
+off_session: fast fader 23.4%, runner 32.8%, upper static 29.3%
+europe_us_overlap: fast fader 22.8%, runner 30.7%, upper static 32.0%
+asia_only: fast fader 21.8%, runner 28.6%, upper static 35.0%
+asia_europe_overlap: fast fader 20.4%, runner 32.3%, upper static 32.5%
+us_only: fast fader 20.2%, runner 38.3%, upper static 28.2%
+```
+
+Weak post-seed acceptance remains the strongest simple discriminator across
+sessions. With `close15 <= ~3.4%`, fast-fader rates were:
+
+```text
+off_session 68.2%
+europe_only 66.5%
+us_only 63.6%
+asia_only 63.0%
+europe_us_overlap 62.5%
+asia_europe_overlap 59.6%
+```
+
+By contrast, `close15 >12%` is mostly runner in every active session, especially
+`us_only` (`88.5%` runner). This supports a session-aware interpretation:
+session shifts the prior, but weak/strong 15m acceptance dominates the local
+outcome split.
+
+Failed-pump structural management also showed session effects. The best
+session-specific rows were mostly `asia_only` deep-break/retest variants, but
+they still did not pass the `50%+` winner top-removal target. Best example:
+
+```text
+asia_only + deep_break_retest0p8 + last_lower_high + full0.75R
+53 trades, avg +0.119R, median +0.019R, WR 52.8%,
+top-removal-to-negative 32.1% of winners
+```
+
+Action: future selectors must include session as a first-class axis. Do not use
+a global short rule without checking session-specific base rates, but also do
+not promote session alone; it is a prior/context layer.
+
+## 2026-06-11 - P541 structural management deep scan
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The failed-pump structural short branch was replayed from `failed_pump_short`
+signals on 1m cache without a new 365d discovery run. This tested whether
+management, not just filters, can improve robustness: existing stop, last
+lower-high stop, recent5/recent10 local stop, full TP at `0.25/0.5/0.75/1R`,
+half partial at the same R targets, and structural pivot-high trailing.
+
+No category passed the `50%+` winner top-removal target. Broad structural
+families remain negative-median or too dependent on a few winners. The best
+morphology clues:
+
+```text
+fast_deep_break_taker_above + recent10 stop + full0.5R:
+31 trades, 31 symbols, 28 days
+avg +0.117R, median +0.102R, WR 61.3%, positive-day share 57.1%
+top-removal-to-negative 42.1% of winners
+
+A_post_oneprint_break1p5_retest0p8 + existing stop + full0.75R:
+64 trades, 53 symbols, 59 days
+avg +0.119R, median +0.032R, WR 56.3%, positive-day share 55.9%
+top-removal-to-negative 30.6% of winners
+
+A_post_oneprint_break1p5_retest0p8 + last_lower_high stop + full0.5R:
+64 trades, 53 symbols, 59 days
+avg +0.082R, median +0.451R, WR 60.9%, positive-day share 59.3%
+top-removal-to-negative 28.1% of winners
+```
+
+Interpretation: the closest thing to the desired shape is not the broad
+failed-pump short; it is a very specific structural morphology: fast deep break
+or one-print deep break plus failed retest, then quick fixed profit. But sample
+is either small or top-removal independence is still below target. This remains
+research-only.
+
+Action: stop broad threshold expansion. Future work should either collect more
+instances of this morphology or build a fixed-family rolling selector over
+these exact families. Required promotion bar remains `50%+` winner
+top-removal-to-negative, positive median, enough active days/symbols, and no
+OI-tail-only dependence.
+
+## 2026-06-11 - P540 fade timing vs anomaly duration
+
+Current commit: UNKNOWN. Status: analysis only.
+
+Fade timing was analyzed without a new 365d discovery run. The readout uses
+existing `future60_low_break_offset_min` labels and the local-high short replay
+to compare fade timing against the long-anomaly confirmation duration
+(`10m/15m` entry delays).
+
+Setup-level timing:
+
+```text
+fader rows with low break before high10: 3151
+low break <=10m after seed close: 1086 rows, 34.5% of faders
+low break <=15m after seed close: 1481 rows, 47.0% of faders
+low break <=20m after seed close: 1785 rows, 56.6% of faders
+median fader low-break offset: 17m
+```
+
+This explains a major trap: if the short waits for a 15m failure, many fades
+have already broken down before entry. The short is then late; the remaining
+path often has poor continuation.
+
+Short replay by evaluation-only timing confirms the shape:
+
+```text
+fade 0-5m after short entry:
+avg +0.835R, median +0.347R, WR 73.7%, no-down-continuation 9.2%
+
+fade 5-10m after short entry:
+avg +1.237R, median +0.699R, WR 64.0%, no-down-continuation 19.6%
+
+fade 10-20m after short entry:
+avg +0.228R, median -0.533R, WR 37.4%, no-down-continuation 36.8%
+
+already faded before entry:
+avg -0.218R, median -0.520R, WR 27.7%, no-down-continuation 42.2%
+
+no low break:
+avg -0.595R, median -1.044R, WR 17.5%, no-down-continuation 46.3%
+```
+
+This timing label is future-only and cannot be used directly. Entry-known
+proxies for quick post-entry fade were weak: the best simple filters only raised
+quick-fade probability to roughly `20-24%`, not enough to create a standalone
+edge.
+
+Action: avoid the “long failed, short immediately” trap unless there is fresh
+post-entry structural breakdown still ahead. A viable short needs an entry that
+is not after the main fade has already happened: either earlier breakdown
+confirmation with tight local high, or a failed retest that proves continuation
+risk remains. Add a no-continuation guard to future short replay metrics.
+
+## 2026-06-11 - P539 long WR 20-30 inversion readout
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The 365d large-runner long trade grid was analyzed for cohorts where long
+trades had `20-30%` winrate. No new 365d discovery run was launched. The scan
+used existing dimensions: arm, exit policy, decision offset, policy id,
+setup-selection, nature status, and price/flow buckets. It then intersected
+those low-WR long cohorts with the existing local-high/partial/trailing short
+replay.
+
+Result: low long WR is a strong fader/veto signal, but not yet a robust short
+edge. The scan found `178` long low-WR cohorts and `5576` short intersections.
+None passed the required short shape: positive average, positive median,
+positive active-day share, enough trades/symbols/days, and `50%+` winner
+top-removal independence.
+
+Examples of low-WR long anatomy:
+
+```text
+E10_confirmed_runner: 13,915 long rows, WR 21.4%, avg net -0.18%,
+runner10 32.8%, fader 66.9%.
+
+early_trade_ratio >20: 34,140 long rows, WR 21.4%, avg net -0.26%,
+runner10 22.7%, fader 77.2%.
+
+last2_trade 45-55: 14,495 long rows, WR 21.4%, avg net -0.34%,
+runner10 24.7%, fader 75.2%.
+```
+
+Best short intersections still fail robustness:
+
+```text
+trade_ratio>20 + trade_top1<=35:
+S3_last2_close15_le2 + recent10 + trail_only
+62 short trades, avg +0.324R, median -0.132R,
+top-removal-to-negative 14.8% of winners.
+
+quote_ratio>20 + taker 50-55:
+S2_last2_close10_le2 + recent10 + half_base_low
+69 short trades, avg +0.054R, median +0.014R,
+top-removal-to-negative 5.4% of winners.
+```
+
+Action: treat long WR 20-30 cohorts as short context/veto and as a source of
+anatomy, not as direct short rules. A short rule must still pass the same
+execution and top-removal independence standard.
+
+## 2026-06-11 - P538 local-high stop and structural half-exit replay
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The large-runner short-failure replay was extended without rerunning the 365d
+discovery. Existing setup artifacts and 1m cache were reused to test a more
+trader-like short model:
+
+```text
+entry: after 10m/15m failure close, next 1m open
+initial SL: recent/local high (`recent3`, `recent5`, `recent10`,
+            `last_pivot_or_recent5`), not full pump high
+partial: close 50% at pump middle, pump open/base, or pump low/base
+remaining position: structural trailing stop using confirmed local pivot highs
+costs: fees plus adverse entry/exit slippage
+```
+
+Result: local-high stops improve the prior naive failure replay, but strict
+robust edge is still not proven. The best broad policy was
+`S4_big_early_close15_le4 + recent10 SL + half_base_open`: `788` closed trades,
+`+0.002R` average, `-0.165R` median, `38.3%` winrate, and negative
+drop-top-3-day/symbol results. This is not tradable.
+
+Top-dependence should be measured by top-removal-to-negative, not fixed
+drop-top-3. Sort trades by net R descending and remove the best trades until
+remaining total R is `<=0`; use the removed share of winning trades as the main
+normalized metric, with `50%+` as the target. By this stricter metric the
+filtered pockets are still weak: the best candidates go negative after removing
+only `4-5` best trades, or `8-11%` of winners.
+
+The filtered search found small positive-median pockets, but none passed the
+strict robust/diversified threshold with `100+` trades, positive median,
+positive active-day share, and `50%+` winner top-removal independence. Best
+current pockets:
+
+```text
+S2 close10<=2 + recent10 SL + half_base_low
+risk 3-8%, m1_trade_top1_share>=45%
+86 trades, 72 days, 73 symbols
+avg +0.051R, median +0.043R, WR 55.8%, positive-day share 56.9%
+drop-top-3-days +0.61R, drop-top-3-symbols +1.08R
+top-removal-to-negative: 4 trades, 4.7% of all trades, 8.3% of winners
+
+S3 last2 close15<=2 + recent10 SL + half_base_low
+risk 2-6%, early_return>=6%
+90 trades, 72 days, 78 symbols
+avg +0.119R, median +0.003R, WR 51.1%, positive-day share 51.4%
+drop-top-3-days +3.03R, drop-top-3-symbols +2.80R
+top-removal-to-negative: 5 trades, 5.6% of all trades, 10.9% of winners
+```
+
+Rolling check on the S3 pocket shows diversification but not full stability:
+one chronological fold was slightly negative (`-0.143R` over `22` trades) and
+the worst 30d window was `-2.25R`. Treat these as candidate categories for
+stress testing, not as live rules.
+
+Action: do not call these an edge. Continue from the positive-median pockets
+only as morphology clues, and require `50%+` winner top-removal independence in
+the next fixed-family selector. The next useful test is replaying the structural
+failed-retest Candidate A with the same local-high/partial/trailing model.
+
+## 2026-06-11 - P537 executable short-failure replay
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The large-runner short-fade pattern was replayed as an executable proxy trade,
+not just as a future label. Entry is only after the failure window is closed:
+next 1m open after 10m/15m confirmation, adverse entry/exit slippage, fees, a
+short stop at the known pre-entry high, and stop-first handling when TP/SL touch
+inside the same 1m candle.
+
+Result: the visible failure predicts downward path very well, but the naive
+short implementation is not profitable in R. Best checked variant was
+`S3_last2_close15_le2 + tp1_full` with `405` closed trades, `-0.012R` average,
+`+0.024R` median, `51.4%` winrate, and `-10.88R` after dropping the top three
+days. Core `S1_close15_fail` was worse: `218` closed trades, `-0.122R` average
+with TP0.75 and `-0.151R` with TP1. Many S1 rows were skipped because the known
+stop distance exceeded the 10% max-risk guard (`335/553` rows).
+
+Trader interpretation: this is not "wait 15 minutes and short every pump".
+The market first shows a real pump attempt, then fails acceptance above the seed
+close. That failure is informative, but by the time it is confirmed the stop is
+often too far and the remaining move is not enough after fees/slippage. The
+edge, if it exists, must come from a tighter structural entry after failure
+(for example low break + failed retest), not from the generic 15m failure close.
+
+Action: do not promote `close15<=0` as a short rule. Use it as a context/veto
+or as a parent regime. The next short test should replay the narrower structural
+Candidate A style entry: concentrated pump, decisive low break, failed retest
+far below the prior high, with risk measured from actual fill.
+
+## 2026-06-11 - P536 short-fade rolling robustness
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The large-runner short-fade candidates were checked for rolling outcome
+robustness before executable short replay. This is not PnL evidence; it tests
+whether fixed known-after-failure categories consistently lead to `short_fade4`
+outcomes.
+
+Core result: `close15<=0` is robust across 30/60/90d train -> next-day OOS:
+
+```text
+S1 close15<=0:
+553 labeled rows, 240 active days, 236 symbols
+short_fade4 97.47%, runner10 2.53%
+drop-top-3-days short_fade4 97.42%
+drop-top-3-symbols short_fade4 97.49%
+30d OOS: 505 rows, short_fade4 97.82%, runner10 2.18%
+60d OOS: 527 rows, short_fade4 97.72%, runner10 2.28%
+90d OOS: 511 rows, short_fade4 97.65%, runner10 2.35%
+```
+
+Flow-gated S1 variants are purer but mostly overlap the same regime. A broader
+greedy basket covers `1695` rows across `334` days and `369` symbols with
+`92.63%` short_fade4, but purity drops after leaving the S1 close15-failure
+core.
+
+Conclusion: the short-fade outcome is rolling-stable enough to justify an
+executable short replay. Do not claim profitability yet.
+
+## 2026-06-11 - P535 large-runner short-fade failure study
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The 365d large-runner long attempt at
+`.output/results/large_runner_discovery_365d` was analyzed as negative evidence
+for long continuation and as a source of short-fade patterns. The long failure
+is mostly nature classification: portfolio fader-label trades contributed
+`-55.48` net return (`5,880` trades, avg `-0.9435%`), while runner10-label
+trades contributed `+43.88` (`1,932` trades, avg `+2.2712%`).
+
+The setup-level short-fade study used only rows with `future_label_status=ok`
+(`11,367` rows out of `573,720` cluster-selected setups). Base rates in this
+labeled slice were `31.71%` runner10, `68.29%` fader, `56.96%` short_fade2 and
+`42.15%` short_fade4. OI is again late-tail only: `2,059/11,367` labeled rows
+had `oi_status=ok`, all in `2026-04..2026-06`.
+
+Strongest visible short-fade condition:
+
+```text
+close_ret_15m <= 0
+
+553 rows, 240 active days, 236 symbols
+runner10 2.53%, fader 97.47%, short_fade4 97.47%
+median future60 min path -12.35%
+```
+
+This is not a seed-time signal. It is a visible failure condition known only
+after the 15m close. Candidate short replays should enter at the next 1m open
+after the failure candle, with structural-high/seed-high stop and actual-fill
+PnL. The promising families are `close15<=0` plus real flow/chase evidence:
+`m1_sustain_strict`, `trade_ratio>=10`, `quote_ratio>=5`, `taker45_55`, or
+concentrated/last2 chase variants. Do not train on OI-tail.
+
+## 2026-06-11 - P534 structural short candidate deep dive
+
+Current commit: UNKNOWN. Status: analysis only.
+
+Deeper forensic search kept the failed-pump short thesis alive, but only as a
+narrow structural pattern. The broad rule "short pumps after failure" remains
+negative; the useful hypothesis is closer to:
+
+```text
+one-print-like pump -> deep structural low break -> failed retest far below
+prior structural high -> fixed partial-take short exit
+```
+
+Best current fixed-exit candidate:
+
+```text
+distribution=one_print_like_top1_ge60
+structural_break_depth_pct >= 1.5%
+failed_retest_distance_pct >= 0.8%
+exit: short_tp0p75r_close50_trail
+
+64 trades, 59 active days, 53 symbols
+avg +0.146R, median +0.0097R, winrate 51.6%
+positive active-day share 54.2%
+drop-top-1-day +7.84R, drop-top-3-days +5.19R
+OI-tail: 15 trades, avg +0.174R, median +0.0039R
+```
+
+The TP1 version is similar (`64` trades, avg `+0.156R`, median `+0.0016R`,
+drop-top-3-days `+5.43R`), but OI-tail median is slightly negative. Two smaller
+pockets also appeared: off-session deep break with neutral taker share
+(`37` trades, median `+0.0229R`) and fast deep break with taker above norm
+(`31` trades, median `+0.0355R`), but both need more sample and the fast-break
+candidate weakens in the OI-covered tail.
+
+Do not promote this to live. Next validation should deduplicate alternate exits
+at signal level and run the exact anatomy rules through a rolling selector with
+explicit low-sample handling. The rule must not be trained on the OI tail.
+
+## 2026-06-11 - P533 failed-pump short rolling readout
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The existing 365d artifacts were analyzed without a new rerun. Full trade-grid
+performance is strongly negative (`1,715,460` rows, avg `-0.207R`, median
+`-0.276R`). The more realistic `structural_low_break` subset is less bad but
+still negative (`277,458` rows, avg `-0.094R`, median `-0.148R`, winrate
+`27.3%`). The audit-only no-low-break fade rows are worse (`-0.229R` avg).
+
+The strict daily walk-forward selector found only one selectable rule across
+`351` OOS days, and that rule produced only `2` trades on `2026-04-11` for
+`-0.425R`. Rolling health therefore did not identify a stable tradable failed
+pump short rule. OI remains a late-tail validation layer only: non-missing OI is
+available from `2026-04-07` to `2026-06-01` (`56` dates), and all OI buckets are
+negative in the full grid.
+
+Action: do not promote failed-pump short rules. At most, run a narrow forensic
+readout on OI-blind structural candidates, requiring positive median, positive
+active-day share, and drop-top-day robustness. If that fails, keep failed-pump
+short evidence only as a diagnostic/avoidance layer for late pump entries.
+
+## 2026-06-11 - P532 rolling-pattern plan with late OI coverage
+
+Current commit: UNKNOWN. Status: analysis only.
+
+The 365d failed-pump-short rolling artifacts under
+`.output/results/failed_pump_short_research_365d` should not be read as an OI
+validated yearly edge. The run config uses `closed_5m_oi_asof_confirm_close`,
+but trade-grid OI buckets show most rows as `missing`; non-missing OI appears
+only near the end of the cache. The strict OOS selector produced only `2` trades
+on `2026-04-11` (`-0.425R` total), so profitability is not established.
+
+Next research should treat OI as a late holdout/confirmation layer, not as a
+year-long training feature. First learn rolling regularities from price,
+quote/trade flow, taker share, distribution, session, timing and post-pump
+structure across the full period; then test whether the same families improve
+or fail in the OI-covered tail. Do not select rules on the OI tail and then
+claim 365d robustness.
+
 ## 2026-06-08 - P531 level-attack recall layer
 
 Current commit: UNKNOWN. Status: PROPOSED.
@@ -4775,3 +6113,333 @@ sub-hypothesis is `m1_last2_trade_share <= ~0.385`, which means the promoted
 seed is not tail-chase inside its own 5m candle. It remains too small and
 top-dependent for live promotion: about `21` portfolio trades, `61.9%` WR,
 `+0.88%` median, but negative ex-top10 in portfolio sequencing.
+
+## 2026-06-11 - P543 session-aware fader classifier
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Using the existing `.output/results/large_runner_discovery_365d` artifacts, a
+session-aware outcome table was built without a new multi-hour 365d rerun:
+
+```text
+large_runner_session_outcome_research_table.csv
+large_runner_session_fixed_hypothesis_outcome_rules.csv
+large_runner_session_fader_classifier_short_replay_summary.csv
+large_runner_session_fader_classifier_rolling_edge_report.md
+```
+
+Main finding: the robust edge found here is a classification edge, not yet a
+proven executable short edge.
+
+Best broad fader classifier:
+
+```text
+all_sessions: close15<=3.39% & pre60_range>=10%
+rows: 889
+symbols: 267
+days: 279
+fader_rate: 77.62%
+runner_rate: 5.40%
+static_or_other_rate: 12.37%
+valid_months: 12
+min_month_fader_rate: 68.52%
+rolling30_min_fader_rate: 57.14%
+rolling30_median_fader_rate: 76.85%
+```
+
+Session readout:
+
+```text
+non_us same rule: 509 rows, 78.78% fader, 4.52% runner
+europe_or_off same rule: 262 rows, 79.77% fader, 2.29% runner
+asia_only same rule: 208 rows, 78.85% fader, 7.69% runner
+us_only same rule: 245 rows, 76.33% fader, 7.76% runner
+```
+
+Static/no-trade zone:
+
+```text
+3.39% < close15 <= 8.10%
+static_or_other about 58-59% on all sessions
+```
+
+Runner/no-short veto:
+
+```text
+close15 >= 12%
+all_sessions runner_rate: 81.63%
+us_only runner_rate: 88.45%
+```
+
+The classifier was joined into the existing local-high structural short replay.
+Current execution/management did not become robust:
+
+```text
+all close15<=3.39 & pre60_range>=10:
+avg -0.177R, median -0.627R, WR 28.60%
+
+europe_or_off same classifier:
+avg -0.085R, median -0.544R, WR 28.27%
+
+best small positive management slice:
+68 trades, avg +0.342R, median -0.211R, WR 39.71%,
+only 11.11% of winning trades need removal to go negative
+```
+
+Conclusion: we can separate faders from statics/runners in a rolling-stable and
+session-aware way, but the current short entry/SL/exit implementation still
+fails the desired `50%+` top-winning-trade-removal robustness target.
+
+## 2026-06-11 - P544 table-first session edge workbench
+
+Status: APPLIED locally / UNKNOWN commit.
+
+A reusable postprocess was added:
+
+```text
+research_tools/session_edge_workbench.py
+```
+
+It builds a table-first workbench from existing 365d artifacts without a new
+multi-hour rerun:
+
+```text
+large_runner_edge_workbench_setups.csv
+large_runner_edge_workbench_feature_catalog.csv
+large_runner_edge_workbench_replay_scorecard.csv
+large_runner_edge_workbench_readme.md
+```
+
+Generated counts:
+
+```text
+setup_master_rows: 11,367
+feature_catalog_rows: 33
+replay_scorecard_rows: 909
+strict replay robustness passes: 0
+watchlist positive-but-top-dependent rows: 90
+```
+
+Core bucket outcome rates:
+
+```text
+fader_candidate:
+889 rows, 77.6% fast fader, 5.4% runner
+
+static_no_trade:
+4614 rows, 47.2% upper static, 15.5% runner, 17.4% fast fader
+
+runner_no_short:
+2145 rows, 81.6% runner, 2.8% fast fader
+```
+
+The workbench separates:
+
+```text
+decision-time features
+known-after-10m/15m confirmation fields
+tail-only OI context
+evaluation-only labels
+execution-result metrics
+```
+
+Conclusion: use the workbench as the default next research surface. Promotion
+requires positive average R, positive median R, enough symbols/days/trades, and
+`top_remove_winner_pct_to_negative >= 0.50`; current replay policies still have
+zero strict passes.
+
+## 2026-06-11 - P545 balance screen over current short watchlist
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Added and ran:
+
+```text
+research_tools/session_edge_balance_screen.py
+```
+
+Generated artifacts:
+
+```text
+large_runner_edge_workbench_balance_screen.csv
+large_runner_edge_workbench_balance_by_session.csv
+large_runner_edge_workbench_balance_screen.md
+```
+
+The screen ranks the existing positive full-period watchlist by a balance of:
+
+```text
+sample size
+symbols/days/sessions
+avg R and median R
+positive day/month rate
+rolling 30d/60d fixed-rule stability
+top trade independence
+top symbol independence
+fader/runner contamination
+```
+
+Result:
+
+```text
+rows screened: 89
+strict candidates: 0
+balanced watchlist rows: 0
+max median_r among screened rows: -0.06395R
+max top_trade_independence_pct: 11.11%
+max top_symbol_independence_pct: 13.04%
+```
+
+Best current balance row:
+
+```text
+selector: europe_or_off_close15<=3.39 & pre60_range>=10
+management: early_return>=6% & close15<=4%
+stop/exit: last_pivot_or_recent5 + half_base_low
+trades: 68
+symbols: 54
+days: 52
+sessions: 2
+avg: +0.342R
+median: -0.211R
+WR: 39.71%
+positive_day_rate: 42.31%
+positive_month_rate: 50.00%
+top_trade_independence: 11.11%
+top_symbol_independence: 13.04%
+roll30_min_sum: -3.20R
+fader_rate: 88.24%
+runner_rate: 2.94%
+```
+
+Conclusion: the best balance is still a research watchlist shape, not an edge.
+It identifies the right market nature, but execution still pays too much in
+median loss and depends on a small set of winners. The next improvement must be
+an executable structural trigger that raises median R and top independence, not
+more fader classification.
+
+## 2026-06-11 - P546 short enhancement strategy screen
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Added and ran:
+
+```text
+research_tools/short_enhancement_strategy_screen.py
+```
+
+Artifacts:
+
+```text
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen.csv
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen_local.csv
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen_structural.csv
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen.md
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_proxy_top_scenarios.csv
+```
+
+Scope:
+
+```text
+local 15m fader/local-high replay + failed-pump structural management replay
+filters: session, fader context, target-valid, no pre-entry base/deep touch,
+         risk buckets, fast break, one-print, deep break/retest
+management: existing fixed/partial/trail policies
+proxy triage: BE/time-stop/no-continuation upper-bound on top scenarios only
+```
+
+Realized screen:
+
+```text
+combined rows: 3397
+strict passes: 0
+promising realized watchlist rows: 164
+local-high promising rows: 0
+```
+
+The best realized candidates are structural failed-pump families, not the
+generic 15m fader replay.
+
+Best balance:
+
+```text
+family: A_post_oneprint_break1p5_retest0p8
+filter: fast_break15
+stop: recent10
+policy: full05
+trades: 49
+symbols: 42
+days: 45
+sessions: 6
+avg: +0.0886R
+median: +0.4562R
+WR: 59.18%
+positive_day_rate: 60.00%
+top_trade_independence: 34.48%
+top_symbol_independence: 36.00%
+max_drawdown: -2.09R
+```
+
+Best larger sample shape:
+
+```text
+family: deep_break_retest0p8
+filter: fast_break20
+stop: recent5
+policy: full025
+trades: 147
+symbols: 100
+days: 118
+avg: +0.0223R
+median: +0.2090R
+WR: 71.43%
+positive_day_rate: 66.95%
+top_trade_independence: 14.29%
+top_symbol_independence: 11.94%
+```
+
+Best high-independence small sample:
+
+```text
+family: fast_deep_break_taker_above
+stop: recent10
+policy: full05
+trades: 31
+symbols: 31
+days: 28
+avg: +0.1169R
+median: +0.1020R
+WR: 61.29%
+top_trade_independence: 42.11%
+top_symbol_independence: 42.11%
+```
+
+Proxy triage:
+
+```text
+A_post_oneprint_break1p5_retest0p8 + last_lower_high + full05:
+realized fast_break15: 53 trades, avg +0.087R, median +0.454R,
+top_trade 29.41%, top_symbol 33.33%.
+
+time_stop_no_mfe025_proxy:
+avg +0.152R, median +0.454R,
+top_trade 50.00%, top_symbol 55.17%.
+```
+
+This proxy is not tradable evidence because MFE order is unknown. It says the
+next high-value implementation is a real 1m path replay for no-continuation /
+time stop on the structural `A` family.
+
+Strategy verdict:
+
+```text
+1. Generic 15m fader context: good classifier, weak execution; do not promote.
+2. Skip already-faded/target-valid/risk filters: improve some rows but do not
+   create a robust local-high edge.
+3. Fixed quick TP (full025/full05) beats broad trailing for larger samples.
+4. Structural one-print/deep-break/retest is the strongest realized family.
+5. BE is not the main lever on structural families; time/no-continuation stop
+   is the most promising path-required enhancement.
+6. Averaging down has no support from current evidence; only staged entry after
+   break + failed retest should be tested, with fixed total risk.
+```

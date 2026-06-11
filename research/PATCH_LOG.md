@@ -1,3 +1,801 @@
+## 2026-06-11 - P558 neutral robust plateau engine
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_robust_plateau_engine.py`.
+- Added `research/SHORT_ROBUST_PLATEAU_ENGINE.md`.
+- Added `research/HYPOTHESIS_REGISTRY.md`.
+- Added manual research archive under
+  `research/archive/2026-06-11_short_fade_manual_research/`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated smoke artifacts:
+
+```text
+.output/research_cache/short_robust_plateau_engine_smoke/events.parquet
+.output/research_cache/short_robust_plateau_engine_smoke/event_outcomes.parquet
+.output/research_cache/short_robust_plateau_engine_smoke/metadata.json
+.output/research_cache/short_robust_plateau_engine_smoke/data_quality_report.md
+.output/research_cache/short_robust_plateau_engine_smoke/wfa_results.csv
+.output/research_cache/short_robust_plateau_engine_smoke/plateau_candidates.csv
+.output/research_cache/short_robust_plateau_engine_smoke/plateau_clusters.csv
+.output/research_cache/short_robust_plateau_engine_smoke/portfolio_candidates.csv
+.output/research_cache/short_robust_plateau_engine_smoke/portfolio_oos_trades.csv
+.output/research_cache/short_robust_plateau_engine_smoke/rejected_reasons.csv
+.output/research_cache/short_robust_plateau_engine_smoke/lookahead_audit.csv
+.output/research_cache/short_robust_plateau_engine_smoke/final_report.md
+```
+
+Validation:
+
+```text
+python -m compileall research_tools/short_robust_plateau_engine.py
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000
+
+event_store=.output/research_cache/short_robust_plateau_engine_smoke
+candidate_rows=265
+promoted=21
+report=.output/research_cache/short_robust_plateau_engine_smoke/final_report.md
+```
+
+Risk:
+
+```text
+The engine is neutral and repeatable, but the smoke uses already inspected
+365d replay artifacts. It is a mechanism validation, not final edge proof.
+```
+
+## 2026-06-11 - P557 session timing deep dive
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_session_timing_deep_dive.py`.
+- Added `research/SHORT_FADE_SESSION_TIMING_DEEP_DIVE.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/large_runner_discovery_365d/short_session_timing_by_session.csv
+.output/results/large_runner_discovery_365d/short_session_close15_bands.csv
+.output/results/large_runner_discovery_365d/short_session_entry_known_oos_slices.csv
+.output/results/large_runner_discovery_365d/short_failed_frontier_by_session.csv
+.output/results/large_runner_discovery_365d/short_session_timing_deep_dive.md
+```
+
+Validation:
+
+```text
+python research_tools/short_session_timing_deep_dive.py --large-dir .output/results/large_runner_discovery_365d --failed-dir .output/results/failed_pump_short_research_365d --split-date 2025-12-03
+
+session_timing_rows=64
+setup_band_rows=15
+entry_known_slice_rows=276
+promotion_candidates=0
+failed_session_rows=15
+```
+
+Risk:
+
+```text
+Future fade timing is used as an evaluation label only. The result is not a
+new tradable sleeve; it defines the next path-replay hypothesis.
+```
+
+## 2026-06-11 - P556 cross-source large-runner sleeve search
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_cross_source_sleeve_search.py`.
+- Added `research/SHORT_FADE_CROSS_SOURCE_SLEEVES.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/large_runner_discovery_365d/short_cross_source_sleeve_candidates.csv
+.output/results/large_runner_discovery_365d/short_cross_source_sleeve_oos_candidates.csv
+.output/results/large_runner_discovery_365d/short_cross_source_sleeves.csv
+.output/results/large_runner_discovery_365d/short_cross_source_portfolio_oos_trades.csv
+.output/results/large_runner_discovery_365d/short_cross_source_sleeve_report.md
+```
+
+Validation:
+
+```text
+python -m compileall research_tools/short_cross_source_sleeve_search.py
+
+python research_tools/short_cross_source_sleeve_search.py --large-dir .output/results/large_runner_discovery_365d --failed-dir .output/results/failed_pump_short_research_365d --split-date 2025-12-03
+
+candidate_rows=2941
+is_pass_rows=5
+oos_candidate_rows=5
+oos_pass_rows=0
+selected_sleeves=0
+```
+
+Risk:
+
+```text
+The large-runner archive and the second 180d half have already been heavily
+inspected. This result is a research frontier and a rejection of the current
+local-high execution sleeve, not fresh proof of absence of edge.
+```
+
+## 2026-06-11 - P555 diversified frontier optimizer
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_diversified_frontier_optimizer.py`.
+- Added quality/balanced/frequency frontier portfolio construction from
+  existing OOS-positive candidate screens.
+- Updated `research/SHORT_FADE_DIVERSIFIED_SLEEVES.md`,
+  `research/RESEARCH_STATE.md`, and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/failed_pump_short_research_365d/short_frontier_candidates.csv
+.output/results/failed_pump_short_research_365d/short_frontier_portfolios.csv
+.output/results/failed_pump_short_research_365d/short_frontier_sleeves.csv
+.output/results/failed_pump_short_research_365d/short_frontier_oos_trades.csv
+.output/results/failed_pump_short_research_365d/short_frontier_report.md
+```
+
+Validation:
+
+```text
+python -m compileall research_tools/short_diversified_frontier_optimizer.py
+python research_tools/short_diversified_frontier_optimizer.py --failed-dir .output/results/failed_pump_short_research_365d --split-days 180 --max-sleeves 8
+```
+
+Risk:
+
+```text
+This optimizer uses the already consumed second 180d OOS screens. Treat the
+frontier portfolios as research candidates, not as fresh proof.
+```
+
+## 2026-06-11 - P554 diversified short-fade sleeves
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research/SHORT_FADE_DIVERSIFIED_SLEEVES.md`.
+- Generated marginal OOS screen for fader natures beyond the frozen core.
+- Generated a 3-sleeve diversified OOS portfolio artifact set.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/failed_pump_short_research_365d/short_other_nature_marginal_screen.csv
+.output/results/failed_pump_short_research_365d/short_diversified_sleeve_report.md
+.output/results/failed_pump_short_research_365d/short_diversified_portfolio_summary.csv
+.output/results/failed_pump_short_research_365d/short_diversified_portfolio_sleeves.csv
+.output/results/failed_pump_short_research_365d/short_diversified_portfolio_oos_trades.csv
+```
+
+Validation:
+
+```text
+Portfolio OOS trades: 109
+avg +0.171R
+median +0.261R
+WR 60.6%
+cost10 avg +0.124R
+```
+
+Risk:
+
+```text
+The diversified sleeves use the same second 180d OOS half and are now consumed
+for these hypotheses. The portfolio improves frequency but has weaker
+top-removal independence than the core.
+```
+
+## 2026-06-11 - P552 IS-max / OOS verifier
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_is_oos_max_verifier.py`.
+- Added frozen first-180d candidate verification on the second 180d half.
+- Added executable treatment for post-entry management features: if a
+  post-entry condition fails after the selected minute, the trade exits at that
+  minute close-r proxy instead of being removed from the sample.
+- Generated narrow guard-expansion sanity artifacts for the already-supported
+  structural families.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/failed_pump_short_research_365d/short_is_oos_max_verification_candidates.csv
+.output/results/failed_pump_short_research_365d/short_is_oos_max_verification_portfolios.csv
+.output/results/failed_pump_short_research_365d/short_is_oos_max_verification_selected.csv
+.output/results/failed_pump_short_research_365d/short_is_oos_max_verification_report.md
+.output/results/failed_pump_short_research_365d/short_is_oos_guard_expansion_sanity.csv
+.output/results/failed_pump_short_research_365d/short_is_oos_guard_expansion_sanity_report.md
+```
+
+Validation:
+
+```text
+python -m compileall research_tools/short_is_oos_max_verifier.py
+
+python research_tools/short_is_oos_max_verifier.py --failed-dir .output/results/failed_pump_short_research_365d --split-days 180 --max-entry 80 --max-management 80
+
+selected=160
+candidate_oos_passes=38
+portfolio_oos_passes=3
+```
+
+Risk:
+
+```text
+The second 180d half is now consumed for these specific hypotheses. The best
+core should be frozen and tested on stress/live-forward/new unseen data, not
+further optimized on this same OOS period.
+```
+
+Follow-up documentation:
+
+- Added `research/SHORT_FADE_CORE_EDGE.md`.
+- Updated `research/STRATEGY_SPEC.md`.
+- Generated `.output/results/failed_pump_short_research_365d/short_core_lookahead_audit.csv`.
+
+Lookahead audit result:
+
+```text
+No direct lookahead found for the frozen core under the current closed-candle
+next-open proxy. Residual risk remains around live latency and OHLC intrabar
+ordering.
+```
+
+## 2026-06-11 - P551 first-180d feature combo search
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_is_feature_combo_search.py`.
+- Added an IS-only feature-combination screen over the first 180 days.
+- Explicitly separated `entry_known` features from
+  `post_entry_management` features so future tests do not leak post-entry path
+  information into entry selection.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/failed_pump_short_research_365d/short_is_feature_combo_screen.csv
+.output/results/failed_pump_short_research_365d/short_is_feature_combo_feature_leaders.csv
+.output/results/failed_pump_short_research_365d/short_is_feature_combo_report.md
+```
+
+Validation:
+
+```text
+python research_tools/short_is_feature_combo_search.py --failed-dir .output/results/failed_pump_short_research_365d --split-days 180
+
+IS: 2025-06-06 -> 2025-12-03
+candidate_rows=74208
+passes=37491
+entry_base_passes=8427
+post_entry_management_passes=29064
+```
+
+Risk:
+
+```text
+This is a first-half discovery screen only. The best rows are not strategy
+proof. The second 180d half must be used once with frozen definitions, not
+iteratively optimized.
+```
+
+## 2026-06-11 - P550 anchored 180d IS/OOS split
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_anchored_is_oos_split.py`.
+- Added anchored first-half selection / second-half frozen OOS evaluation over
+  the bounded structural short candidate surface.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/failed_pump_short_research_365d/short_anchored_is_candidates.csv
+.output/results/failed_pump_short_research_365d/short_anchored_is_oos_result.csv
+.output/results/failed_pump_short_research_365d/short_anchored_is_oos_report.md
+```
+
+Validation:
+
+```text
+python research_tools/short_anchored_is_oos_split.py --failed-dir .output/results/failed_pump_short_research_365d --split-days 180 --top-n 80
+
+is_start=2025-06-06
+split_date=2025-12-03
+oos_end=2026-06-02
+is_rows=5295
+oos_rows=6429
+is_candidate_rows=3744
+selected_rows=40
+oos_passes=20
+```
+
+Risk:
+
+```text
+Anchored split is stricter than same-window WFA but still uses one 365d cache
+snapshot and one chosen split. The OOS half should now be treated as consumed;
+future changes must be validated on a new period or live-forward artifacts.
+```
+
+## 2026-06-11 - P549 short WFA plateau engine
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_wfa_plateau_engine.py`.
+- Generated bounded full-period plateau screen, heatmap table, and rolling WFA
+  matrix for structural short rules with no profit exit before `0.75R`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_candidates.csv
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_heatmap.csv
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_matrix.csv
+.output/results/failed_pump_short_research_365d/short_wfa_plateau_report.md
+```
+
+Validation:
+
+```text
+python research_tools/short_wfa_plateau_engine.py --failed-dir .output/results/failed_pump_short_research_365d
+
+base_rows=11724
+candidate_rows=3744
+full_passes=331
+plateau_passes=73
+wfa_rows=67
+wfa_passes=18
+```
+
+Risk:
+
+```text
+Daily rolling OOS windows overlap, so WFA metrics are window diagnostics, not
+independent trade totals. The script uses existing same-365d replay artifacts;
+promotion still requires non-overlapping OOS and Monte Carlo stress.
+```
+
+## 2026-06-11 - P548 structural 0.75R path replay
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_structural_075_path_replay.py`.
+- Generated 1m path replay artifacts for structural short families with no
+  profit exit before `0.75R`.
+- Added win/loss micro-feature diagnostics for first 1m/3m/5m/10m/15m path and
+  flow fields.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/failed_pump_short_research_365d/short_structural_075_path_replay_trades.csv
+.output/results/failed_pump_short_research_365d/short_structural_075_path_replay_summary.csv
+.output/results/failed_pump_short_research_365d/short_structural_075_path_micro_win_loss.csv
+.output/results/failed_pump_short_research_365d/short_structural_075_path_replay.md
+```
+
+Validation:
+
+```text
+python research_tools/short_structural_075_path_replay.py --failed-dir .output/results/failed_pump_short_research_365d --cache-dir .output/cache
+
+base_rows=3908
+replayed_rows=31264
+closed_rows=31264
+summary_rows=128
+micro_rows=1024
+```
+
+Risk:
+
+```text
+This is still same-365d research postprocessing. The 3-5m micro-confirmation
+features are known only after entry and are valid for management/derisking, not
+for initial entry selection. Promotion requires a single live-like rule,
+deduplicated by signal, with rolling/OOS validation.
+```
+
+## 2026-06-11 - P547 short portfolio combination search
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_portfolio_combination_search.py`.
+- Generated deduplicated candidate-library and portfolio-combination artifacts.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/large_runner_discovery_365d/short_portfolio_candidate_library.csv
+.output/results/large_runner_discovery_365d/short_portfolio_combination_search.csv
+.output/results/large_runner_discovery_365d/short_portfolio_top_trades.csv
+.output/results/large_runner_discovery_365d/short_portfolio_combination_search.md
+```
+
+Validation:
+
+```text
+python research_tools/short_portfolio_combination_search.py --large-dir .output/results/large_runner_discovery_365d --failed-dir .output/results/failed_pump_short_research_365d
+
+candidate_rows=3397
+usable_candidates=618
+portfolio_rows=794
+frequency_passes=0
+strict_passes=0
+```
+
+Risk:
+
+```text
+Portfolio combinations are postprocessed from existing same-365d artifacts.
+They are useful for rejecting naive frequency expansion and ranking candidate
+families, but they are not forward/OOS proof. Promotion still requires a true
+path replay and rolling selector.
+```
+
+## 2026-06-11 - P542 fader/runner/static session readout
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added session readout artifacts:
+  `large_runner_fader_runner_static_by_session.csv`,
+  `large_runner_fader_runner_static_session_close15.csv`,
+  `large_runner_short_replay_by_session.csv`,
+  `failed_pump_structural_management_by_session.csv`, and
+  `large_runner_session_fader_static_short_readout.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only post-processing from existing labeled setup/replay artifacts.
+No new 365d discovery run and no trading code changed.
+```
+
+Risk:
+
+```text
+Session is a prior/context layer. No session-specific short family passed the
+50%+ winner top-removal target.
+```
+
+## 2026-06-11 - P541 structural management deep scan
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added failed-pump structural category and management replay artifacts:
+  `failed_pump_structural_top_removal_category_scan.csv`,
+  `failed_pump_structural_top_removal_category_scan.md`,
+  `failed_pump_structural_management_replay_trades.csv`,
+  `failed_pump_structural_management_replay_summary.csv`, and
+  `failed_pump_structural_management_replay_report.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only post-processing/replay from existing failed_pump_short artifacts
+and 1m cache. No new 365d discovery run and no trading code changed.
+```
+
+Risk:
+
+```text
+No tested family passed the 50%+ winner top-removal target. The best-looking
+fast-deep/taker-above morphology has only 31 trades and remains underpowered.
+```
+
+## 2026-06-11 - P540 fade timing vs anomaly duration
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added fade-timing analysis artifacts under
+  `.output/results/large_runner_discovery_365d/`:
+  `large_runner_fade_timing_setup_buckets.csv`,
+  `large_runner_short_replay_by_fade_timing_all.csv`,
+  `large_runner_short_replay_by_fade_timing_selected.csv`,
+  `large_runner_short_replay_timing_diagnostic_families.csv`,
+  `large_runner_fade_timing_entry_feature_readout.csv`, and
+  `large_runner_fade_timing_vs_anomaly_report.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only post-processing from existing setup labels and existing short
+replay artifacts. No new 365d discovery rerun and no trading code changed.
+```
+
+Risk:
+
+```text
+Fade timing is evaluation-only. It identifies why many shorts are late, but it
+cannot be used directly as an entry feature. Entry-known proxies for quick fade
+were weak.
+```
+
+## 2026-06-11 - P539 long WR 20-30 inversion readout
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added inversion analysis artifacts under
+  `.output/results/large_runner_discovery_365d/`:
+  `large_runner_long_wr20_30_patterns.csv`,
+  `large_runner_long_wr20_30_short_intersection.csv`, and
+  `large_runner_long_wr20_30_short_logic_report.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only post-processing from existing large-runner trade grid and existing
+short replay artifacts. No new 365d discovery rerun and no trading code changed.
+```
+
+Risk:
+
+```text
+The inversion uses realized long underperformance to discover contexts, so it is
+research evidence only. No short category passed the 50%+ winner top-removal
+independence target.
+```
+
+## 2026-06-11 - P538 local-high SL and structural half-exit replay
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added local-high/structural-exit replay artifacts under
+  `.output/results/large_runner_discovery_365d/`:
+  `large_runner_local_high_structural_exit_replay_trades.csv`,
+  `large_runner_local_high_structural_exit_replay_summary.csv`,
+  `large_runner_local_high_structural_exit_replay_summary.json`,
+  `large_runner_local_high_structural_exit_replay_report.md`,
+  `large_runner_local_high_structural_exit_filtered_candidates.csv`, and
+  `large_runner_s3_local_high_candidate_trades.csv`.
+- Added top-removal independence artifacts:
+  `large_runner_top_removal_independence.csv` and
+  `large_runner_top_removal_independence.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only post-processing from existing 365d artifacts and 1m cache. No
+new 365d discovery rerun and no trading code changed.
+```
+
+Risk:
+
+```text
+Positive-median pockets are small (`86-90` trades), discovered by filtering the
+same 365d artifact, and fail the stricter top-removal-to-negative independence
+target (`8-11%` of winners vs desired `50%+`). They need fixed-family rolling/OOS
+validation before any live consideration.
+```
+
+## 2026-06-11 - P537 executable short-failure replay
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added executable proxy replay artifacts under
+  `.output/results/large_runner_discovery_365d/`:
+  `large_runner_short_failure_replay_trades.csv`,
+  `large_runner_short_failure_replay_summary.csv`,
+  `large_runner_short_failure_replay_summary.json`, and
+  `large_runner_short_failure_replay_report.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only artifact generation from existing setup CSVs and 1m cache. No
+trading code changed.
+```
+
+Risk:
+
+```text
+This is still a proxy replay, not live execution. It uses conservative timing
+and stop-first ambiguity, and it rejects the naive post-failure short because
+average R remains negative after fees/slippage and known-high stop placement.
+```
+
+## 2026-06-11 - P536 short-fade rolling robustness
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added rolling/de-cloning artifacts under
+  `.output/results/large_runner_discovery_365d/`:
+  `large_runner_short_fade_rolling_robustness.json`,
+  `large_runner_short_fade_rolling_daily.csv`,
+  `large_runner_short_fade_rolling_candidates.csv`,
+  `large_runner_short_fade_rolling_robustness.md`,
+  `large_runner_short_fade_category_overlap.json`, and
+  `large_runner_short_fade_category_overlap.csv`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only artifact generation from existing CSVs. No trading code changed.
+```
+
+Risk:
+
+```text
+The result proves rolling stability of the future short-fade outcome, not
+tradable short PnL. Replay with executable post-failure entry is still required.
+```
+
+## 2026-06-11 - P535 large-runner short-fade failure study
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added large-runner short-fade analysis artifacts under
+  `.output/results/large_runner_discovery_365d/`:
+  `large_runner_short_fade_setup_readout.json`,
+  `large_runner_short_fade_candidate_rules.csv`,
+  `large_runner_short_fade_setup_report.md`,
+  `large_runner_short_fade_complex_report.md`, and
+  `large_runner_long_failure_summary.json`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+Analysis-only artifact generation from existing CSVs. No trading code changed.
+```
+
+Risk:
+
+```text
+The strongest condition, close_ret_15m<=0, is only known after the 15m close.
+It must be replayed as a post-failure short entry, not used as a seed-time
+filter. The study uses 11,367 future-label-ok setup rows, not all 573,720
+cluster-selected setup rows.
+```
+
+## 2026-06-11 - P534 structural short forensic candidates
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added forensic candidate artifacts under
+  `.output/results/failed_pump_short_research_365d/`:
+  `failed_pump_short_structural_forensic_candidates.json`,
+  `failed_pump_short_structural_forensic_report.md`,
+  `failed_pump_short_structural_positive_median_exit_split.json`,
+  `failed_pump_short_structural_candidate_deep_dive.json`,
+  `failed_pump_short_structural_candidate_deep_dive.csv`, and
+  `failed_pump_short_structural_candidate_deep_dive.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md` with
+  the narrowed failed-pump short hypothesis.
+
+Validation:
+
+```text
+Analysis-only artifact generation from existing CSVs. No trading code changed.
+```
+
+Risk:
+
+```text
+Candidate A is still a small-sample hypothesis. It must be validated with
+signal-level deduplication and rolling train/test selection before any live
+consideration.
+```
+
+## 2026-06-11 - P533 failed-pump short rolling readout artifacts
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added compact analysis artifacts under
+  `.output/results/failed_pump_short_research_365d/`:
+  `failed_pump_short_rolling_pattern_readout.json`,
+  `failed_pump_short_structural_pattern_readout.json`, and
+  `failed_pump_short_rolling_pattern_report.md`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md` with
+  the failed-pump short 365d readout.
+- Recorded that the current data does not prove a tradable failed-pump short
+  edge and that OI remains late-tail validation only.
+
+Validation:
+
+```text
+Analysis-only artifact generation from existing CSVs. No trading code changed.
+```
+
+Risk:
+
+```text
+The readout uses existing artifacts and does not correct any upstream modeling
+assumptions. If the OI cache is rebuilt over the full period or execution rules
+change, the readout must be recomputed.
+```
+
+## 2026-06-11 - P532 rolling-pattern research notes
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Documented the 365d failed-pump-short rolling readout in
+  `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+- Recorded that non-missing OI is late-cache only for practical research
+  purposes, so OI must be used as a holdout/confirmation layer rather than a
+  full-period training feature.
+- Recorded that strict selected OOS produced only `2` trades on `2026-04-11`
+  with `-0.4246R`, so this run does not prove profitability.
+
+Validation:
+
+```text
+Docs-only patch. No trading code changed.
+```
+
+Risk:
+
+```text
+The conclusion is based on existing artifacts, not a new rerun. If the OI cache
+is rebuilt with broader historical coverage, the OI split should be recomputed.
+```
+
 ## 2026-06-08 - P531 level-attack recall coverage
 
 Status: PROPOSED. Commit: UNKNOWN.
@@ -11808,4 +12606,150 @@ Risk:
 ```text
 Documentation only. The promoted `m1_last2_trade_share <= ~0.385` observation
 is a small-sample hypothesis, not a promoted category.
+```
+
+## 2026-06-11 - P543 session-aware fader classifier readout
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `.output/results/large_runner_discovery_365d/large_runner_session_fader_classifier_rolling_edge_report.md`.
+- Documented the session-aware fader/static/runner classifier results in
+  `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+- Recorded that the stable result is an outcome classifier, not a validated
+  executable short strategy.
+
+Validation:
+
+```text
+Postprocess artifacts were generated from existing 365d output.
+No trading code changed.
+No multi-hour rerun launched.
+```
+
+Risk:
+
+```text
+The classifier uses decision-time 15m confirmation fields from research
+artifacts. It must not be wired live until live/backtest timing confirms those
+fields are available at the intended entry time and the separate executable
+break/retest trigger passes top-removal robustness.
+```
+
+## 2026-06-11 - P544 session edge workbench script
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/session_edge_workbench.py`.
+- Generated table-first workbench artifacts under
+  `.output/results/large_runner_discovery_365d`.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+large_runner_edge_workbench_setups.csv
+large_runner_edge_workbench_feature_catalog.csv
+large_runner_edge_workbench_replay_scorecard.csv
+large_runner_edge_workbench_readme.md
+```
+
+Validation:
+
+```text
+python research_tools/session_edge_workbench.py --base-dir .output/results/large_runner_discovery_365d
+
+setup_master_rows=11367
+feature_catalog_rows=33
+replay_scorecard_rows=909
+passes_replay_robustness=0
+```
+
+Risk:
+
+```text
+Research postprocess only. It does not change live/backtest trading logic. The
+workbench includes evaluation-only outcome/path columns for audit, so selector
+promotion must use the feature catalog availability labels.
+```
+
+## 2026-06-11 - P545 balance screen script
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/session_edge_balance_screen.py`.
+- Generated balance-screen artifacts for the current positive short watchlist.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+large_runner_edge_workbench_balance_screen.csv
+large_runner_edge_workbench_balance_by_session.csv
+large_runner_edge_workbench_balance_screen.md
+```
+
+Validation:
+
+```text
+python research_tools/session_edge_balance_screen.py --base-dir .output/results/large_runner_discovery_365d
+
+balance_rows=89
+strict_candidates=0
+balanced_watchlist=0
+```
+
+Risk:
+
+```text
+This is a fast stability screen over the current full-period positive watchlist,
+not a final non-leaky rolling selector. It is useful for ranking and rejecting
+weak pockets, but promotion still requires a true train-before-test rolling
+selector.
+```
+
+## 2026-06-11 - P546 short enhancement strategy screen
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `research_tools/short_enhancement_strategy_screen.py`.
+- Generated realized enhancement screen artifacts and top-scenario proxy triage.
+- Updated `research/RESEARCH_STATE.md` and `research/EXPERIMENT_LOG.md`.
+
+Generated artifacts:
+
+```text
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen.csv
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen_local.csv
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen_structural.csv
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_screen.md
+.output/results/large_runner_discovery_365d/short_enhancement_strategy_proxy_top_scenarios.csv
+```
+
+Validation:
+
+```text
+python research_tools/short_enhancement_strategy_screen.py --large-dir .output/results/large_runner_discovery_365d --failed-dir .output/results/failed_pump_short_research_365d
+
+local_screen_rows=931
+structural_screen_rows=2466
+combined_rows=3397
+realized_strict_passes=0
+realized_promising_watchlist=164
+```
+
+Risk:
+
+```text
+Realized rows use already simulated trades and are valid for rejecting/current
+watchlist ranking. Proxy rows for BE/time-stop are upper-bound triage only and
+must not be treated as executable edge until a real 1m path replay confirms
+event order.
 ```
