@@ -472,7 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pump_mechanism = subparsers.add_parser(
         "run-pump-mechanism-stability-research",
-        help="Install cache-only pump mechanism stability research scaffold",
+        help="Build cache-only pump mechanism event/outcome stores",
     )
     pump_mechanism.add_argument("--days", type=_positive_int_for("--days"), default=365)
     pump_mechanism.add_argument(
