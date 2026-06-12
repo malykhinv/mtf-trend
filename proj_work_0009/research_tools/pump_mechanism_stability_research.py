@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_daily_prequential_oos"
+IMPLEMENTATION_STAGE = "mechanism_oos_diagnostics"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -138,6 +138,10 @@ DAILY_PREQUENTIAL_OOS_MODEL = "daily_prequential_oos_selected_basins_v1"
 DAILY_SELECTION_MODEL = "select_train_only_plateau_basins_for_test_day_v1"
 WINDOW_HEALTH_MODEL = "daily_window_health_from_train_only_basins_and_oos_v1"
 SELECTION_DRIFT_MODEL = "selected_basin_key_drift_over_prequential_days_v1"
+DAILY_OOS_EVENT_LEDGER_MODEL = "daily_prequential_selected_event_ledger_v1"
+OOS_DIAGNOSTICS_MODEL = "daily_prequential_oos_split_diagnostics_v1"
+OOS_TOP_REMOVAL_MODEL = "daily_prequential_oos_top_removal_stress_v1"
+OOS_SELECTION_SUMMARY_MODEL = "daily_prequential_selection_key_summary_v1"
 MAX_SELECTED_BASINS_PER_DAY_WINDOW = 20
 DAILY_ALLOWED_BASIN_STATUSES = ("strong_candidate", "tactical", "challenger")
 
@@ -397,6 +401,22 @@ def run_pump_mechanism_stability_research(
         outcomes=outcomes,
     )
 
+    _print_stage(progress_label, "building OOS event ledger and stability diagnostics", started_at)
+    daily_oos_events = _build_daily_oos_event_ledger(
+        daily_selection=daily_selection,
+        rule_universe=rule_universe,
+        taxonomy=taxonomy,
+        events=events,
+        outcomes=outcomes,
+    )
+    oos_diagnostics = _build_oos_diagnostics(daily_oos=daily_oos, daily_oos_events=daily_oos_events)
+    oos_top_removal = _build_oos_top_removal(daily_oos_events=daily_oos_events)
+    oos_selection_summary = _build_oos_selection_summary(
+        daily_selection=daily_selection,
+        daily_oos=daily_oos,
+        daily_oos_events=daily_oos_events,
+    )
+
     _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
@@ -411,6 +431,10 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_daily_oos.csv", daily_oos)
     _write_csv(config.output_dir / "pump_mechanism_window_health.csv", window_health)
     _write_csv(config.output_dir / "pump_mechanism_selection_drift.csv", selection_drift)
+    _write_csv(config.output_dir / "pump_mechanism_daily_oos_events.csv", daily_oos_events)
+    _write_csv(config.output_dir / "pump_mechanism_oos_diagnostics.csv", oos_diagnostics)
+    _write_csv(config.output_dir / "pump_mechanism_oos_top_removal.csv", oos_top_removal)
+    _write_csv(config.output_dir / "pump_mechanism_oos_selection_summary.csv", oos_selection_summary)
 
     run_config = _run_config_frame(
         config=config,
@@ -431,6 +455,10 @@ def run_pump_mechanism_stability_research(
         daily_oos=daily_oos,
         window_health=window_health,
         selection_drift=selection_drift,
+        daily_oos_events=daily_oos_events,
+        oos_diagnostics=oos_diagnostics,
+        oos_top_removal=oos_top_removal,
+        oos_selection_summary=oos_selection_summary,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -440,7 +468,8 @@ def run_pump_mechanism_stability_research(
         f"taxonomy={len(taxonomy):,} response_surfaces={len(response_surfaces):,} "
         f"rule_universe={len(rule_universe):,} negative_space={len(negative_space):,} "
         f"plateau_basins={len(plateau_basins):,} daily_selection={len(daily_selection):,} "
-        f"daily_oos={len(daily_oos):,} "
+        f"daily_oos={len(daily_oos):,} daily_oos_events={len(daily_oos_events):,} "
+        f"oos_diagnostics={len(oos_diagnostics):,} oos_top_removal={len(oos_top_removal):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -2765,6 +2794,435 @@ def _selection_drift_columns() -> list[str]:
     ]
 
 
+
+def _build_daily_oos_event_ledger(
+    *,
+    daily_selection: pd.DataFrame,
+    rule_universe: pd.DataFrame,
+    taxonomy: pd.DataFrame,
+    events: pd.DataFrame,
+    outcomes: pd.DataFrame,
+) -> pd.DataFrame:
+    """Create event-level rows for selected daily OOS basins.
+
+    This ledger is intentionally downstream of daily selection.  It reconstructs
+    the selected center rule on the held-out test day and writes every matching
+    event so OOS stability can be stressed by symbol, event, calendar bucket,
+    and selection key.  Selection still comes only from train-scored basins; the
+    outcome fields here are diagnostic labels for the already-selected OOS rows.
+    """
+
+    columns = _daily_oos_event_columns()
+    if daily_selection.empty or rule_universe.empty:
+        return pd.DataFrame(columns=columns)
+    rule_lookup = rule_universe.drop_duplicates("rule_id", keep="last").set_index("rule_id", drop=False) if "rule_id" in rule_universe.columns else pd.DataFrame()
+    if rule_lookup.empty:
+        return pd.DataFrame(columns=columns)
+    oos_input = _joined_rule_outcome_input(taxonomy=taxonomy, events=events, outcomes=outcomes)
+    if oos_input.empty or "day_ord" not in oos_input.columns:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for selection in daily_selection.to_dict("records"):
+        center_rule_id = str(selection.get("center_rule_id", ""))
+        if center_rule_id not in rule_lookup.index:
+            continue
+        rule = rule_lookup.loc[center_rule_id]
+        if isinstance(rule, pd.DataFrame):
+            rule = rule.iloc[-1]
+        filtered = _selected_oos_events(selection=selection, rule=rule.to_dict(), oos_input=oos_input)
+        if filtered.empty:
+            continue
+        for event_rank, event in enumerate(filtered.to_dict("records"), start=1):
+            rows.append(_daily_oos_event_row(selection=selection, event=event, event_rank=event_rank))
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days", "selected_rank", "event_rank", "event_id"])
+
+
+def _selected_oos_events(*, selection: dict[str, object], rule: dict[str, object], oos_input: pd.DataFrame) -> pd.DataFrame:
+    test_day_ord = _finite_int_or_none(selection.get("test_day_ord"))
+    if test_day_ord is None or oos_input.empty or "day_ord" not in oos_input.columns:
+        return pd.DataFrame()
+    test = oos_input.loc[oos_input["day_ord"] == int(test_day_ord)].copy()
+    if test.empty:
+        return pd.DataFrame()
+    filtered = _apply_rule_scope(test, _parse_scope_conditions(rule.get("scope_conditions")))
+    threshold_feature = str(rule.get("threshold_feature") or "")
+    threshold_side = str(rule.get("threshold_side") or "none")
+    threshold_value = _float(rule.get("threshold_value"))
+    if threshold_feature and threshold_side != "none" and math.isfinite(threshold_value):
+        filtered = _apply_threshold(filtered, feature=threshold_feature, side=threshold_side, threshold_value=threshold_value)
+    elif threshold_feature and threshold_side != "none":
+        filtered = filtered.iloc[0:0].copy()
+    if filtered.empty:
+        return pd.DataFrame()
+    return filtered.sort_values([column for column in ["symbol", "event_id"] if column in filtered.columns]).copy()
+
+
+def _daily_oos_event_row(*, selection: dict[str, object], event: dict[str, object], event_rank: int) -> dict[str, object]:
+    test_day_ord = int(selection.get("test_day_ord", 0) or 0)
+    score = _event_response_score(event)
+    future_min_30 = _float(event.get("future_min_ret_30m"))
+    future_min_60 = _float(event.get("future_min_ret_60m"))
+    return {
+        "research_id": RESEARCH_ID,
+        "test_day_ord": test_day_ord,
+        "test_date": _date_from_day_ord(test_day_ord),
+        "train_window_days": int(selection.get("train_window_days", 0) or 0),
+        "train_start_day_ord": int(selection.get("train_start_day_ord", 0) or 0),
+        "train_end_day_ord": int(selection.get("train_end_day_ord", 0) or 0),
+        "selected_rank": int(selection.get("selected_rank", 0) or 0),
+        "basin_id": str(selection.get("basin_id", "")),
+        "center_rule_id": str(selection.get("center_rule_id", "")),
+        "selection_key": str(selection.get("selection_key", "")),
+        "basin_status_at_selection": str(selection.get("basin_status", "")),
+        "event_rank": int(event_rank),
+        "event_id": str(event.get("event_id", "")),
+        "symbol": str(event.get("symbol", "")),
+        "session_bucket": str(event.get("session_bucket", "")),
+        "mechanism_family": str(event.get("mechanism_family", "")),
+        "mechanism_id": str(event.get("mechanism_id", "")),
+        "acceptance_regime": str(event.get("acceptance_regime", "")),
+        "oi_regime": str(event.get("oi_regime", "")),
+        "flow_regime": str(event.get("flow_regime", "")),
+        "price_progress_regime": str(event.get("price_progress_regime", "")),
+        "structure_regime": str(event.get("structure_regime", "")),
+        "late_buyer_regime": str(event.get("late_buyer_regime", "")),
+        "future_ret_30m": _float(event.get("future_ret_30m")),
+        "future_ret_60m": _float(event.get("future_ret_60m")),
+        "future_min_ret_30m": future_min_30,
+        "future_min_ret_60m": future_min_60,
+        "future_max_ret_30m": _float(event.get("future_max_ret_30m")),
+        "future_max_ret_60m": _float(event.get("future_max_ret_60m")),
+        "down_mfe_30m": _float(event.get("down_mfe_30m")),
+        "down_mfe_60m": _float(event.get("down_mfe_60m")),
+        "up_mae_30m": _float(event.get("up_mae_30m")),
+        "up_mae_60m": _float(event.get("up_mae_60m")),
+        "downside_hit_30m": bool(math.isfinite(future_min_30) and future_min_30 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
+        "downside_hit_60m": bool(math.isfinite(future_min_60) and future_min_60 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
+        "reclaimed_pump_high_60m": _to_bool(event.get("reclaimed_pump_high_60m")),
+        "broke_structural_low_60m": _to_bool(event.get("broke_structural_low_60m")),
+        "event_response_score": score,
+        "event_expected_downside": bool(math.isfinite(score) and score > 0.0),
+        "daily_oos_event_ledger_model": DAILY_OOS_EVENT_LEDGER_MODEL,
+        "selection_uses_test_day_outcomes": False,
+        "evaluation_uses_test_day_outcomes": True,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _event_response_score(row: dict[str, object]) -> float:
+    future_min_30 = _float(row.get("future_min_ret_30m"))
+    future_min_60 = _float(row.get("future_min_ret_60m"))
+    broke = 1.0 if _to_bool(row.get("broke_structural_low_60m")) else 0.0
+    reclaimed = 1.0 if _to_bool(row.get("reclaimed_pump_high_60m")) else 0.0
+    downside_30 = 1.0 if math.isfinite(future_min_30) and future_min_30 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD else 0.0
+    downside_60 = 1.0 if math.isfinite(future_min_60) and future_min_60 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD else 0.0
+    components = [
+        -_float(row.get("future_ret_30m")),
+        -_float(row.get("future_ret_60m")),
+        -future_min_30,
+        -future_min_60,
+        0.02 * (downside_30 - 0.50),
+        0.02 * (downside_60 - 0.50),
+        0.02 * (broke - 0.30),
+        0.02 * (0.50 - reclaimed),
+    ]
+    finite = [float(value) for value in components if math.isfinite(float(value))]
+    return float(np.mean(finite)) if finite else float("nan")
+
+
+def _build_oos_diagnostics(*, daily_oos: pd.DataFrame, daily_oos_events: pd.DataFrame) -> pd.DataFrame:
+    columns = _oos_diagnostics_columns()
+    rows: list[dict[str, object]] = []
+    if not daily_oos.empty:
+        work = daily_oos.copy()
+        work["month"] = work["test_date"].astype(str).str.slice(0, 7) if "test_date" in work.columns else ""
+        day_ord = pd.to_numeric(work.get("test_day_ord", pd.Series(dtype=float)), errors="coerce")
+        work["odd_even_day"] = np.where((day_ord.fillna(0).astype("int64") % 2) == 0, "even", "odd")
+        finite_day_ord = day_ord.dropna()
+        midpoint = float(finite_day_ord.median()) if not finite_day_ord.empty else float("nan")
+        work["year_half"] = np.where(day_ord <= midpoint, "first_half", "second_half") if math.isfinite(midpoint) else "unknown"
+        for axis in ["all", "train_window_days", "basin_status_at_selection", "month", "odd_even_day", "year_half"]:
+            rows.extend(_oos_daily_split_rows(work, axis=axis))
+    if not daily_oos_events.empty:
+        event_work = daily_oos_events.copy()
+        event_work["month"] = event_work["test_date"].astype(str).str.slice(0, 7) if "test_date" in event_work.columns else ""
+        for axis in ["session_bucket", "mechanism_family", "acceptance_regime", "oi_regime", "flow_regime", "structure_regime", "symbol", "month"]:
+            rows.extend(_oos_event_split_rows(event_work, axis=axis))
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["diagnostic_source", "split_axis", "split_value"])
+
+
+def _oos_daily_split_rows(frame: pd.DataFrame, *, axis: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    if frame.empty:
+        return rows
+    if axis == "all":
+        groups = [("all", frame)]
+    elif axis not in frame.columns:
+        return rows
+    else:
+        groups = [(str(value), group) for value, group in frame.groupby(axis, dropna=False, sort=True)]
+    for value, group in groups:
+        score = pd.to_numeric(group.get("oos_response_score", pd.Series(dtype=float)), errors="coerce")
+        events = pd.to_numeric(group.get("oos_events", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        active = events > 0
+        expected = group.get("oos_expected_downside", pd.Series(dtype=bool)).map(_to_bool)
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "diagnostic_source": "daily_oos_rows",
+                "split_axis": axis,
+                "split_value": value,
+                "rows": int(len(group)),
+                "active_rows": int(active.sum()),
+                "unique_test_days": int(group["test_day_ord"].nunique()) if "test_day_ord" in group.columns else 0,
+                "unique_selection_keys": int(group["selection_key"].nunique()) if "selection_key" in group.columns else 0,
+                "unique_symbols": np.nan,
+                "total_events": int(events.sum()),
+                "median_response_score": _safe_median(score),
+                "avg_response_score": _safe_mean(score),
+                "positive_score_rate": _rate(score > 0.0),
+                "positive_active_score_rate": _rate(score.loc[active] > 0.0) if bool(active.any()) else float("nan"),
+                "expected_downside_rate": _rate(expected),
+                "median_future_ret_30m": _safe_median(group.get("oos_median_future_ret_30m", pd.Series(dtype=float))),
+                "median_future_ret_60m": _safe_median(group.get("oos_median_future_ret_60m", pd.Series(dtype=float))),
+                "median_future_min_ret_30m": _safe_median(group.get("oos_median_future_min_ret_30m", pd.Series(dtype=float))),
+                "median_future_min_ret_60m": _safe_median(group.get("oos_median_future_min_ret_60m", pd.Series(dtype=float))),
+                "downside_hit_rate_30m": _safe_mean(group.get("oos_downside_hit_rate_30m", pd.Series(dtype=float))),
+                "downside_hit_rate_60m": _safe_mean(group.get("oos_downside_hit_rate_60m", pd.Series(dtype=float))),
+                "reclaim_rate_60m": _safe_mean(group.get("oos_reclaim_rate_60m", pd.Series(dtype=float))),
+                "diagnostics_model": OOS_DIAGNOSTICS_MODEL,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    return rows
+
+
+def _oos_event_split_rows(frame: pd.DataFrame, *, axis: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    if frame.empty or axis not in frame.columns:
+        return rows
+    for value, group in frame.groupby(axis, dropna=False, sort=True):
+        score = pd.to_numeric(group.get("event_response_score", pd.Series(dtype=float)), errors="coerce")
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "diagnostic_source": "selected_oos_events",
+                "split_axis": axis,
+                "split_value": str(value),
+                "rows": int(len(group)),
+                "active_rows": int(len(group)),
+                "unique_test_days": int(group["test_day_ord"].nunique()) if "test_day_ord" in group.columns else 0,
+                "unique_selection_keys": int(group["selection_key"].nunique()) if "selection_key" in group.columns else 0,
+                "unique_symbols": int(group["symbol"].nunique()) if "symbol" in group.columns else 0,
+                "total_events": int(len(group)),
+                "median_response_score": _safe_median(score),
+                "avg_response_score": _safe_mean(score),
+                "positive_score_rate": _rate(score > 0.0),
+                "positive_active_score_rate": _rate(score > 0.0),
+                "expected_downside_rate": _rate(group.get("event_expected_downside", pd.Series(dtype=bool)).map(_to_bool)),
+                "median_future_ret_30m": _safe_median(group.get("future_ret_30m", pd.Series(dtype=float))),
+                "median_future_ret_60m": _safe_median(group.get("future_ret_60m", pd.Series(dtype=float))),
+                "median_future_min_ret_30m": _safe_median(group.get("future_min_ret_30m", pd.Series(dtype=float))),
+                "median_future_min_ret_60m": _safe_median(group.get("future_min_ret_60m", pd.Series(dtype=float))),
+                "downside_hit_rate_30m": _rate(group.get("downside_hit_30m", pd.Series(dtype=bool)).map(_to_bool)),
+                "downside_hit_rate_60m": _rate(group.get("downside_hit_60m", pd.Series(dtype=bool)).map(_to_bool)),
+                "reclaim_rate_60m": _rate(group.get("reclaimed_pump_high_60m", pd.Series(dtype=bool)).map(_to_bool)),
+                "diagnostics_model": OOS_DIAGNOSTICS_MODEL,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    return rows
+
+
+def _build_oos_top_removal(*, daily_oos_events: pd.DataFrame) -> pd.DataFrame:
+    columns = _oos_top_removal_columns()
+    if daily_oos_events.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    groups: list[tuple[str, str, pd.DataFrame]] = [("all", "all", daily_oos_events)]
+    if "train_window_days" in daily_oos_events.columns:
+        groups.extend(("train_window_days", str(value), group) for value, group in daily_oos_events.groupby("train_window_days", dropna=False, sort=True))
+    if "selection_key" in daily_oos_events.columns:
+        groups.extend(("selection_key", str(value), group) for value, group in daily_oos_events.groupby("selection_key", dropna=False, sort=True))
+    for group_axis, group_value, group in groups:
+        rows.extend(_top_removal_rows_for_group(group_axis=group_axis, group_value=group_value, group=group, removal_kind="top_events"))
+        rows.extend(_top_removal_rows_for_group(group_axis=group_axis, group_value=group_value, group=group, removal_kind="top_symbols"))
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["group_axis", "group_value", "removal_kind", "remove_fraction"])
+
+
+def _top_removal_rows_for_group(*, group_axis: str, group_value: str, group: pd.DataFrame, removal_kind: str) -> list[dict[str, object]]:
+    score = pd.to_numeric(group.get("event_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    base_score_sum = float(score.sum())
+    base_events = int(len(group))
+    if removal_kind == "top_symbols" and "symbol" in group.columns:
+        ranked = group.assign(_score=score).groupby("symbol", dropna=False)["_score"].sum().sort_values(ascending=False)
+        unit_count = int(len(ranked))
+    else:
+        ranked = score.sort_values(ascending=False)
+        unit_count = int(len(ranked))
+    rows: list[dict[str, object]] = []
+    for fraction in (0.0, 0.01, 0.05, 0.10, 0.20):
+        remove_count = _removal_count(unit_count, float(fraction))
+        if removal_kind == "top_symbols" and "symbol" in group.columns:
+            removed_symbols = set(ranked.head(remove_count).index.astype(str)) if remove_count > 0 else set()
+            remaining = group.loc[~group["symbol"].astype(str).isin(removed_symbols)].copy()
+        else:
+            removed_index = set(ranked.head(remove_count).index) if remove_count > 0 else set()
+            remaining = group.loc[~group.index.isin(removed_index)].copy()
+        remaining_score = pd.to_numeric(remaining.get("event_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        remaining_score_sum = float(remaining_score.sum())
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "group_axis": group_axis,
+                "group_value": group_value,
+                "removal_kind": removal_kind,
+                "remove_fraction": float(fraction),
+                "base_events": base_events,
+                "base_symbols": int(group["symbol"].nunique()) if "symbol" in group.columns else 0,
+                "removed_units": int(remove_count),
+                "remaining_events": int(len(remaining)),
+                "remaining_symbols": int(remaining["symbol"].nunique()) if "symbol" in remaining.columns and not remaining.empty else 0,
+                "base_score_sum": base_score_sum,
+                "remaining_score_sum": remaining_score_sum,
+                "score_retention_rate": float(remaining_score_sum / base_score_sum) if base_score_sum != 0 else float("nan"),
+                "remaining_score_positive": bool(remaining_score_sum > 0.0),
+                "top_removal_model": OOS_TOP_REMOVAL_MODEL,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    return rows
+
+
+def _removal_count(unit_count: int, fraction: float) -> int:
+    if int(unit_count) <= 0 or float(fraction) <= 0.0:
+        return 0
+    return min(int(unit_count), max(1, int(math.ceil(float(unit_count) * float(fraction)))))
+
+
+def _build_oos_selection_summary(
+    *,
+    daily_selection: pd.DataFrame,
+    daily_oos: pd.DataFrame,
+    daily_oos_events: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = _oos_selection_summary_columns()
+    if daily_selection.empty:
+        return pd.DataFrame(columns=columns)
+    oos_grouped = daily_oos.groupby("selection_key", dropna=False) if not daily_oos.empty and "selection_key" in daily_oos.columns else None
+    event_grouped = daily_oos_events.groupby("selection_key", dropna=False) if not daily_oos_events.empty and "selection_key" in daily_oos_events.columns else None
+    rows: list[dict[str, object]] = []
+    for selection_key, selected in daily_selection.groupby("selection_key", dropna=False, sort=True):
+        key = str(selection_key)
+        oos = oos_grouped.get_group(selection_key) if oos_grouped is not None and selection_key in oos_grouped.groups else pd.DataFrame()
+        events = event_grouped.get_group(selection_key) if event_grouped is not None and selection_key in event_grouped.groups else pd.DataFrame()
+        score = pd.to_numeric(oos.get("oos_response_score", pd.Series(dtype=float)), errors="coerce") if not oos.empty else pd.Series(dtype=float)
+        active = pd.to_numeric(oos.get("oos_events", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0 if not oos.empty else pd.Series(dtype=bool)
+        event_score = pd.to_numeric(events.get("event_response_score", pd.Series(dtype=float)), errors="coerce") if not events.empty else pd.Series(dtype=float)
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "selection_key": key,
+                "selected_rows": int(len(selected)),
+                "selected_days": int(selected["test_day_ord"].nunique()) if "test_day_ord" in selected.columns else 0,
+                "train_windows_seen": int(selected["train_window_days"].nunique()) if "train_window_days" in selected.columns else 0,
+                "first_selected_date": str(selected["test_date"].min()) if "test_date" in selected.columns else "",
+                "last_selected_date": str(selected["test_date"].max()) if "test_date" in selected.columns else "",
+                "basin_statuses_seen": ",".join(sorted(set(selected.get("basin_status", pd.Series(dtype=str)).astype(str)))) if not selected.empty else "",
+                "oos_rows": int(len(oos)),
+                "oos_active_rows": int(active.sum()) if not active.empty else 0,
+                "oos_total_events": int(pd.to_numeric(oos.get("oos_events", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not oos.empty else 0,
+                "oos_median_response_score": _safe_median(score),
+                "oos_avg_response_score": _safe_mean(score),
+                "oos_positive_active_score_rate": _rate(score.loc[active] > 0.0) if not score.empty and bool(active.any()) else float("nan"),
+                "event_rows": int(len(events)),
+                "event_symbols": int(events["symbol"].nunique()) if "symbol" in events.columns and not events.empty else 0,
+                "event_sessions": int(events["session_bucket"].nunique()) if "session_bucket" in events.columns and not events.empty else 0,
+                "event_median_response_score": _safe_median(event_score),
+                "event_score_sum": _safe_sum(event_score),
+                "event_positive_score_rate": _rate(event_score > 0.0) if not event_score.empty else float("nan"),
+                "top_symbol_event_share": _top_share(events, column="symbol"),
+                "top_day_event_share": _top_share(events, column="test_day_ord"),
+                "selection_summary_model": OOS_SELECTION_SUMMARY_MODEL,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["oos_median_response_score", "event_score_sum", "selection_key"])
+
+
+def _top_share(frame: pd.DataFrame, *, column: str) -> float:
+    if frame.empty or column not in frame.columns:
+        return float("nan")
+    counts = frame[column].astype(str).value_counts(dropna=False)
+    if counts.empty:
+        return float("nan")
+    return float(counts.iloc[0] / counts.sum())
+
+
+def _daily_oos_event_columns() -> list[str]:
+    return [
+        "research_id", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
+        "selected_rank", "basin_id", "center_rule_id", "selection_key", "basin_status_at_selection", "event_rank",
+        "event_id", "symbol", "session_bucket", "mechanism_family", "mechanism_id", "acceptance_regime", "oi_regime",
+        "flow_regime", "price_progress_regime", "structure_regime", "late_buyer_regime", "future_ret_30m",
+        "future_ret_60m", "future_min_ret_30m", "future_min_ret_60m", "future_max_ret_30m", "future_max_ret_60m",
+        "down_mfe_30m", "down_mfe_60m", "up_mae_30m", "up_mae_60m", "downside_hit_30m", "downside_hit_60m",
+        "reclaimed_pump_high_60m", "broke_structural_low_60m", "event_response_score", "event_expected_downside",
+        "daily_oos_event_ledger_model", "selection_uses_test_day_outcomes", "evaluation_uses_test_day_outcomes", "uses_pnl",
+        "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+
+
+def _oos_diagnostics_columns() -> list[str]:
+    return [
+        "research_id", "diagnostic_source", "split_axis", "split_value", "rows", "active_rows", "unique_test_days",
+        "unique_selection_keys", "unique_symbols", "total_events", "median_response_score", "avg_response_score",
+        "positive_score_rate", "positive_active_score_rate", "expected_downside_rate", "median_future_ret_30m",
+        "median_future_ret_60m", "median_future_min_ret_30m", "median_future_min_ret_60m", "downside_hit_rate_30m",
+        "downside_hit_rate_60m", "reclaim_rate_60m", "diagnostics_model", "uses_pnl", "uses_short_entry",
+        "uses_final_holdout_tuning", "data_access_model",
+    ]
+
+
+def _oos_top_removal_columns() -> list[str]:
+    return [
+        "research_id", "group_axis", "group_value", "removal_kind", "remove_fraction", "base_events", "base_symbols",
+        "removed_units", "remaining_events", "remaining_symbols", "base_score_sum", "remaining_score_sum", "score_retention_rate",
+        "remaining_score_positive", "top_removal_model", "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning",
+        "data_access_model",
+    ]
+
+
+def _oos_selection_summary_columns() -> list[str]:
+    return [
+        "research_id", "selection_key", "selected_rows", "selected_days", "train_windows_seen", "first_selected_date",
+        "last_selected_date", "basin_statuses_seen", "oos_rows", "oos_active_rows", "oos_total_events",
+        "oos_median_response_score", "oos_avg_response_score", "oos_positive_active_score_rate", "event_rows",
+        "event_symbols", "event_sessions", "event_median_response_score", "event_score_sum", "event_positive_score_rate",
+        "top_symbol_event_share", "top_day_event_share", "selection_summary_model", "uses_pnl", "uses_short_entry",
+        "uses_final_holdout_tuning", "data_access_model",
+    ]
+
 def _to_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -2795,6 +3253,10 @@ def _run_config_frame(
     daily_oos: pd.DataFrame,
     window_health: pd.DataFrame,
     selection_drift: pd.DataFrame,
+    daily_oos_events: pd.DataFrame,
+    oos_diagnostics: pd.DataFrame,
+    oos_top_removal: pd.DataFrame,
+    oos_selection_summary: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -2814,6 +3276,10 @@ def _run_config_frame(
     daily_oos_rows_with_events = int((pd.to_numeric(daily_oos.get("oos_events", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if daily_oos is not None and not daily_oos.empty else 0
     window_health_rows = int(len(window_health)) if window_health is not None else 0
     selection_drift_rows = int(len(selection_drift)) if selection_drift is not None else 0
+    daily_oos_event_rows = int(len(daily_oos_events)) if daily_oos_events is not None else 0
+    oos_diagnostics_rows = int(len(oos_diagnostics)) if oos_diagnostics is not None else 0
+    oos_top_removal_rows = int(len(oos_top_removal)) if oos_top_removal is not None else 0
+    oos_selection_summary_rows = int(len(oos_selection_summary)) if oos_selection_summary is not None else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -2885,6 +3351,14 @@ def _run_config_frame(
         "daily_oos_rows_with_events": daily_oos_rows_with_events,
         "window_health_rows": window_health_rows,
         "selection_drift_rows": selection_drift_rows,
+        "daily_oos_event_rows": daily_oos_event_rows,
+        "oos_diagnostics_rows": oos_diagnostics_rows,
+        "oos_top_removal_rows": oos_top_removal_rows,
+        "oos_selection_summary_rows": oos_selection_summary_rows,
+        "daily_oos_event_ledger_model": DAILY_OOS_EVENT_LEDGER_MODEL,
+        "oos_diagnostics_model": OOS_DIAGNOSTICS_MODEL,
+        "oos_top_removal_model": OOS_TOP_REMOVAL_MODEL,
+        "oos_selection_summary_model": OOS_SELECTION_SUMMARY_MODEL,
         "daily_prequential_oos_model": DAILY_PREQUENTIAL_OOS_MODEL,
         "daily_selection_model": DAILY_SELECTION_MODEL,
         "window_health_model": WINDOW_HEALTH_MODEL,
@@ -2936,6 +3410,10 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_daily_oos.csv", "written", "daily prequential OOS ledger for selected basins"),
         ("pump_mechanism_window_health.csv", "written", "15/30/60d train-window health plus selected-basin OOS summary"),
         ("pump_mechanism_selection_drift.csv", "written", "selected mechanism-key drift over time"),
+        ("pump_mechanism_daily_oos_events.csv", "written", "event-level ledger for selected daily OOS basins"),
+        ("pump_mechanism_oos_diagnostics.csv", "written", "daily OOS split diagnostics by time/window/status"),
+        ("pump_mechanism_oos_top_removal.csv", "written", "selected-event top-removal stress by event and symbol"),
+        ("pump_mechanism_oos_selection_summary.csv", "written", "selection-key OOS aggregation and breadth diagnostics"),
     ]
     rows = []
     for artifact_name, status, description in planned:
