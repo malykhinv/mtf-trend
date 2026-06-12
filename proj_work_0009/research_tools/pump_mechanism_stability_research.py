@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_short_trade_grid"
+IMPLEMENTATION_STAGE = "mechanism_short_trade_verdict"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -179,6 +179,23 @@ SHORT_TRAIL_BUFFER_PCT = 0.0005
 SHORT_PARTIAL_TP_R_MULTIPLE = 1.0
 SHORT_PARTIAL_TP_FRACTION = 0.50
 SHORT_EXIT_POLICIES = ("short_trail_all_lower_highs", "short_tp1r_close50_trail")
+
+SHORT_TRADE_DIAGNOSTICS_MODEL = "accepted_mechanism_short_trade_oos_diagnostics_v1"
+SHORT_TRADE_TOP_REMOVAL_MODEL = "accepted_mechanism_short_trade_top_removal_v1"
+SHORT_TRADE_VERDICT_MODEL = "accepted_mechanism_short_trade_verdict_v1"
+SHORT_TRADE_GUARD_MODEL = "short_trade_grid_source_guard_v1"
+SHORT_TRADE_VERDICT_MIN_TRADES = 20
+SHORT_TRADE_VERDICT_MIN_ACTIVE_DAYS = 8
+SHORT_TRADE_VERDICT_MIN_SYMBOLS = 4
+SHORT_TRADE_VERDICT_MIN_SESSIONS = 1
+SHORT_TRADE_VERDICT_MIN_SUM_R = 0.0
+SHORT_TRADE_VERDICT_MIN_AVG_R = 0.0
+SHORT_TRADE_VERDICT_MIN_MEDIAN_R = 0.0
+SHORT_TRADE_VERDICT_MIN_POSITIVE_ACTIVE_DAY_RATE = 0.50
+SHORT_TRADE_VERDICT_MAX_TOP_SYMBOL_TRADE_SHARE = 0.45
+SHORT_TRADE_VERDICT_MAX_TOP_DAY_TRADE_SHARE = 0.35
+SHORT_TRADE_VERDICT_MAX_MONTH_POSITIVE_R_SHARE = 0.55
+SHORT_TRADE_TOP_REMOVAL_FRACTION = 0.10
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +353,10 @@ def run_pump_mechanism_stability_research(
             oos_verdict=pd.DataFrame(),
             short_trade_candidates=pd.DataFrame(),
             short_trade_grid=pd.DataFrame(),
+            short_trade_diagnostics=pd.DataFrame(),
+            short_trade_top_removal=pd.DataFrame(),
+            short_trade_verdict=pd.DataFrame(),
+            short_trade_guard=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -482,7 +503,20 @@ def run_pump_mechanism_stability_research(
         short_trade_candidates=short_trade_candidates,
     )
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping/trade-grid artifacts", started_at)
+    _print_stage(progress_label, "building short trade diagnostics and verdict gates", started_at)
+    short_trade_diagnostics = _build_short_trade_diagnostics(short_trade_grid=short_trade_grid)
+    short_trade_top_removal = _build_short_trade_top_removal(short_trade_grid=short_trade_grid)
+    short_trade_verdict = _build_short_trade_verdict(
+        short_trade_grid=short_trade_grid,
+        short_trade_top_removal=short_trade_top_removal,
+    )
+    short_trade_guard = _build_short_trade_guard(
+        short_trade_candidates=short_trade_candidates,
+        short_trade_grid=short_trade_grid,
+        oos_verdict=oos_verdict,
+    )
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping/trade-grid/verdict artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -503,6 +537,10 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_oos_verdict.csv", oos_verdict)
     _write_csv(config.output_dir / "pump_mechanism_short_trade_candidates.csv", short_trade_candidates)
     _write_csv(config.output_dir / "pump_mechanism_short_trade_grid.csv", short_trade_grid)
+    _write_csv(config.output_dir / "pump_mechanism_short_trade_diagnostics.csv", short_trade_diagnostics)
+    _write_csv(config.output_dir / "pump_mechanism_short_trade_top_removal.csv", short_trade_top_removal)
+    _write_csv(config.output_dir / "pump_mechanism_short_trade_verdict.csv", short_trade_verdict)
+    _write_csv(config.output_dir / "pump_mechanism_short_trade_guard.csv", short_trade_guard)
 
     run_config = _run_config_frame(
         config=config,
@@ -530,6 +568,10 @@ def run_pump_mechanism_stability_research(
         oos_verdict=oos_verdict,
         short_trade_candidates=short_trade_candidates,
         short_trade_grid=short_trade_grid,
+        short_trade_diagnostics=short_trade_diagnostics,
+        short_trade_top_removal=short_trade_top_removal,
+        short_trade_verdict=short_trade_verdict,
+        short_trade_guard=short_trade_guard,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -542,7 +584,8 @@ def run_pump_mechanism_stability_research(
         f"daily_oos={len(daily_oos):,} daily_oos_events={len(daily_oos_events):,} "
         f"oos_diagnostics={len(oos_diagnostics):,} oos_top_removal={len(oos_top_removal):,} "
         f"oos_verdict={len(oos_verdict):,} short_trade_candidates={len(short_trade_candidates):,} "
-        f"short_trade_grid={len(short_trade_grid):,} elapsed={_format_duration(time.monotonic() - started_at)} "
+        f"short_trade_grid={len(short_trade_grid):,} short_trade_verdict={len(short_trade_verdict):,} "
+        f"elapsed={_format_duration(time.monotonic() - started_at)} "
         f"output_dir={config.output_dir}",
         flush=True,
     )
@@ -4116,6 +4159,7 @@ def _short_trade_grid_row(
         "basin_id": str(candidate.get("basin_id", "")),
         "center_rule_id": str(candidate.get("center_rule_id", "")),
         "basin_status_at_selection": str(candidate.get("basin_status_at_selection", "")),
+        "accepted_mechanism_verdict": str(candidate.get("accepted_mechanism_verdict", "")),
         "event_rank": int(candidate.get("event_rank", 0) or 0),
         "event_id": str(candidate.get("event_id", "")),
         "symbol": str(candidate.get("symbol", "")),
@@ -4184,7 +4228,7 @@ def _short_trade_grid_columns() -> list[str]:
     return [
         "research_id", "short_trade_id", "short_candidate_id", "selection_key", "test_day_ord", "test_date", "train_window_days",
         "train_start_day_ord", "train_end_day_ord", "selected_rank", "basin_id", "center_rule_id", "basin_status_at_selection",
-        "event_rank", "event_id", "symbol", "session_bucket", "mechanism_family", "mechanism_id", "acceptance_regime",
+        "accepted_mechanism_verdict", "event_rank", "event_id", "symbol", "session_bucket", "mechanism_family", "mechanism_id", "acceptance_regime",
         "oi_regime_at_feature_cutoff", "oi_regime_at_confirm", "signal_family", "exit_policy", "trade_grid_status",
         "trade_grid_rejection_reason", "entry_timestamp_ms", "entry_time_utc", "entry_price_after_slippage", "entry_adverse_slippage_bps",
         "initial_stop_price", "final_stop_price", "risk_abs", "entry_to_stop_risk_pct", "final_exit_timestamp_ms", "final_exit_time_utc",
@@ -4195,6 +4239,550 @@ def _short_trade_grid_columns() -> list[str]:
         "trail_pivot_right_bars", "trail_buffer_pct", "exit_policy_model", "short_mapping_model", "short_confirm_model", "entry_model",
         "stop_model", "oi_model", "data_access_model", "future_label_available_at_entry", "short_confirm_closed_before_entry",
         "allowed_for_exit_grid_required", "audit_only_no_oi_excluded", "uses_future_optimal_exit", "uses_final_holdout_tuning",
+    ]
+
+
+
+def _build_short_trade_diagnostics(*, short_trade_grid: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate simulated short trades by stability slices.
+
+    This is a downstream diagnostic layer.  It never changes signals, exits, or
+    daily mechanism selection.  It reads realized R from the already-fixed trade
+    grid only to answer whether the accepted mechanism sleeves survived the
+    honest execution layer by session/family/exit/time splits.
+    """
+
+    columns = _short_trade_diagnostics_columns()
+    trades = _simulated_short_trades(short_trade_grid)
+    if trades.empty:
+        return pd.DataFrame(columns=columns)
+    work = _add_trade_split_columns(trades)
+    rows: list[dict[str, object]] = []
+    for axis in (
+        "all",
+        "trading_sleeve_key",
+        "selection_key",
+        "exit_policy",
+        "signal_family",
+        "session_bucket",
+        "mechanism_family",
+        "mechanism_id",
+        "acceptance_regime",
+        "oi_regime_at_confirm",
+        "train_window_days",
+        "month",
+        "week",
+        "odd_even_day",
+        "year_half",
+        "symbol",
+    ):
+        rows.extend(_short_trade_split_rows(work, axis=axis))
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["split_axis", "split_value"])
+
+
+def _build_short_trade_top_removal(*, short_trade_grid: pd.DataFrame) -> pd.DataFrame:
+    columns = _short_trade_top_removal_columns()
+    trades = _simulated_short_trades(short_trade_grid)
+    if trades.empty:
+        return pd.DataFrame(columns=columns)
+    work = _add_trade_split_columns(trades)
+    groups: list[tuple[str, str, pd.DataFrame]] = [("all", "all", work)]
+    for axis in ("trading_sleeve_key", "selection_key", "exit_policy", "signal_family", "session_bucket", "mechanism_family"):
+        if axis in work.columns:
+            groups.extend((axis, str(value), group) for value, group in work.groupby(axis, dropna=False, sort=True))
+    rows: list[dict[str, object]] = []
+    for group_axis, group_value, group in groups:
+        rows.extend(_short_trade_top_removal_rows(group_axis=group_axis, group_value=group_value, group=group, removal_kind="top_trades"))
+        rows.extend(_short_trade_top_removal_rows(group_axis=group_axis, group_value=group_value, group=group, removal_kind="top_symbols"))
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["group_axis", "group_value", "removal_kind", "remove_fraction"])
+
+
+def _build_short_trade_verdict(*, short_trade_grid: pd.DataFrame, short_trade_top_removal: pd.DataFrame) -> pd.DataFrame:
+    """Produce explicit pass/fail verdicts for executed trading sleeves."""
+
+    columns = _short_trade_verdict_columns()
+    trades = _simulated_short_trades(short_trade_grid)
+    if trades.empty:
+        return pd.DataFrame(columns=columns)
+    work = _add_trade_split_columns(trades)
+    if "trading_sleeve_key" not in work.columns:
+        return pd.DataFrame(columns=columns)
+    top_lookup = _short_trade_top_removal_lookup(short_trade_top_removal)
+    rows: list[dict[str, object]] = []
+    for sleeve_key, group in work.groupby("trading_sleeve_key", dropna=False, sort=True):
+        stats = _short_trade_stats(group)
+        top_trade_retention, top_trade_positive = top_lookup.get((str(sleeve_key), "top_trades"), (float("nan"), False))
+        top_symbol_retention, top_symbol_positive = top_lookup.get((str(sleeve_key), "top_symbols"), (float("nan"), False))
+        first_half_r, second_half_r = _trade_half_r_sums(group)
+        odd_r, even_r = _trade_odd_even_r_sums(group)
+        month_positive_share = _trade_month_positive_r_share(group)
+        fail_reasons: list[str] = []
+        warning_reasons: list[str] = []
+        if stats["trades"] < SHORT_TRADE_VERDICT_MIN_TRADES:
+            fail_reasons.append("low_trade_count")
+        if stats["active_days"] < SHORT_TRADE_VERDICT_MIN_ACTIVE_DAYS:
+            fail_reasons.append("low_active_days")
+        if stats["symbols"] < SHORT_TRADE_VERDICT_MIN_SYMBOLS:
+            fail_reasons.append("low_symbol_breadth")
+        if stats["sessions"] < SHORT_TRADE_VERDICT_MIN_SESSIONS:
+            fail_reasons.append("low_session_breadth")
+        if not math.isfinite(stats["sum_r"]) or stats["sum_r"] <= SHORT_TRADE_VERDICT_MIN_SUM_R:
+            fail_reasons.append("non_positive_sum_r")
+        if not math.isfinite(stats["avg_r"]) or stats["avg_r"] <= SHORT_TRADE_VERDICT_MIN_AVG_R:
+            fail_reasons.append("non_positive_avg_r")
+        if not math.isfinite(stats["median_r"]) or stats["median_r"] <= SHORT_TRADE_VERDICT_MIN_MEDIAN_R:
+            fail_reasons.append("non_positive_median_r")
+        if not math.isfinite(stats["positive_active_day_rate"]) or stats["positive_active_day_rate"] < SHORT_TRADE_VERDICT_MIN_POSITIVE_ACTIVE_DAY_RATE:
+            fail_reasons.append("low_positive_active_day_rate")
+        if not math.isfinite(stats["top_symbol_trade_share"]) or stats["top_symbol_trade_share"] > SHORT_TRADE_VERDICT_MAX_TOP_SYMBOL_TRADE_SHARE:
+            fail_reasons.append("top_symbol_trade_dependency")
+        if not math.isfinite(stats["top_day_trade_share"]) or stats["top_day_trade_share"] > SHORT_TRADE_VERDICT_MAX_TOP_DAY_TRADE_SHARE:
+            fail_reasons.append("top_day_trade_dependency")
+        if not math.isfinite(month_positive_share) or month_positive_share > SHORT_TRADE_VERDICT_MAX_MONTH_POSITIVE_R_SHARE:
+            fail_reasons.append("month_positive_r_concentration")
+        if not bool(top_trade_positive):
+            fail_reasons.append("top_trade_removal_not_positive")
+        if not bool(top_symbol_positive):
+            fail_reasons.append("top_symbol_removal_not_positive")
+        if math.isfinite(first_half_r) and math.isfinite(second_half_r) and first_half_r > 0.0 and second_half_r <= 0.0:
+            fail_reasons.append("second_half_degraded_to_non_positive")
+        if math.isfinite(odd_r) and math.isfinite(even_r) and (odd_r <= 0.0 or even_r <= 0.0):
+            warning_reasons.append("odd_even_split_not_both_positive")
+        if math.isfinite(stats["max_drawdown_r"]) and math.isfinite(stats["sum_r"]) and stats["sum_r"] > 0.0:
+            dd_to_profit = stats["max_drawdown_r"] / max(stats["sum_r"], 1e-12)
+            if dd_to_profit > 1.50:
+                warning_reasons.append("drawdown_large_vs_profit")
+        else:
+            dd_to_profit = float("nan")
+
+        if not fail_reasons:
+            verdict = "accepted_trading_sleeve"
+            allowed = True
+            next_stage = "portfolio_aggregation_candidate"
+        elif stats["trades"] >= SHORT_TRADE_VERDICT_MIN_TRADES and math.isfinite(stats["sum_r"]) and stats["sum_r"] > 0.0:
+            verdict = "watchlist_trading_sleeve"
+            allowed = False
+            next_stage = "trade_research_only"
+        else:
+            verdict = "rejected_trading_sleeve"
+            allowed = False
+            next_stage = "trade_research_only"
+
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "trading_sleeve_key": str(sleeve_key),
+                "trading_sleeve_verdict": verdict,
+                "allowed_for_portfolio_aggregation": allowed,
+                "next_allowed_stage": next_stage,
+                "fail_reasons": ";".join(fail_reasons) if fail_reasons else "pass",
+                "warning_reasons": ";".join(warning_reasons),
+                **stats,
+                "first_trade_date": _safe_min_str(group.get("test_date", pd.Series(dtype=str))),
+                "last_trade_date": _safe_max_str(group.get("test_date", pd.Series(dtype=str))),
+                "selection_keys_seen": _joined_unique(group, "selection_key"),
+                "exit_policies_seen": _joined_unique(group, "exit_policy"),
+                "signal_families_seen": _joined_unique(group, "signal_family"),
+                "mechanism_families_seen": _joined_unique(group, "mechanism_family"),
+                "sessions_seen": _joined_unique(group, "session_bucket"),
+                "month_positive_r_share": month_positive_share,
+                "first_half_sum_r": first_half_r,
+                "second_half_sum_r": second_half_r,
+                "odd_day_sum_r": odd_r,
+                "even_day_sum_r": even_r,
+                "drawdown_to_profit_ratio": dd_to_profit,
+                "top_trade_removal_10pct_r_retention_rate": top_trade_retention,
+                "top_trade_removal_10pct_remaining_positive": bool(top_trade_positive),
+                "top_symbol_removal_10pct_r_retention_rate": top_symbol_retention,
+                "top_symbol_removal_10pct_remaining_positive": bool(top_symbol_positive),
+                "min_trades_gate": int(SHORT_TRADE_VERDICT_MIN_TRADES),
+                "min_active_days_gate": int(SHORT_TRADE_VERDICT_MIN_ACTIVE_DAYS),
+                "min_symbols_gate": int(SHORT_TRADE_VERDICT_MIN_SYMBOLS),
+                "min_sessions_gate": int(SHORT_TRADE_VERDICT_MIN_SESSIONS),
+                "min_sum_r_gate": float(SHORT_TRADE_VERDICT_MIN_SUM_R),
+                "min_avg_r_gate": float(SHORT_TRADE_VERDICT_MIN_AVG_R),
+                "min_median_r_gate": float(SHORT_TRADE_VERDICT_MIN_MEDIAN_R),
+                "min_positive_active_day_rate_gate": float(SHORT_TRADE_VERDICT_MIN_POSITIVE_ACTIVE_DAY_RATE),
+                "max_top_symbol_trade_share_gate": float(SHORT_TRADE_VERDICT_MAX_TOP_SYMBOL_TRADE_SHARE),
+                "max_top_day_trade_share_gate": float(SHORT_TRADE_VERDICT_MAX_TOP_DAY_TRADE_SHARE),
+                "max_month_positive_r_share_gate": float(SHORT_TRADE_VERDICT_MAX_MONTH_POSITIVE_R_SHARE),
+                "top_removal_fraction_gate": float(SHORT_TRADE_TOP_REMOVAL_FRACTION),
+                "short_trade_verdict_model": SHORT_TRADE_VERDICT_MODEL,
+                "uses_final_holdout_tuning": False,
+                "uses_future_optimal_exit": False,
+                "source_mechanism_verdict_required": SHORT_ALLOWED_VERDICT,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["trading_sleeve_verdict", "sum_r", "trading_sleeve_key"])
+
+
+def _build_short_trade_guard(
+    *,
+    short_trade_candidates: pd.DataFrame,
+    short_trade_grid: pd.DataFrame,
+    oos_verdict: pd.DataFrame,
+) -> pd.DataFrame:
+    """Audit that the trade grid is sourced only from accepted non-audit candidates."""
+
+    columns = _short_trade_guard_columns()
+    grid = short_trade_grid.copy() if short_trade_grid is not None else pd.DataFrame()
+    candidates = short_trade_candidates.copy() if short_trade_candidates is not None else pd.DataFrame()
+    verdict = oos_verdict.copy() if oos_verdict is not None else pd.DataFrame()
+    simulated = grid.loc[grid.get("trade_grid_status", pd.Series(dtype=str)).astype(str) == "simulated_trade"].copy() if not grid.empty else pd.DataFrame()
+    rows: list[dict[str, object]] = []
+
+    def add_guard(name: str, failures: int, checked: int, description: str) -> None:
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "guard_name": name,
+                "guard_status": "pass" if int(failures) == 0 else "fail",
+                "checked_rows": int(checked),
+                "failure_rows": int(failures),
+                "description": description,
+                "short_trade_guard_model": SHORT_TRADE_GUARD_MODEL,
+                "uses_final_holdout_tuning": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+
+    add_guard(
+        "no_audit_only_no_oi_in_trade_grid",
+        int((simulated.get("signal_family", pd.Series(dtype=str)).astype(str) == "no_oi_confirmation").sum()) if not simulated.empty else 0,
+        int(len(simulated)),
+        "simulated trades must exclude audit-only no_oi_confirmation candidates",
+    )
+    add_guard(
+        "all_trade_grid_rows_from_accepted_mechanisms",
+        int((simulated.get("accepted_mechanism_verdict", simulated.get("source_mechanism_verdict_required", pd.Series(dtype=str))).astype(str) != SHORT_ALLOWED_VERDICT).sum()) if not simulated.empty else 0,
+        int(len(simulated)),
+        "simulated trades must come from accepted_mechanism rows only",
+    )
+    add_guard(
+        "all_trade_grid_rows_have_no_future_optimal_exit",
+        int(simulated.get("uses_future_optimal_exit", pd.Series(False, index=simulated.index)).map(_to_bool).sum()) if not simulated.empty else 0,
+        int(len(simulated)),
+        "exit grid must never use future-optimal exits",
+    )
+    add_guard(
+        "all_trade_grid_rows_enter_after_closed_confirm",
+        int((~simulated.get("short_confirm_closed_before_entry", pd.Series(False, index=simulated.index)).map(_to_bool)).sum()) if not simulated.empty else 0,
+        int(len(simulated)),
+        "entry must occur only after a closed 1m confirm candle",
+    )
+    add_guard(
+        "all_trade_grid_rows_use_next_open_entry_model",
+        int((simulated.get("entry_model", pd.Series(dtype=str)).astype(str) != SHORT_ENTRY_MODEL).sum()) if not simulated.empty else 0,
+        int(len(simulated)),
+        "entry model must be next 1m open after confirm plus adverse slippage",
+    )
+    add_guard(
+        "all_trade_grid_rows_use_closed_5m_oi_model",
+        int((simulated.get("oi_model", pd.Series(dtype=str)).astype(str) != SHORT_OI_MODEL).sum()) if not simulated.empty else 0,
+        int(len(simulated)),
+        "OI model must be closed 5m OI as-of confirm close",
+    )
+    if not candidates.empty:
+        allowed = candidates.get("allowed_for_exit_grid", pd.Series(False, index=candidates.index)).map(_to_bool)
+        confirmed = candidates.get("short_mapping_status", pd.Series(dtype=str)).astype(str).eq("confirmed_short_candidate")
+        bad_candidates = candidates.loc[allowed & confirmed & candidates.get("signal_family", pd.Series(dtype=str)).astype(str).eq("no_oi_confirmation")]
+        add_guard(
+            "no_audit_only_candidate_marked_for_exit_grid",
+            int(len(bad_candidates)),
+            int(len(candidates)),
+            "candidate layer must not mark no_oi_confirmation as allowed_for_exit_grid",
+        )
+    else:
+        add_guard("no_audit_only_candidate_marked_for_exit_grid", 0, 0, "candidate layer absent or empty")
+    if not verdict.empty and "allowed_for_short_mapping" in verdict.columns:
+        accepted = verdict.loc[verdict["allowed_for_short_mapping"].map(_to_bool)].copy()
+        bad_verdict = accepted.loc[accepted.get("oos_verdict", pd.Series(dtype=str)).astype(str) != SHORT_ALLOWED_VERDICT]
+        add_guard(
+            "short_mapping_allowed_only_for_accepted_mechanisms",
+            int(len(bad_verdict)),
+            int(len(accepted)),
+            "OOS verdict must allow short mapping only for accepted mechanisms",
+        )
+    else:
+        add_guard("short_mapping_allowed_only_for_accepted_mechanisms", 0, 0, "OOS verdict absent or empty")
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["guard_status", "guard_name"])
+
+
+def _simulated_short_trades(short_trade_grid: pd.DataFrame) -> pd.DataFrame:
+    columns = _short_trade_grid_columns()
+    if short_trade_grid is None or short_trade_grid.empty:
+        return pd.DataFrame(columns=columns)
+    frame = short_trade_grid.copy()
+    if "trade_grid_status" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+    frame = frame.loc[frame["trade_grid_status"].astype(str) == "simulated_trade"].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    frame["realized_r"] = pd.to_numeric(frame.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan)
+    frame = frame.loc[frame["realized_r"].notna()].copy()
+    return frame
+
+
+def _add_trade_split_columns(trades: pd.DataFrame) -> pd.DataFrame:
+    work = trades.copy()
+    work["month"] = work.get("test_date", pd.Series(dtype=str)).astype(str).str.slice(0, 7)
+    parsed_date = pd.to_datetime(work.get("test_date", pd.Series(dtype=str)), errors="coerce", utc=True)
+    iso = parsed_date.dt.isocalendar()
+    work["week"] = np.where(parsed_date.notna(), iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2), "")
+    day_ord = pd.to_numeric(work.get("test_day_ord", pd.Series(dtype=float)), errors="coerce")
+    work["odd_even_day"] = np.where((day_ord.fillna(0).astype("int64") % 2) == 0, "even", "odd")
+    finite_day_ord = day_ord.dropna()
+    midpoint = float(finite_day_ord.median()) if not finite_day_ord.empty else float("nan")
+    work["year_half"] = np.where(day_ord <= midpoint, "first_half", "second_half") if math.isfinite(midpoint) else "unknown"
+    work["trading_sleeve_key"] = (
+        work.get("selection_key", pd.Series(dtype=str)).astype(str)
+        + "|"
+        + work.get("signal_family", pd.Series(dtype=str)).astype(str)
+        + "|"
+        + work.get("exit_policy", pd.Series(dtype=str)).astype(str)
+    )
+    return work
+
+
+def _short_trade_split_rows(frame: pd.DataFrame, *, axis: str) -> list[dict[str, object]]:
+    if frame.empty:
+        return []
+    if axis == "all":
+        groups = [("all", frame)]
+    elif axis not in frame.columns:
+        return []
+    else:
+        groups = [(str(value), group) for value, group in frame.groupby(axis, dropna=False, sort=True)]
+    rows: list[dict[str, object]] = []
+    for value, group in groups:
+        stats = _short_trade_stats(group)
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "split_axis": axis,
+                "split_value": value,
+                **stats,
+                "short_trade_diagnostics_model": SHORT_TRADE_DIAGNOSTICS_MODEL,
+                "uses_final_holdout_tuning": False,
+                "uses_future_optimal_exit": False,
+                "source_mechanism_verdict_required": SHORT_ALLOWED_VERDICT,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    return rows
+
+
+def _short_trade_stats(group: pd.DataFrame) -> dict[str, object]:
+    r = pd.to_numeric(group.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    day_r = _trade_day_r(group)
+    return {
+        "trades": int(len(r)),
+        "active_days": int(day_r.shape[0]),
+        "symbols": int(group["symbol"].nunique()) if "symbol" in group.columns else 0,
+        "sessions": int(group["session_bucket"].nunique()) if "session_bucket" in group.columns else 0,
+        "selection_keys": int(group["selection_key"].nunique()) if "selection_key" in group.columns else 0,
+        "sum_r": _safe_sum(r),
+        "avg_r": _safe_mean(r),
+        "median_r": _safe_median(r),
+        "win_rate": _rate(r > 0.0) if not r.empty else float("nan"),
+        "loss_rate": _rate(r < 0.0) if not r.empty else float("nan"),
+        "positive_active_days": int((day_r > 0.0).sum()) if not day_r.empty else 0,
+        "positive_active_day_rate": _rate(day_r > 0.0) if not day_r.empty else float("nan"),
+        "max_drawdown_r": _max_drawdown_from_returns(day_r),
+        "avg_hold_minutes": _safe_mean(group.get("hold_minutes", pd.Series(dtype=float))),
+        "median_hold_minutes": _safe_median(group.get("hold_minutes", pd.Series(dtype=float))),
+        "median_mae_r": _safe_median(group.get("mae_r", pd.Series(dtype=float))),
+        "median_mfe_r": _safe_median(group.get("mfe_r", pd.Series(dtype=float))),
+        "partial_tp_hit_rate": _rate(group.get("partial_tp_hit", pd.Series(dtype=bool)).map(_to_bool)) if "partial_tp_hit" in group.columns else float("nan"),
+        "stop_exit_rate": _rate(group.get("final_exit_reason", pd.Series(dtype=str)).astype(str).eq("stop_or_trailing_stop_hit")) if "final_exit_reason" in group.columns else float("nan"),
+        "max_hold_exit_rate": _rate(group.get("final_exit_reason", pd.Series(dtype=str)).astype(str).eq("max_hold_close")) if "final_exit_reason" in group.columns else float("nan"),
+        "top_symbol_trade_share": _top_share(group, column="symbol"),
+        "top_day_trade_share": _top_share(group, column="test_day_ord"),
+    }
+
+
+def _trade_day_r(group: pd.DataFrame) -> pd.Series:
+    if group.empty or "test_day_ord" not in group.columns:
+        return pd.Series(dtype=float)
+    work = group.copy()
+    work["_r"] = pd.to_numeric(work.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    day = pd.to_numeric(work.get("test_day_ord", pd.Series(dtype=float)), errors="coerce")
+    work = work.loc[day.notna()].copy()
+    if work.empty:
+        return pd.Series(dtype=float)
+    work["_day"] = day.loc[work.index].astype("int64")
+    return work.groupby("_day", dropna=False)["_r"].sum().sort_index()
+
+
+def _max_drawdown_from_returns(returns: pd.Series) -> float:
+    values = pd.to_numeric(returns, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    if values.empty:
+        return float("nan")
+    cumulative = values.cumsum()
+    drawdown = cumulative - cumulative.cummax()
+    return float(abs(drawdown.min())) if not drawdown.empty else float("nan")
+
+
+def _short_trade_top_removal_rows(*, group_axis: str, group_value: str, group: pd.DataFrame, removal_kind: str) -> list[dict[str, object]]:
+    r = pd.to_numeric(group.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    base_sum_r = float(r.sum())
+    if removal_kind == "top_symbols" and "symbol" in group.columns:
+        ranked = group.assign(_r=r).groupby("symbol", dropna=False)["_r"].sum().sort_values(ascending=False)
+        unit_count = int(len(ranked))
+    else:
+        ranked = r.sort_values(ascending=False)
+        unit_count = int(len(ranked))
+    rows: list[dict[str, object]] = []
+    for fraction in (0.0, 0.01, 0.05, 0.10, 0.20):
+        remove_count = _removal_count(unit_count, float(fraction))
+        if removal_kind == "top_symbols" and "symbol" in group.columns:
+            removed_symbols = set(ranked.head(remove_count).index.astype(str)) if remove_count > 0 else set()
+            remaining = group.loc[~group["symbol"].astype(str).isin(removed_symbols)].copy()
+        else:
+            removed_index = set(ranked.head(remove_count).index) if remove_count > 0 else set()
+            remaining = group.loc[~group.index.isin(removed_index)].copy()
+        remaining_r = pd.to_numeric(remaining.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        remaining_sum_r = float(remaining_r.sum())
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "group_axis": group_axis,
+                "group_value": group_value,
+                "removal_kind": removal_kind,
+                "remove_fraction": float(fraction),
+                "base_trades": int(len(group)),
+                "base_symbols": int(group["symbol"].nunique()) if "symbol" in group.columns else 0,
+                "base_active_days": int(_trade_day_r(group).shape[0]),
+                "base_sum_r": base_sum_r,
+                "removed_units": int(remove_count),
+                "remaining_trades": int(len(remaining)),
+                "remaining_symbols": int(remaining["symbol"].nunique()) if "symbol" in remaining.columns and not remaining.empty else 0,
+                "remaining_active_days": int(_trade_day_r(remaining).shape[0]) if not remaining.empty else 0,
+                "remaining_sum_r": remaining_sum_r,
+                "r_retention_rate": float(remaining_sum_r / base_sum_r) if abs(base_sum_r) > 1e-12 else float("nan"),
+                "remaining_sum_r_positive": bool(remaining_sum_r > 0.0),
+                "short_trade_top_removal_model": SHORT_TRADE_TOP_REMOVAL_MODEL,
+                "uses_final_holdout_tuning": False,
+                "uses_future_optimal_exit": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    return rows
+
+
+def _short_trade_top_removal_lookup(top_removal: pd.DataFrame) -> dict[tuple[str, str], tuple[float, bool]]:
+    if top_removal is None or top_removal.empty:
+        return {}
+    frame = top_removal.loc[top_removal.get("group_axis", pd.Series(dtype=str)).astype(str) == "trading_sleeve_key"].copy()
+    if frame.empty:
+        return {}
+    fraction = pd.to_numeric(frame.get("remove_fraction", pd.Series(dtype=float)), errors="coerce")
+    frame = frame.loc[(fraction - float(SHORT_TRADE_TOP_REMOVAL_FRACTION)).abs() < 1e-12].copy()
+    lookup: dict[tuple[str, str], tuple[float, bool]] = {}
+    for row in frame.to_dict("records"):
+        lookup[(str(row.get("group_value", "")), str(row.get("removal_kind", "")))] = (
+            _float(row.get("r_retention_rate")),
+            _to_bool(row.get("remaining_sum_r_positive")),
+        )
+    return lookup
+
+
+def _trade_month_positive_r_share(trades: pd.DataFrame) -> float:
+    if trades.empty or "month" not in trades.columns:
+        return float("nan")
+    r = pd.to_numeric(trades.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    grouped = r.groupby(trades["month"].astype(str)).sum()
+    positive = grouped.loc[grouped > 0.0]
+    total_positive = float(positive.sum())
+    if total_positive <= 0.0 or positive.empty:
+        return float("nan")
+    return float(positive.max() / total_positive)
+
+
+def _trade_half_r_sums(trades: pd.DataFrame) -> tuple[float, float]:
+    if trades.empty or "year_half" not in trades.columns:
+        return (float("nan"), float("nan"))
+    r = pd.to_numeric(trades.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    grouped = r.groupby(trades["year_half"].astype(str)).sum()
+    return (float(grouped.get("first_half", np.nan)), float(grouped.get("second_half", np.nan)))
+
+
+def _trade_odd_even_r_sums(trades: pd.DataFrame) -> tuple[float, float]:
+    if trades.empty or "odd_even_day" not in trades.columns:
+        return (float("nan"), float("nan"))
+    r = pd.to_numeric(trades.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    grouped = r.groupby(trades["odd_even_day"].astype(str)).sum()
+    return (float(grouped.get("odd", np.nan)), float(grouped.get("even", np.nan)))
+
+
+def _joined_unique(frame: pd.DataFrame, column: str, *, limit: int = 20) -> str:
+    if frame.empty or column not in frame.columns:
+        return ""
+    values = [str(value) for value in frame[column].dropna().astype(str).unique().tolist() if str(value)]
+    values = sorted(values)
+    if len(values) > limit:
+        return ",".join(values[:limit]) + f",...(+{len(values) - limit})"
+    return ",".join(values)
+
+
+def _safe_min_str(series: pd.Series) -> str:
+    values = series.dropna().astype(str) if series is not None else pd.Series(dtype=str)
+    values = values.loc[values != ""]
+    return str(values.min()) if not values.empty else ""
+
+
+def _safe_max_str(series: pd.Series) -> str:
+    values = series.dropna().astype(str) if series is not None else pd.Series(dtype=str)
+    values = values.loc[values != ""]
+    return str(values.max()) if not values.empty else ""
+
+
+def _short_trade_diagnostics_columns() -> list[str]:
+    return [
+        "research_id", "split_axis", "split_value", "trades", "active_days", "symbols", "sessions", "selection_keys",
+        "sum_r", "avg_r", "median_r", "win_rate", "loss_rate", "positive_active_days", "positive_active_day_rate",
+        "max_drawdown_r", "avg_hold_minutes", "median_hold_minutes", "median_mae_r", "median_mfe_r", "partial_tp_hit_rate",
+        "stop_exit_rate", "max_hold_exit_rate", "top_symbol_trade_share", "top_day_trade_share", "short_trade_diagnostics_model",
+        "uses_final_holdout_tuning", "uses_future_optimal_exit", "source_mechanism_verdict_required", "data_access_model",
+    ]
+
+
+def _short_trade_top_removal_columns() -> list[str]:
+    return [
+        "research_id", "group_axis", "group_value", "removal_kind", "remove_fraction", "base_trades", "base_symbols",
+        "base_active_days", "base_sum_r", "removed_units", "remaining_trades", "remaining_symbols", "remaining_active_days",
+        "remaining_sum_r", "r_retention_rate", "remaining_sum_r_positive", "short_trade_top_removal_model",
+        "uses_final_holdout_tuning", "uses_future_optimal_exit", "data_access_model",
+    ]
+
+
+def _short_trade_verdict_columns() -> list[str]:
+    return [
+        "research_id", "trading_sleeve_key", "trading_sleeve_verdict", "allowed_for_portfolio_aggregation", "next_allowed_stage",
+        "fail_reasons", "warning_reasons", "trades", "active_days", "symbols", "sessions", "selection_keys", "sum_r", "avg_r",
+        "median_r", "win_rate", "loss_rate", "positive_active_days", "positive_active_day_rate", "max_drawdown_r",
+        "avg_hold_minutes", "median_hold_minutes", "median_mae_r", "median_mfe_r", "partial_tp_hit_rate", "stop_exit_rate",
+        "max_hold_exit_rate", "top_symbol_trade_share", "top_day_trade_share", "first_trade_date", "last_trade_date",
+        "selection_keys_seen", "exit_policies_seen", "signal_families_seen", "mechanism_families_seen", "sessions_seen",
+        "month_positive_r_share", "first_half_sum_r", "second_half_sum_r", "odd_day_sum_r", "even_day_sum_r",
+        "drawdown_to_profit_ratio", "top_trade_removal_10pct_r_retention_rate", "top_trade_removal_10pct_remaining_positive",
+        "top_symbol_removal_10pct_r_retention_rate", "top_symbol_removal_10pct_remaining_positive", "min_trades_gate",
+        "min_active_days_gate", "min_symbols_gate", "min_sessions_gate", "min_sum_r_gate", "min_avg_r_gate", "min_median_r_gate",
+        "min_positive_active_day_rate_gate", "max_top_symbol_trade_share_gate", "max_top_day_trade_share_gate",
+        "max_month_positive_r_share_gate", "top_removal_fraction_gate", "short_trade_verdict_model", "uses_final_holdout_tuning",
+        "uses_future_optimal_exit", "source_mechanism_verdict_required", "data_access_model",
+    ]
+
+
+def _short_trade_guard_columns() -> list[str]:
+    return [
+        "research_id", "guard_name", "guard_status", "checked_rows", "failure_rows", "description",
+        "short_trade_guard_model", "uses_final_holdout_tuning", "data_access_model",
     ]
 
 
@@ -4379,6 +4967,10 @@ def _run_config_frame(
     oos_verdict: pd.DataFrame,
     short_trade_candidates: pd.DataFrame,
     short_trade_grid: pd.DataFrame,
+    short_trade_diagnostics: pd.DataFrame,
+    short_trade_top_removal: pd.DataFrame,
+    short_trade_verdict: pd.DataFrame,
+    short_trade_guard: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -4409,6 +5001,11 @@ def _run_config_frame(
     short_trade_grid_rows = int(len(short_trade_grid)) if short_trade_grid is not None else 0
     short_trade_grid_simulated_rows = int((short_trade_grid.get("trade_grid_status", pd.Series(dtype=str)).astype(str) == "simulated_trade").sum()) if short_trade_grid is not None and not short_trade_grid.empty else 0
     short_trade_grid_total_r = float(pd.to_numeric(short_trade_grid.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().sum()) if short_trade_grid is not None and not short_trade_grid.empty else 0.0
+    short_trade_diagnostics_rows = int(len(short_trade_diagnostics)) if short_trade_diagnostics is not None else 0
+    short_trade_top_removal_rows = int(len(short_trade_top_removal)) if short_trade_top_removal is not None else 0
+    short_trade_verdict_rows = int(len(short_trade_verdict)) if short_trade_verdict is not None else 0
+    short_trade_verdict_pass_rows = int((short_trade_verdict.get("trading_sleeve_verdict", pd.Series(dtype=str)).astype(str) == "accepted_trading_sleeve").sum()) if short_trade_verdict is not None and not short_trade_verdict.empty else 0
+    short_trade_guard_fail_rows = int((short_trade_guard.get("guard_status", pd.Series(dtype=str)).astype(str) != "pass").sum()) if short_trade_guard is not None and not short_trade_guard.empty else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -4512,6 +5109,27 @@ def _run_config_frame(
         "short_partial_tp_fraction": float(SHORT_PARTIAL_TP_FRACTION),
         "short_trade_grid_excludes_no_oi_confirmation": True,
         "short_trade_grid_uses_future_optimal_exit": False,
+        "short_trade_diagnostics_rows": short_trade_diagnostics_rows,
+        "short_trade_top_removal_rows": short_trade_top_removal_rows,
+        "short_trade_verdict_rows": short_trade_verdict_rows,
+        "short_trade_verdict_pass_rows": short_trade_verdict_pass_rows,
+        "short_trade_guard_fail_rows": short_trade_guard_fail_rows,
+        "short_trade_diagnostics_model": SHORT_TRADE_DIAGNOSTICS_MODEL,
+        "short_trade_top_removal_model": SHORT_TRADE_TOP_REMOVAL_MODEL,
+        "short_trade_verdict_model": SHORT_TRADE_VERDICT_MODEL,
+        "short_trade_guard_model": SHORT_TRADE_GUARD_MODEL,
+        "short_trade_verdict_min_trades": int(SHORT_TRADE_VERDICT_MIN_TRADES),
+        "short_trade_verdict_min_active_days": int(SHORT_TRADE_VERDICT_MIN_ACTIVE_DAYS),
+        "short_trade_verdict_min_symbols": int(SHORT_TRADE_VERDICT_MIN_SYMBOLS),
+        "short_trade_verdict_min_sessions": int(SHORT_TRADE_VERDICT_MIN_SESSIONS),
+        "short_trade_verdict_min_sum_r": float(SHORT_TRADE_VERDICT_MIN_SUM_R),
+        "short_trade_verdict_min_avg_r": float(SHORT_TRADE_VERDICT_MIN_AVG_R),
+        "short_trade_verdict_min_median_r": float(SHORT_TRADE_VERDICT_MIN_MEDIAN_R),
+        "short_trade_verdict_min_positive_active_day_rate": float(SHORT_TRADE_VERDICT_MIN_POSITIVE_ACTIVE_DAY_RATE),
+        "short_trade_verdict_max_top_symbol_trade_share": float(SHORT_TRADE_VERDICT_MAX_TOP_SYMBOL_TRADE_SHARE),
+        "short_trade_verdict_max_top_day_trade_share": float(SHORT_TRADE_VERDICT_MAX_TOP_DAY_TRADE_SHARE),
+        "short_trade_verdict_max_month_positive_r_share": float(SHORT_TRADE_VERDICT_MAX_MONTH_POSITIVE_R_SHARE),
+        "short_trade_top_removal_fraction": float(SHORT_TRADE_TOP_REMOVAL_FRACTION),
         "oos_verdict_min_active_days": int(OOS_VERDICT_MIN_ACTIVE_DAYS),
         "oos_verdict_min_events": int(OOS_VERDICT_MIN_EVENTS),
         "oos_verdict_min_symbols": int(OOS_VERDICT_MIN_SYMBOLS),
@@ -4584,6 +5202,10 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_oos_verdict.csv", "written", "explicit OOS mechanism acceptance verdict and fail reasons"),
         ("pump_mechanism_short_trade_candidates.csv", "written", "honest short confirm/entry candidates for accepted mechanisms only; no exit/PnL"),
         ("pump_mechanism_short_trade_grid.csv", "written", "deterministic short exit policy grid for accepted OI-confirmed candidates only"),
+        ("pump_mechanism_short_trade_diagnostics.csv", "written", "trade-level OOS split diagnostics by session/family/exit/time"),
+        ("pump_mechanism_short_trade_top_removal.csv", "written", "trade-level top trade and top symbol removal stress"),
+        ("pump_mechanism_short_trade_verdict.csv", "written", "explicit trading sleeve acceptance verdict and fail reasons"),
+        ("pump_mechanism_short_trade_guard.csv", "written", "guardrail audit proving only accepted non-audit candidates entered the trade grid"),
     ]
     rows = []
     for artifact_name, status, description in planned:
