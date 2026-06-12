@@ -12,6 +12,7 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -42,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_response_surfaces"
+IMPLEMENTATION_STAGE = "mechanism_train_rule_grammar"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -84,6 +85,42 @@ HIGH_FLOW_RATIO_MIN = 3.0
 HIGH_VOLUME_LOW_PROGRESS_CLOSE_TO_HIGH_MAX = 0.35
 SEED_LOW_BREAK_BUFFER_PCT = 0.0005
 DEEP_RETRACE_TO_SEED_RETURN_FRACTION = 0.25
+
+# Train-only rule grammar constants.  These generate candidate rule specs from
+# entry-known feature distributions inside each rolling train window.  They are
+# descriptive rule-construction axes, not optimized performance knobs.
+MIN_TRAIN_SCOPE_EVENTS = 20
+MIN_RULE_EVENTS = 8
+MIN_RULE_SYMBOLS = 3
+MIN_RULE_ACTIVE_DAYS = 3
+RULE_QUANTILES = (0.25, 0.35, 0.50, 0.65, 0.75)
+RULE_THRESHOLD_FEATURES: tuple[tuple[str, str, tuple[float, ...]], ...] = (
+    ("close15_to_high15_ratio", "le", (0.25, 0.35, 0.50)),
+    ("wick_ret_15m", "ge", (0.50, 0.65, 0.75)),
+    ("pre60_range_pct", "ge", (0.50, 0.65, 0.75)),
+    ("seed_high_return_pct", "ge", (0.50, 0.65, 0.75)),
+    ("early_quote_ratio_60m_scaled", "ge", (0.50, 0.65, 0.75)),
+    ("early_trade_ratio_60m_scaled", "ge", (0.50, 0.65, 0.75)),
+    ("early_taker_buy_quote_share", "ge", (0.50, 0.65, 0.75)),
+    ("m1_last2_quote_share", "ge", (0.50, 0.65, 0.75)),
+    ("m1_quote_accel_last2_vs_first2", "ge", (0.50, 0.65, 0.75)),
+    ("oi_change_5m_pct", "abs_ge", (0.50, 0.65, 0.75)),
+)
+RULE_SCOPE_AXES: tuple[str, ...] = (
+    "mechanism_family",
+    "acceptance_regime",
+    "oi_regime",
+    "flow_regime",
+    "structure_regime",
+    "late_buyer_regime",
+    "session_bucket",
+)
+RULE_PAIR_SCOPES: tuple[tuple[str, str], ...] = (
+    ("mechanism_family", "session_bucket"),
+    ("acceptance_regime", "session_bucket"),
+    ("oi_regime", "acceptance_regime"),
+    ("mechanism_family", "oi_regime"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +264,7 @@ def run_pump_mechanism_stability_research(
             cache_coverage={},
             taxonomy=pd.DataFrame(),
             response_surfaces=pd.DataFrame(),
+            rule_universe=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -310,13 +348,17 @@ def run_pump_mechanism_stability_research(
     _print_stage(progress_label, "building pre-trade mechanism response surfaces", started_at)
     response_surfaces = _build_response_surfaces(taxonomy=taxonomy, outcomes=outcomes)
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface artifacts", started_at)
+    _print_stage(progress_label, "generating train-only mechanism rule universe", started_at)
+    rule_universe = _build_train_only_rule_universe(taxonomy=taxonomy, events=events)
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
     _write_csv(config.output_dir / "pump_mechanism_taxonomy.csv", taxonomy)
     _write_csv(config.output_dir / "pump_mechanism_taxonomy_by_axis.csv", taxonomy_by_axis)
     _write_csv(config.output_dir / "pump_mechanism_response_surfaces.csv", response_surfaces)
+    _write_csv(config.output_dir / "pump_mechanism_rule_universe.csv", rule_universe)
 
     run_config = _run_config_frame(
         config=config,
@@ -330,6 +372,7 @@ def run_pump_mechanism_stability_research(
         cache_coverage=cache_coverage,
         taxonomy=taxonomy,
         response_surfaces=response_surfaces,
+        rule_universe=rule_universe,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -337,6 +380,7 @@ def run_pump_mechanism_stability_research(
     print(
         f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} "
         f"taxonomy={len(taxonomy):,} response_surfaces={len(response_surfaces):,} "
+        f"rule_universe={len(rule_universe):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -1206,6 +1250,310 @@ def _dependency_metrics(frame: pd.DataFrame) -> dict[str, float]:
     }
 
 
+
+
+def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    """Generate candidate mechanism rule specs with train-window-only thresholds.
+
+    This function creates the grammar layer for later negative-space plateau
+    accounting.  It uses only entry-known taxonomy/event columns; it deliberately
+    does not join outcomes, PnL, short entries, or final-holdout artifacts.
+    Threshold values are recomputed independently inside each train window for
+    each test day, so the same 365d cache can be replayed chronologically.
+    """
+
+    columns = _rule_universe_columns()
+    rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
+    if rule_input.empty:
+        return pd.DataFrame(columns=columns)
+    rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
+    if rule_input.empty:
+        return pd.DataFrame(columns=columns)
+    rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+    rows: list[dict[str, object]] = []
+    for test_day_ord in sorted(rule_input["day_ord"].dropna().astype("int64").unique()):
+        test_day_ord_int = int(test_day_ord)
+        test_date = _date_from_day_ord(test_day_ord_int)
+        for train_window_days in ROLLING_WINDOWS_DAYS:
+            train_start_day_ord = test_day_ord_int - int(train_window_days)
+            train_end_day_ord = test_day_ord_int - 1
+            train = rule_input.loc[
+                (rule_input["day_ord"] >= train_start_day_ord) & (rule_input["day_ord"] <= train_end_day_ord)
+            ].copy()
+            if train.empty:
+                continue
+            for scope in _train_rule_scopes(train):
+                scoped = _apply_rule_scope(train, scope["conditions"])
+                if len(scoped) < MIN_TRAIN_SCOPE_EVENTS:
+                    continue
+                rows.append(
+                    _rule_universe_row(
+                        test_day_ord=test_day_ord_int,
+                        test_date=test_date,
+                        train_window_days=int(train_window_days),
+                        train_start_day_ord=train_start_day_ord,
+                        train_end_day_ord=train_end_day_ord,
+                        scope=scope,
+                        threshold_feature="",
+                        threshold_side="none",
+                        threshold_quantile=np.nan,
+                        threshold_value=np.nan,
+                        filtered=scoped,
+                        threshold_source_events=0,
+                        threshold_valid_values=0,
+                        threshold_uses_abs_value=False,
+                    )
+                )
+                for feature, side, quantiles in RULE_THRESHOLD_FEATURES:
+                    if feature not in scoped.columns:
+                        continue
+                    source_values = pd.to_numeric(scoped[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+                    threshold_uses_abs_value = side == "abs_ge"
+                    fit_values = source_values.abs() if threshold_uses_abs_value else source_values
+                    fit_values = fit_values.dropna()
+                    if fit_values.empty:
+                        continue
+                    for quantile in quantiles:
+                        threshold_value = _safe_quantile(fit_values, float(quantile))
+                        if not math.isfinite(threshold_value):
+                            continue
+                        filtered = _apply_threshold(scoped, feature=feature, side=side, threshold_value=threshold_value)
+                        rows.append(
+                            _rule_universe_row(
+                                test_day_ord=test_day_ord_int,
+                                test_date=test_date,
+                                train_window_days=int(train_window_days),
+                                train_start_day_ord=train_start_day_ord,
+                                train_end_day_ord=train_end_day_ord,
+                                scope=scope,
+                                threshold_feature=feature,
+                                threshold_side=side,
+                                threshold_quantile=float(quantile),
+                                threshold_value=float(threshold_value),
+                                filtered=filtered,
+                                threshold_source_events=int(len(scoped)),
+                                threshold_valid_values=int(len(fit_values)),
+                                threshold_uses_abs_value=threshold_uses_abs_value,
+                            )
+                        )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days", "scope_name", "threshold_feature", "threshold_quantile", "rule_id"])
+
+
+def _rule_input_frame(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    if taxonomy.empty:
+        return pd.DataFrame()
+    taxonomy_columns = [
+        "event_id", "symbol", "feature_cutoff_ms", "feature_cutoff_time_utc", "day_ord", "date", "session_bucket",
+        "pump_tier", "acceptance_regime", "oi_regime", "flow_regime", "price_progress_regime", "structure_regime",
+        "late_buyer_regime", "mechanism_id", "mechanism_family", "taxonomy_model", "taxonomy_feature_source_model",
+        "taxonomy_uses_outcome_columns", "future_label_available_at_entry", "outcomes_available_in_feature_store",
+        "data_access_model", "oi_model",
+    ]
+    event_feature_columns = [
+        "event_id", "seed_return_pct", "seed_high_return_pct", "seed_quote_ratio", "seed_trade_ratio", "seed_taker_buy_share",
+        "pre60_return_pct", "pre60_range_pct", "early_return_pct", "early_range_pct", "early_quote_ratio_60m_scaled",
+        "early_trade_ratio_60m_scaled", "early_taker_buy_quote_share", "close_ret_5m", "close_ret_10m", "close_ret_15m",
+        "high_ret_15m", "close15_to_high15_ratio", "wick_ret_15m", "m1_last2_quote_share", "m1_last2_trade_share",
+        "m1_quote_accel_last2_vs_first2", "m1_trade_accel_last2_vs_first2", "oi_change_5m_pct", "oi_change_10m_pct",
+        "oi_change_15m_pct", "oi_available",
+    ]
+    available_taxonomy_columns = [column for column in taxonomy_columns if column in taxonomy.columns]
+    work = taxonomy[available_taxonomy_columns].copy()
+    if not events.empty:
+        available_event_columns = [column for column in event_feature_columns if column in events.columns]
+        if available_event_columns and "event_id" in available_event_columns:
+            event_features = events[available_event_columns].drop_duplicates("event_id", keep="last")
+            work = work.merge(event_features, on="event_id", how="left", suffixes=("", "_event"))
+    for column in _rule_numeric_feature_columns():
+        if column in work.columns:
+            work[column] = pd.to_numeric(work[column], errors="coerce")
+    return work
+
+
+def _train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
+    scopes: list[dict[str, object]] = [
+        {"scope_name": "all", "conditions": {}, "scope_depth": 0},
+    ]
+    for axis in RULE_SCOPE_AXES:
+        if axis not in train.columns:
+            continue
+        counts = train[axis].fillna("missing").astype(str).value_counts(dropna=False)
+        for value, count in counts.items():
+            if int(count) >= MIN_TRAIN_SCOPE_EVENTS:
+                scopes.append({"scope_name": axis, "conditions": {axis: str(value)}, "scope_depth": 1})
+    for left, right in RULE_PAIR_SCOPES:
+        if left not in train.columns or right not in train.columns:
+            continue
+        grouped = train.assign(**{left: train[left].fillna("missing").astype(str), right: train[right].fillna("missing").astype(str)}).groupby([left, right], dropna=False)
+        for (left_value, right_value), frame in grouped:
+            if len(frame) >= MIN_TRAIN_SCOPE_EVENTS:
+                scopes.append(
+                    {
+                        "scope_name": f"{left}+{right}",
+                        "conditions": {left: str(left_value), right: str(right_value)},
+                        "scope_depth": 2,
+                    }
+                )
+    # Deterministic order and de-duplication: the same condition set can be
+    # reached through a named pair after missing-value normalization.
+    unique: dict[str, dict[str, object]] = {}
+    for scope in scopes:
+        key = _scope_key(scope["conditions"])
+        unique.setdefault(f"{scope['scope_name']}|{key}", scope)
+    return list(unique.values())
+
+
+def _apply_rule_scope(frame: pd.DataFrame, conditions: object) -> pd.DataFrame:
+    if not isinstance(conditions, dict) or not conditions:
+        return frame.copy()
+    mask = pd.Series(True, index=frame.index)
+    for column, expected in conditions.items():
+        if column not in frame.columns:
+            return frame.iloc[0:0].copy()
+        mask &= frame[column].fillna("missing").astype(str).eq(str(expected))
+    return frame.loc[mask].copy()
+
+
+def _apply_threshold(frame: pd.DataFrame, *, feature: str, side: str, threshold_value: float) -> pd.DataFrame:
+    values = pd.to_numeric(frame.get(feature, pd.Series(np.nan, index=frame.index)), errors="coerce")
+    if side == "le":
+        mask = values <= float(threshold_value)
+    elif side == "ge":
+        mask = values >= float(threshold_value)
+    elif side == "abs_ge":
+        mask = values.abs() >= float(threshold_value)
+    else:
+        raise ValueError(f"unsupported threshold side: {side}")
+    return frame.loc[mask.fillna(False)].copy()
+
+
+def _rule_universe_row(
+    *,
+    test_day_ord: int,
+    test_date: str,
+    train_window_days: int,
+    train_start_day_ord: int,
+    train_end_day_ord: int,
+    scope: dict[str, object],
+    threshold_feature: str,
+    threshold_side: str,
+    threshold_quantile: float,
+    threshold_value: float,
+    filtered: pd.DataFrame,
+    threshold_source_events: int,
+    threshold_valid_values: int,
+    threshold_uses_abs_value: bool,
+) -> dict[str, object]:
+    conditions = scope.get("conditions") if isinstance(scope.get("conditions"), dict) else {}
+    assert isinstance(conditions, dict)
+    scope_key = _scope_key(conditions)
+    scope_name = str(scope.get("scope_name", ""))
+    threshold_family = "axis_only" if not threshold_feature else f"{threshold_feature}_{threshold_side}_q{_quantile_label(threshold_quantile)}"
+    rule_key = "|".join(
+        (
+            str(test_day_ord),
+            str(train_window_days),
+            scope_name,
+            scope_key,
+            threshold_family,
+            _format_float_for_id(threshold_value),
+        )
+    )
+    train_events = int(len(filtered))
+    train_symbols = int(filtered["symbol"].nunique()) if "symbol" in filtered.columns and not filtered.empty else 0
+    train_active_days = int(filtered["date"].nunique()) if "date" in filtered.columns and not filtered.empty else 0
+    return {
+        "research_id": RESEARCH_ID,
+        "rule_id": "pmr_" + hashlib.sha1(rule_key.encode("utf-8")).hexdigest()[:16],
+        "rule_key": rule_key,
+        "test_day_ord": int(test_day_ord),
+        "test_date": test_date,
+        "train_window_days": int(train_window_days),
+        "train_start_day_ord": int(train_start_day_ord),
+        "train_end_day_ord": int(train_end_day_ord),
+        "train_start_date": _date_from_day_ord(train_start_day_ord),
+        "train_end_date": _date_from_day_ord(train_end_day_ord),
+        "scope_name": scope_name,
+        "scope_depth": int(scope.get("scope_depth", 0) or 0),
+        "scope_conditions": scope_key,
+        "mechanism_family": _condition_value(conditions, "mechanism_family"),
+        "acceptance_regime": _condition_value(conditions, "acceptance_regime"),
+        "oi_regime": _condition_value(conditions, "oi_regime"),
+        "flow_regime": _condition_value(conditions, "flow_regime"),
+        "structure_regime": _condition_value(conditions, "structure_regime"),
+        "late_buyer_regime": _condition_value(conditions, "late_buyer_regime"),
+        "session_bucket": _condition_value(conditions, "session_bucket"),
+        "threshold_family": threshold_family,
+        "threshold_feature": threshold_feature,
+        "threshold_side": threshold_side,
+        "threshold_quantile": threshold_quantile,
+        "threshold_value": threshold_value,
+        "threshold_source_events": int(threshold_source_events),
+        "threshold_valid_values": int(threshold_valid_values),
+        "threshold_uses_abs_value": bool(threshold_uses_abs_value),
+        "train_events": train_events,
+        "train_symbols": train_symbols,
+        "train_active_days": train_active_days,
+        "rule_passes_min_sample": bool(train_events >= MIN_RULE_EVENTS and train_symbols >= MIN_RULE_SYMBOLS and train_active_days >= MIN_RULE_ACTIVE_DAYS),
+        "min_rule_events": int(MIN_RULE_EVENTS),
+        "min_rule_symbols": int(MIN_RULE_SYMBOLS),
+        "min_rule_active_days": int(MIN_RULE_ACTIVE_DAYS),
+        "rule_generation_model": "train_only_entry_known_mechanism_rule_grammar_v1",
+        "threshold_fit_model": "quantiles_fit_inside_train_window_only",
+        "train_uses_only_days_before_test": True,
+        "uses_outcome_columns": False,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _rule_universe_columns() -> list[str]:
+    return [
+        "research_id", "rule_id", "rule_key", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord",
+        "train_end_day_ord", "train_start_date", "train_end_date", "scope_name", "scope_depth", "scope_conditions",
+        "mechanism_family", "acceptance_regime", "oi_regime", "flow_regime", "structure_regime", "late_buyer_regime",
+        "session_bucket", "threshold_family", "threshold_feature", "threshold_side", "threshold_quantile", "threshold_value",
+        "threshold_source_events", "threshold_valid_values", "threshold_uses_abs_value", "train_events", "train_symbols",
+        "train_active_days", "rule_passes_min_sample", "min_rule_events", "min_rule_symbols", "min_rule_active_days",
+        "rule_generation_model", "threshold_fit_model", "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl",
+        "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+
+
+def _rule_numeric_feature_columns() -> list[str]:
+    return sorted({feature for feature, _side, _quantiles in RULE_THRESHOLD_FEATURES} | {"day_ord"})
+
+
+def _scope_key(conditions: object) -> str:
+    if not isinstance(conditions, dict) or not conditions:
+        return "*"
+    return ";".join(f"{key}={conditions[key]}" for key in sorted(conditions))
+
+
+def _condition_value(conditions: dict[str, object], key: str) -> str:
+    return str(conditions.get(key, "*"))
+
+
+def _quantile_label(value: float) -> str:
+    if not math.isfinite(_float(value)):
+        return "none"
+    return str(int(round(float(value) * 100))).zfill(2)
+
+
+def _format_float_for_id(value: float) -> str:
+    parsed = _float(value)
+    if not math.isfinite(parsed):
+        return "nan"
+    return f"{parsed:.8g}"
+
+
+def _date_from_day_ord(day_ord: int) -> str:
+    return datetime.fromtimestamp(int(day_ord) * DAY_MS / 1000, UTC).date().isoformat()
+
 def _run_config_frame(
     *,
     config: PumpMechanismStabilityConfig,
@@ -1219,6 +1567,7 @@ def _run_config_frame(
     cache_coverage: dict[str, object],
     taxonomy: pd.DataFrame,
     response_surfaces: pd.DataFrame,
+    rule_universe: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -1276,6 +1625,12 @@ def _run_config_frame(
         "taxonomy_rows": taxonomy_rows,
         "unique_mechanism_ids": unique_mechanism_ids,
         "response_surface_rows": response_surface_rows,
+        "rule_universe_rows": rule_universe_rows,
+        "sampled_train_rule_rows": sampled_train_rule_rows,
+        "rule_generation_model": "train_only_entry_known_mechanism_rule_grammar_v1",
+        "rule_threshold_fit_model": "quantiles_fit_inside_train_window_only",
+        "rule_universe_uses_outcomes": False,
+        "rule_universe_uses_pnl": False,
         "response_surface_model": "pre_trade_mechanism_outcome_distribution_v1",
         "response_surfaces_use_pnl": False,
         "response_surfaces_use_short_entry": False,
@@ -1302,6 +1657,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_taxonomy.csv", "written", "entry-known mechanism axes per event"),
         ("pump_mechanism_taxonomy_by_axis.csv", "written", "axis-level taxonomy counts and breadth diagnostics"),
         ("pump_mechanism_response_surfaces.csv", "written", "mechanism response diagnostics before PnL"),
+        ("pump_mechanism_rule_universe.csv", "written", "train-only entry-known mechanism rule specs"),
         ("pump_mechanism_negative_space.csv", "planned", "all generated neighbors including failed/rejected rules"),
         ("pump_mechanism_plateau_basins.csv", "planned", "basin-level plateau scores"),
         ("pump_mechanism_daily_oos.csv", "planned", "daily prequential OOS ledger"),
