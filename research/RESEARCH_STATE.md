@@ -6809,3 +6809,118 @@ launch-ready: top-removal, calendar >60%, frequency and final holdout are not
 good enough. The next improvement should target robust frequency and tail
 dependence, not looser acceptance.
 ```
+
+## 2026-06-12 - P565 adaptive category plateau miner
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Next step to complete the theoretical model:
+
+```text
+Add a bounded adaptive miner above cached events. It must discover numeric
+entry-known threshold pockets inside different source/session/nature/stop/
+management categories, then verify them with the same rolling WFA, top-removal,
+Monte Carlo, calendar and final-holdout audit gates.
+```
+
+Implemented:
+
+```text
+research_tools/short_robust_plateau_engine.py
+
+New artifacts:
+- category_plateau_prefilter.csv
+- category_plateau_candidates.csv
+- category_plateau_neighborhoods.csv
+- category_plateau_final_holdout_validation.csv
+- category_plateau_rejected_reasons.csv
+- category_plateau_diversity_scores.csv
+- category_plateau_portfolio_candidates.csv
+- category_plateau_portfolio_oos_trades.csv
+- category_plateau_portfolio_meta_validation.csv
+- category_plateau_report.md
+```
+
+Scope:
+
+```text
+The miner searches only ENTRY_FEATURES, grouped by:
+- source
+- source + session
+- source + nature
+- source + session + nature
+- source + session + nature + stop
+- source + session + nature + management
+
+It does not use future labels, fader_label, outcome_class, MFE/MAE, final
+holdout or post-entry path fields for selection.
+```
+
+Full 365d run:
+
+```text
+command:
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py run-365d --output-dir .output\research_cache\short_robust_plateau_engine_category_365d --progress-every 500
+
+runtime: about 20 minutes
+event_outcome_rows: 217910
+events: 5147
+regular_candidate_rows: 3030
+regular_promoted: 168
+regular_strict_model_pass: 0
+regular_theoretical_accept_pass: 0
+
+category_prefilter_rows: 900
+category_candidate_rows: 665
+category_promoted: 0
+category_strict_model_pass: 0
+category_theoretical_accept_pass: 0
+category_neighborhoods: 0
+category_final_holdout_basic_pass: 0
+```
+
+Category portfolio audit:
+
+```text
+trades: 276
+symbols: 168
+cost10_avg: +0.3455R
+cost10_sum: +95.36R
+win_rate: 72.8%
+calendar_positive_day_rate: 46.25%
+calendar_median_trades_per_day: 1
+top35 pass: false
+MC pass: false
+```
+
+Read:
+
+```text
+The bot now finds promising category-specific pockets instead of only testing
+handwritten trigger families. The strongest pockets are still sparse and do not
+form broad enough numeric-threshold plateaus. This is useful discovery, not a
+trade-ready edge.
+```
+
+Most useful discovered pockets:
+
+```text
+failed_pump_075_path + asia_only + deep_break_retest0p4:
+  initial_risk_pct <= 3.32%, minutes_from_seed_to_break <= 9m
+
+large_runner_local_high + europe_us_overlap + early_return>=6% & close15<=4%:
+  m1_quote_top1_share <= 0.306, m1_trade_top1_share <= 0.289
+
+large_runner_failed_continuation + europe_us_overlap + big_early_stall_close15_le4:
+  m1_last2_trade_share <= 0.374
+```
+
+Conclusion:
+
+```text
+The theoretical model is now much closer to the intended "bot-scientist": cache
+events once, generate bounded hypotheses, mine category plateaus, stress them,
+rank diversity and build a marginal portfolio. It still correctly refuses
+acceptance because calendar coverage, top-removal and numeric-neighborhood
+robustness are not strong enough.
+```

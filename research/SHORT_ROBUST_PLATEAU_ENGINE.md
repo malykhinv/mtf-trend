@@ -529,3 +529,101 @@ new event source.
 
 The current 365d artifacts remain development/sandbox data. The final judge
 must be a future unseen/live-forward period.
+
+## Adaptive Category Plateau Miner
+
+The next step toward the theoretical model is implemented as a bounded category
+miner. It is meant to answer:
+
+```text
+Inside each separate fader nature and session, are there entry-known feature
+threshold zones that stay positive under rolling WFA, stress tests and
+top-removal?
+```
+
+This is different from the original verifier:
+
+```text
+Old layer:
+  generate handwritten trigger/stop/management combinations and verify them.
+
+New category miner:
+  group cached outcomes by source/session/nature/stop/management, then mine
+  numeric ENTRY_FEATURE thresholds inside each group before WFA verification.
+```
+
+Outputs:
+
+```text
+category_plateau_prefilter.csv
+category_plateau_candidates.csv
+category_plateau_neighborhoods.csv
+category_plateau_final_holdout_validation.csv
+category_plateau_rejected_reasons.csv
+category_plateau_diversity_scores.csv
+category_plateau_portfolio_candidates.csv
+category_plateau_portfolio_oos_trades.csv
+category_plateau_portfolio_meta_validation.csv
+category_plateau_report.md
+```
+
+Safety contract:
+
+```text
+Generation uses only development rows before final_start.
+Selectors are restricted to ENTRY_FEATURES.
+Future labels, fader_label, outcome_class, MFE/MAE, future60 fields and final
+holdout are never used to generate category thresholds.
+```
+
+365d command:
+
+```text
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py run-365d --output-dir .output\research_cache\short_robust_plateau_engine_category_365d --progress-every 500
+```
+
+365d result:
+
+```text
+event_outcome_rows=217910
+events=5147
+regular_candidate_rows=3030
+regular_promoted=168
+regular_strict_model_pass=0
+category_prefilter_rows=900
+category_candidate_rows=665
+category_promoted=0
+category_strict_model_pass=0
+category_theoretical_accept_pass=0
+category_neighborhoods=0
+lookahead_audit=pass, 0 violations
+```
+
+Category portfolio read:
+
+```text
+trades=276
+symbols=168
+cost10_avg=+0.3455R
+cost10_sum=+95.36R
+WR=72.8%
+calendar_positive_day_rate=46.25%
+top35 pass=false
+MC pass=false
+```
+
+Interpretation:
+
+```text
+The miner successfully discovers category-specific pockets, especially:
+- failed_pump_075_path + asia_only + deep_break_retest0p4 with small initial
+  risk or fast break-to-retest timing;
+- large_runner_local_high + europe_us_overlap + early_return>=6% & close15<=4%
+  with distributed 1m flow instead of one dominant minute;
+- large_runner_failed_continuation + europe_us_overlap with weak late m1 trade
+  continuation.
+
+They are still too sparse and fragile to promote. The bot now has the correct
+research mechanism, but the current cache still does not contain a fully robust
+and diversified short-fader edge.
+```

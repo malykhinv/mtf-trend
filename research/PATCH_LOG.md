@@ -13005,3 +13005,85 @@ Research tooling only. The new sources are replay-backed, not unseen proof.
 `large_runner_failed_continuation` uses the artifact's initial stop because the
 artifact does not expose the exact local-high stop construction.
 ```
+
+## 2026-06-12 - P565 adaptive category plateau miner
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added an adaptive category plateau miner to
+  `research_tools/short_robust_plateau_engine.py`.
+- Added bounded category scopes over source, session, nature, stop and
+  management axes.
+- Added entry-known numeric threshold generation for selected ENTRY_FEATURES.
+- Added category-level rolling WFA, top-35 removal, Monte Carlo, calendar and
+  final-holdout audit.
+- Added category diversity and marginal portfolio artifacts.
+- Added category miner coverage to `compute_budget_plan.csv`,
+  `theoretical_model_gap_analysis.csv` and `final_report.md`.
+- Added CLI summary lines for category candidate/promoted/strict counts after
+  `smoke` and `run-365d`.
+- Added normal column headers for empty
+  `category_plateau_neighborhoods.csv` outputs so downstream tools can read the
+  artifact without `EmptyDataError`.
+- Updated `research/SHORT_ROBUST_PLATEAU_ENGINE.md`,
+  `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`,
+  `research/EXPERIMENT_LOG.md` and `research/STRATEGY_SPEC.md`.
+
+Validation:
+
+```text
+.\.venv\Scripts\python.exe -m compileall research_tools\short_robust_plateau_engine.py
+
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py smoke --output-dir .output\research_cache\short_robust_plateau_engine_category_smoke2 --max-rows-per-source 3000
+
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py run-365d --output-dir .output\research_cache\short_robust_plateau_engine_category_365d --progress-every 500
+
+synthetic artifact contract smoke:
+category_plateau_neighborhoods empty output keeps 23 readable columns
+
+post-final quick smoke:
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py smoke --output-dir .output\research_cache\short_robust_plateau_engine_category_smoke3 --max-rows-per-source 1000
+candidate_rows=179
+promoted=42
+category_plateau_candidate_rows=4
+category_plateau_promoted=0
+category_plateau_strict_model_pass=0
+```
+
+Full 365d validation output:
+
+```text
+event_outcome_rows=217910
+events=5147
+regular_candidate_rows=3030
+regular_promoted=168
+regular_strict_model_pass=0
+category_prefilter_rows=900
+category_candidate_rows=665
+category_promoted=0
+category_strict_model_pass=0
+category_theoretical_accept_pass=0
+lookahead_audit=pass, 0 violations
+```
+
+Category portfolio audit:
+
+```text
+trades=276
+symbols=168
+cost10_avg=+0.3455R
+win_rate=72.8%
+calendar_positive_day_rate=46.25%
+top35 pass=false
+MC pass=false
+```
+
+Risk:
+
+```text
+Research tooling only. The miner searches cached replay outcomes and does not
+change live trading logic. Category portfolio output is exploratory; it is not
+an acceptance shortcut because strict gates remain failed.
+```

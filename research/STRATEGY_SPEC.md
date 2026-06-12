@@ -1444,3 +1444,27 @@ Only entry-known fields may select a short candidate.
 future labels, fader_label, outcome_class, MFE/MAE and post-entry 1m/m3/m5 path
 features are evaluation-only.
 ```
+
+### Adaptive Category Plateau Research
+
+`short_robust_plateau_engine.py` now includes a research-only category plateau
+miner. It does not change live trading logic.
+
+The miner searches entry-known numeric thresholds inside separate fader
+categories:
+
+```text
+source
+source + session
+source + nature
+source + session + nature
+source + session + nature + stop
+source + session + nature + management
+```
+
+Allowed selector fields are restricted to the engine's `ENTRY_FEATURES`. The
+purpose is to find broad, repeatable pockets such as fast failed retests, small
+initial-risk structures, distributed 1m flow, or weak failed-continuation flow
+inside a specific session. Any discovered pocket remains research-only until it
+passes rolling WFA, top-removal, Monte Carlo, calendar, plateau-neighborhood and
+fresh unseen validation.

@@ -43,11 +43,73 @@ DEFAULT_MC_ITERATIONS = 1000
 DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE = 0.60
 DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS = 400
 DEFAULT_DIVERSIFIED_PORTFOLIO_MAX_CANDIDATES = 18
+DEFAULT_CATEGORY_PLATEAU_MAX_GROUPS = 240
+DEFAULT_CATEGORY_PLATEAU_MAX_CANDIDATES = 900
+DEFAULT_CATEGORY_PLATEAU_MIN_GROUP_ROWS = 60
+DEFAULT_CATEGORY_PLATEAU_QUANTILES = (0.20, 0.35, 0.50, 0.65, 0.80)
+CATEGORY_PLATEAU_NEIGHBORHOOD_COLUMNS = [
+    "category_plateau_id",
+    "members",
+    "threshold_values",
+    "threshold_min",
+    "threshold_max",
+    "member_candidate_ids",
+    "best_candidate_id",
+    "best_candidate_score",
+    "worst_candidate_score",
+    "score_degradation_pct",
+    "category_plateau_pass",
+    "category_plateau_strong_pass",
+    "member_oos_cost10_avg_r_median",
+    "member_oos_median_r_median",
+    "member_oos_trades_median",
+    "category_scope",
+    "source",
+    "session_bucket",
+    "nature_id",
+    "stop_model",
+    "management_id",
+    "feature",
+    "direction",
+]
 SOURCE_TRIGGER_PREFIXES = {
     "failed_pump_structural": "failed_",
     "failed_pump_075_path": "path075_",
     "large_runner_local_high": "large_",
     "large_runner_failed_continuation": "lfail_",
+}
+CATEGORY_PLATEAU_SCOPES = {
+    "source": ["source"],
+    "source_session": ["source", "session_bucket"],
+    "source_nature": ["source", "nature_id"],
+    "source_session_nature": ["source", "session_bucket", "nature_id"],
+    "source_session_nature_stop": ["source", "session_bucket", "nature_id", "stop_model"],
+    "source_session_nature_management": ["source", "session_bucket", "nature_id", "management_id"],
+}
+CATEGORY_PLATEAU_FEATURE_DIRECTIONS = {
+    "structural_break_depth_pct": ("ge",),
+    "failed_retest_distance_pct": ("ge",),
+    "minutes_from_seed_to_break": ("le",),
+    "initial_risk_pct": ("le", "ge"),
+    "delay_min": ("ge", "le"),
+    "close_ret_10m": ("le",),
+    "close_ret_15m": ("le",),
+    "high_ret_15m": ("le",),
+    "wick_ret_15m": ("ge",),
+    "pre60_range_pct": ("ge",),
+    "pre60_return_pct": ("le", "ge"),
+    "early_return_pct": ("le", "ge"),
+    "early_quote_ratio_24h_scaled": ("ge",),
+    "early_trade_ratio_24h_scaled": ("ge",),
+    "early_taker_buy_quote_share": ("le", "ge"),
+    "m1_taker_buy_quote_share": ("le", "ge"),
+    "m1_quote_top1_share": ("le",),
+    "m1_trade_top1_share": ("le",),
+    "m1_last2_quote_share": ("le", "ge"),
+    "m1_last2_trade_share": ("le", "ge"),
+    "m1_quote_accel_last2_vs_first2": ("le", "ge"),
+    "m1_trade_accel_last2_vs_first2": ("le", "ge"),
+    "close15_to_high15_ratio": ("le",),
 }
 LARGE_FAILURE_NATURE_BY_CANDIDATE_ID = {
     "S1_close15_fail": "failed_continuation_close15_le0",
@@ -481,6 +543,15 @@ def _date_bounds(
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _read_csv_optional(path: Path) -> pd.DataFrame:
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def archive_manual_knowledge(archive_dir: Path = DEFAULT_ARCHIVE_DIR) -> None:
@@ -1676,6 +1747,10 @@ def scan_plateaus(
     min_calendar_positive_day_rate: float = DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE,
     candidate_queue_file: Path | None = None,
     guided_candidates_limit: int = 0,
+    category_plateaus: bool = False,
+    category_plateau_max_groups: int = DEFAULT_CATEGORY_PLATEAU_MAX_GROUPS,
+    category_plateau_max_candidates: int = DEFAULT_CATEGORY_PLATEAU_MAX_CANDIDATES,
+    category_plateau_min_group_rows: int = DEFAULT_CATEGORY_PLATEAU_MIN_GROUP_ROWS,
 ) -> None:
     df = _load_outcomes(output_dir)
     _, final_end, final_start = _date_bounds(df, final_holdout_days=final_holdout_days)
@@ -1728,6 +1803,10 @@ def scan_plateaus(
         "top_removal_pct": top_removal_pct,
         "min_calendar_positive_day_rate": min_calendar_positive_day_rate,
         "event_store_fingerprint": _event_store_fingerprint(metadata, {"candidate_profile": candidate_profile, "candidate_universe_rows": len(specs), "is_days": is_days, "oos_days": oos_days, "step_days": step_days, "final_holdout_days": final_holdout_days}),
+        "category_plateaus": bool(category_plateaus),
+        "category_plateau_max_groups": int(category_plateau_max_groups),
+        "category_plateau_max_candidates": int(category_plateau_max_candidates),
+        "category_plateau_min_group_rows": int(category_plateau_min_group_rows),
     }
     _write_json(
         output_dir / "scan_config.json",
@@ -1919,6 +1998,24 @@ def scan_plateaus(
         risk_per_trade_pct=risk_per_trade_pct,
         top_removal_pct=top_removal_pct,
     )
+    category_results: dict[str, pd.DataFrame] = {}
+    if category_plateaus:
+        category_results = run_category_plateau_miner(
+            output_dir,
+            df,
+            windows,
+            final_start=final_start,
+            final_end=final_end,
+            min_is_trades=min_is_trades,
+            min_oos_trades=min_oos_trades,
+            mc_iterations=mc_iterations,
+            risk_per_trade_pct=risk_per_trade_pct,
+            top_removal_pct=top_removal_pct,
+            min_calendar_positive_day_rate=min_calendar_positive_day_rate,
+            max_groups=category_plateau_max_groups,
+            max_candidates=category_plateau_max_candidates,
+            min_group_rows=category_plateau_min_group_rows,
+        )
     self_improvement_queue = _build_self_improvement_queue(
         dev_df,
         trigger_masks,
@@ -1937,6 +2034,7 @@ def scan_plateaus(
         guided_candidate_rows=len(guided_specs),
         rejected=rejected,
         self_improvement_queue=self_improvement_queue,
+        category_plateau_candidates=category_results.get("candidates", pd.DataFrame()),
     )
     theoretical_model_gap_analysis = _build_theoretical_model_gap_analysis(
         hypothesis_grammar=hypothesis_grammar,
@@ -1948,6 +2046,8 @@ def scan_plateaus(
         diversified_portfolio=diversified_portfolio,
         compute_budget_plan=compute_budget_plan,
         lookahead=lookahead,
+        category_plateau_candidates=category_results.get("candidates", pd.DataFrame()),
+        category_plateau_neighborhoods=category_results.get("neighborhoods", pd.DataFrame()),
     )
     improvement_plan = _build_improvement_plan(
         candidates,
@@ -2182,6 +2282,657 @@ def _build_candidate_axis_summary(candidates: pd.DataFrame) -> pd.DataFrame:
             )
     out = pd.DataFrame(rows)
     return out.sort_values(["axis", "promoted_rows", "best_candidate_score"], ascending=[True, False, False])
+
+
+def _format_threshold(value: float) -> str:
+    if not np.isfinite(value):
+        return "nan"
+    return f"{float(value):.8g}".replace("-", "m").replace(".", "p")
+
+
+def _category_scope_row(scope: str, keys: object) -> dict[str, str]:
+    cols = CATEGORY_PLATEAU_SCOPES[scope]
+    if not isinstance(keys, tuple):
+        keys = (keys,)
+    values = {col: str(value) for col, value in zip(cols, keys)}
+    return {
+        "source": values.get("source", "ALL"),
+        "session_bucket": values.get("session_bucket", "ALL"),
+        "nature_id": values.get("nature_id", "ALL"),
+        "stop_model": values.get("stop_model", "ALL"),
+        "management_id": values.get("management_id", "ALL"),
+    }
+
+
+def _category_base_mask(df: pd.DataFrame, row: pd.Series | dict[str, object]) -> pd.Series:
+    mask = pd.Series(True, index=df.index)
+    for col in ["source", "session_bucket", "nature_id", "stop_model", "management_id"]:
+        value = str(row.get(col, "ALL"))
+        if value and value != "ALL":
+            mask &= df[col].astype(str).eq(value)
+    return mask.fillna(False)
+
+
+def _category_threshold_mask(df: pd.DataFrame, row: pd.Series | dict[str, object]) -> pd.Series:
+    feature = str(row.get("feature", ""))
+    direction = str(row.get("direction", ""))
+    threshold = _safe_float(row.get("threshold", np.nan), float("nan"))
+    if feature not in df.columns or not np.isfinite(threshold):
+        return pd.Series(False, index=df.index)
+    values = pd.to_numeric(df[feature], errors="coerce")
+    if direction == "le":
+        mask = values.le(threshold)
+    elif direction == "ge":
+        mask = values.ge(threshold)
+    else:
+        mask = pd.Series(False, index=df.index)
+    return (_category_base_mask(df, row) & mask).fillna(False)
+
+
+def _category_candidate_id(row: dict[str, object]) -> str:
+    raw = "|".join(
+        [
+            str(row.get("category_scope", "")),
+            str(row.get("source", "")),
+            str(row.get("session_bucket", "")),
+            str(row.get("nature_id", "")),
+            str(row.get("stop_model", "")),
+            str(row.get("management_id", "")),
+            str(row.get("feature", "")),
+            str(row.get("direction", "")),
+            _format_threshold(_safe_float(row.get("threshold", np.nan), float("nan"))),
+        ]
+    )
+    return _stable_id("CP", raw)
+
+
+def _build_category_groups(
+    dev_df: pd.DataFrame,
+    *,
+    min_group_rows: int,
+    min_symbols: int,
+    min_days: int,
+    max_groups: int,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for scope, cols in CATEGORY_PLATEAU_SCOPES.items():
+        for keys, group in dev_df.groupby(cols, dropna=False):
+            if len(group) < min_group_rows:
+                continue
+            symbols = int(group["symbol"].nunique())
+            days = int(group["date"].nunique())
+            if symbols < min_symbols or days < min_days:
+                continue
+            net_m = _summary(group, "net_r", robust=False)
+            cost_m = _summary(group, "cost10_r", robust=False)
+            base = _category_scope_row(scope, keys)
+            row = {
+                "category_scope": scope,
+                "category_group_id": _stable_id("CG", f"{scope}|{keys}"),
+                **base,
+                "group_rows": int(len(group)),
+                "group_symbols": symbols,
+                "group_days": days,
+                "group_avg_r": net_m["avg_r"],
+                "group_median_r": net_m["median_r"],
+                "group_cost10_avg_r": cost_m["avg_r"],
+                "group_win_rate": net_m["win_rate"],
+            }
+            row["group_score"] = float(
+                0.35 * min(len(group) / 500.0, 1.0)
+                + 0.20 * min(symbols / 120.0, 1.0)
+                + 0.20 * min(days / 120.0, 1.0)
+                + 0.15 * np.tanh(_safe_float(cost_m["avg_r"]) / 0.12)
+                + 0.10 * np.tanh(_safe_float(net_m["median_r"]) / 0.12)
+            )
+            rows.append(row)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out = out.sort_values(["group_score", "group_rows"], ascending=[False, False])
+    selected: list[pd.DataFrame] = []
+    for _, scope_group in out.groupby("category_scope", sort=False):
+        selected.append(scope_group.head(max(8, max_groups // max(len(CATEGORY_PLATEAU_SCOPES), 1))))
+    capped = pd.concat(selected, ignore_index=True) if selected else out.iloc[0:0].copy()
+    capped = capped.sort_values(["group_score", "group_rows"], ascending=[False, False]).drop_duplicates("category_group_id")
+    return capped.head(max_groups).reset_index(drop=True)
+
+
+def _build_category_plateau_prefilter(
+    dev_df: pd.DataFrame,
+    *,
+    min_is_trades: int,
+    max_groups: int,
+    max_candidates: int,
+    min_group_rows: int,
+) -> pd.DataFrame:
+    groups = _build_category_groups(
+        dev_df,
+        min_group_rows=min_group_rows,
+        min_symbols=max(5, min_is_trades // 4),
+        min_days=max(5, min_is_trades // 4),
+        max_groups=max_groups,
+    )
+    if groups.empty:
+        return groups
+    rows: list[dict[str, object]] = []
+    quantiles = list(DEFAULT_CATEGORY_PLATEAU_QUANTILES)
+    allowed_features = [feature for feature in CATEGORY_PLATEAU_FEATURE_DIRECTIONS if feature in ENTRY_FEATURES and feature in dev_df.columns]
+    for _, group_row in groups.iterrows():
+        base_mask = _category_base_mask(dev_df, group_row)
+        group_df = dev_df[base_mask]
+        if group_df.empty:
+            continue
+        for feature in allowed_features:
+            values = pd.to_numeric(group_df[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            if values.nunique() < 4 or len(values) < min_is_trades:
+                continue
+            thresholds = values.quantile(quantiles).dropna().drop_duplicates().tolist()
+            if not thresholds:
+                continue
+            for threshold_rank, threshold in enumerate(thresholds):
+                threshold = float(threshold)
+                for direction in CATEGORY_PLATEAU_FEATURE_DIRECTIONS[feature]:
+                    if direction == "le":
+                        cand = group_df[pd.to_numeric(group_df[feature], errors="coerce").le(threshold)]
+                    else:
+                        cand = group_df[pd.to_numeric(group_df[feature], errors="coerce").ge(threshold)]
+                    reason = _prefilter_candidate(cand, min_is_trades)
+                    if reason:
+                        continue
+                    net_m = _summary(cand, "net_r", robust=False)
+                    cost_m = _summary(cand, "cost10_r", robust=False)
+                    if _safe_float(cost_m["avg_r"]) < -0.04 or _safe_float(net_m["median_r"]) < -0.20:
+                        continue
+                    row = group_row.to_dict()
+                    row.update(
+                        {
+                            "feature": feature,
+                            "direction": direction,
+                            "threshold": threshold,
+                            "threshold_rank": int(threshold_rank),
+                            "threshold_quantile": float(quantiles[min(threshold_rank, len(quantiles) - 1)]),
+                            "quick_rows": int(net_m["trades"]),
+                            "quick_symbols": int(net_m["symbols"]),
+                            "quick_days": int(net_m["days"]),
+                            "quick_avg_r": net_m["avg_r"],
+                            "quick_median_r": net_m["median_r"],
+                            "quick_cost10_avg_r": cost_m["avg_r"],
+                            "quick_win_rate": net_m["win_rate"],
+                            "quick_positive_day_rate": net_m["positive_day_rate"],
+                        }
+                    )
+                    row["candidate_id"] = _category_candidate_id(row)
+                    row["trigger_rule"] = f"cat_{feature}_{direction}_{_format_threshold(threshold)}"
+                    row["session_rule"] = str(row.get("session_bucket", "ALL"))
+                    row["risk_bucket"] = "feature_mined"
+                    row["quick_score"] = _quality_score(net_m) + 0.15 * np.tanh(_safe_float(cost_m["avg_r"]) / 0.18)
+                    rows.append(row)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out = out.sort_values(["quick_score", "quick_cost10_avg_r", "quick_rows"], ascending=[False, False, False])
+    selected: list[pd.DataFrame] = []
+    for _, source_group in out.groupby("source", sort=False):
+        selected.append(source_group.head(max(25, max_candidates // max(dev_df["source"].nunique(), 1))))
+    capped = pd.concat(selected, ignore_index=True) if selected else out.iloc[0:0].copy()
+    capped = capped.sort_values(["quick_score", "quick_cost10_avg_r", "quick_rows"], ascending=[False, False, False])
+    capped = capped.drop_duplicates("candidate_id", keep="first").head(max_candidates).reset_index(drop=True)
+    capped["selected_for_wfa"] = True
+    return capped
+
+
+def _build_category_plateau_neighborhoods(candidates: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame(columns=CATEGORY_PLATEAU_NEIGHBORHOOD_COLUMNS)
+    work = candidates[candidates["promoted"].astype(bool)].copy()
+    if work.empty:
+        return pd.DataFrame(columns=CATEGORY_PLATEAU_NEIGHBORHOOD_COLUMNS)
+    group_cols = ["category_scope", "source", "session_bucket", "nature_id", "stop_model", "management_id", "feature", "direction"]
+    rows: list[dict[str, object]] = []
+    for keys, group in work.groupby(group_cols, dropna=False):
+        if len(group) < 2:
+            continue
+        scores = pd.to_numeric(group["candidate_score"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        if scores.empty:
+            continue
+        best = group.sort_values(["candidate_score", "oos_cost10_sum_r"], ascending=[False, False]).iloc[0]
+        best_score = float(scores.max())
+        worst_score = float(scores.min())
+        degradation = 1.0 - (worst_score / best_score) if best_score > 0 else float("nan")
+        thresholds = pd.to_numeric(group["threshold"], errors="coerce").dropna()
+        row: dict[str, object] = {
+            "category_plateau_id": _stable_id("CPL", "|".join(map(str, keys))),
+            "members": int(len(group)),
+            "threshold_values": int(group["threshold"].nunique()),
+            "threshold_min": float(thresholds.min()) if len(thresholds) else float("nan"),
+            "threshold_max": float(thresholds.max()) if len(thresholds) else float("nan"),
+            "member_candidate_ids": ";".join(group["candidate_id"].astype(str).tolist()),
+            "best_candidate_id": str(best["candidate_id"]),
+            "best_candidate_score": best_score,
+            "worst_candidate_score": worst_score,
+            "score_degradation_pct": float(degradation),
+            "category_plateau_pass": bool(np.isfinite(degradation) and degradation <= 0.30 and len(group) >= 2),
+            "category_plateau_strong_pass": bool(np.isfinite(degradation) and degradation <= 0.15 and len(group) >= 2),
+            "member_oos_cost10_avg_r_median": float(pd.to_numeric(group["oos_cost10_avg_r"], errors="coerce").median()),
+            "member_oos_median_r_median": float(pd.to_numeric(group["oos_median_r"], errors="coerce").median()),
+            "member_oos_trades_median": float(pd.to_numeric(group["oos_trades"], errors="coerce").median()),
+        }
+        for col, value in zip(group_cols, keys if isinstance(keys, tuple) else (keys,)):
+            row[col] = value
+        rows.append(row)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=CATEGORY_PLATEAU_NEIGHBORHOOD_COLUMNS)
+    return out.sort_values(["category_plateau_pass", "category_plateau_strong_pass", "best_candidate_score"], ascending=[False, False, False])
+
+
+def _category_plateau_membership(neighborhoods: pd.DataFrame) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    if neighborhoods.empty or "member_candidate_ids" not in neighborhoods.columns:
+        return out
+    for _, neighborhood in neighborhoods.iterrows():
+        for cid in str(neighborhood.get("member_candidate_ids", "")).split(";"):
+            if not cid:
+                continue
+            current = out.get(cid)
+            score = _safe_float(neighborhood.get("best_candidate_score", 0.0))
+            if current is not None and _safe_float(current.get("category_plateau_best_candidate_score", 0.0)) >= score:
+                continue
+            out[cid] = {
+                "category_plateau_id": neighborhood.get("category_plateau_id", ""),
+                "category_plateau_pass": bool(neighborhood.get("category_plateau_pass", False)),
+                "category_plateau_strong_pass": bool(neighborhood.get("category_plateau_strong_pass", False)),
+                "category_plateau_members": int(neighborhood.get("members", 0) or 0),
+                "category_plateau_score_degradation_pct": float(neighborhood.get("score_degradation_pct", np.nan)),
+                "category_plateau_best_candidate_score": score,
+            }
+    return out
+
+
+def _evaluate_category_plateau_candidates(
+    df: pd.DataFrame,
+    candidate_specs: pd.DataFrame,
+    windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
+    *,
+    final_start: pd.Timestamp,
+    final_end: pd.Timestamp,
+    min_is_trades: int,
+    min_oos_trades: int,
+    mc_iterations: int,
+    risk_per_trade_pct: float,
+    top_removal_pct: float,
+    min_calendar_positive_day_rate: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, pd.DataFrame]]:
+    if candidate_specs.empty:
+        return pd.DataFrame(), pd.DataFrame(columns=CATEGORY_PLATEAU_NEIGHBORHOOD_COLUMNS), pd.DataFrame(), pd.DataFrame(), {}
+    dev_end = final_start
+    dev_df = df[df["date"].lt(dev_end)].copy()
+    calendar_days = _calendar_days_from_windows(windows)
+    final_days = pd.date_range(final_start, final_end - pd.Timedelta(days=1), freq="D", tz="UTC")
+    candidate_rows: list[dict[str, object]] = []
+    rejected_rows: list[dict[str, object]] = []
+    final_rows: list[dict[str, object]] = []
+    ledgers: dict[str, pd.DataFrame] = {}
+
+    for _, spec in candidate_specs.iterrows():
+        cid = str(spec["candidate_id"])
+        mask = _category_threshold_mask(dev_df, spec)
+        cand = dev_df[mask].copy()
+        prefilter_reason = _prefilter_candidate(cand, min_is_trades)
+        if prefilter_reason:
+            rejected_rows.append({"candidate_id": cid, "reason": prefilter_reason, "rows": int(len(cand))})
+            continue
+        oos_parts: list[pd.DataFrame] = []
+        is_scores: list[float] = []
+        oos_scores: list[float] = []
+        train_pass_count = 0
+        for window_idx, (is_start, is_end, oos_start, oos_end) in enumerate(windows):
+            is_part = _window_frame(cand, is_start, is_end)
+            oos_part = _window_frame(cand, oos_start, oos_end)
+            is_m = _summary(is_part, "net_r", robust=False)
+            is_cost = _summary(is_part, "cost10_r", robust=False)
+            train_pass = (
+                is_m["trades"] >= min_is_trades
+                and is_m["symbols"] >= max(5, min_is_trades // 4)
+                and is_m["days"] >= max(5, min_is_trades // 4)
+                and _safe_float(is_cost["avg_r"]) > -0.03
+                and _safe_float(is_m["median_r"]) > -0.20
+            )
+            if train_pass:
+                train_pass_count += 1
+            is_score = _quality_score(is_m)
+            is_scores.append(is_score)
+            if train_pass and not oos_part.empty:
+                oos_m = _summary(oos_part, "net_r", robust=False)
+                oos_scores.append(_quality_score(oos_m))
+                oos_parts.append(oos_part.assign(candidate_id=cid, category_wfa_window=window_idx))
+        if not oos_parts:
+            rejected_rows.append({"candidate_id": cid, "reason": "no_train_pass_oos_rows", "train_pass_count": int(train_pass_count)})
+            continue
+        oos_all = pd.concat(oos_parts, ignore_index=True)
+        oos_all = oos_all.drop_duplicates(["candidate_id", "event_id", "source"], keep="first")
+        ledgers[cid] = oos_all
+        net_m = _summary(oos_all, "net_r")
+        cost_m = _summary(oos_all, "cost10_r")
+        calendar = _calendar_stats(oos_all, calendar_days, "cost10_r")
+        top_removed = _top_removal_summary(oos_all["cost10_r"], remove_pct=top_removal_pct)
+        mc = _monte_carlo_stress(
+            oos_all["cost10_r"],
+            iterations=mc_iterations,
+            risk_per_trade_pct=risk_per_trade_pct,
+            seed=zlib.crc32(cid.encode("utf-8")),
+        )
+        is_score_med = float(np.nanmedian(is_scores)) if is_scores else float("nan")
+        oos_score_med = float(np.nanmedian(oos_scores)) if oos_scores else float("nan")
+        efficiency = oos_score_med / is_score_med if is_score_med and np.isfinite(is_score_med) and is_score_med > 0 else float("nan")
+        oos_window_rate = float(np.mean([score > 0 for score in oos_scores])) if oos_scores else 0.0
+        promoted = (
+            net_m["trades"] >= min_oos_trades
+            and _safe_float(net_m["avg_r"]) > 0
+            and _safe_float(net_m["median_r"]) > 0
+            and _safe_float(cost_m["avg_r"]) > 0
+            and _safe_float(net_m["win_rate"]) >= 0.50
+            and _safe_float(calendar["calendar_positive_day_rate"]) >= 0.35
+            and _safe_float(net_m["top_trade_independence_pct"]) >= 0.15
+            and oos_window_rate >= 0.50
+        )
+        row = spec.to_dict()
+        row.update(
+            {
+                "train_pass_count": int(train_pass_count),
+                "windows": int(len(windows)),
+                "oos_window_positive_score_rate": oos_window_rate,
+                "is_score_median": is_score_med,
+                "oos_score_median": oos_score_med,
+                "efficiency_ratio": efficiency,
+                "candidate_score": _quality_score(net_m) + min(max(efficiency if np.isfinite(efficiency) else 0.0, 0.0), 1.5) * 0.15,
+                "promoted": bool(promoted),
+                "oos_cost10_avg_r": cost_m["avg_r"],
+                "oos_cost10_sum_r": cost_m["sum_r"],
+            }
+        )
+        row.update({f"oos_{k}": v for k, v in net_m.items()})
+        row.update(calendar)
+        row.update(top_removed)
+        row.update(mc)
+        row["top_removal_pass"] = bool(top_removed["top_removed_pass"])
+        row["model_quality_score"] = _model_quality_score(net_m)
+        candidate_rows.append(row)
+        if not promoted:
+            rejected_rows.append(
+                {
+                    "candidate_id": cid,
+                    "reason": _reject_reason(row),
+                    "oos_trades": int(net_m["trades"]),
+                    "oos_cost10_avg_r": float(cost_m["avg_r"]),
+                    "oos_median_r": float(net_m["median_r"]),
+                }
+            )
+
+        final = df[_category_threshold_mask(df, spec) & df["date"].ge(final_start) & df["date"].lt(final_end)].copy()
+        final_net = _summary(final, "net_r")
+        final_cost = _summary(final, "cost10_r")
+        final_cal = _calendar_stats(final, final_days, "cost10_r")
+        final_top = _top_removal_summary(final["cost10_r"], remove_pct=top_removal_pct) if not final.empty else _top_removal_summary(pd.Series(dtype=float), remove_pct=top_removal_pct)
+        final_rows.append(
+            {
+                "candidate_id": cid,
+                "final_pass_basic": bool(
+                    final_net["trades"] >= min_oos_trades
+                    and _safe_float(final_cost["avg_r"]) > 0
+                    and _safe_float(final_net["median_r"]) > 0
+                    and _safe_float(final_net["win_rate"]) >= 0.50
+                    and _safe_float(final_cal["calendar_positive_day_rate"]) > min_calendar_positive_day_rate
+                    and bool(final_top["top_removed_pass"])
+                ),
+                "final_trades": int(final_net["trades"]),
+                "final_cost10_avg_r": final_cost["avg_r"],
+                "final_cost10_sum_r": final_cost["sum_r"],
+                "final_median_r": final_net["median_r"],
+                "final_win_rate": final_net["win_rate"],
+                **{f"final_{k}": v for k, v in final_cal.items()},
+                **{f"final_{k}": v for k, v in final_top.items()},
+            }
+        )
+
+    candidates = pd.DataFrame(candidate_rows)
+    final_df = pd.DataFrame(final_rows)
+    rejected = pd.DataFrame(rejected_rows)
+    neighborhoods = _build_category_plateau_neighborhoods(candidates)
+    membership = _category_plateau_membership(neighborhoods)
+    if not candidates.empty:
+        for key, default in [
+            ("category_plateau_pass", False),
+            ("category_plateau_strong_pass", False),
+            ("category_plateau_members", 0),
+            ("category_plateau_score_degradation_pct", np.nan),
+        ]:
+            candidates[key] = candidates["candidate_id"].map(lambda cid: membership.get(str(cid), {}).get(key, default))
+        candidates["strict_model_pass"] = (
+            candidates["promoted"].astype(bool)
+            & candidates["category_plateau_pass"].astype(bool)
+            & candidates["top_removal_pass"].astype(bool)
+            & candidates["mc_pass"].astype(bool)
+            & pd.to_numeric(candidates["calendar_positive_day_rate"], errors="coerce").gt(min_calendar_positive_day_rate)
+            & pd.to_numeric(candidates["oos_cost10_avg_r"], errors="coerce").gt(0)
+            & pd.to_numeric(candidates["oos_median_r"], errors="coerce").gt(0)
+        )
+        candidates["theoretical_accept_pass"] = (
+            candidates["strict_model_pass"].astype(bool)
+            & candidates["category_plateau_strong_pass"].astype(bool)
+            & pd.to_numeric(candidates["calendar_median_trades_per_day"], errors="coerce").ge(3.0)
+        )
+        candidates["model_grade"] = np.where(
+            candidates["theoretical_accept_pass"].astype(bool),
+            "theoretical_accept",
+            np.where(candidates["strict_model_pass"].astype(bool), "robust_watchlist", "research_only"),
+        )
+        candidates = candidates.sort_values(
+            ["theoretical_accept_pass", "strict_model_pass", "promoted", "candidate_score", "oos_cost10_sum_r"],
+            ascending=[False, False, False, False, False],
+        )
+    if not final_df.empty:
+        final_df = final_df.sort_values(["final_pass_basic", "final_cost10_sum_r"], ascending=[False, False])
+    return candidates, neighborhoods, final_df, rejected, ledgers
+
+
+def _write_category_plateau_report(
+    output_dir: Path,
+    prefilter: pd.DataFrame,
+    candidates: pd.DataFrame,
+    neighborhoods: pd.DataFrame,
+    final_holdout: pd.DataFrame,
+    portfolio: pd.DataFrame,
+    portfolio_meta: pd.DataFrame,
+    rejected: pd.DataFrame,
+) -> None:
+    top_cols = [
+        "candidate_id",
+        "promoted",
+        "strict_model_pass",
+        "category_scope",
+        "source",
+        "session_bucket",
+        "nature_id",
+        "stop_model",
+        "management_id",
+        "feature",
+        "direction",
+        "threshold",
+        "oos_trades",
+        "oos_cost10_avg_r",
+        "oos_median_r",
+        "oos_win_rate",
+        "calendar_positive_day_rate",
+        "top_removed_pass",
+        "mc_pass",
+        "category_plateau_pass",
+    ]
+    neighborhood_cols = [
+        "category_plateau_id",
+        "category_plateau_pass",
+        "category_plateau_strong_pass",
+        "members",
+        "source",
+        "session_bucket",
+        "nature_id",
+        "feature",
+        "direction",
+        "threshold_min",
+        "threshold_max",
+        "best_candidate_id",
+        "best_candidate_score",
+    ]
+    portfolio_cols = [
+        "candidate_id",
+        "accepted",
+        "marginal_score",
+        "marginal_trades",
+        "marginal_cost10_avg_r",
+        "marginal_median_r",
+        "marginal_calendar_positive_day_rate",
+        "marginal_top_removed_pass",
+        "selected_event_overlap_pct",
+    ]
+    rejected_summary = rejected["reason"].value_counts().head(15).to_string() if not rejected.empty and "reason" in rejected.columns else "none"
+    text = f"""# Category Plateau Miner Report
+
+Status: adaptive numeric plateau search over cached entry-known event outcomes.
+
+This layer searches different source/session/nature/stop/management categories
+without hand-written trigger rules. It uses development data for generation and
+rolling WFA/final holdout for verification.
+
+Run size:
+
+```text
+prefilter_rows={len(prefilter)}
+candidate_rows={len(candidates)}
+promoted={int(candidates['promoted'].sum()) if not candidates.empty and 'promoted' in candidates.columns else 0}
+strict_model_pass={int(candidates['strict_model_pass'].sum()) if not candidates.empty and 'strict_model_pass' in candidates.columns else 0}
+theoretical_accept_pass={int(candidates['theoretical_accept_pass'].sum()) if not candidates.empty and 'theoretical_accept_pass' in candidates.columns else 0}
+neighborhoods={len(neighborhoods)}
+neighborhood_pass={int(neighborhoods['category_plateau_pass'].sum()) if not neighborhoods.empty and 'category_plateau_pass' in neighborhoods.columns else 0}
+final_holdout_basic_pass={int(final_holdout['final_pass_basic'].sum()) if not final_holdout.empty and 'final_pass_basic' in final_holdout.columns else 0}
+```
+
+Top category plateau candidates:
+
+```text
+{candidates.head(30)[[c for c in top_cols if c in candidates.columns]].to_string(index=False) if not candidates.empty else 'none'}
+```
+
+Top threshold neighborhoods:
+
+```text
+{neighborhoods.head(30)[[c for c in neighborhood_cols if c in neighborhoods.columns]].to_string(index=False) if not neighborhoods.empty else 'none'}
+```
+
+Portfolio meta:
+
+```text
+{portfolio_meta.head(5).to_string(index=False) if not portfolio_meta.empty else 'none'}
+```
+
+Portfolio candidates:
+
+```text
+{portfolio.head(30)[[c for c in portfolio_cols if c in portfolio.columns]].to_string(index=False) if not portfolio.empty else 'none'}
+```
+
+Top rejected reasons:
+
+```text
+{rejected_summary}
+```
+
+Safety:
+
+```text
+Only ENTRY_FEATURES are used as selectors.
+Evaluation-only labels such as fader_label, outcome_class, future60 fields,
+MFE/MAE and final holdout are not used to generate thresholds.
+```
+"""
+    (output_dir / "category_plateau_report.md").write_text(text, encoding="utf-8")
+
+
+def run_category_plateau_miner(
+    output_dir: Path,
+    df: pd.DataFrame,
+    windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
+    *,
+    final_start: pd.Timestamp,
+    final_end: pd.Timestamp,
+    min_is_trades: int,
+    min_oos_trades: int,
+    mc_iterations: int,
+    risk_per_trade_pct: float,
+    top_removal_pct: float,
+    min_calendar_positive_day_rate: float,
+    max_groups: int,
+    max_candidates: int,
+    min_group_rows: int,
+) -> dict[str, pd.DataFrame]:
+    dev_df = df[df["date"].lt(final_start)].copy()
+    prefilter = _build_category_plateau_prefilter(
+        dev_df,
+        min_is_trades=min_is_trades,
+        max_groups=max_groups,
+        max_candidates=max_candidates,
+        min_group_rows=min_group_rows,
+    )
+    candidates, neighborhoods, final_holdout, rejected, ledgers = _evaluate_category_plateau_candidates(
+        df,
+        prefilter,
+        windows,
+        final_start=final_start,
+        final_end=final_end,
+        min_is_trades=min_is_trades,
+        min_oos_trades=min_oos_trades,
+        mc_iterations=mc_iterations,
+        risk_per_trade_pct=risk_per_trade_pct,
+        top_removal_pct=top_removal_pct,
+        min_calendar_positive_day_rate=min_calendar_positive_day_rate,
+    )
+    diversity = _build_diversity_scores(candidates, ledgers, pd.DataFrame(), pd.DataFrame()) if not candidates.empty else pd.DataFrame()
+    portfolio, portfolio_trades = _build_diversified_portfolio(
+        candidates,
+        diversity,
+        ledgers,
+        windows,
+        top_removal_pct=top_removal_pct,
+        max_candidates=DEFAULT_DIVERSIFIED_PORTFOLIO_MAX_CANDIDATES,
+    )
+    portfolio_meta = _build_portfolio_meta_validation(
+        portfolio_trades,
+        windows,
+        mc_iterations=mc_iterations,
+        risk_per_trade_pct=risk_per_trade_pct,
+        top_removal_pct=top_removal_pct,
+    )
+    prefilter.to_csv(output_dir / "category_plateau_prefilter.csv", index=False)
+    candidates.to_csv(output_dir / "category_plateau_candidates.csv", index=False)
+    neighborhoods.to_csv(output_dir / "category_plateau_neighborhoods.csv", index=False)
+    final_holdout.to_csv(output_dir / "category_plateau_final_holdout_validation.csv", index=False)
+    rejected.to_csv(output_dir / "category_plateau_rejected_reasons.csv", index=False)
+    diversity.to_csv(output_dir / "category_plateau_diversity_scores.csv", index=False)
+    portfolio.to_csv(output_dir / "category_plateau_portfolio_candidates.csv", index=False)
+    portfolio_trades.to_csv(output_dir / "category_plateau_portfolio_oos_trades.csv", index=False)
+    portfolio_meta.to_csv(output_dir / "category_plateau_portfolio_meta_validation.csv", index=False)
+    _write_category_plateau_report(output_dir, prefilter, candidates, neighborhoods, final_holdout, portfolio, portfolio_meta, rejected)
+    return {
+        "prefilter": prefilter,
+        "candidates": candidates,
+        "neighborhoods": neighborhoods,
+        "final_holdout": final_holdout,
+        "rejected": rejected,
+        "diversity": diversity,
+        "portfolio": portfolio,
+        "portfolio_trades": portfolio_trades,
+        "portfolio_meta": portfolio_meta,
+    }
 
 
 def _candidate_spec_from_row(row: pd.Series) -> CandidateSpec:
@@ -3069,6 +3820,7 @@ def _build_compute_budget_plan(
     guided_candidate_rows: int,
     rejected: pd.DataFrame,
     self_improvement_queue: pd.DataFrame,
+    category_plateau_candidates: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     rejected_count = int(len(rejected))
     queue_rows = int(len(self_improvement_queue))
@@ -3134,6 +3886,17 @@ def _build_compute_budget_plan(
                 "next_action": "keep_only_if_calendar_and_top_removal_improve",
             }
         )
+    if category_plateau_candidates is not None and not category_plateau_candidates.empty:
+        promoted = int(category_plateau_candidates["promoted"].astype(bool).sum()) if "promoted" in category_plateau_candidates.columns else 0
+        rows.append(
+            {
+                "stage": "category_plateau_miner",
+                "rows": int(len(category_plateau_candidates)),
+                "cost_class": "bounded_medium",
+                "policy": "Mine numeric feature-threshold plateaus inside source/session/nature categories from development data only.",
+                "next_action": f"review_{promoted}_promoted_category_plateaus_for_frequency_and_tail_dependence",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -3148,6 +3911,8 @@ def _build_theoretical_model_gap_analysis(
     diversified_portfolio: pd.DataFrame,
     compute_budget_plan: pd.DataFrame,
     lookahead: pd.DataFrame,
+    category_plateau_candidates: pd.DataFrame | None = None,
+    category_plateau_neighborhoods: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     def status(ok: bool, partial: bool = False) -> str:
         if ok:
@@ -3159,6 +3924,8 @@ def _build_theoretical_model_gap_analysis(
     lookahead_ok = bool(not lookahead.empty and "status" in lookahead.columns and lookahead["status"].astype(str).eq("pass").all())
     grammar_sources = set(hypothesis_grammar.loc[hypothesis_grammar["axis"].eq("source"), "value"].astype(str)) if not hypothesis_grammar.empty and "axis" in hypothesis_grammar.columns else set()
     new_fader_sources_ok = {"large_runner_failed_continuation", "failed_pump_075_path"}.issubset(grammar_sources)
+    category_plateaus_ok = bool(category_plateau_candidates is not None and not category_plateau_candidates.empty)
+    category_neighborhoods_ok = bool(category_plateau_neighborhoods is not None and not category_plateau_neighborhoods.empty)
     rows = [
         {
             "capability": "entry_known_hypothesis_grammar",
@@ -3181,7 +3948,15 @@ def _build_theoretical_model_gap_analysis(
             "theoretical_goal": "Prefer broad flat zones over single best points across risk/session/trigger/stop/management/nature axes.",
             "current_status": status(not plateau_neighborhoods.empty),
             "implemented_artifact": "plateau_neighborhoods.csv",
-            "remaining_gap": "Current neighborhoods are categorical; numeric threshold heatmaps need raw feature-threshold replay.",
+            "remaining_gap": "Categorical neighborhoods are implemented; category_plateau_neighborhoods.csv adds bounded numeric-threshold neighborhoods.",
+            "priority": 1,
+        },
+        {
+            "capability": "adaptive_category_plateau_miner",
+            "theoretical_goal": "Automatically search broad entry-known feature-threshold plateaus inside different source/session/nature categories.",
+            "current_status": status(category_plateaus_ok and category_neighborhoods_ok, partial=category_plateaus_ok),
+            "implemented_artifact": "category_plateau_candidates.csv, category_plateau_neighborhoods.csv, category_plateau_report.md",
+            "remaining_gap": "Still bounded single-feature thresholds; true multi-feature symbolic composition should be added only after this layer shows robust families.",
             "priority": 1,
         },
         {
@@ -3514,8 +4289,16 @@ def _write_final_report(
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     source_session_nature = pd.DataFrame()
     source_session_nature_path = output_dir / "source_session_nature_summary.csv"
-    if source_session_nature_path.exists():
-        source_session_nature = pd.read_csv(source_session_nature_path)
+    source_session_nature = _read_csv_optional(source_session_nature_path)
+    category_plateaus = pd.DataFrame()
+    category_plateau_path = output_dir / "category_plateau_candidates.csv"
+    category_plateaus = _read_csv_optional(category_plateau_path)
+    category_plateau_neighborhoods = pd.DataFrame()
+    category_plateau_neighborhood_path = output_dir / "category_plateau_neighborhoods.csv"
+    category_plateau_neighborhoods = _read_csv_optional(category_plateau_neighborhood_path)
+    category_plateau_portfolio_meta = pd.DataFrame()
+    category_plateau_portfolio_meta_path = output_dir / "category_plateau_portfolio_meta_validation.csv"
+    category_plateau_portfolio_meta = _read_csv_optional(category_plateau_portfolio_meta_path)
     cand_cols = [
         "candidate_id",
         "promoted",
@@ -3715,6 +4498,41 @@ def _write_final_report(
         "top_trade_independence_pct",
         "top_symbol_independence_pct",
     ]
+    category_plateau_cols = [
+        "candidate_id",
+        "promoted",
+        "strict_model_pass",
+        "category_scope",
+        "source",
+        "session_bucket",
+        "nature_id",
+        "feature",
+        "direction",
+        "threshold",
+        "oos_trades",
+        "oos_cost10_avg_r",
+        "oos_median_r",
+        "oos_win_rate",
+        "calendar_positive_day_rate",
+        "top_removed_pass",
+        "mc_pass",
+        "category_plateau_pass",
+    ]
+    category_neighborhood_cols = [
+        "category_plateau_id",
+        "category_plateau_pass",
+        "category_plateau_strong_pass",
+        "members",
+        "source",
+        "session_bucket",
+        "nature_id",
+        "feature",
+        "direction",
+        "threshold_min",
+        "threshold_max",
+        "best_candidate_id",
+        "best_candidate_score",
+    ]
     rejected_summary = rejected["reason"].value_counts().head(20).to_string() if not rejected.empty and "reason" in rejected.columns else "none"
     strict_count = int(meta_validation["strict_model_pass"].sum()) if not meta_validation.empty and "strict_model_pass" in meta_validation.columns else 0
     theoretical_count = int(meta_validation["theoretical_accept_pass"].sum()) if not meta_validation.empty and "theoretical_accept_pass" in meta_validation.columns else 0
@@ -3821,6 +4639,34 @@ Source/session/nature summary:
 
 ```text
 {source_session_nature.head(40)[[c for c in source_nature_cols if c in source_session_nature.columns]].to_string(index=False) if not source_session_nature.empty else 'none'}
+```
+
+Adaptive category plateau miner:
+
+```text
+category_plateau_candidates={len(category_plateaus)}
+category_plateau_promoted={int(category_plateaus['promoted'].sum()) if not category_plateaus.empty and 'promoted' in category_plateaus.columns else 0}
+category_plateau_strict_model_pass={int(category_plateaus['strict_model_pass'].sum()) if not category_plateaus.empty and 'strict_model_pass' in category_plateaus.columns else 0}
+category_plateau_neighborhoods={len(category_plateau_neighborhoods)}
+category_plateau_neighborhood_pass={int(category_plateau_neighborhoods['category_plateau_pass'].sum()) if not category_plateau_neighborhoods.empty and 'category_plateau_pass' in category_plateau_neighborhoods.columns else 0}
+```
+
+Top adaptive category plateau candidates:
+
+```text
+{category_plateaus.head(30)[[c for c in category_plateau_cols if c in category_plateaus.columns]].to_string(index=False) if not category_plateaus.empty else 'none'}
+```
+
+Top adaptive category threshold neighborhoods:
+
+```text
+{category_plateau_neighborhoods.head(30)[[c for c in category_neighborhood_cols if c in category_plateau_neighborhoods.columns]].to_string(index=False) if not category_plateau_neighborhoods.empty else 'none'}
+```
+
+Adaptive category portfolio meta:
+
+```text
+{category_plateau_portfolio_meta.head(5).to_string(index=False) if not category_plateau_portfolio_meta.empty else 'none'}
 ```
 
 Portfolio candidates:
@@ -4150,6 +4996,10 @@ def run_all(args: argparse.Namespace) -> None:
         min_calendar_positive_day_rate=args.min_calendar_positive_day_rate,
         candidate_queue_file=Path(args.candidate_queue_file) if args.candidate_queue_file else None,
         guided_candidates_limit=args.guided_candidates_limit,
+        category_plateaus=args.category_plateaus,
+        category_plateau_max_groups=args.category_plateau_max_groups,
+        category_plateau_max_candidates=args.category_plateau_max_candidates,
+        category_plateau_min_group_rows=args.category_plateau_min_group_rows,
     )
 
 
@@ -4191,6 +5041,10 @@ def _add_scan_args(
     parser.add_argument("--min-calendar-positive-day-rate", type=float, default=DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE)
     parser.add_argument("--candidate-queue-file", default="")
     parser.add_argument("--guided-candidates-limit", type=int, default=0)
+    parser.add_argument("--category-plateaus", action="store_true", default=False)
+    parser.add_argument("--category-plateau-max-groups", type=int, default=DEFAULT_CATEGORY_PLATEAU_MAX_GROUPS)
+    parser.add_argument("--category-plateau-max-candidates", type=int, default=DEFAULT_CATEGORY_PLATEAU_MAX_CANDIDATES)
+    parser.add_argument("--category-plateau-min-group-rows", type=int, default=DEFAULT_CATEGORY_PLATEAU_MIN_GROUP_ROWS)
 
 
 def main() -> None:
@@ -4231,6 +5085,12 @@ def main() -> None:
         progress_every=250,
     )
     run365.set_defaults(guided_candidates_limit=DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS)
+    run365.set_defaults(
+        category_plateaus=True,
+        category_plateau_max_groups=DEFAULT_CATEGORY_PLATEAU_MAX_GROUPS,
+        category_plateau_max_candidates=DEFAULT_CATEGORY_PLATEAU_MAX_CANDIDATES,
+        category_plateau_min_group_rows=DEFAULT_CATEGORY_PLATEAU_MIN_GROUP_ROWS,
+    )
 
     smoke = sub.add_parser("smoke")
     _add_common_args(smoke)
@@ -4252,6 +5112,10 @@ def main() -> None:
         min_calendar_positive_day_rate=DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE,
         candidate_queue_file="",
         guided_candidates_limit=0,
+        category_plateaus=True,
+        category_plateau_max_groups=80,
+        category_plateau_max_candidates=260,
+        category_plateau_min_group_rows=30,
     )
 
     args = parser.parse_args()
@@ -4287,6 +5151,10 @@ def main() -> None:
             min_calendar_positive_day_rate=args.min_calendar_positive_day_rate,
             candidate_queue_file=Path(args.candidate_queue_file) if args.candidate_queue_file else None,
             guided_candidates_limit=args.guided_candidates_limit,
+            category_plateaus=args.category_plateaus,
+            category_plateau_max_groups=args.category_plateau_max_groups,
+            category_plateau_max_candidates=args.category_plateau_max_candidates,
+            category_plateau_min_group_rows=args.category_plateau_min_group_rows,
         )
         print(f"report={Path(args.output_dir) / 'final_report.md'}")
     elif args.command in {"all", "smoke", "run-365d"}:
@@ -4298,6 +5166,11 @@ def main() -> None:
         print(f"event_store={args.output_dir}")
         print(f"candidate_rows={len(candidates)}")
         print(f"promoted={int(candidates['promoted'].sum()) if not candidates.empty else 0}")
+        category_candidates = _read_csv_optional(Path(args.output_dir) / "category_plateau_candidates.csv")
+        if not category_candidates.empty:
+            print(f"category_plateau_candidate_rows={len(category_candidates)}")
+            print(f"category_plateau_promoted={int(category_candidates['promoted'].sum()) if 'promoted' in category_candidates.columns else 0}")
+            print(f"category_plateau_strict_model_pass={int(category_candidates['strict_model_pass'].sum()) if 'strict_model_pass' in category_candidates.columns else 0}")
         print(f"report={report}")
 
 

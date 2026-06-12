@@ -9209,3 +9209,132 @@ Europe/US-overlap failed close15 high-flow cases. They are not launch-ready:
 strict calendar, top-removal and final holdout gates still fail. Treat these as
 next research sleeves, not as tradeable strategy output.
 ```
+
+## 2026-06-12 - P565 adaptive category plateau miner
+
+Question:
+
+```text
+Can the engine become a more complete bot-scientist by finding entry-known
+numeric threshold plateaus inside separate fader categories, instead of only
+verifying handwritten trigger families?
+```
+
+Implementation:
+
+```text
+Added category_plateaus mode to scan_plateaus, smoke and run-365d.
+Generation uses development data before final_start only.
+Selectors are restricted to ENTRY_FEATURES.
+Final holdout remains audit-only.
+```
+
+Smoke command:
+
+```text
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py smoke --output-dir .output\research_cache\short_robust_plateau_engine_category_smoke2 --max-rows-per-source 3000
+```
+
+Smoke output:
+
+```text
+event_store=.output\research_cache\short_robust_plateau_engine_category_smoke2
+candidate_rows=254
+promoted=67
+category_prefilter_rows=197
+category_candidate_rows=25
+category_promoted=0
+category_strict_model_pass=0
+category_theoretical_accept_pass=0
+lookahead_audit=pass, 0 violations / 10454 rows
+```
+
+Post-final quick smoke after CLI/reporting cleanup:
+
+```text
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py smoke --output-dir .output\research_cache\short_robust_plateau_engine_category_smoke3 --max-rows-per-source 1000
+
+candidate_rows=179
+promoted=42
+category_plateau_candidate_rows=4
+category_plateau_promoted=0
+category_plateau_strict_model_pass=0
+```
+
+Full 365d command:
+
+```text
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py run-365d --output-dir .output\research_cache\short_robust_plateau_engine_category_365d --progress-every 500
+```
+
+Full 365d output:
+
+```text
+runtime: about 20 minutes
+event_outcome_rows=217910
+events=5147
+regular_candidate_rows=3030
+regular_promoted=168
+regular_strict_model_pass=0
+regular_theoretical_accept_pass=0
+
+category_prefilter_rows=900
+category_candidate_rows=665
+category_promoted=0
+category_strict_model_pass=0
+category_theoretical_accept_pass=0
+category_neighborhoods=0
+category_final_holdout_basic_pass=0
+```
+
+Lookahead audit:
+
+```text
+feature_available_at_or_before_entry: pass, 0 / 217910
+evaluation_only_columns_not_in_trigger_rules: pass, 0 / 13
+large_close15_requires_delay15: pass, 0 / 61372
+large_close10_requires_delay10: pass, 0 / 61372
+large_failure_close15_requires_delay15: pass, 0 / 7347
+large_failure_close10_requires_delay10: pass, 0 / 7347
+path075_source_has_no_delay_trigger_dependency: pass, 0 / 31264
+```
+
+Best category pockets:
+
+```text
+large_runner_local_high + europe_us_overlap + early_return>=6% & close15<=4%:
+  m1_quote_top1_share <= 0.306281
+  OOS trades=6, cost10_avg=+1.083R, WR=83.3%, calendar=2.08%, top35=false
+
+failed_pump_075_path + asia_only + deep_break_retest0p4:
+  initial_risk_pct <= 0.033166
+  OOS trades=33, cost10_avg=+0.316R, WR=81.8%, calendar=9.17%, top35=true
+
+failed_pump_075_path + asia_only + deep_break_retest0p4:
+  minutes_from_seed_to_break <= 9
+  OOS trades=11-13 depending stop/management, cost10_avg about +0.44R to +0.55R
+```
+
+Category portfolio audit:
+
+```text
+trades=276
+symbols=168
+cost10_avg=+0.3455R
+cost10_sum=+95.36R
+WR=72.8%
+calendar_positive_day_rate=46.25%
+calendar_median_trades_per_day=1
+top35 pass=false
+MC pass=false
+```
+
+Result:
+
+```text
+The category miner found strong but sparse pockets. It did not find a complete
+launch-ready plateau: promoted=0, strict=0, numeric-neighborhoods=0 and
+category portfolio still fails top35 and MC. The right next research direction
+is controlled multi-feature composition for the few recurring robust families,
+not loosening acceptance gates.
+```
