@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_short_mapping_candidates"
+IMPLEMENTATION_STAGE = "mechanism_short_trade_grid"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -170,6 +170,15 @@ SHORT_CONFIRM_MAX_ENTRY_RISK_PCT = 0.08
 SHORT_STOP_BUFFER_PCT = 0.0010
 SHORT_ENTRY_ADVERSE_SLIPPAGE_BPS = 2.0
 SHORT_ALLOWED_VERDICT = "accepted_mechanism"
+
+SHORT_TRADE_GRID_MODEL = "accepted_mechanism_short_exit_policy_grid_v1"
+SHORT_EXIT_MAX_HOLD_MINUTES = 60
+SHORT_TRAIL_PIVOT_LEFT_BARS = 1
+SHORT_TRAIL_PIVOT_RIGHT_BARS = 1
+SHORT_TRAIL_BUFFER_PCT = 0.0005
+SHORT_PARTIAL_TP_R_MULTIPLE = 1.0
+SHORT_PARTIAL_TP_FRACTION = 0.50
+SHORT_EXIT_POLICIES = ("short_trail_all_lower_highs", "short_tp1r_close50_trail")
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +335,7 @@ def run_pump_mechanism_stability_research(
             oos_selection_summary=pd.DataFrame(),
             oos_verdict=pd.DataFrame(),
             short_trade_candidates=pd.DataFrame(),
+            short_trade_grid=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -466,7 +476,13 @@ def run_pump_mechanism_stability_research(
         events=events,
     )
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping artifacts", started_at)
+    _print_stage(progress_label, "simulating honest short exit policy grid", started_at)
+    short_trade_grid = _build_short_trade_grid(
+        storage=storage,
+        short_trade_candidates=short_trade_candidates,
+    )
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping/trade-grid artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -486,6 +502,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_oos_selection_summary.csv", oos_selection_summary)
     _write_csv(config.output_dir / "pump_mechanism_oos_verdict.csv", oos_verdict)
     _write_csv(config.output_dir / "pump_mechanism_short_trade_candidates.csv", short_trade_candidates)
+    _write_csv(config.output_dir / "pump_mechanism_short_trade_grid.csv", short_trade_grid)
 
     run_config = _run_config_frame(
         config=config,
@@ -512,6 +529,7 @@ def run_pump_mechanism_stability_research(
         oos_selection_summary=oos_selection_summary,
         oos_verdict=oos_verdict,
         short_trade_candidates=short_trade_candidates,
+        short_trade_grid=short_trade_grid,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -524,7 +542,8 @@ def run_pump_mechanism_stability_research(
         f"daily_oos={len(daily_oos):,} daily_oos_events={len(daily_oos_events):,} "
         f"oos_diagnostics={len(oos_diagnostics):,} oos_top_removal={len(oos_top_removal):,} "
         f"oos_verdict={len(oos_verdict):,} short_trade_candidates={len(short_trade_candidates):,} "
-        f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
+        f"short_trade_grid={len(short_trade_grid):,} elapsed={_format_duration(time.monotonic() - started_at)} "
+        f"output_dir={config.output_dir}",
         flush=True,
     )
     return config.output_dir
@@ -3803,6 +3822,382 @@ def _short_trade_candidate_columns() -> list[str]:
         "mapping_uses_oos_outcome_columns", "uses_pnl", "uses_future_exit", "uses_final_holdout_tuning",
     ]
 
+
+def _build_short_trade_grid(*, storage: ParquetStorage, short_trade_candidates: pd.DataFrame) -> pd.DataFrame:
+    """Simulate fixed short exit policies for confirmed tradable candidates.
+
+    This layer is intentionally downstream of the accepted-mechanism verdict and
+    the closed-confirm/next-open mapping.  It does not create new signals and it
+    excludes audit-only no-OI rows.  Exit policies are deterministic and run
+    forward minute by minute from the known entry timestamp; there is no
+    future-optimal stop/target selection.
+    """
+
+    columns = _short_trade_grid_columns()
+    tradable = _tradable_short_candidates(short_trade_candidates)
+    if tradable.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    for symbol, symbol_candidates in tradable.groupby("symbol", dropna=False, sort=True):
+        symbol_str = str(symbol)
+        entry_times = pd.to_numeric(symbol_candidates.get("entry_timestamp_ms", pd.Series(dtype=float)), errors="coerce").dropna()
+        if not symbol_str or entry_times.empty:
+            for candidate in symbol_candidates.to_dict("records"):
+                for exit_policy in SHORT_EXIT_POLICIES:
+                    rows.append(
+                        _short_trade_grid_rejection_row(
+                            candidate,
+                            exit_policy=exit_policy,
+                            status="missing_symbol_or_entry_time",
+                            reason="symbol_or_entry_timestamp_missing",
+                        )
+                    )
+            continue
+        load_start_ms = int(entry_times.min())
+        load_end_ms = int(entry_times.max()) + (int(SHORT_EXIT_MAX_HOLD_MINUTES) + 5) * MINUTE_MS
+        frame_1m_result = _load_frame_result(storage, symbol_str, "1m", start_ms=load_start_ms, end_ms=load_end_ms)
+        frame_1m = _prepare_ohlcv(frame_1m_result.frame) if frame_1m_result.ok and not frame_1m_result.frame.empty else pd.DataFrame()
+        if frame_1m.empty:
+            for candidate in symbol_candidates.to_dict("records"):
+                for exit_policy in SHORT_EXIT_POLICIES:
+                    rows.append(
+                        _short_trade_grid_rejection_row(
+                            candidate,
+                            exit_policy=exit_policy,
+                            status="missing_1m_cache_for_exit_grid",
+                            reason=str(frame_1m_result.reason or "missing_1m_cache"),
+                        )
+                    )
+            continue
+        for candidate in symbol_candidates.to_dict("records"):
+            for exit_policy in SHORT_EXIT_POLICIES:
+                rows.append(_simulate_short_exit_policy(candidate=candidate, frame_1m=frame_1m, exit_policy=exit_policy))
+
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days", "selected_rank", "event_rank", "exit_policy", "short_candidate_id"])
+
+
+def _tradable_short_candidates(short_trade_candidates: pd.DataFrame) -> pd.DataFrame:
+    columns = _short_trade_candidate_columns()
+    if short_trade_candidates is None or short_trade_candidates.empty:
+        return pd.DataFrame(columns=columns)
+    frame = short_trade_candidates.copy()
+    allowed = frame.get("allowed_for_exit_grid", pd.Series(False, index=frame.index)).map(_to_bool)
+    confirmed = frame.get("short_mapping_status", pd.Series("", index=frame.index)).astype(str).eq("confirmed_short_candidate")
+    signal = frame.get("signal_family", pd.Series("", index=frame.index)).astype(str).isin({"oi_drop_position_exit", "oi_rise_fresh_shorts"})
+    required = frame.get("accepted_mechanism_verdict", pd.Series("", index=frame.index)).astype(str).eq(SHORT_ALLOWED_VERDICT)
+    return frame.loc[allowed & confirmed & signal & required].copy()
+
+
+def _simulate_short_exit_policy(*, candidate: dict[str, object], frame_1m: pd.DataFrame, exit_policy: str) -> dict[str, object]:
+    entry_ts = _finite_int_or_none(candidate.get("entry_timestamp_ms"))
+    entry_price = _float(candidate.get("entry_price_after_slippage"))
+    initial_stop = _float(candidate.get("stop_price"))
+    if entry_ts is None:
+        return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="missing_entry_timestamp", reason="entry_timestamp_ms_missing")
+    if not math.isfinite(entry_price) or entry_price <= 0.0:
+        return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="invalid_entry_price", reason="entry_price_missing_or_invalid")
+    if not math.isfinite(initial_stop) or initial_stop <= entry_price:
+        return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="invalid_stop_price", reason="stop_price_missing_or_not_above_entry")
+    risk_abs = initial_stop - entry_price
+    if risk_abs <= 0.0:
+        return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="invalid_risk", reason="non_positive_entry_stop_risk")
+    if exit_policy not in SHORT_EXIT_POLICIES:
+        return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="unknown_exit_policy", reason="exit_policy_not_registered")
+    if not {"timestamp", "open", "high", "low", "close"}.issubset(frame_1m.columns):
+        return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="missing_1m_ohlc_columns", reason="required_1m_ohlc_columns_missing")
+
+    hold_end_ms = int(entry_ts) + int(SHORT_EXIT_MAX_HOLD_MINUTES) * MINUTE_MS
+    window = _time_window(frame_1m, start_ms=int(entry_ts), end_ms=hold_end_ms, include_end=False)
+    if window.empty:
+        return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="missing_exit_window", reason="no_1m_rows_from_entry_to_max_hold")
+
+    candles = window.to_dict("records")
+    active_stop = float(initial_stop)
+    remaining_size = 1.0
+    realized_r = 0.0
+    partial_tp_hit = False
+    partial_tp_timestamp_ms: int | None = None
+    partial_tp_price = float("nan")
+    partial_tp_r = 0.0
+    trailing_updates = 0
+    first_trail_update_ms: int | None = None
+    last_trail_update_ms: int | None = None
+    min_active_stop = float(active_stop)
+    max_high = float("nan")
+    min_low = float("nan")
+    final_exit_price = float("nan")
+    final_exit_timestamp_ms: int | None = None
+    final_exit_reason = "max_hold_close"
+
+    tp_price = entry_price - float(SHORT_PARTIAL_TP_R_MULTIPLE) * risk_abs
+    for index, candle in enumerate(candles):
+        candle_ts = _finite_int_or_none(candle.get("timestamp"))
+        high = _float(candle.get("high"))
+        low = _float(candle.get("low"))
+        close = _float(candle.get("close"))
+        if candle_ts is None or not all(math.isfinite(value) and value > 0.0 for value in (high, low, close)):
+            continue
+        max_high = high if not math.isfinite(max_high) else max(max_high, high)
+        min_low = low if not math.isfinite(min_low) else min(min_low, low)
+
+        # Conservative intrabar assumption: when stop and target are both inside
+        # one candle, the stop is considered first for a short.  This avoids
+        # optimistic path assumptions from OHLC-only data.
+        if high >= active_stop:
+            realized_r += remaining_size * ((entry_price - active_stop) / risk_abs)
+            final_exit_price = active_stop
+            final_exit_timestamp_ms = candle_ts
+            final_exit_reason = "stop_or_trailing_stop_hit"
+            remaining_size = 0.0
+            break
+
+        if exit_policy == "short_tp1r_close50_trail" and not partial_tp_hit and low <= tp_price:
+            partial_size = float(SHORT_PARTIAL_TP_FRACTION)
+            realized_r += partial_size * ((entry_price - tp_price) / risk_abs)
+            remaining_size = max(0.0, 1.0 - partial_size)
+            partial_tp_hit = True
+            partial_tp_timestamp_ms = candle_ts
+            partial_tp_price = tp_price
+            partial_tp_r = partial_size * float(SHORT_PARTIAL_TP_R_MULTIPLE)
+
+        new_stop = _candidate_lower_high_trailing_stop(candles=candles, current_index=index, active_stop=active_stop, latest_close=close)
+        if math.isfinite(new_stop) and new_stop < active_stop:
+            active_stop = new_stop
+            min_active_stop = min(min_active_stop, active_stop)
+            trailing_updates += 1
+            update_ms = candle_ts + MINUTE_MS
+            first_trail_update_ms = first_trail_update_ms or update_ms
+            last_trail_update_ms = update_ms
+
+    if remaining_size > 0.0:
+        last_valid = _last_valid_candle(candles)
+        if last_valid is None:
+            return _short_trade_grid_rejection_row(candidate, exit_policy=exit_policy, status="missing_valid_exit_candle", reason="no_valid_ohlc_in_exit_window")
+        final_exit_price = _float(last_valid.get("close"))
+        final_exit_timestamp_ms = _finite_int_or_none(last_valid.get("timestamp"))
+        final_exit_reason = "max_hold_close"
+        realized_r += remaining_size * ((entry_price - final_exit_price) / risk_abs)
+        remaining_size = 0.0
+
+    mae_r = ((max_high - entry_price) / risk_abs) if math.isfinite(max_high) else float("nan")
+    mfe_r = ((entry_price - min_low) / risk_abs) if math.isfinite(min_low) else float("nan")
+    hold_minutes = ((int(final_exit_timestamp_ms) - int(entry_ts)) / MINUTE_MS) if final_exit_timestamp_ms is not None else float("nan")
+    return _short_trade_grid_row(
+        candidate=candidate,
+        exit_policy=exit_policy,
+        status="simulated_trade",
+        rejection_reason="pass",
+        entry_price=entry_price,
+        initial_stop=initial_stop,
+        final_stop=active_stop,
+        risk_abs=risk_abs,
+        final_exit_timestamp_ms=final_exit_timestamp_ms,
+        final_exit_price=final_exit_price,
+        final_exit_reason=final_exit_reason,
+        hold_minutes=hold_minutes,
+        realized_r=realized_r,
+        mae_r=mae_r,
+        mfe_r=mfe_r,
+        partial_tp_hit=partial_tp_hit,
+        partial_tp_timestamp_ms=partial_tp_timestamp_ms,
+        partial_tp_price=partial_tp_price,
+        partial_tp_realized_r=partial_tp_r,
+        trailing_updates=trailing_updates,
+        first_trail_update_ms=first_trail_update_ms,
+        last_trail_update_ms=last_trail_update_ms,
+        min_active_stop=min_active_stop,
+    )
+
+
+def _candidate_lower_high_trailing_stop(*, candles: list[dict[str, object]], current_index: int, active_stop: float, latest_close: float) -> float:
+    if current_index < int(SHORT_TRAIL_PIVOT_LEFT_BARS) + int(SHORT_TRAIL_PIVOT_RIGHT_BARS):
+        return float("nan")
+    pivot_index = current_index - int(SHORT_TRAIL_PIVOT_RIGHT_BARS)
+    left_index = pivot_index - int(SHORT_TRAIL_PIVOT_LEFT_BARS)
+    right_index = pivot_index + int(SHORT_TRAIL_PIVOT_RIGHT_BARS)
+    if left_index < 0 or right_index >= len(candles):
+        return float("nan")
+    pivot_high = _float(candles[pivot_index].get("high"))
+    left_high = _float(candles[left_index].get("high"))
+    right_high = _float(candles[right_index].get("high"))
+    if not all(math.isfinite(value) and value > 0.0 for value in (pivot_high, left_high, right_high, active_stop, latest_close)):
+        return float("nan")
+    if not (pivot_high >= left_high and pivot_high >= right_high):
+        return float("nan")
+    proposed_stop = pivot_high * (1.0 + float(SHORT_TRAIL_BUFFER_PCT))
+    if proposed_stop >= active_stop:
+        return float("nan")
+    if proposed_stop <= latest_close:
+        return float("nan")
+    return float(proposed_stop)
+
+
+def _last_valid_candle(candles: list[dict[str, object]]) -> dict[str, object] | None:
+    for candle in reversed(candles):
+        close = _float(candle.get("close"))
+        ts = _finite_int_or_none(candle.get("timestamp"))
+        if ts is not None and math.isfinite(close) and close > 0.0:
+            return candle
+    return None
+
+
+def _short_trade_grid_rejection_row(candidate: dict[str, object], *, exit_policy: str, status: str, reason: str) -> dict[str, object]:
+    return _short_trade_grid_row(
+        candidate=candidate,
+        exit_policy=exit_policy,
+        status=status,
+        rejection_reason=reason,
+        entry_price=_float(candidate.get("entry_price_after_slippage")),
+        initial_stop=_float(candidate.get("stop_price")),
+        final_stop=float("nan"),
+        risk_abs=float("nan"),
+        final_exit_timestamp_ms=None,
+        final_exit_price=float("nan"),
+        final_exit_reason="",
+        hold_minutes=float("nan"),
+        realized_r=float("nan"),
+        mae_r=float("nan"),
+        mfe_r=float("nan"),
+        partial_tp_hit=False,
+        partial_tp_timestamp_ms=None,
+        partial_tp_price=float("nan"),
+        partial_tp_realized_r=0.0,
+        trailing_updates=0,
+        first_trail_update_ms=None,
+        last_trail_update_ms=None,
+        min_active_stop=float("nan"),
+    )
+
+
+def _short_trade_grid_row(
+    *,
+    candidate: dict[str, object],
+    exit_policy: str,
+    status: str,
+    rejection_reason: str,
+    entry_price: float,
+    initial_stop: float,
+    final_stop: float,
+    risk_abs: float,
+    final_exit_timestamp_ms: int | None,
+    final_exit_price: float,
+    final_exit_reason: str,
+    hold_minutes: float,
+    realized_r: float,
+    mae_r: float,
+    mfe_r: float,
+    partial_tp_hit: bool,
+    partial_tp_timestamp_ms: int | None,
+    partial_tp_price: float,
+    partial_tp_realized_r: float,
+    trailing_updates: int,
+    first_trail_update_ms: int | None,
+    last_trail_update_ms: int | None,
+    min_active_stop: float,
+) -> dict[str, object]:
+    trade_key = "|".join((str(candidate.get("short_candidate_id", "")), str(exit_policy)))
+    final_exit_ts = int(final_exit_timestamp_ms) if final_exit_timestamp_ms is not None else np.nan
+    partial_ts = int(partial_tp_timestamp_ms) if partial_tp_timestamp_ms is not None else np.nan
+    first_trail_ts = int(first_trail_update_ms) if first_trail_update_ms is not None else np.nan
+    last_trail_ts = int(last_trail_update_ms) if last_trail_update_ms is not None else np.nan
+    return {
+        "research_id": RESEARCH_ID,
+        "short_trade_id": "pmst_" + hashlib.sha1(trade_key.encode("utf-8")).hexdigest()[:16],
+        "short_candidate_id": str(candidate.get("short_candidate_id", "")),
+        "selection_key": str(candidate.get("selection_key", "")),
+        "test_day_ord": int(candidate.get("test_day_ord", 0) or 0),
+        "test_date": str(candidate.get("test_date", "")),
+        "train_window_days": int(candidate.get("train_window_days", 0) or 0),
+        "train_start_day_ord": int(candidate.get("train_start_day_ord", 0) or 0),
+        "train_end_day_ord": int(candidate.get("train_end_day_ord", 0) or 0),
+        "selected_rank": int(candidate.get("selected_rank", 0) or 0),
+        "basin_id": str(candidate.get("basin_id", "")),
+        "center_rule_id": str(candidate.get("center_rule_id", "")),
+        "basin_status_at_selection": str(candidate.get("basin_status_at_selection", "")),
+        "event_rank": int(candidate.get("event_rank", 0) or 0),
+        "event_id": str(candidate.get("event_id", "")),
+        "symbol": str(candidate.get("symbol", "")),
+        "session_bucket": str(candidate.get("session_bucket", "")),
+        "mechanism_family": str(candidate.get("mechanism_family", "")),
+        "mechanism_id": str(candidate.get("mechanism_id", "")),
+        "acceptance_regime": str(candidate.get("acceptance_regime", "")),
+        "oi_regime_at_feature_cutoff": str(candidate.get("oi_regime_at_feature_cutoff", "")),
+        "oi_regime_at_confirm": str(candidate.get("oi_regime_at_confirm", "")),
+        "signal_family": str(candidate.get("signal_family", "")),
+        "exit_policy": str(exit_policy),
+        "trade_grid_status": status,
+        "trade_grid_rejection_reason": rejection_reason,
+        "entry_timestamp_ms": _finite_int_or_none(candidate.get("entry_timestamp_ms")) or np.nan,
+        "entry_time_utc": str(candidate.get("entry_time_utc", "")),
+        "entry_price_after_slippage": entry_price,
+        "entry_adverse_slippage_bps": _float(candidate.get("entry_adverse_slippage_bps")),
+        "initial_stop_price": initial_stop,
+        "final_stop_price": final_stop,
+        "risk_abs": risk_abs,
+        "entry_to_stop_risk_pct": _float(candidate.get("entry_to_stop_risk_pct")),
+        "final_exit_timestamp_ms": final_exit_ts,
+        "final_exit_time_utc": _fmt_optional_ts(final_exit_ts),
+        "final_exit_price": final_exit_price,
+        "final_exit_reason": final_exit_reason,
+        "hold_minutes": hold_minutes,
+        "realized_r": realized_r,
+        "mae_r": mae_r,
+        "mfe_r": mfe_r,
+        "win": bool(math.isfinite(realized_r) and realized_r > 0.0),
+        "loss": bool(math.isfinite(realized_r) and realized_r < 0.0),
+        "partial_tp_hit": bool(partial_tp_hit),
+        "partial_tp_r_multiple": float(SHORT_PARTIAL_TP_R_MULTIPLE) if exit_policy == "short_tp1r_close50_trail" else np.nan,
+        "partial_tp_fraction": float(SHORT_PARTIAL_TP_FRACTION) if exit_policy == "short_tp1r_close50_trail" else np.nan,
+        "partial_tp_timestamp_ms": partial_ts,
+        "partial_tp_time_utc": _fmt_optional_ts(partial_ts),
+        "partial_tp_price": partial_tp_price,
+        "partial_tp_realized_r": partial_tp_realized_r,
+        "trailing_updates": int(trailing_updates),
+        "first_trail_update_timestamp_ms": first_trail_ts,
+        "first_trail_update_time_utc": _fmt_optional_ts(first_trail_ts),
+        "last_trail_update_timestamp_ms": last_trail_ts,
+        "last_trail_update_time_utc": _fmt_optional_ts(last_trail_ts),
+        "min_active_stop_price": min_active_stop,
+        "max_hold_minutes": int(SHORT_EXIT_MAX_HOLD_MINUTES),
+        "trail_pivot_left_bars": int(SHORT_TRAIL_PIVOT_LEFT_BARS),
+        "trail_pivot_right_bars": int(SHORT_TRAIL_PIVOT_RIGHT_BARS),
+        "trail_buffer_pct": float(SHORT_TRAIL_BUFFER_PCT),
+        "exit_policy_model": SHORT_TRADE_GRID_MODEL,
+        "short_mapping_model": str(candidate.get("short_mapping_model", SHORT_MAPPING_MODEL)),
+        "short_confirm_model": str(candidate.get("short_confirm_model", SHORT_CONFIRM_MODEL)),
+        "entry_model": SHORT_ENTRY_MODEL,
+        "stop_model": SHORT_STOP_MODEL,
+        "oi_model": SHORT_OI_MODEL,
+        "data_access_model": DATA_ACCESS_MODEL,
+        "future_label_available_at_entry": False,
+        "short_confirm_closed_before_entry": _to_bool(candidate.get("short_confirm_closed_before_entry")),
+        "allowed_for_exit_grid_required": True,
+        "audit_only_no_oi_excluded": True,
+        "uses_future_optimal_exit": False,
+        "uses_final_holdout_tuning": False,
+    }
+
+
+def _short_trade_grid_columns() -> list[str]:
+    return [
+        "research_id", "short_trade_id", "short_candidate_id", "selection_key", "test_day_ord", "test_date", "train_window_days",
+        "train_start_day_ord", "train_end_day_ord", "selected_rank", "basin_id", "center_rule_id", "basin_status_at_selection",
+        "event_rank", "event_id", "symbol", "session_bucket", "mechanism_family", "mechanism_id", "acceptance_regime",
+        "oi_regime_at_feature_cutoff", "oi_regime_at_confirm", "signal_family", "exit_policy", "trade_grid_status",
+        "trade_grid_rejection_reason", "entry_timestamp_ms", "entry_time_utc", "entry_price_after_slippage", "entry_adverse_slippage_bps",
+        "initial_stop_price", "final_stop_price", "risk_abs", "entry_to_stop_risk_pct", "final_exit_timestamp_ms", "final_exit_time_utc",
+        "final_exit_price", "final_exit_reason", "hold_minutes", "realized_r", "mae_r", "mfe_r", "win", "loss", "partial_tp_hit",
+        "partial_tp_r_multiple", "partial_tp_fraction", "partial_tp_timestamp_ms", "partial_tp_time_utc", "partial_tp_price",
+        "partial_tp_realized_r", "trailing_updates", "first_trail_update_timestamp_ms", "first_trail_update_time_utc",
+        "last_trail_update_timestamp_ms", "last_trail_update_time_utc", "min_active_stop_price", "max_hold_minutes", "trail_pivot_left_bars",
+        "trail_pivot_right_bars", "trail_buffer_pct", "exit_policy_model", "short_mapping_model", "short_confirm_model", "entry_model",
+        "stop_model", "oi_model", "data_access_model", "future_label_available_at_entry", "short_confirm_closed_before_entry",
+        "allowed_for_exit_grid_required", "audit_only_no_oi_excluded", "uses_future_optimal_exit", "uses_final_holdout_tuning",
+    ]
+
+
 def _oos_top_removal_lookup(top_removal: pd.DataFrame) -> dict[tuple[str, str], tuple[float, bool]]:
     if top_removal is None or top_removal.empty:
         return {}
@@ -3983,6 +4378,7 @@ def _run_config_frame(
     oos_selection_summary: pd.DataFrame,
     oos_verdict: pd.DataFrame,
     short_trade_candidates: pd.DataFrame,
+    short_trade_grid: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -4010,6 +4406,9 @@ def _run_config_frame(
     oos_verdict_pass_rows = int((oos_verdict.get("oos_verdict", pd.Series(dtype=str)).astype(str) == "accepted_mechanism").sum()) if oos_verdict is not None and not oos_verdict.empty else 0
     short_trade_candidate_rows = int(len(short_trade_candidates)) if short_trade_candidates is not None else 0
     short_trade_confirmed_rows = int((short_trade_candidates.get("short_mapping_status", pd.Series(dtype=str)).astype(str) == "confirmed_short_candidate").sum()) if short_trade_candidates is not None and not short_trade_candidates.empty else 0
+    short_trade_grid_rows = int(len(short_trade_grid)) if short_trade_grid is not None else 0
+    short_trade_grid_simulated_rows = int((short_trade_grid.get("trade_grid_status", pd.Series(dtype=str)).astype(str) == "simulated_trade").sum()) if short_trade_grid is not None and not short_trade_grid.empty else 0
+    short_trade_grid_total_r = float(pd.to_numeric(short_trade_grid.get("realized_r", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().sum()) if short_trade_grid is not None and not short_trade_grid.empty else 0.0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -4100,6 +4499,19 @@ def _run_config_frame(
         "short_mapping_uses_only_accepted_mechanisms": True,
         "short_mapping_uses_pnl": False,
         "short_mapping_uses_future_exit": False,
+        "short_trade_grid_rows": short_trade_grid_rows,
+        "short_trade_grid_simulated_rows": short_trade_grid_simulated_rows,
+        "short_trade_grid_total_realized_r": short_trade_grid_total_r,
+        "short_trade_grid_model": SHORT_TRADE_GRID_MODEL,
+        "short_exit_policies": ",".join(SHORT_EXIT_POLICIES),
+        "short_exit_max_hold_minutes": int(SHORT_EXIT_MAX_HOLD_MINUTES),
+        "short_trail_pivot_left_bars": int(SHORT_TRAIL_PIVOT_LEFT_BARS),
+        "short_trail_pivot_right_bars": int(SHORT_TRAIL_PIVOT_RIGHT_BARS),
+        "short_trail_buffer_pct": float(SHORT_TRAIL_BUFFER_PCT),
+        "short_partial_tp_r_multiple": float(SHORT_PARTIAL_TP_R_MULTIPLE),
+        "short_partial_tp_fraction": float(SHORT_PARTIAL_TP_FRACTION),
+        "short_trade_grid_excludes_no_oi_confirmation": True,
+        "short_trade_grid_uses_future_optimal_exit": False,
         "oos_verdict_min_active_days": int(OOS_VERDICT_MIN_ACTIVE_DAYS),
         "oos_verdict_min_events": int(OOS_VERDICT_MIN_EVENTS),
         "oos_verdict_min_symbols": int(OOS_VERDICT_MIN_SYMBOLS),
@@ -4171,6 +4583,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_oos_selection_summary.csv", "written", "selection-key OOS aggregation and breadth diagnostics"),
         ("pump_mechanism_oos_verdict.csv", "written", "explicit OOS mechanism acceptance verdict and fail reasons"),
         ("pump_mechanism_short_trade_candidates.csv", "written", "honest short confirm/entry candidates for accepted mechanisms only; no exit/PnL"),
+        ("pump_mechanism_short_trade_grid.csv", "written", "deterministic short exit policy grid for accepted OI-confirmed candidates only"),
     ]
     rows = []
     for artifact_name, status, description in planned:
