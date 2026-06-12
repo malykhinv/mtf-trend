@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_train_rule_grammar"
+IMPLEMENTATION_STAGE = "mechanism_negative_space_neighborhoods"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -121,6 +121,9 @@ RULE_PAIR_SCOPES: tuple[tuple[str, str], ...] = (
     ("oi_regime", "acceptance_regime"),
     ("mechanism_family", "oi_regime"),
 )
+NEGATIVE_SPACE_MODEL = "train_only_full_generated_neighbor_space_including_rejected_v1"
+NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS = 2
+MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +268,7 @@ def run_pump_mechanism_stability_research(
             taxonomy=pd.DataFrame(),
             response_surfaces=pd.DataFrame(),
             rule_universe=pd.DataFrame(),
+            negative_space=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -351,7 +355,10 @@ def run_pump_mechanism_stability_research(
     _print_stage(progress_label, "generating train-only mechanism rule universe", started_at)
     rule_universe = _build_train_only_rule_universe(taxonomy=taxonomy, events=events)
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule artifacts", started_at)
+    _print_stage(progress_label, "building full negative-space rule neighborhoods", started_at)
+    negative_space = _build_negative_space_neighborhoods(rule_universe=rule_universe, taxonomy=taxonomy, events=events)
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -359,6 +366,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_taxonomy_by_axis.csv", taxonomy_by_axis)
     _write_csv(config.output_dir / "pump_mechanism_response_surfaces.csv", response_surfaces)
     _write_csv(config.output_dir / "pump_mechanism_rule_universe.csv", rule_universe)
+    _write_csv(config.output_dir / "pump_mechanism_negative_space.csv", negative_space)
 
     run_config = _run_config_frame(
         config=config,
@@ -373,6 +381,7 @@ def run_pump_mechanism_stability_research(
         taxonomy=taxonomy,
         response_surfaces=response_surfaces,
         rule_universe=rule_universe,
+        negative_space=negative_space,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -380,7 +389,7 @@ def run_pump_mechanism_stability_research(
     print(
         f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} "
         f"taxonomy={len(taxonomy):,} response_surfaces={len(response_surfaces):,} "
-        f"rule_universe={len(rule_universe):,} "
+        f"rule_universe={len(rule_universe):,} negative_space={len(negative_space):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -1554,6 +1563,381 @@ def _format_float_for_id(value: float) -> str:
 def _date_from_day_ord(day_ord: int) -> str:
     return datetime.fromtimestamp(int(day_ord) * DAY_MS / 1000, UTC).date().isoformat()
 
+
+
+def _build_negative_space_neighborhoods(
+    *,
+    rule_universe: pd.DataFrame,
+    taxonomy: pd.DataFrame,
+    events: pd.DataFrame,
+) -> pd.DataFrame:
+    """Generate full train-only neighbor space around each mechanism rule.
+
+    This is negative-space accounting, not plateau scoring.  It starts from
+    train-window sample-valid centers only, then deliberately emits neighbors
+    that fail low-sample gates so later plateau scoring can see cliffs and dead
+    zones instead of only promoted/surviving rules.
+    """
+
+    columns = _negative_space_columns()
+    if rule_universe.empty:
+        return pd.DataFrame(columns=columns)
+    rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
+    if rule_input.empty:
+        return pd.DataFrame(columns=columns)
+    rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
+    if rule_input.empty:
+        return pd.DataFrame(columns=columns)
+    rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+
+    center_rules = rule_universe.loc[rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)].copy()
+    if center_rules.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    for center in center_rules.to_dict("records"):
+        test_day_ord = _finite_int_or_none(center.get("test_day_ord"))
+        train_start_day_ord = _finite_int_or_none(center.get("train_start_day_ord"))
+        train_end_day_ord = _finite_int_or_none(center.get("train_end_day_ord"))
+        train_window_days = _finite_int_or_none(center.get("train_window_days"))
+        if test_day_ord is None or train_start_day_ord is None or train_end_day_ord is None or train_window_days is None:
+            continue
+        train = rule_input.loc[
+            (rule_input["day_ord"] >= int(train_start_day_ord)) & (rule_input["day_ord"] <= int(train_end_day_ord))
+        ].copy()
+        if train.empty:
+            continue
+        basin_id = _basin_id_for_center(center)
+        for neighbor in _iter_negative_space_neighbor_specs(center=center, train=train):
+            rows.append(
+                _negative_space_row(
+                    center=center,
+                    neighbor=neighbor,
+                    train=train,
+                    basin_id=basin_id,
+                    test_day_ord=int(test_day_ord),
+                    train_window_days=int(train_window_days),
+                    train_start_day_ord=int(train_start_day_ord),
+                    train_end_day_ord=int(train_end_day_ord),
+                )
+            )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days", "basin_id", "neighbor_distance", "neighbor_kind", "neighbor_rule_id"])
+
+
+def _iter_negative_space_neighbor_specs(*, center: dict[str, object], train: pd.DataFrame) -> list[dict[str, object]]:
+    conditions = _parse_scope_conditions(center.get("scope_conditions"))
+    threshold_feature = str(center.get("threshold_feature") or "")
+    threshold_side = str(center.get("threshold_side") or "none")
+    threshold_quantile = _float(center.get("threshold_quantile"))
+    specs: dict[str, dict[str, object]] = {}
+
+    def add_spec(
+        *,
+        kind: str,
+        distance: int,
+        axis_changed: str,
+        next_conditions: dict[str, str],
+        next_quantile: float,
+    ) -> None:
+        key = _negative_neighbor_key(
+            kind=kind,
+            conditions=next_conditions,
+            threshold_feature=threshold_feature,
+            threshold_side=threshold_side,
+            threshold_quantile=next_quantile,
+        )
+        specs.setdefault(
+            key,
+            {
+                "neighbor_kind": kind,
+                "neighbor_distance": int(distance),
+                "neighbor_axis_changed": axis_changed,
+                "conditions": dict(next_conditions),
+                "threshold_feature": threshold_feature,
+                "threshold_side": threshold_side,
+                "threshold_quantile": next_quantile,
+            },
+        )
+
+    add_spec(kind="center", distance=0, axis_changed="none", next_conditions=conditions, next_quantile=threshold_quantile)
+
+    if threshold_feature and threshold_side != "none":
+        quantiles = _quantiles_for_threshold_feature(threshold_feature, threshold_side)
+        if quantiles and math.isfinite(threshold_quantile):
+            center_index = min(range(len(quantiles)), key=lambda index: abs(float(quantiles[index]) - float(threshold_quantile)))
+            for delta in range(-NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS, NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS + 1):
+                if delta == 0:
+                    continue
+                neighbor_index = center_index + delta
+                if 0 <= neighbor_index < len(quantiles):
+                    add_spec(
+                        kind="threshold_perturb",
+                        distance=abs(delta),
+                        axis_changed=threshold_feature,
+                        next_conditions=conditions,
+                        next_quantile=float(quantiles[neighbor_index]),
+                    )
+
+    for axis in sorted(conditions):
+        relaxed = dict(conditions)
+        relaxed.pop(axis, None)
+        add_spec(
+            kind="scope_relax_axis",
+            distance=1,
+            axis_changed=axis,
+            next_conditions=relaxed,
+            next_quantile=threshold_quantile,
+        )
+        for value in _eligible_scope_values(train, axis):
+            if value == str(conditions.get(axis)):
+                continue
+            replaced = dict(conditions)
+            replaced[axis] = value
+            add_spec(
+                kind="scope_replace_axis_value",
+                distance=1,
+                axis_changed=axis,
+                next_conditions=replaced,
+                next_quantile=threshold_quantile,
+            )
+
+    if not conditions:
+        for axis in RULE_SCOPE_AXES:
+            for value in _eligible_scope_values(train, axis):
+                add_spec(
+                    kind="scope_tighten_axis_value",
+                    distance=1,
+                    axis_changed=axis,
+                    next_conditions={axis: value},
+                    next_quantile=threshold_quantile,
+                )
+
+    return list(specs.values())
+
+
+def _negative_space_row(
+    *,
+    center: dict[str, object],
+    neighbor: dict[str, object],
+    train: pd.DataFrame,
+    basin_id: str,
+    test_day_ord: int,
+    train_window_days: int,
+    train_start_day_ord: int,
+    train_end_day_ord: int,
+) -> dict[str, object]:
+    conditions = neighbor.get("conditions") if isinstance(neighbor.get("conditions"), dict) else {}
+    assert isinstance(conditions, dict)
+    scoped = _apply_rule_scope(train, conditions)
+    threshold_feature = str(neighbor.get("threshold_feature") or "")
+    threshold_side = str(neighbor.get("threshold_side") or "none")
+    threshold_quantile = _float(neighbor.get("threshold_quantile"))
+    threshold_uses_abs_value = threshold_side == "abs_ge"
+    threshold_value = float("nan")
+    threshold_valid_values = 0
+    if threshold_feature and threshold_side != "none":
+        source_values = pd.to_numeric(scoped.get(threshold_feature, pd.Series(np.nan, index=scoped.index)), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        fit_values = source_values.abs() if threshold_uses_abs_value else source_values
+        fit_values = fit_values.dropna()
+        threshold_valid_values = int(len(fit_values))
+        if math.isfinite(threshold_quantile) and threshold_valid_values > 0:
+            threshold_value = _safe_quantile(fit_values, float(threshold_quantile))
+        if math.isfinite(threshold_value):
+            filtered = _apply_threshold(scoped, feature=threshold_feature, side=threshold_side, threshold_value=threshold_value)
+        else:
+            filtered = scoped.iloc[0:0].copy()
+    else:
+        filtered = scoped.copy()
+
+    neighbor_events = int(len(filtered))
+    neighbor_symbols = int(filtered["symbol"].nunique()) if "symbol" in filtered.columns and not filtered.empty else 0
+    neighbor_active_days = int(filtered["date"].nunique()) if "date" in filtered.columns and not filtered.empty else 0
+    passes_min_sample = bool(
+        neighbor_events >= MIN_RULE_EVENTS
+        and neighbor_symbols >= MIN_RULE_SYMBOLS
+        and neighbor_active_days >= MIN_RULE_ACTIVE_DAYS
+    )
+    fail_reason = _negative_space_fail_reason(
+        scoped_events=int(len(scoped)),
+        threshold_feature=threshold_feature,
+        threshold_valid_values=threshold_valid_values,
+        neighbor_events=neighbor_events,
+        neighbor_symbols=neighbor_symbols,
+        neighbor_active_days=neighbor_active_days,
+        passes_min_sample=passes_min_sample,
+    )
+    scope_conditions = _scope_key(conditions)
+    neighbor_key = "|".join(
+        (
+            str(center.get("rule_id", "")),
+            str(neighbor.get("neighbor_kind", "")),
+            str(neighbor.get("neighbor_axis_changed", "")),
+            scope_conditions,
+            threshold_feature,
+            threshold_side,
+            _quantile_label(threshold_quantile),
+            _format_float_for_id(threshold_value),
+        )
+    )
+    return {
+        "research_id": RESEARCH_ID,
+        "basin_id": basin_id,
+        "center_rule_id": str(center.get("rule_id", "")),
+        "center_rule_key": str(center.get("rule_key", "")),
+        "neighbor_rule_id": "pmn_" + hashlib.sha1(neighbor_key.encode("utf-8")).hexdigest()[:16],
+        "neighbor_rule_key": neighbor_key,
+        "test_day_ord": int(test_day_ord),
+        "test_date": _date_from_day_ord(test_day_ord),
+        "train_window_days": int(train_window_days),
+        "train_start_day_ord": int(train_start_day_ord),
+        "train_end_day_ord": int(train_end_day_ord),
+        "train_start_date": _date_from_day_ord(train_start_day_ord),
+        "train_end_date": _date_from_day_ord(train_end_day_ord),
+        "center_scope_name": str(center.get("scope_name", "")),
+        "center_scope_conditions": str(center.get("scope_conditions", "")),
+        "center_threshold_feature": str(center.get("threshold_feature") or ""),
+        "center_threshold_side": str(center.get("threshold_side") or "none"),
+        "center_threshold_quantile": _float(center.get("threshold_quantile")),
+        "center_train_events": _finite_int_or_none(center.get("train_events")) or 0,
+        "center_train_symbols": _finite_int_or_none(center.get("train_symbols")) or 0,
+        "center_train_active_days": _finite_int_or_none(center.get("train_active_days")) or 0,
+        "center_passes_min_sample": _to_bool(center.get("rule_passes_min_sample")),
+        "neighbor_kind": str(neighbor.get("neighbor_kind", "")),
+        "neighbor_distance": int(neighbor.get("neighbor_distance", 0) or 0),
+        "neighbor_axis_changed": str(neighbor.get("neighbor_axis_changed", "")),
+        "neighbor_scope_conditions": scope_conditions,
+        "neighbor_scope_depth": int(len(conditions)),
+        "neighbor_threshold_feature": threshold_feature,
+        "neighbor_threshold_side": threshold_side,
+        "neighbor_threshold_quantile": threshold_quantile,
+        "neighbor_threshold_value": threshold_value,
+        "neighbor_threshold_source_events": int(len(scoped)),
+        "neighbor_threshold_valid_values": int(threshold_valid_values),
+        "neighbor_threshold_uses_abs_value": bool(threshold_uses_abs_value),
+        "neighbor_events": neighbor_events,
+        "neighbor_symbols": neighbor_symbols,
+        "neighbor_active_days": neighbor_active_days,
+        "neighbor_passes_min_sample": passes_min_sample,
+        "neighbor_fail_reason": fail_reason,
+        "min_rule_events": int(MIN_RULE_EVENTS),
+        "min_rule_symbols": int(MIN_RULE_SYMBOLS),
+        "min_rule_active_days": int(MIN_RULE_ACTIVE_DAYS),
+        "negative_space_model": NEGATIVE_SPACE_MODEL,
+        "train_uses_only_days_before_test": True,
+        "uses_outcome_columns": False,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _negative_space_fail_reason(
+    *,
+    scoped_events: int,
+    threshold_feature: str,
+    threshold_valid_values: int,
+    neighbor_events: int,
+    neighbor_symbols: int,
+    neighbor_active_days: int,
+    passes_min_sample: bool,
+) -> str:
+    if passes_min_sample:
+        return "pass"
+    if int(scoped_events) < MIN_TRAIN_SCOPE_EVENTS:
+        return "scope_low_sample"
+    if threshold_feature and int(threshold_valid_values) <= 0:
+        return "threshold_no_valid_values"
+    if int(neighbor_events) < MIN_RULE_EVENTS:
+        return "low_events"
+    if int(neighbor_symbols) < MIN_RULE_SYMBOLS:
+        return "low_symbols"
+    if int(neighbor_active_days) < MIN_RULE_ACTIVE_DAYS:
+        return "low_active_days"
+    return "failed_min_sample"
+
+
+def _negative_space_columns() -> list[str]:
+    return [
+        "research_id", "basin_id", "center_rule_id", "center_rule_key", "neighbor_rule_id", "neighbor_rule_key",
+        "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
+        "train_start_date", "train_end_date", "center_scope_name", "center_scope_conditions", "center_threshold_feature",
+        "center_threshold_side", "center_threshold_quantile", "center_train_events", "center_train_symbols",
+        "center_train_active_days", "center_passes_min_sample", "neighbor_kind", "neighbor_distance", "neighbor_axis_changed",
+        "neighbor_scope_conditions", "neighbor_scope_depth", "neighbor_threshold_feature", "neighbor_threshold_side",
+        "neighbor_threshold_quantile", "neighbor_threshold_value", "neighbor_threshold_source_events", "neighbor_threshold_valid_values",
+        "neighbor_threshold_uses_abs_value", "neighbor_events", "neighbor_symbols", "neighbor_active_days",
+        "neighbor_passes_min_sample", "neighbor_fail_reason", "min_rule_events", "min_rule_symbols", "min_rule_active_days",
+        "negative_space_model", "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl", "uses_short_entry",
+        "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+
+
+def _parse_scope_conditions(value: object) -> dict[str, str]:
+    text = str(value or "").strip()
+    if not text or text == "*":
+        return {}
+    conditions: dict[str, str] = {}
+    for part in text.split(";"):
+        if not part or "=" not in part:
+            continue
+        key, raw_value = part.split("=", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if key:
+            conditions[key] = raw_value
+    return conditions
+
+
+def _quantiles_for_threshold_feature(feature: str, side: str) -> tuple[float, ...]:
+    for known_feature, known_side, quantiles in RULE_THRESHOLD_FEATURES:
+        if known_feature == feature and known_side == side:
+            return tuple(float(value) for value in quantiles)
+    return tuple(float(value) for value in RULE_QUANTILES)
+
+
+def _eligible_scope_values(train: pd.DataFrame, axis: str) -> list[str]:
+    if axis not in train.columns:
+        return []
+    counts = train[axis].fillna("missing").astype(str).value_counts(dropna=False)
+    values = [str(value) for value, count in counts.items() if int(count) >= MIN_TRAIN_SCOPE_EVENTS]
+    return sorted(values[:MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS])
+
+
+def _negative_neighbor_key(
+    *,
+    kind: str,
+    conditions: dict[str, str],
+    threshold_feature: str,
+    threshold_side: str,
+    threshold_quantile: float,
+) -> str:
+    return "|".join((kind, _scope_key(conditions), threshold_feature, threshold_side, _quantile_label(threshold_quantile)))
+
+
+def _basin_id_for_center(center: dict[str, object]) -> str:
+    key = "|".join(
+        (
+            str(center.get("test_day_ord", "")),
+            str(center.get("train_window_days", "")),
+            str(center.get("scope_conditions", "")),
+            str(center.get("threshold_feature", "")),
+            str(center.get("threshold_side", "")),
+            _quantile_label(_float(center.get("threshold_quantile"))),
+        )
+    )
+    return "pmb_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _to_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
 def _run_config_frame(
     *,
     config: PumpMechanismStabilityConfig,
@@ -1568,6 +1952,7 @@ def _run_config_frame(
     taxonomy: pd.DataFrame,
     response_surfaces: pd.DataFrame,
     rule_universe: pd.DataFrame,
+    negative_space: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -1576,6 +1961,10 @@ def _run_config_frame(
     taxonomy_rows = int(len(taxonomy)) if taxonomy is not None else 0
     unique_mechanism_ids = int(taxonomy["mechanism_id"].nunique()) if taxonomy is not None and not taxonomy.empty and "mechanism_id" in taxonomy.columns else 0
     response_surface_rows = int(len(response_surfaces)) if response_surfaces is not None else 0
+    rule_universe_rows = int(len(rule_universe)) if rule_universe is not None else 0
+    sampled_train_rule_rows = int((rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if rule_universe is not None and not rule_universe.empty else 0
+    negative_space_rows = int(len(negative_space)) if negative_space is not None else 0
+    negative_space_pass_rows = int((negative_space.get("neighbor_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if negative_space is not None and not negative_space.empty else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -1627,6 +2016,13 @@ def _run_config_frame(
         "response_surface_rows": response_surface_rows,
         "rule_universe_rows": rule_universe_rows,
         "sampled_train_rule_rows": sampled_train_rule_rows,
+        "negative_space_rows": negative_space_rows,
+        "negative_space_pass_rows": negative_space_pass_rows,
+        "negative_space_model": NEGATIVE_SPACE_MODEL,
+        "negative_space_threshold_radius_steps": int(NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS),
+        "negative_space_max_scope_replacement_values_per_axis": int(MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS),
+        "negative_space_uses_outcomes": False,
+        "negative_space_uses_pnl": False,
         "rule_generation_model": "train_only_entry_known_mechanism_rule_grammar_v1",
         "rule_threshold_fit_model": "quantiles_fit_inside_train_window_only",
         "rule_universe_uses_outcomes": False,
@@ -1658,7 +2054,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_taxonomy_by_axis.csv", "written", "axis-level taxonomy counts and breadth diagnostics"),
         ("pump_mechanism_response_surfaces.csv", "written", "mechanism response diagnostics before PnL"),
         ("pump_mechanism_rule_universe.csv", "written", "train-only entry-known mechanism rule specs"),
-        ("pump_mechanism_negative_space.csv", "planned", "all generated neighbors including failed/rejected rules"),
+        ("pump_mechanism_negative_space.csv", "written", "all generated train-only neighbors including failed/rejected rules"),
         ("pump_mechanism_plateau_basins.csv", "planned", "basin-level plateau scores"),
         ("pump_mechanism_daily_oos.csv", "planned", "daily prequential OOS ledger"),
         ("pump_mechanism_daily_selection.csv", "planned", "train-only basin selection per test day"),
