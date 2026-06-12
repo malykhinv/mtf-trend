@@ -138,6 +138,7 @@ DAILY_PREQUENTIAL_OOS_MODEL = "daily_prequential_oos_selected_basins_v1"
 DAILY_SELECTION_MODEL = "select_train_only_plateau_basins_for_test_day_v1"
 WINDOW_HEALTH_MODEL = "daily_window_health_from_train_only_basins_and_oos_v1"
 SELECTION_DRIFT_MODEL = "selected_basin_key_drift_over_prequential_days_v1"
+PROTOCOL_AUDIT_MODEL = "pump_mechanism_no_lookahead_negative_space_daily_replay_audit_v1"
 DAILY_OOS_EVENT_LEDGER_MODEL = "daily_prequential_selected_event_ledger_v1"
 OOS_DIAGNOSTICS_MODEL = "daily_prequential_oos_split_diagnostics_v1"
 OOS_TOP_REMOVAL_MODEL = "daily_prequential_oos_top_removal_stress_v1"
@@ -381,6 +382,18 @@ def run_pump_mechanism_stability_research(
             short_portfolio_guard=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
+        _write_csv(config.output_dir / "pump_mechanism_protocol_audit.csv", _build_protocol_audit(
+            events=pd.DataFrame(),
+            outcomes=pd.DataFrame(),
+            taxonomy=pd.DataFrame(),
+            rule_universe=pd.DataFrame(),
+            negative_space=pd.DataFrame(),
+            plateau_basins=pd.DataFrame(),
+            daily_selection=pd.DataFrame(),
+            daily_oos=pd.DataFrame(),
+            window_health=pd.DataFrame(),
+            selection_drift=pd.DataFrame(),
+        ))
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
         raise RuntimeError(
             "No symbols with both 1m and 5m cache were found. "
@@ -551,7 +564,21 @@ def run_pump_mechanism_stability_research(
         short_portfolio_oos=short_portfolio_oos,
     )
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping/trade-grid/verdict/portfolio artifacts", started_at)
+    _print_stage(progress_label, "auditing no-lookahead, negative-space, and daily replay contracts", started_at)
+    protocol_audit = _build_protocol_audit(
+        events=events,
+        outcomes=outcomes,
+        taxonomy=taxonomy,
+        rule_universe=rule_universe,
+        negative_space=negative_space,
+        plateau_basins=plateau_basins,
+        daily_selection=daily_selection,
+        daily_oos=daily_oos,
+        window_health=window_health,
+        selection_drift=selection_drift,
+    )
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping/trade-grid/verdict/portfolio/audit artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -580,6 +607,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_short_portfolio_oos.csv", short_portfolio_oos)
     _write_csv(config.output_dir / "pump_mechanism_short_portfolio_verdict.csv", short_portfolio_verdict)
     _write_csv(config.output_dir / "pump_mechanism_short_portfolio_guard.csv", short_portfolio_guard)
+    _write_csv(config.output_dir / "pump_mechanism_protocol_audit.csv", protocol_audit)
 
     run_config = _run_config_frame(
         config=config,
@@ -629,6 +657,7 @@ def run_pump_mechanism_stability_research(
         f"oos_verdict={len(oos_verdict):,} short_trade_candidates={len(short_trade_candidates):,} "
         f"short_trade_grid={len(short_trade_grid):,} short_trade_verdict={len(short_trade_verdict):,} "
         f"short_portfolio_oos={len(short_portfolio_oos):,} short_portfolio_verdict={len(short_portfolio_verdict):,} "
+        f"protocol_audit={len(protocol_audit):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} "
         f"output_dir={config.output_dir}",
         flush=True,
@@ -5418,6 +5447,266 @@ def _to_bool(value: object) -> bool:
         return bool(math.isfinite(parsed) and parsed != 0.0)
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
+
+def _build_protocol_audit(
+    *,
+    events: pd.DataFrame,
+    outcomes: pd.DataFrame,
+    taxonomy: pd.DataFrame,
+    rule_universe: pd.DataFrame,
+    negative_space: pd.DataFrame,
+    plateau_basins: pd.DataFrame,
+    daily_selection: pd.DataFrame,
+    daily_oos: pd.DataFrame,
+    window_health: pd.DataFrame,
+    selection_drift: pd.DataFrame,
+) -> pd.DataFrame:
+    """Audit the mechanism-stability protocol without changing selection."""
+
+    rows: list[dict[str, object]] = []
+
+    def add(
+        audit_name: str,
+        passed: bool,
+        *,
+        observed_rows: int = 0,
+        failing_rows: int = 0,
+        expected: str = "",
+        observed: str = "",
+        details: str = "",
+    ) -> None:
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "audit_name": audit_name,
+                "audit_status": "pass" if bool(passed) else "fail",
+                "passed": bool(passed),
+                "observed_rows": int(observed_rows),
+                "failing_rows": int(failing_rows),
+                "expected": expected,
+                "observed": observed,
+                "details": details,
+                "protocol_audit_model": PROTOCOL_AUDIT_MODEL,
+                "primary_evaluation_model": PRIMARY_EVALUATION_MODEL,
+                "plateau_accounting_model": PLATEAU_ACCOUNTING_MODEL,
+                "future_outcome_usage_model": FUTURE_OUTCOME_USAGE_MODEL,
+                "data_access_model": DATA_ACCESS_MODEL,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+            }
+        )
+
+    selection_bad = _rows_where_train_touches_test_day(daily_selection)
+    oos_bad = _rows_where_train_touches_test_day(daily_oos)
+    add(
+        "daily_selection_and_oos_train_windows_end_before_test_day",
+        selection_bad == 0 and oos_bad == 0,
+        observed_rows=int(len(daily_selection)) + int(len(daily_oos)),
+        failing_rows=selection_bad + oos_bad,
+        expected="train_end_day_ord < test_day_ord for every selected/evaluated daily row",
+        observed=f"selection_bad={selection_bad};oos_bad={oos_bad}",
+    )
+
+    rule_bad = _rows_where_train_touches_test_day(rule_universe)
+    add(
+        "rule_universe_thresholds_fit_only_on_prior_train_days",
+        rule_bad == 0,
+        observed_rows=int(len(rule_universe)),
+        failing_rows=rule_bad,
+        expected="rule_universe train_end_day_ord < test_day_ord",
+        observed=f"bad_rule_rows={rule_bad}",
+    )
+
+    rule_leak_bad = _rows_with_truthy_flags(
+        rule_universe,
+        {
+            "uses_outcome_columns": False,
+            "uses_pnl": False,
+            "uses_short_entry": False,
+            "uses_final_holdout_tuning": False,
+        },
+    )
+    taxonomy_leak_bad = _rows_with_truthy_flags(
+        taxonomy,
+        {
+            "taxonomy_uses_outcome_columns": False,
+            "outcomes_available_in_feature_store": False,
+            "future_label_available_at_entry": False,
+        },
+    )
+    add(
+        "entry_known_masks_exclude_outcomes_pnl_short_entry",
+        rule_leak_bad == 0 and taxonomy_leak_bad == 0,
+        observed_rows=int(len(rule_universe)) + int(len(taxonomy)),
+        failing_rows=rule_leak_bad + taxonomy_leak_bad,
+        expected="rule/taxonomy masks use entry-known data only",
+        observed=f"rule_bad={rule_leak_bad};taxonomy_bad={taxonomy_leak_bad}",
+    )
+
+    event_columns = set(events.columns) if events is not None else set()
+    event_forbidden = [column for column in _outcome_columns() if column in event_columns and column != "event_id"]
+    outcome_contract_bad = _rows_with_truthy_flags(
+        outcomes,
+        {
+            "future_label_available_at_entry": False,
+            "outcomes_available_in_feature_store": False,
+        },
+    )
+    add(
+        "event_store_does_not_embed_future_outcome_labels",
+        not event_forbidden and outcome_contract_bad == 0,
+        observed_rows=int(len(events)) + int(len(outcomes)),
+        failing_rows=int(bool(event_forbidden)) + outcome_contract_bad,
+        expected="events contain no future outcome label columns; outcomes are not available at entry",
+        observed="forbidden_event_columns=" + ",".join(event_forbidden),
+    )
+
+    selected_basin_ids = _string_set(daily_selection, "basin_id")
+    neg_basin_ids = _string_set(negative_space, "basin_id")
+    missing_negative_space = sorted(selected_basin_ids - neg_basin_ids)
+    selected_with_failed_neighbors = _selected_basin_ids_with_failed_neighbors(negative_space, selected_basin_ids)
+    missing_failed_neighbors = sorted(selected_basin_ids - selected_with_failed_neighbors)
+    failed_neighbor_count = _failed_negative_space_neighbor_count(negative_space, selected_basin_ids)
+    add(
+        "selected_basins_have_full_negative_space_rows_including_rejected_neighbors",
+        not missing_negative_space and not missing_failed_neighbors,
+        observed_rows=int(len(negative_space)),
+        failing_rows=len(missing_negative_space) + len(missing_failed_neighbors),
+        expected="each selected basin_id has generated neighbor rows and at least one rejected/min-sample-failed neighbor",
+        observed=(
+            f"selected_basins={len(selected_basin_ids)};negative_space_basins={len(neg_basin_ids)};"
+            f"failed_neighbor_rows={failed_neighbor_count}"
+        ),
+        details=(
+            "missing_negative_space=" + ",".join(missing_negative_space[:20])
+            + ";missing_failed_neighbors=" + ",".join(missing_failed_neighbors[:20])
+        ),
+    )
+
+    daily_oos_flag_bad = _rows_with_truthy_flags(
+        daily_oos,
+        {
+            "selection_uses_test_day_outcomes": False,
+            "uses_pnl": False,
+            "uses_short_entry": False,
+            "uses_final_holdout_tuning": False,
+        },
+    )
+    if daily_oos is not None and not daily_oos.empty and "test_day_not_in_train_window" in daily_oos.columns:
+        daily_oos_flag_bad += int((~daily_oos["test_day_not_in_train_window"].map(_to_bool)).sum())
+    add(
+        "daily_oos_is_evaluation_only_not_selection_or_pnl",
+        daily_oos_flag_bad == 0,
+        observed_rows=int(len(daily_oos)),
+        failing_rows=daily_oos_flag_bad,
+        expected="daily OOS uses outcomes only after train-only selection; no PnL/short entry/final tuning",
+        observed=f"bad_daily_oos_flags={daily_oos_flag_bad}",
+    )
+
+    oi_bad = 0
+    if events is not None and not events.empty and {"oi_available", "oi_asof_timestamp_ms", "feature_cutoff_ms"}.issubset(events.columns):
+        oi_events = events.loc[events["oi_available"].map(_to_bool)].copy()
+        if not oi_events.empty:
+            oi_bad = int(
+                (
+                    pd.to_numeric(oi_events["oi_asof_timestamp_ms"], errors="coerce")
+                    > pd.to_numeric(oi_events["feature_cutoff_ms"], errors="coerce")
+                ).sum()
+            )
+    add(
+        "oi_snapshot_is_closed_5m_asof_feature_cutoff",
+        oi_bad == 0,
+        observed_rows=int(len(events)),
+        failing_rows=oi_bad,
+        expected="oi_asof_timestamp_ms <= feature_cutoff_ms for OI-available events",
+        observed=f"bad_oi_rows={oi_bad}",
+    )
+
+    data_access_bad = 0
+    frames = (events, outcomes, taxonomy, rule_universe, negative_space, plateau_basins, daily_selection, daily_oos, window_health, selection_drift)
+    for frame in frames:
+        data_access_bad += _rows_without_expected_data_access_model(frame)
+    add(
+        "all_major_artifacts_declare_cache_only_data_access_model",
+        data_access_bad == 0,
+        observed_rows=sum(int(len(frame)) for frame in frames),
+        failing_rows=data_access_bad,
+        expected=f"data_access_model == {DATA_ACCESS_MODEL} where the column exists",
+        observed=f"bad_data_access_rows={data_access_bad}",
+    )
+
+    return _ensure_columns(pd.DataFrame(rows), _protocol_audit_columns())
+
+
+def _rows_where_train_touches_test_day(frame: pd.DataFrame) -> int:
+    if frame is None or frame.empty:
+        return 0
+    if not {"test_day_ord", "train_end_day_ord"}.issubset(frame.columns):
+        return 0
+    test_day = pd.to_numeric(frame["test_day_ord"], errors="coerce")
+    train_end = pd.to_numeric(frame["train_end_day_ord"], errors="coerce")
+    return int((train_end.notna() & test_day.notna() & (train_end >= test_day)).sum())
+
+
+def _rows_with_truthy_flags(frame: pd.DataFrame, expected_flags: dict[str, bool]) -> int:
+    if frame is None or frame.empty:
+        return 0
+    bad = pd.Series(False, index=frame.index)
+    for column, expected in expected_flags.items():
+        if column not in frame.columns:
+            continue
+        bad |= frame[column].map(_to_bool) != bool(expected)
+    return int(bad.sum())
+
+
+def _string_set(frame: pd.DataFrame, column: str) -> set[str]:
+    if frame is None or frame.empty or column not in frame.columns:
+        return set()
+    return set(frame[column].dropna().astype(str))
+
+
+def _failed_negative_space_neighbor_count(negative_space: pd.DataFrame, selected_basin_ids: set[str]) -> int:
+    if negative_space is None or negative_space.empty or "basin_id" not in negative_space.columns:
+        return 0
+    frame = negative_space.loc[negative_space["basin_id"].astype(str).isin(selected_basin_ids)].copy()
+    if frame.empty:
+        return 0
+    if "neighbor_passes_min_sample" in frame.columns:
+        return int((~frame["neighbor_passes_min_sample"].map(_to_bool)).sum())
+    if "neighbor_fail_reason" in frame.columns:
+        return int((frame["neighbor_fail_reason"].astype(str) != "pass").sum())
+    return 0
+
+
+def _selected_basin_ids_with_failed_neighbors(negative_space: pd.DataFrame, selected_basin_ids: set[str]) -> set[str]:
+    if not selected_basin_ids or negative_space is None or negative_space.empty or "basin_id" not in negative_space.columns:
+        return set()
+    frame = negative_space.loc[negative_space["basin_id"].astype(str).isin(selected_basin_ids)].copy()
+    if frame.empty:
+        return set()
+    if "neighbor_passes_min_sample" in frame.columns:
+        failed = frame.loc[~frame["neighbor_passes_min_sample"].map(_to_bool)]
+    elif "neighbor_fail_reason" in frame.columns:
+        failed = frame.loc[frame["neighbor_fail_reason"].astype(str) != "pass"]
+    else:
+        return set()
+    return _string_set(failed, "basin_id")
+
+
+def _rows_without_expected_data_access_model(frame: pd.DataFrame) -> int:
+    if frame is None or frame.empty or "data_access_model" not in frame.columns:
+        return 0
+    return int((frame["data_access_model"].astype(str) != DATA_ACCESS_MODEL).sum())
+
+
+def _protocol_audit_columns() -> list[str]:
+    return [
+        "research_id", "audit_name", "audit_status", "passed", "observed_rows", "failing_rows", "expected", "observed",
+        "details", "protocol_audit_model", "primary_evaluation_model", "plateau_accounting_model", "future_outcome_usage_model",
+        "data_access_model", "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning",
+    ]
+
 def _run_config_frame(
     *,
     config: PumpMechanismStabilityConfig,
@@ -5700,6 +5989,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_daily_oos.csv", "written", "daily prequential OOS ledger for selected basins"),
         ("pump_mechanism_window_health.csv", "written", "15/30/60d train-window health plus selected-basin OOS summary"),
         ("pump_mechanism_selection_drift.csv", "written", "selected mechanism-key drift over time"),
+        ("pump_mechanism_protocol_audit.csv", "written", "no-lookahead, train-only, negative-space, and daily replay guardrail audit"),
         ("pump_mechanism_daily_oos_events.csv", "written", "event-level ledger for selected daily OOS basins"),
         ("pump_mechanism_oos_diagnostics.csv", "written", "daily OOS split diagnostics by time/window/status"),
         ("pump_mechanism_oos_top_removal.csv", "written", "selected-event top-removal stress by event and symbol"),
