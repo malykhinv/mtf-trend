@@ -12910,3 +12910,43 @@ Risk:
 Research tooling only. The new queue must not be treated as proof. It is a
 controlled next-search input and still needs the normal robustness gates.
 ```
+
+## 2026-06-12 - P563 theory-vs-bot gap closure layer
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added multi-axis plateau neighborhoods across risk/session/trigger/stop/
+  management/nature axes.
+- Added neighborhood membership into `meta_validation.csv` and
+  `model_gate_diagnostics.csv`.
+- Added diversified multi-objective portfolio selection with marginal
+  expectancy, novelty, top-removal, calendar and overlap penalties.
+- Added `diversified_portfolio_candidates.csv`,
+  `diversified_portfolio_oos_trades.csv` and
+  `diversified_portfolio_meta_validation.csv`.
+- Added `compute_budget_plan.csv`.
+- Added `theoretical_model_gap_analysis.csv`.
+- Updated `final_report.md` and `self_improvement_report.md` sections for the
+  new theory-vs-bot gap artifacts.
+- Updated `research/SHORT_ROBUST_PLATEAU_ENGINE.md`,
+  `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md` and
+  `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+python -m compileall research_tools/short_robust_plateau_engine.py
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000 --output-dir .output/research_cache/short_robust_plateau_engine_theory_gap_smoke
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_theory_gap_smoke --candidate-profile balanced_365d --max-candidates 80 --max-natures-per-source 4 --is-days 45 --oos-days 15 --step-days 15 --final-holdout-days 15 --min-is-trades 8 --min-oos-trades 3 --mc-iterations 100 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_theory_gap_smoke/self_improvement_queue.csv --guided-candidates-limit 20
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_365d/self_improvement_queue.csv --guided-candidates-limit 400
+```
+
+Risk:
+
+```text
+Research tooling only. This does not change live trading logic. Diversified
+portfolio output is still a research artifact and must pass strict robustness
+gates before strategy use.
+```

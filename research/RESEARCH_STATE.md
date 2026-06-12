@@ -6655,3 +6655,70 @@ from 78 to 210, but strict/final gates still remain zero because calendar
 stability and top-removal robustness are still weak. The queue is useful for
 search, not proof of edge.
 ```
+
+## 2026-06-12 - P563 theory-vs-bot gap closure layer
+
+Status: APPLIED locally / UNKNOWN commit.
+
+The theoretical model still exceeded the bot in these areas:
+
+```text
+multi-axis plateau neighborhoods, not only risk-bucket clusters
+multi-objective portfolio construction, not only greedy score order
+explicit theory-vs-implementation gap audit
+compute-budget/failure-control artifact
+```
+
+Implemented artifacts:
+
+```text
+plateau_neighborhoods.csv
+diversified_portfolio_candidates.csv
+diversified_portfolio_oos_trades.csv
+diversified_portfolio_meta_validation.csv
+compute_budget_plan.csv
+theoretical_model_gap_analysis.csv
+```
+
+Full cached guided 365d output:
+
+```text
+base_candidate_universe_rows: 5000
+guided_candidate_rows: 400
+candidate_universe_rows: 5400
+candidate_rows: 2913
+promoted: 172
+strict_model_pass: 0
+theoretical_accept_pass: 0
+final_holdout_basic_pass: 0
+plateau_neighborhoods: 138
+neighborhood_pass: 112
+neighborhood_strong_pass: 64
+```
+
+Diversified portfolio:
+
+```text
+trades: 305
+symbols: 171
+avg: +0.135R
+median: +0.221R
+WR: 67.9%
+cost10_avg: +0.113R
+cost10_sum: +34.53R
+calendar_positive_day_rate: 40.4%
+calendar_median_trades_per_day: 1
+top35 pass: false
+MC pass: false
+```
+
+Read:
+
+```text
+The new layer closes most theory-vs-bot implementation gaps over existing
+cached artifacts. It improves breadth and portfolio expectancy but still does
+not create launch-ready robustness: top-removal, calendar density and MC stress
+remain insufficient. The remaining theoretical advantage requires new raw
+event-source/path replay, especially fresh lower-high failed-retest and
+static/runner separator sources.
+```

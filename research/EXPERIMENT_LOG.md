@@ -9010,3 +9010,103 @@ a guided scan. Guided candidates add many promoted rolling rows, but the
 current 365d sleeves still remain rejected by strict gates. Calendar stability
 and top-removal robustness remain the bottlenecks.
 ```
+
+## 2026-06-12 - P563 theory-vs-bot gap closure scan
+
+Smoke command:
+
+```text
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000 --output-dir .output/research_cache/short_robust_plateau_engine_theory_gap_smoke
+```
+
+Smoke output:
+
+```text
+candidate_rows=286
+promoted=6
+plateau_neighborhoods=1
+diversified_portfolio_trades=39
+theoretical_model_gap_rows=9
+compute_budget_plan_rows=7
+```
+
+Small guided validation command:
+
+```text
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_theory_gap_smoke --candidate-profile balanced_365d --max-candidates 80 --max-natures-per-source 4 --is-days 45 --oos-days 15 --step-days 15 --final-holdout-days 15 --min-is-trades 8 --min-oos-trades 3 --mc-iterations 100 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_theory_gap_smoke/self_improvement_queue.csv --guided-candidates-limit 20
+```
+
+Full cached guided 365d command:
+
+```text
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_365d/self_improvement_queue.csv --guided-candidates-limit 400
+```
+
+Full cached guided 365d output:
+
+```text
+base_candidate_universe_rows=5000
+guided_candidate_rows=400
+candidate_universe_rows=5400
+candidate_rows=2913
+promoted=172
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
+plateau_neighborhoods=138
+neighborhood_pass=112
+neighborhood_strong_pass=64
+self_improvement_queue_rows=400
+```
+
+Greedy portfolio:
+
+```text
+trades=122
+symbols=82
+cost10_avg=+0.086R
+cost10_sum=+10.50R
+calendar_positive_day_rate=21.3%
+top35 pass=false
+MC pass=true
+```
+
+Diversified portfolio:
+
+```text
+trades=305
+symbols=171
+cost10_avg=+0.113R
+cost10_sum=+34.53R
+calendar_positive_day_rate=40.4%
+calendar_median_trades_per_day=1
+top35 pass=false
+MC pass=false
+```
+
+Theory-vs-bot gap analysis:
+
+```text
+implemented:
+- entry_known_hypothesis_grammar
+- multi_axis_plateau_neighborhoods
+- diversity_and_novelty_scoring
+- failure_driven_iteration_queue
+- multi_objective_portfolio_builder
+- compute_budget_controller
+- lookahead_and_final_holdout_guard
+
+partial:
+- sealed_hypothesis_ledger, because cross-run enforcement is still local
+- new_fader_nature_discovery, because new raw event-source replay is required
+```
+
+Conclusion:
+
+```text
+The implementation now covers the practical parts of the theoretical model
+available from cached outcomes. It improves portfolio breadth and calendar
+coverage, but does not produce a launch-ready edge. Remaining work is not more
+postprocessing; it is new executable event-source/path replay for genuinely
+different fader natures and future/live-forward validation.
+```

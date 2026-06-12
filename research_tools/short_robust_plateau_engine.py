@@ -42,6 +42,7 @@ DEFAULT_TOP_REMOVAL_PCT = 0.35
 DEFAULT_MC_ITERATIONS = 1000
 DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE = 0.60
 DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS = 400
+DEFAULT_DIVERSIFIED_PORTFOLIO_MAX_CANDIDATES = 18
 MANUAL_RESEARCH_DOCS = [
     Path("research/SHORT_FADE_CORE_EDGE.md"),
     Path("research/SHORT_FADE_DIVERSIFIED_SLEEVES.md"),
@@ -92,6 +93,15 @@ SESSION_NEIGHBORS = {
 }
 
 RISK_ORDER = ["risk_1_3", "risk_2_5", "risk_3_8", "risk_5_12", "risk_all"]
+
+PLATEAU_NEIGHBOR_AXES = [
+    "risk_bucket",
+    "session_rule",
+    "trigger_rule",
+    "stop_model",
+    "management_id",
+    "nature_id",
+]
 
 ENTRY_FEATURES = {
     "source",
@@ -1526,6 +1536,7 @@ def scan_plateaus(
     if not candidates.empty:
         candidates = candidates.sort_values(["promoted", "candidate_score", "oos_cost10_sum_r"], ascending=[False, False, False])
     clusters = _build_plateau_clusters(candidates)
+    plateau_neighborhoods = _build_plateau_neighborhoods(candidates)
     portfolio, portfolio_trades = _build_portfolio(candidates, ledgers)
     lookahead = _lookahead_audit(df, candidates)
     axis_summary = _build_candidate_axis_summary(candidates)
@@ -1533,6 +1544,7 @@ def scan_plateaus(
         df,
         candidates,
         clusters,
+        plateau_neighborhoods,
         ledgers,
         full_trigger_masks,
         windows,
@@ -1570,6 +1582,20 @@ def scan_plateaus(
         scan_config=scan_config,
     )
     diversity_scores = _build_diversity_scores(meta_validation, ledgers, portfolio, portfolio_trades)
+    diversified_portfolio, diversified_portfolio_trades = _build_diversified_portfolio(
+        meta_validation,
+        diversity_scores,
+        ledgers,
+        windows,
+        top_removal_pct=top_removal_pct,
+    )
+    diversified_portfolio_meta = _build_portfolio_meta_validation(
+        diversified_portfolio_trades,
+        windows,
+        mc_iterations=mc_iterations,
+        risk_per_trade_pct=risk_per_trade_pct,
+        top_removal_pct=top_removal_pct,
+    )
     self_improvement_queue = _build_self_improvement_queue(
         dev_df,
         trigger_masks,
@@ -1581,6 +1607,24 @@ def scan_plateaus(
         min_is_trades=min_is_trades,
         min_calendar_positive_day_rate=min_calendar_positive_day_rate,
         max_rows=DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS,
+    )
+    compute_budget_plan = _build_compute_budget_plan(
+        candidate_universe_rows=len(specs),
+        candidate_rows=len(candidates),
+        guided_candidate_rows=len(guided_specs),
+        rejected=rejected,
+        self_improvement_queue=self_improvement_queue,
+    )
+    theoretical_model_gap_analysis = _build_theoretical_model_gap_analysis(
+        hypothesis_grammar=hypothesis_grammar,
+        hypothesis_ledger=hypothesis_ledger,
+        plateau_neighborhoods=plateau_neighborhoods,
+        diversity_scores=diversity_scores,
+        self_improvement_queue=self_improvement_queue,
+        portfolio=portfolio,
+        diversified_portfolio=diversified_portfolio,
+        compute_budget_plan=compute_budget_plan,
+        lookahead=lookahead,
     )
     improvement_plan = _build_improvement_plan(
         candidates,
@@ -1595,35 +1639,46 @@ def scan_plateaus(
     wfa.to_csv(output_dir / "wfa_results.csv", index=False)
     candidates.to_csv(output_dir / "plateau_candidates.csv", index=False)
     clusters.to_csv(output_dir / "plateau_clusters.csv", index=False)
+    plateau_neighborhoods.to_csv(output_dir / "plateau_neighborhoods.csv", index=False)
     axis_summary.to_csv(output_dir / "candidate_axis_summary.csv", index=False)
     meta_validation.to_csv(output_dir / "meta_validation.csv", index=False)
     final_holdout.to_csv(output_dir / "final_holdout_validation.csv", index=False)
     portfolio_meta.to_csv(output_dir / "portfolio_meta_validation.csv", index=False)
+    diversified_portfolio_meta.to_csv(output_dir / "diversified_portfolio_meta_validation.csv", index=False)
     gate_diagnostics.to_csv(output_dir / "model_gate_diagnostics.csv", index=False)
     hypothesis_grammar.to_csv(output_dir / "hypothesis_grammar.csv", index=False)
     hypothesis_ledger.to_csv(output_dir / "hypothesis_ledger.csv", index=False)
     diversity_scores.to_csv(output_dir / "diversity_scores.csv", index=False)
     self_improvement_queue.to_csv(output_dir / "self_improvement_queue.csv", index=False)
+    compute_budget_plan.to_csv(output_dir / "compute_budget_plan.csv", index=False)
+    theoretical_model_gap_analysis.to_csv(output_dir / "theoretical_model_gap_analysis.csv", index=False)
     improvement_plan.to_csv(output_dir / "improvement_plan.csv", index=False)
     rejected.to_csv(output_dir / "rejected_reasons.csv", index=False)
     portfolio.to_csv(output_dir / "portfolio_candidates.csv", index=False)
     portfolio_trades.to_csv(output_dir / "portfolio_oos_trades.csv", index=False)
+    diversified_portfolio.to_csv(output_dir / "diversified_portfolio_candidates.csv", index=False)
+    diversified_portfolio_trades.to_csv(output_dir / "diversified_portfolio_oos_trades.csv", index=False)
     lookahead.to_csv(output_dir / "lookahead_audit.csv", index=False)
     _write_final_report(
         output_dir,
         candidates,
         clusters,
+        plateau_neighborhoods,
         portfolio,
+        diversified_portfolio,
         rejected,
         axis_summary,
         meta_validation,
         final_holdout,
         portfolio_meta,
+        diversified_portfolio_meta,
         gate_diagnostics,
         hypothesis_grammar,
         hypothesis_ledger,
         diversity_scores,
         self_improvement_queue,
+        compute_budget_plan,
+        theoretical_model_gap_analysis,
         improvement_plan,
         lookahead,
         windows,
@@ -1634,6 +1689,10 @@ def scan_plateaus(
         hypothesis_ledger,
         diversity_scores,
         self_improvement_queue,
+        diversified_portfolio,
+        diversified_portfolio_meta,
+        compute_budget_plan,
+        theoretical_model_gap_analysis,
         gate_diagnostics,
         portfolio_meta,
     )
@@ -1700,6 +1759,56 @@ def _build_plateau_clusters(candidates: pd.DataFrame) -> pd.DataFrame:
         row.update(s)
         rows.append(row)
     return pd.DataFrame(rows).sort_values(["plateau_pass", "best_candidate_score"], ascending=[False, False])
+
+
+def _build_plateau_neighborhoods(candidates: pd.DataFrame) -> pd.DataFrame:
+    """Find broad positive neighborhoods by varying one search axis at a time."""
+    if candidates.empty:
+        return pd.DataFrame()
+    work = candidates[candidates["promoted"].astype(bool)].copy()
+    if work.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for varied_axis in PLATEAU_NEIGHBOR_AXES:
+        if varied_axis not in work.columns:
+            continue
+        fixed_axes = [axis for axis in HYPOTHESIS_AXES if axis != varied_axis and axis in work.columns]
+        if not fixed_axes:
+            continue
+        for keys, group in work.groupby(fixed_axes, dropna=False):
+            unique_values = sorted(group[varied_axis].astype(str).unique().tolist())
+            if len(unique_values) < 2:
+                continue
+            scores = pd.to_numeric(group["candidate_score"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            if scores.empty:
+                continue
+            best = group.sort_values(["candidate_score", "oos_cost10_sum_r"], ascending=[False, False]).iloc[0]
+            worst_score = float(scores.min())
+            best_score = float(scores.max())
+            degradation = 1.0 - (worst_score / best_score) if best_score > 0 else float("nan")
+            s = _summary_from_candidate_group(group)
+            row: dict[str, object] = {
+                "neighborhood_id": _stable_id("N", f"{varied_axis}|{'|'.join(map(str, keys if isinstance(keys, tuple) else (keys,)))}"),
+                "varied_axis": varied_axis,
+                "members": int(len(group)),
+                "unique_values": int(len(unique_values)),
+                "varied_values": ",".join(unique_values),
+                "member_candidate_ids": ";".join(group["candidate_id"].astype(str).tolist()),
+                "best_candidate_id": str(best["candidate_id"]),
+                "best_candidate_score": best_score,
+                "worst_candidate_score": worst_score,
+                "score_degradation_pct": float(degradation),
+                "neighborhood_pass": bool(np.isfinite(degradation) and degradation <= 0.30 and len(group) >= 2 and len(unique_values) >= 2),
+                "neighborhood_strong_pass": bool(np.isfinite(degradation) and degradation <= 0.15 and len(group) >= 2 and len(unique_values) >= 2),
+            }
+            for axis, value in zip(fixed_axes, keys if isinstance(keys, tuple) else (keys,)):
+                row[axis] = value
+            row.update(s)
+            rows.append(row)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values(["neighborhood_pass", "neighborhood_strong_pass", "best_candidate_score"], ascending=[False, False, False])
 
 
 def _summary_from_candidate_group(group: pd.DataFrame) -> dict[str, float]:
@@ -1783,6 +1892,31 @@ def _plateau_membership(clusters: pd.DataFrame) -> dict[str, dict[str, object]]:
     return out
 
 
+def _neighborhood_membership(neighborhoods: pd.DataFrame) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    if neighborhoods.empty or "member_candidate_ids" not in neighborhoods.columns:
+        return out
+    for _, neighborhood in neighborhoods.iterrows():
+        for cid in str(neighborhood.get("member_candidate_ids", "")).split(";"):
+            if not cid:
+                continue
+            current = out.get(cid)
+            score = float(neighborhood.get("best_candidate_score", 0.0) or 0.0)
+            if current is not None and float(current.get("neighborhood_best_candidate_score", 0.0) or 0.0) >= score:
+                continue
+            out[cid] = {
+                "neighborhood_id": neighborhood.get("neighborhood_id", ""),
+                "neighborhood_varied_axis": neighborhood.get("varied_axis", ""),
+                "neighborhood_pass": bool(neighborhood.get("neighborhood_pass", False)),
+                "neighborhood_strong_pass": bool(neighborhood.get("neighborhood_strong_pass", False)),
+                "neighborhood_members": int(neighborhood.get("members", 0) or 0),
+                "neighborhood_unique_values": int(neighborhood.get("unique_values", 0) or 0),
+                "neighborhood_score_degradation_pct": float(neighborhood.get("score_degradation_pct", np.nan)),
+                "neighborhood_best_candidate_score": score,
+            }
+    return out
+
+
 def _model_gate(
     *,
     base: dict[str, object],
@@ -1821,6 +1955,7 @@ def _build_meta_validation(
     df: pd.DataFrame,
     candidates: pd.DataFrame,
     clusters: pd.DataFrame,
+    neighborhoods: pd.DataFrame,
     ledgers: dict[str, pd.DataFrame],
     trigger_masks: dict[str, pd.Series],
     windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
@@ -1838,6 +1973,7 @@ def _build_meta_validation(
     calendar_days = _calendar_days_from_windows(windows)
     final_days = pd.date_range(final_start, final_end - pd.Timedelta(days=1), freq="D", tz="UTC")
     membership = _plateau_membership(clusters)
+    neighborhood = _neighborhood_membership(neighborhoods)
     promoted = candidates[candidates["promoted"].astype(bool)].copy()
     rows: list[dict] = []
     final_rows: list[dict] = []
@@ -1884,6 +2020,7 @@ def _build_meta_validation(
             **top40,
             **mc,
             **membership.get(cid, {}),
+            **neighborhood.get(cid, {}),
         }
         base["top_removal_pass"] = bool(base.get("top_removed_pass", False))
         base["top40_pass"] = bool(base.get("top_removed_pass", False))
@@ -2022,10 +2159,22 @@ def _build_model_gate_diagnostics(
     top_remove_pct = top_removal_pct * 100.0
     total = int(len(meta_validation))
     if total:
+        neighborhood_pass = (
+            meta_validation["neighborhood_pass"].map(_as_bool).astype(bool)
+            if "neighborhood_pass" in meta_validation.columns
+            else pd.Series(False, index=meta_validation.index, dtype="bool")
+        )
+        neighborhood_strong_pass = (
+            meta_validation["neighborhood_strong_pass"].map(_as_bool).astype(bool)
+            if "neighborhood_strong_pass" in meta_validation.columns
+            else pd.Series(False, index=meta_validation.index, dtype="bool")
+        )
         candidate_checks = [
             ("min_oos_trades", meta_validation["oos_trades"].ge(min_oos_trades), "Enough rolling OOS trades for a sleeve."),
             ("plateau_pass", meta_validation["plateau_pass"].fillna(False), "Candidate belongs to a risk-bucket plateau with <=30% score degradation."),
             ("plateau_strong_pass", meta_validation["plateau_strong_pass"].fillna(False), "Candidate belongs to a risk-bucket plateau with <=15% score degradation."),
+            ("neighborhood_pass", neighborhood_pass, "Candidate belongs to a multi-axis neighborhood with <=30% score degradation."),
+            ("neighborhood_strong_pass", neighborhood_strong_pass, "Candidate belongs to a multi-axis neighborhood with <=15% score degradation."),
             ("efficiency_ratio_ge_0p70", meta_validation["efficiency_ratio"].ge(0.70), "OOS score does not collapse versus IS score."),
             ("top_removal_pass", meta_validation["top_removed_pass"].fillna(False), f"Remaining {kept_pct:.0%} of trades is still positive after removing top {top_remove_pct:.0f}% winners."),
             ("mc_pass", meta_validation["mc_pass"].fillna(False), "Monte Carlo drawdown/positive-rate stress survives fixed risk."),
@@ -2590,6 +2739,178 @@ def _build_improvement_plan(
     return pd.DataFrame(rows)
 
 
+def _build_compute_budget_plan(
+    *,
+    candidate_universe_rows: int,
+    candidate_rows: int,
+    guided_candidate_rows: int,
+    rejected: pd.DataFrame,
+    self_improvement_queue: pd.DataFrame,
+) -> pd.DataFrame:
+    rejected_count = int(len(rejected))
+    queue_rows = int(len(self_improvement_queue))
+    new_queue_rows = int(self_improvement_queue["status_hint"].astype(str).eq("new_guided_candidate").sum()) if not self_improvement_queue.empty and "status_hint" in self_improvement_queue.columns else 0
+    rows = [
+        {
+            "stage": "event_store",
+            "rows": "cached",
+            "cost_class": "already_paid",
+            "policy": "Reuse Parquet event outcomes; do not rebuild raw artifacts unless source logic changes.",
+            "next_action": "skip_rebuild",
+        },
+        {
+            "stage": "cheap_prefilter",
+            "rows": candidate_universe_rows,
+            "cost_class": "low",
+            "policy": "Reject sparse/weak candidates before WFA windows.",
+            "next_action": "keep_first",
+        },
+        {
+            "stage": "rolling_wfa",
+            "rows": candidate_rows,
+            "cost_class": "medium",
+            "policy": "Run WFA only after total-row/symbol/day prefilter.",
+            "next_action": "parallelize_by_candidate_later",
+        },
+        {
+            "stage": "rejection_funnel",
+            "rows": rejected_count,
+            "cost_class": "low",
+            "policy": "Use rejection reasons to avoid expanding dead branches.",
+            "next_action": "feed_queue_generator",
+        },
+        {
+            "stage": "guided_queue",
+            "rows": queue_rows,
+            "cost_class": "bounded_medium",
+            "policy": "Cap next guided scan; prefer new candidates with enough estimated development rows.",
+            "next_action": f"scan_top_{min(new_queue_rows, DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS)}_new_guided",
+        },
+        {
+            "stage": "stress_tests",
+            "rows": candidate_rows,
+            "cost_class": "medium_high",
+            "policy": "Run MC/top-removal only for promoted/meta candidates, not the full grid.",
+            "next_action": "keep_after_promotion",
+        },
+        {
+            "stage": "final_holdout",
+            "rows": candidate_rows,
+            "cost_class": "audit_only",
+            "policy": "Use final holdout for verification only; never generate new candidates from final wins.",
+            "next_action": "seal_family_after_open",
+        },
+    ]
+    if guided_candidate_rows > 0:
+        rows.append(
+            {
+                "stage": "guided_iteration_read",
+                "rows": guided_candidate_rows,
+                "cost_class": "medium",
+                "policy": "Compare guided candidates against base candidates by strict gates, not promoted count.",
+                "next_action": "keep_only_if_calendar_and_top_removal_improve",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_theoretical_model_gap_analysis(
+    *,
+    hypothesis_grammar: pd.DataFrame,
+    hypothesis_ledger: pd.DataFrame,
+    plateau_neighborhoods: pd.DataFrame,
+    diversity_scores: pd.DataFrame,
+    self_improvement_queue: pd.DataFrame,
+    portfolio: pd.DataFrame,
+    diversified_portfolio: pd.DataFrame,
+    compute_budget_plan: pd.DataFrame,
+    lookahead: pd.DataFrame,
+) -> pd.DataFrame:
+    def status(ok: bool, partial: bool = False) -> str:
+        if ok:
+            return "implemented"
+        if partial:
+            return "partial"
+        return "missing"
+
+    lookahead_ok = bool(not lookahead.empty and "status" in lookahead.columns and lookahead["status"].astype(str).eq("pass").all())
+    rows = [
+        {
+            "capability": "entry_known_hypothesis_grammar",
+            "theoretical_goal": "Typed primitives only from features available at or before entry.",
+            "current_status": status(not hypothesis_grammar.empty),
+            "implemented_artifact": "hypothesis_grammar.csv",
+            "remaining_gap": "Add new raw event sources before expanding grammar beyond existing artifacts.",
+            "priority": 2,
+        },
+        {
+            "capability": "sealed_hypothesis_ledger",
+            "theoretical_goal": "Every hypothesis has id, family id, source-data hash, status and holdout audit.",
+            "current_status": "partial" if not hypothesis_ledger.empty else "missing",
+            "implemented_artifact": "hypothesis_ledger.csv",
+            "remaining_gap": "Cross-run immutable ledger enforcement is still local to output_dir, not a central database.",
+            "priority": 2,
+        },
+        {
+            "capability": "multi_axis_plateau_neighborhoods",
+            "theoretical_goal": "Prefer broad flat zones over single best points across risk/session/trigger/stop/management/nature axes.",
+            "current_status": status(not plateau_neighborhoods.empty),
+            "implemented_artifact": "plateau_neighborhoods.csv",
+            "remaining_gap": "Current neighborhoods are categorical; numeric threshold heatmaps need raw feature-threshold replay.",
+            "priority": 1,
+        },
+        {
+            "capability": "diversity_and_novelty_scoring",
+            "theoretical_goal": "Penalize same event, symbol, day and peer-return drivers.",
+            "current_status": status(not diversity_scores.empty),
+            "implemented_artifact": "diversity_scores.csv",
+            "remaining_gap": "Return-driver correlation can be made stronger with minute-path feature vectors.",
+            "priority": 1,
+        },
+        {
+            "capability": "failure_driven_iteration_queue",
+            "theoretical_goal": "Use model failures to generate the next bounded search queue.",
+            "current_status": status(not self_improvement_queue.empty),
+            "implemented_artifact": "self_improvement_queue.csv",
+            "remaining_gap": "Queue still mutates existing artifact axes; it cannot invent unbuilt path-replay event sources.",
+            "priority": 1,
+        },
+        {
+            "capability": "multi_objective_portfolio_builder",
+            "theoretical_goal": "Build portfolio by marginal contribution, novelty, top-removal, calendar and overlap, not one-candidate score.",
+            "current_status": status(not diversified_portfolio.empty and bool(diversified_portfolio.get("accepted", pd.Series(dtype=bool)).astype(bool).any()), partial=not portfolio.empty),
+            "implemented_artifact": "diversified_portfolio_candidates.csv",
+            "remaining_gap": "Still greedy bounded selection, not full combinatorial optimization; this is deliberate for 16GB/i5.",
+            "priority": 1,
+        },
+        {
+            "capability": "compute_budget_controller",
+            "theoretical_goal": "Cheap reject first; expensive stress only for survivors; bounded guided scans.",
+            "current_status": status(not compute_budget_plan.empty),
+            "implemented_artifact": "compute_budget_plan.csv",
+            "remaining_gap": "No multiprocessing scheduler yet; current controller is artifact/policy level.",
+            "priority": 3,
+        },
+        {
+            "capability": "lookahead_and_final_holdout_guard",
+            "theoretical_goal": "Never generate from future/final data; final holdout remains audit only.",
+            "current_status": status(lookahead_ok),
+            "implemented_artifact": "lookahead_audit.csv, hypothesis_ledger.csv",
+            "remaining_gap": "A truly fresh judge still requires future/live-forward data outside this inspected 365d cache.",
+            "priority": 1,
+        },
+        {
+            "capability": "new_fader_nature_discovery",
+            "theoretical_goal": "Discover genuinely different fader natures, not just variants of the same failed-pump source.",
+            "current_status": "partial",
+            "implemented_artifact": "self_improvement_queue.csv",
+            "remaining_gap": "Requires new executable event-source/path replay builders for fresh lower-high, failed retest and static/runner separators.",
+            "priority": 1,
+        },
+    ]
+    return pd.DataFrame(rows).sort_values(["priority", "capability"], ascending=[True, True])
+
+
 def _remove_collisions(candidate: pd.DataFrame, selected: pd.DataFrame, *, window_ms: int = 60 * 60_000) -> pd.DataFrame:
     if candidate.empty or selected.empty:
         return candidate
@@ -2645,6 +2966,127 @@ def _build_portfolio(candidates: pd.DataFrame, ledgers: dict[str, pd.DataFrame])
     return portfolio, selected
 
 
+def _build_diversified_portfolio(
+    meta_validation: pd.DataFrame,
+    diversity_scores: pd.DataFrame,
+    ledgers: dict[str, pd.DataFrame],
+    windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
+    *,
+    top_removal_pct: float,
+    max_candidates: int = DEFAULT_DIVERSIFIED_PORTFOLIO_MAX_CANDIDATES,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if meta_validation.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    work = meta_validation.copy()
+    if not diversity_scores.empty and "candidate_id" in diversity_scores.columns:
+        div_cols = [
+            "candidate_id",
+            "novelty_score",
+            "robustness_score",
+            "selection_utility_score",
+            "diversity_grade",
+            "portfolio_event_overlap_pct",
+            "max_peer_event_overlap_pct",
+        ]
+        work = work.merge(diversity_scores[[c for c in div_cols if c in diversity_scores.columns]], on="candidate_id", how="left")
+    for col in ["novelty_score", "robustness_score", "selection_utility_score", "portfolio_event_overlap_pct", "max_peer_event_overlap_pct"]:
+        if col not in work.columns:
+            work[col] = 0.0
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+    work["portfolio_rank_score"] = (
+        0.28 * pd.to_numeric(work.get("model_quality_score", 0.0), errors="coerce").fillna(0.0)
+        + 0.22 * work["selection_utility_score"]
+        + 0.18 * work["novelty_score"]
+        + 0.14 * work["robustness_score"]
+        + 0.10 * pd.to_numeric(work.get("oos_cost10_avg_r", 0.0), errors="coerce").fillna(0.0).clip(-1.0, 1.0)
+        + 0.08 * pd.to_numeric(work.get("calendar_positive_day_rate", 0.0), errors="coerce").fillna(0.0)
+    )
+    candidates = work.sort_values(["strict_model_pass", "portfolio_rank_score", "oos_cost10_sum_r"], ascending=[False, False, False]).head(180)
+    selected = pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    calendar_days = _calendar_days_from_windows(windows)
+    selected_sessions: dict[str, int] = {}
+    selected_sources: dict[str, int] = {}
+
+    for _, cand in candidates.iterrows():
+        cid = str(cand["candidate_id"])
+        ledger = ledgers.get(cid, pd.DataFrame()).copy()
+        if ledger.empty:
+            continue
+        before_keys = _ledger_key_set(ledger)
+        marginal = _remove_collisions(ledger, selected)
+        marginal = marginal.drop_duplicates(["event_id", "source"], keep="first")
+        if marginal.empty:
+            continue
+        after_keys = _ledger_key_set(marginal)
+        collision_removed_pct = 1.0 - (len(after_keys) / len(before_keys)) if before_keys else 0.0
+        net_m = _summary(marginal, "net_r")
+        cost_m = _summary(marginal, "cost10_r")
+        calendar = _calendar_stats(marginal, calendar_days, "cost10_r")
+        top_removed = _top_removal_summary(marginal["cost10_r"], remove_pct=top_removal_pct)
+        selected_keys = _ledger_key_set(selected)
+        event_overlap = _overlap_pct(after_keys, selected_keys)
+        session = str(cand.get("session_rule", ""))
+        source = str(cand.get("source", ""))
+        session_penalty = min(selected_sessions.get(session, 0) * 0.04, 0.20)
+        source_penalty = min(selected_sources.get(source, 0) * 0.02, 0.12)
+        marginal_score = (
+            0.24 * np.tanh(_safe_float(cost_m["avg_r"]) / 0.18)
+            + 0.18 * np.tanh(_safe_float(net_m["median_r"]) / 0.18)
+            + 0.14 * _safe_float(net_m["win_rate"])
+            + 0.12 * min(_safe_float(calendar["calendar_positive_day_rate"]) / 0.60, 1.0)
+            + 0.10 * float(bool(top_removed["top_removed_pass"]))
+            + 0.10 * min(max(_safe_float(cand.get("novelty_score", 0.0)), 0.0), 1.0)
+            + 0.08 * min(max(_safe_float(cand.get("robustness_score", 0.0)), 0.0), 1.0)
+            + 0.04 * min(_safe_float(net_m["top_symbol_independence_pct"]) / 0.50, 1.0)
+            - 0.16 * event_overlap
+            - 0.10 * collision_removed_pct
+            - session_penalty
+            - source_penalty
+        )
+        accept = bool(
+            net_m["trades"] >= 8
+            and _safe_float(cost_m["avg_r"]) > 0
+            and _safe_float(net_m["median_r"]) > 0
+            and event_overlap < 0.70
+            and marginal_score > 0.05
+        )
+        rows.append(
+            {
+                "candidate_id": cid,
+                "accepted": accept,
+                "order": len(rows),
+                "marginal_score": float(marginal_score),
+                "collision_removed_pct": float(collision_removed_pct),
+                "selected_event_overlap_pct": float(event_overlap),
+                "session_penalty": float(session_penalty),
+                "source_penalty": float(source_penalty),
+                "novelty_score": _safe_float(cand.get("novelty_score", np.nan), float("nan")),
+                "robustness_score": _safe_float(cand.get("robustness_score", np.nan), float("nan")),
+                "diversity_grade": str(cand.get("diversity_grade", "")),
+                "marginal_cost10_avg_r": cost_m["avg_r"],
+                "marginal_cost10_sum_r": cost_m["sum_r"],
+                "marginal_calendar_positive_day_rate": calendar["calendar_positive_day_rate"],
+                "marginal_calendar_median_trades_per_day": calendar["calendar_median_trades_per_day"],
+                "marginal_top_removed_pass": top_removed["top_removed_pass"],
+                "marginal_top_removed_remaining_sum_r": top_removed["top_removed_remaining_sum_r"],
+                **{f"marginal_{k}": v for k, v in net_m.items()},
+            }
+        )
+        if accept:
+            marginal = marginal.copy()
+            marginal["portfolio_candidate_id"] = cid
+            marginal["portfolio_model"] = "diversified_multi_objective"
+            selected = pd.concat([selected, marginal], ignore_index=True)
+            selected = selected.drop_duplicates(["event_id", "source"], keep="first")
+            selected_sessions[session] = selected_sessions.get(session, 0) + 1
+            selected_sources[source] = selected_sources.get(source, 0) + 1
+        if int(sum(1 for row in rows if row.get("accepted"))) >= max_candidates:
+            break
+    portfolio = pd.DataFrame(rows)
+    return portfolio, selected
+
+
 def _lookahead_audit(outcomes: pd.DataFrame, candidates: pd.DataFrame) -> pd.DataFrame:
     used_rules = sorted(candidates["trigger_rule"].dropna().unique().tolist()) if not candidates.empty else []
     rows = [
@@ -2691,17 +3133,22 @@ def _write_final_report(
     output_dir: Path,
     candidates: pd.DataFrame,
     clusters: pd.DataFrame,
+    plateau_neighborhoods: pd.DataFrame,
     portfolio: pd.DataFrame,
+    diversified_portfolio: pd.DataFrame,
     rejected: pd.DataFrame,
     axis_summary: pd.DataFrame,
     meta_validation: pd.DataFrame,
     final_holdout: pd.DataFrame,
     portfolio_meta: pd.DataFrame,
+    diversified_portfolio_meta: pd.DataFrame,
     gate_diagnostics: pd.DataFrame,
     hypothesis_grammar: pd.DataFrame,
     hypothesis_ledger: pd.DataFrame,
     diversity_scores: pd.DataFrame,
     self_improvement_queue: pd.DataFrame,
+    compute_budget_plan: pd.DataFrame,
+    theoretical_model_gap_analysis: pd.DataFrame,
     improvement_plan: pd.DataFrame,
     lookahead: pd.DataFrame,
     windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
@@ -2742,6 +3189,18 @@ def _write_final_report(
         "best_candidate_id",
         "best_candidate_score",
     ]
+    neighborhood_cols = [
+        "neighborhood_id",
+        "varied_axis",
+        "neighborhood_pass",
+        "neighborhood_strong_pass",
+        "members",
+        "unique_values",
+        "varied_values",
+        "best_candidate_id",
+        "best_candidate_score",
+        "score_degradation_pct",
+    ]
     port_cols = [
         "candidate_id",
         "accepted",
@@ -2751,6 +3210,20 @@ def _write_final_report(
         "marginal_cost10_avg_r",
         "marginal_top_trade_independence_pct",
     ]
+    diversified_port_cols = [
+        "candidate_id",
+        "accepted",
+        "marginal_score",
+        "marginal_trades",
+        "marginal_cost10_avg_r",
+        "marginal_median_r",
+        "marginal_calendar_positive_day_rate",
+        "marginal_top_removed_pass",
+        "selected_event_overlap_pct",
+        "novelty_score",
+        "robustness_score",
+        "diversity_grade",
+    ]
     meta_cols = [
         "candidate_id",
         "model_grade",
@@ -2758,6 +3231,8 @@ def _write_final_report(
         "theoretical_accept_pass",
         "plateau_pass",
         "plateau_strong_pass",
+        "neighborhood_pass",
+        "neighborhood_strong_pass",
         "oos_trades",
         "oos_cost10_avg_r",
         "oos_median_r",
@@ -2791,6 +3266,20 @@ def _write_final_report(
         "mc_shuffle_dd95_pct",
         "mc_bootstrap_positive_rate",
         "mc_pass",
+    ]
+    gap_cols = [
+        "capability",
+        "current_status",
+        "implemented_artifact",
+        "remaining_gap",
+        "priority",
+    ]
+    budget_cols = [
+        "stage",
+        "rows",
+        "cost_class",
+        "policy",
+        "next_action",
     ]
     gate_cols = [
         "scope",
@@ -2864,6 +3353,8 @@ def _write_final_report(
     final_pass_count = int(final_holdout["final_pass_basic"].sum()) if not final_holdout.empty and "final_pass_basic" in final_holdout.columns else 0
     plateau_pass_count = int(clusters["plateau_pass"].sum()) if not clusters.empty and "plateau_pass" in clusters.columns else 0
     plateau_strong_count = int(clusters["plateau_strong_pass"].sum()) if not clusters.empty and "plateau_strong_pass" in clusters.columns else 0
+    neighborhood_pass_count = int(plateau_neighborhoods["neighborhood_pass"].sum()) if not plateau_neighborhoods.empty and "neighborhood_pass" in plateau_neighborhoods.columns else 0
+    neighborhood_strong_count = int(plateau_neighborhoods["neighborhood_strong_pass"].sum()) if not plateau_neighborhoods.empty and "neighborhood_strong_pass" in plateau_neighborhoods.columns else 0
     text = f"""# Short Robust Plateau Engine Report
 
 Status: automated plateau/WFA postprocess over immutable replay event store.
@@ -2913,6 +3404,13 @@ plateau_pass={plateau_pass_count}
 plateau_strong_pass={plateau_strong_count}
 ```
 
+Multi-axis plateau neighborhoods:
+
+```text
+neighborhood_pass={neighborhood_pass_count}
+neighborhood_strong_pass={neighborhood_strong_count}
+```
+
 Model gate:
 
 ```text
@@ -2939,6 +3437,12 @@ Top plateau clusters:
 {clusters.head(25)[[c for c in cluster_cols if c in clusters.columns]].to_string(index=False) if not clusters.empty else 'none'}
 ```
 
+Top plateau neighborhoods:
+
+```text
+{plateau_neighborhoods.head(25)[[c for c in neighborhood_cols if c in plateau_neighborhoods.columns]].to_string(index=False) if not plateau_neighborhoods.empty else 'none'}
+```
+
 Candidate axis summary:
 
 ```text
@@ -2949,6 +3453,12 @@ Portfolio candidates:
 
 ```text
 {portfolio.head(20)[[c for c in port_cols if c in portfolio.columns]].to_string(index=False) if not portfolio.empty else 'none'}
+```
+
+Diversified portfolio candidates:
+
+```text
+{diversified_portfolio.head(30)[[c for c in diversified_port_cols if c in diversified_portfolio.columns]].to_string(index=False) if not diversified_portfolio.empty else 'none'}
 ```
 
 Meta validation:
@@ -2967,6 +3477,12 @@ Portfolio meta validation:
 
 ```text
 {portfolio_meta.head(10)[[c for c in portfolio_meta_cols if c in portfolio_meta.columns]].to_string(index=False) if not portfolio_meta.empty else 'none'}
+```
+
+Diversified portfolio meta validation:
+
+```text
+{diversified_portfolio_meta.head(10)[[c for c in portfolio_meta_cols if c in diversified_portfolio_meta.columns]].to_string(index=False) if not diversified_portfolio_meta.empty else 'none'}
 ```
 
 Model gate diagnostics:
@@ -2999,6 +3515,18 @@ Self-improvement queue:
 {self_improvement_queue.head(30)[[c for c in queue_cols if c in self_improvement_queue.columns]].to_string(index=False) if not self_improvement_queue.empty else 'none'}
 ```
 
+Theoretical model gap analysis:
+
+```text
+{theoretical_model_gap_analysis[[c for c in gap_cols if c in theoretical_model_gap_analysis.columns]].to_string(index=False) if not theoretical_model_gap_analysis.empty else 'none'}
+```
+
+Compute budget plan:
+
+```text
+{compute_budget_plan[[c for c in budget_cols if c in compute_budget_plan.columns]].to_string(index=False) if not compute_budget_plan.empty else 'none'}
+```
+
 Improvement plan:
 
 ```text
@@ -3027,6 +3555,10 @@ def _write_self_improvement_report(
     hypothesis_ledger: pd.DataFrame,
     diversity_scores: pd.DataFrame,
     self_improvement_queue: pd.DataFrame,
+    diversified_portfolio: pd.DataFrame,
+    diversified_portfolio_meta: pd.DataFrame,
+    compute_budget_plan: pd.DataFrame,
+    theoretical_model_gap_analysis: pd.DataFrame,
     gate_diagnostics: pd.DataFrame,
     portfolio_meta: pd.DataFrame,
 ) -> None:
@@ -3035,6 +3567,7 @@ def _write_self_improvement_report(
     queue_counts = self_improvement_queue["status_hint"].value_counts().to_string() if not self_improvement_queue.empty and "status_hint" in self_improvement_queue.columns else "none"
     gate_view = gate_diagnostics[["scope", "check", "passed", "total", "pass_rate"]] if not gate_diagnostics.empty else pd.DataFrame()
     portfolio_view = portfolio_meta.head(5).to_string(index=False) if not portfolio_meta.empty else "none"
+    diversified_portfolio_view = diversified_portfolio_meta.head(5).to_string(index=False) if not diversified_portfolio_meta.empty else "none"
     queue_cols = [
         "priority_score",
         "status_hint",
@@ -3054,6 +3587,21 @@ def _write_self_improvement_report(
         "portfolio_event_overlap_pct",
         "max_peer_event_overlap_pct",
     ]
+    diversified_port_cols = [
+        "candidate_id",
+        "accepted",
+        "marginal_score",
+        "marginal_trades",
+        "marginal_cost10_avg_r",
+        "marginal_median_r",
+        "marginal_calendar_positive_day_rate",
+        "marginal_top_removed_pass",
+        "selected_event_overlap_pct",
+        "novelty_score",
+        "robustness_score",
+    ]
+    gap_cols = ["capability", "current_status", "implemented_artifact", "remaining_gap", "priority"]
+    budget_cols = ["stage", "rows", "cost_class", "policy", "next_action"]
     grammar_summary = (
         hypothesis_grammar.groupby("axis", dropna=False)
         .agg(values=("value", "nunique"), event_rows=("event_rows", "sum"), candidate_uses=("candidate_universe_uses", "sum"))
@@ -3106,6 +3654,12 @@ Portfolio meta:
 {portfolio_view}
 ```
 
+Diversified portfolio meta:
+
+```text
+{diversified_portfolio_view}
+```
+
 Top independent / complementary sleeves:
 
 ```text
@@ -3116,6 +3670,24 @@ Next guided candidate queue:
 
 ```text
 {self_improvement_queue.head(40)[[c for c in queue_cols if c in self_improvement_queue.columns]].to_string(index=False) if not self_improvement_queue.empty else 'none'}
+```
+
+Diversified portfolio candidates:
+
+```text
+{diversified_portfolio.head(40)[[c for c in diversified_port_cols if c in diversified_portfolio.columns]].to_string(index=False) if not diversified_portfolio.empty else 'none'}
+```
+
+Theoretical model gap analysis:
+
+```text
+{theoretical_model_gap_analysis[[c for c in gap_cols if c in theoretical_model_gap_analysis.columns]].to_string(index=False) if not theoretical_model_gap_analysis.empty else 'none'}
+```
+
+Compute budget plan:
+
+```text
+{compute_budget_plan[[c for c in budget_cols if c in compute_budget_plan.columns]].to_string(index=False) if not compute_budget_plan.empty else 'none'}
 ```
 
 How to iterate:

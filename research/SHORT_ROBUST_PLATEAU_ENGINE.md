@@ -158,9 +158,15 @@ lookahead_audit.csv
 final_report.md
 hypothesis_grammar.csv
 hypothesis_ledger.csv
+plateau_neighborhoods.csv
 diversity_scores.csv
 self_improvement_queue.csv
 self_improvement_report.md
+diversified_portfolio_candidates.csv
+diversified_portfolio_oos_trades.csv
+diversified_portfolio_meta_validation.csv
+compute_budget_plan.csv
+theoretical_model_gap_analysis.csv
 ```
 
 The engine evaluates:
@@ -186,6 +192,10 @@ hypothesis ledger with stable candidate/family hashes
 entry-known hypothesis grammar inventory
 novelty/diversity scoring across events, symbols, days and axes
 failure-driven guided candidate queue
+multi-axis plateau neighborhoods
+diversified multi-objective portfolio construction
+theoretical model gap analysis
+compute budget plan
 ```
 
 Current strict gates:
@@ -211,26 +221,27 @@ event_store=.output/research_cache/short_robust_plateau_engine_365d
 event_outcome_rows=179299
 events=3283
 wfa_windows=8
-candidate_universe_rows=5399
+candidate_universe_rows=5400
 base_candidate_universe_rows=5000
-guided_candidate_rows=399
+guided_candidate_rows=400
 development_rows=168391
 final_holdout=2026-05-03 -> 2026-06-02 exclusive
-candidate_rows=2854
-promoted=210
-plateau_clusters=176
-plateau_pass_clusters=20
-plateau_strong_pass_clusters=14
+candidate_rows=2913
+promoted=172
+plateau_neighborhoods=138
+plateau_neighborhood_pass=112
+plateau_neighborhood_strong_pass=64
 strict_model_pass=0
 theoretical_accept_pass=0
 final_holdout_basic_pass=0
 report=.output/research_cache/short_robust_plateau_engine_365d/final_report.md
 hypothesis_grammar_rows=67
-hypothesis_ledger_rows=5399
-diversity_score_rows=210
+hypothesis_ledger_rows=5400
+diversity_score_rows=172
 self_improvement_queue_rows=400
 self_improvement_queue_new_guided=400
 self_improvement_report=.output/research_cache/short_robust_plateau_engine_365d/self_improvement_report.md
+theoretical_model_gap_analysis=.output/research_cache/short_robust_plateau_engine_365d/theoretical_model_gap_analysis.csv
 ```
 
 Lookahead audit:
@@ -245,7 +256,7 @@ large_close10_requires_delay10: 0 violations / 61372 rows
 Read:
 
 ```text
-The latest guided rolling scan finds 210 promoted rows after adding 399
+The latest guided rolling scan finds 172 promoted rows after adding 400
 queue-generated candidates, mostly structural failed-pump rows. The stricter
 theoretical gate still rejects all of them as final strategy candidates: no
 sleeve passes top-removal, calendar consistency, plateau robustness and final
@@ -255,13 +266,12 @@ holdout together.
 Latest guided model-gate bottlenecks with top-removal at 35% and calendar gate >60%:
 
 ```text
-candidate_oos top_removal_pass: 15 / 210
-candidate_oos mc_pass: 95 / 210
-candidate_oos calendar_positive_gt_0p60: 0 / 210
-candidate_oos median_trades_per_day_ge_3: 0 / 210
-final_holdout final_calendar_positive_gt_0p60: 0 / 210
-final_holdout final_top_removal_pass: 3 / 210
-final_holdout final_pass_basic: 0 / 210
+candidate_oos neighborhood_pass: 122 / 172
+candidate_oos neighborhood_strong_pass: 74 / 172
+candidate_oos top_removal_pass: 15 / 172
+candidate_oos calendar_positive_gt_0p60: 0 / 172
+candidate_oos median_trades_per_day_ge_3: 0 / 172
+final_holdout final_pass_basic: 0 / 172
 ```
 
 The strongest portfolio-accepted marginal rows in the final report are:
@@ -293,6 +303,22 @@ MC pass: true
 top-35 removal pass: false
 calendar_positive_day_rate: 24.2%
 calendar_median_trades_per_day: 0
+```
+
+Diversified portfolio-level read:
+
+```text
+selected marginal OOS trades: 305
+symbols: 171
+avg: +0.135R
+median: +0.221R
+WR: 67.9%
+cost10 avg: +0.113R
+cost10 sum: +34.53R
+MC pass: false
+top-35 removal pass: false
+calendar_positive_day_rate: 40.4%
+calendar_median_trades_per_day: 1
 ```
 
 ## Controlled Self-Improving Research Loop
@@ -333,31 +359,41 @@ target.
      --guided-candidates-limit 400
 
 6. Multi-objective portfolio builder
-   Current portfolio selection is still greedy marginal contribution after
-   collision removal. The new diversity scores are the required input for the
-   next upgrade to portfolio-level multi-objective selection.
+   diversified_portfolio_candidates.csv selects by marginal expectancy,
+   novelty, top-removal, calendar contribution and event/session/source
+   overlap penalties. It remains bounded-greedy by design for 16GB RAM / i5.
 
 7. Compute budget controller
-   The queue is capped to 400 rows by default and separates already-analyzed,
-   already-rejected and new guided candidates, keeping iteration practical on
-   16GB RAM / i5.
+   compute_budget_plan.csv documents cheap reject, WFA, stress-test, final
+   audit and guided-queue stages. The queue is capped to 400 rows by default.
+
+8. Theory-vs-bot gap analysis
+   theoretical_model_gap_analysis.csv lists which theoretical capabilities are
+   implemented, partial or still blocked by missing raw event-source replay.
 ```
 
 365d self-improvement output:
 
 ```text
-hypothesis_ledger_rows: 5399
-diversity_scores_rows: 210
+hypothesis_ledger_rows: 5400
+diversity_scores_rows: 172
 diversity_grade independent_watchlist: 1
-diversity_grade complementary_research: 51
-diversity_grade redundant: 158
+diversity_grade complementary_research: 52
+diversity_grade redundant: 119
 self_improvement_queue_rows: 400
 self_improvement_queue new_guided_candidate: 400
+plateau_neighborhoods: 138
+neighborhood_pass: 112
+neighborhood_strong_pass: 64
 ```
 
 The queue is a research input, not an acceptance shortcut. A proposed candidate
 must still survive normal WFA, top-removal, MC, plateau, calendar and final
 holdout diagnostics.
+
+The theoretical model still exceeds the bot where new executable event sources
+are required: fresh lower-high/failure-retest path replay, minute-path return
+driver correlation and truly unseen/live-forward data.
 
 ## Smoke Result
 
