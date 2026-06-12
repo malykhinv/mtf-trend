@@ -12836,3 +12836,37 @@ Research tooling only. This tightens validation and reporting. It does not
 change live trading logic or prove freshness of the heavily inspected 365d
 dataset.
 ```
+
+## 2026-06-12 - P561 strict gate threshold update
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Changed default `top_removal_pct` from `0.40` to `0.35`.
+- Added explicit `min_calendar_positive_day_rate=0.60`.
+- Updated strict/theoretical candidate gates to require
+  `calendar_positive_day_rate > 0.60`.
+- Updated final holdout gate to require final calendar positive-day rate
+  strictly above `60%`.
+- Updated gate diagnostics to use generic `top_removal_pass` labels instead of
+  misleading `top40` wording.
+- Added CLI flag `--min-calendar-positive-day-rate`.
+- Updated `research/SHORT_ROBUST_PLATEAU_ENGINE.md`,
+  `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md` and
+  `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+python -m compileall research_tools/short_robust_plateau_engine.py
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000 --output-dir .output/research_cache/short_robust_plateau_engine_threshold_smoke
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500
+```
+
+Risk:
+
+```text
+Research tooling only. This changes acceptance/reporting thresholds, not live
+entry/exit logic.
+```

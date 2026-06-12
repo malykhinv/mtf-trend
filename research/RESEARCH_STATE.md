@@ -6555,3 +6555,49 @@ Do not weaken the gates to force acceptance. The next valuable work is adding
 new executable event sources/path replay for other fader natures, then letting
 the same one-command engine judge them by the strict model.
 ```
+
+## 2026-06-12 - P561 top-35 removal and >60% calendar gate
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Threshold update:
+
+```text
+top_removal_pct: 0.40 -> 0.35
+calendar_positive_day_rate gate: strictly > 60%
+final holdout uses the same calendar and top-removal gates
+```
+
+Full cached rescan:
+
+```text
+candidate_rows: 2589
+promoted by rolling filter: 78
+plateau_pass clusters: 8
+plateau_strong_pass clusters: 4
+strict_model_pass: 0
+theoretical_accept_pass: 0
+final_holdout_basic_pass: 0
+lookahead violations: 0
+```
+
+Gate read:
+
+```text
+candidate_oos top_removal_pass: 5 / 78
+candidate_oos calendar_positive_gt_0p60: 0 / 78
+final_holdout final_top_removal_pass: 1 / 78
+final_holdout final_calendar_positive_gt_0p60: 0 / 78
+portfolio top_removal_pass: false
+portfolio calendar_positive_day_rate: 32.1%
+portfolio MC pass: true
+```
+
+Interpretation:
+
+```text
+Lowering winner removal from 40% to 35% helps only slightly. The current sleeve
+set still fails because it is not calendar-dense/diversified enough. The next
+mechanism should search new independent fader natures and portfolio-level
+diversification, not loosen acceptance gates further.
+```

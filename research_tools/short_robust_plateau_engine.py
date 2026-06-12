@@ -38,8 +38,9 @@ DEFAULT_OUTPUT_DIR = Path(".output/research_cache/short_robust_plateau_engine")
 RUN_365D_OUTPUT_DIR = Path(".output/research_cache/short_robust_plateau_engine_365d")
 DEFAULT_ARCHIVE_DIR = Path("research/archive/2026-06-11_short_fade_manual_research")
 DEFAULT_RISK_PER_TRADE_PCT = 0.04
-DEFAULT_TOP_REMOVAL_PCT = 0.40
+DEFAULT_TOP_REMOVAL_PCT = 0.35
 DEFAULT_MC_ITERATIONS = 1000
+DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE = 0.60
 MANUAL_RESEARCH_DOCS = [
     Path("research/SHORT_FADE_CORE_EDGE.md"),
     Path("research/SHORT_FADE_DIVERSIFIED_SLEEVES.md"),
@@ -1095,6 +1096,7 @@ def scan_plateaus(
     mc_iterations: int = DEFAULT_MC_ITERATIONS,
     risk_per_trade_pct: float = DEFAULT_RISK_PER_TRADE_PCT,
     top_removal_pct: float = DEFAULT_TOP_REMOVAL_PCT,
+    min_calendar_positive_day_rate: float = DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE,
 ) -> None:
     df = _load_outcomes(output_dir)
     _, final_end, final_start = _date_bounds(df, final_holdout_days=final_holdout_days)
@@ -1131,6 +1133,7 @@ def scan_plateaus(
             "mc_iterations": mc_iterations,
             "risk_per_trade_pct": risk_per_trade_pct,
             "top_removal_pct": top_removal_pct,
+            "min_calendar_positive_day_rate": min_calendar_positive_day_rate,
         },
     )
 
@@ -1275,6 +1278,7 @@ def scan_plateaus(
         mc_iterations=mc_iterations,
         risk_per_trade_pct=risk_per_trade_pct,
         top_removal_pct=top_removal_pct,
+        min_calendar_positive_day_rate=min_calendar_positive_day_rate,
     )
     portfolio_meta = _build_portfolio_meta_validation(
         portfolio_trades,
@@ -1283,7 +1287,14 @@ def scan_plateaus(
         risk_per_trade_pct=risk_per_trade_pct,
         top_removal_pct=top_removal_pct,
     )
-    gate_diagnostics = _build_model_gate_diagnostics(meta_validation, final_holdout, portfolio_meta, min_oos_trades=min_oos_trades)
+    gate_diagnostics = _build_model_gate_diagnostics(
+        meta_validation,
+        final_holdout,
+        portfolio_meta,
+        min_oos_trades=min_oos_trades,
+        top_removal_pct=top_removal_pct,
+        min_calendar_positive_day_rate=min_calendar_positive_day_rate,
+    )
     improvement_plan = _build_improvement_plan(candidates, rejected, axis_summary, meta_validation, portfolio_meta)
 
     wfa.to_csv(output_dir / "wfa_results.csv", index=False)
@@ -1464,29 +1475,30 @@ def _model_gate(
     *,
     base: dict[str, object],
     min_oos_trades: int,
+    min_calendar_positive_day_rate: float,
 ) -> tuple[bool, bool, str]:
     strict = (
         int(base.get("oos_trades", 0) or 0) >= min_oos_trades
         and bool(base.get("plateau_pass", False))
         and float(base.get("efficiency_ratio", 0.0) or 0.0) >= 0.70
-        and bool(base.get("top40_pass", False))
+        and bool(base.get("top_removal_pass", False))
         and bool(base.get("mc_pass", False))
         and float(base.get("oos_win_rate", 0.0) or 0.0) >= 0.50
-        and float(base.get("calendar_positive_day_rate", 0.0) or 0.0) >= 0.50
+        and float(base.get("calendar_positive_day_rate", 0.0) or 0.0) > min_calendar_positive_day_rate
         and float(base.get("oos_cost10_avg_r", 0.0) or 0.0) > 0
         and float(base.get("oos_median_r", 0.0) or 0.0) > 0
     )
     theoretical = (
         strict
         and bool(base.get("plateau_strong_pass", False))
-        and float(base.get("calendar_positive_day_rate", 0.0) or 0.0) >= 0.75
+        and float(base.get("calendar_positive_day_rate", 0.0) or 0.0) > min_calendar_positive_day_rate
         and float(base.get("calendar_median_trades_per_day", 0.0) or 0.0) >= 3.0
     )
     if theoretical:
         grade = "theoretical_accept"
     elif strict:
         grade = "robust_watchlist"
-    elif bool(base.get("top40_pass", False)) and bool(base.get("mc_pass", False)):
+    elif bool(base.get("top_removal_pass", False)) and bool(base.get("mc_pass", False)):
         grade = "stress_pass_but_plateau_or_consistency_weak"
     else:
         grade = "research_only"
@@ -1507,6 +1519,7 @@ def _build_meta_validation(
     mc_iterations: int,
     risk_per_trade_pct: float,
     top_removal_pct: float,
+    min_calendar_positive_day_rate: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if candidates.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -1560,8 +1573,13 @@ def _build_meta_validation(
             **mc,
             **membership.get(cid, {}),
         }
+        base["top_removal_pass"] = bool(base.get("top_removed_pass", False))
         base["top40_pass"] = bool(base.get("top_removed_pass", False))
-        strict, theoretical, grade = _model_gate(base=base, min_oos_trades=min_oos_trades)
+        strict, theoretical, grade = _model_gate(
+            base=base,
+            min_oos_trades=min_oos_trades,
+            min_calendar_positive_day_rate=min_calendar_positive_day_rate,
+        )
         base["strict_model_pass"] = strict
         base["theoretical_accept_pass"] = theoretical
         base["model_grade"] = grade
@@ -1579,6 +1597,7 @@ def _build_meta_validation(
             and float(final_net["median_r"]) > 0
             and float(final_cost["avg_r"]) > 0
             and float(final_net["win_rate"]) >= 0.50
+            and float(final_cal["calendar_positive_day_rate"]) > min_calendar_positive_day_rate
             and bool(final_top40["top_removed_pass"])
         )
         final_rows.append(
@@ -1682,8 +1701,13 @@ def _build_model_gate_diagnostics(
     portfolio_meta: pd.DataFrame,
     *,
     min_oos_trades: int,
+    top_removal_pct: float,
+    min_calendar_positive_day_rate: float,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
+    kept_pct = max(0.0, 1.0 - top_removal_pct)
+    calendar_pct = min_calendar_positive_day_rate * 100.0
+    top_remove_pct = top_removal_pct * 100.0
     total = int(len(meta_validation))
     if total:
         candidate_checks = [
@@ -1691,11 +1715,10 @@ def _build_model_gate_diagnostics(
             ("plateau_pass", meta_validation["plateau_pass"].fillna(False), "Candidate belongs to a risk-bucket plateau with <=30% score degradation."),
             ("plateau_strong_pass", meta_validation["plateau_strong_pass"].fillna(False), "Candidate belongs to a risk-bucket plateau with <=15% score degradation."),
             ("efficiency_ratio_ge_0p70", meta_validation["efficiency_ratio"].ge(0.70), "OOS score does not collapse versus IS score."),
-            ("top40_pass", meta_validation["top_removed_pass"].fillna(False), "Remaining 60% of trades is still positive after removing top 40% winners."),
+            ("top_removal_pass", meta_validation["top_removed_pass"].fillna(False), f"Remaining {kept_pct:.0%} of trades is still positive after removing top {top_remove_pct:.0f}% winners."),
             ("mc_pass", meta_validation["mc_pass"].fillna(False), "Monte Carlo drawdown/positive-rate stress survives fixed risk."),
             ("win_rate_ge_0p50", meta_validation["oos_win_rate"].ge(0.50), "Rolling OOS win rate is at least 50%."),
-            ("calendar_positive_ge_0p50", meta_validation["calendar_positive_day_rate"].ge(0.50), "At least half of rolling OOS calendar days are positive."),
-            ("calendar_positive_ge_0p75", meta_validation["calendar_positive_day_rate"].ge(0.75), "The theoretical full model's profitable-day target."),
+            ("calendar_positive_gt_0p60", meta_validation["calendar_positive_day_rate"].gt(min_calendar_positive_day_rate), f"Strictly more than {calendar_pct:.0f}% of rolling OOS calendar days are positive."),
             ("median_trades_per_day_ge_3", meta_validation["calendar_median_trades_per_day"].ge(3.0), "The theoretical full model's frequency target."),
             ("cost10_avg_positive", meta_validation["oos_cost10_avg_r"].gt(0), "Average trade remains positive after extra 10bps cost proxy."),
             ("median_r_positive", meta_validation["oos_median_r"].gt(0), "Median trade is positive; not only tail-driven."),
@@ -1712,7 +1735,8 @@ def _build_model_gate_diagnostics(
             ("final_median_positive", final_holdout["final_median_r"].gt(0), "Final holdout median trade is positive."),
             ("final_cost10_avg_positive", final_holdout["final_cost10_avg_r"].gt(0), "Final holdout survives extra 10bps cost proxy."),
             ("final_win_rate_ge_0p50", final_holdout["final_win_rate"].ge(0.50), "Final holdout win rate is at least 50%."),
-            ("final_top40_pass", final_holdout["final_top_removed_pass"].fillna(False), "Final holdout remains positive after removing top 40% winners."),
+            ("final_calendar_positive_gt_0p60", final_holdout["final_calendar_positive_day_rate"].gt(min_calendar_positive_day_rate), f"Strictly more than {calendar_pct:.0f}% of final holdout calendar days are positive."),
+            ("final_top_removal_pass", final_holdout["final_top_removed_pass"].fillna(False), f"Final holdout remains positive after removing top {top_remove_pct:.0f}% winners."),
             ("final_pass_basic", final_holdout["final_pass_basic"].fillna(False), "All basic final holdout gates passed."),
         ]
         for check, condition, note in final_checks:
@@ -1725,9 +1749,9 @@ def _build_model_gate_diagnostics(
             ("portfolio_cost10_avg_positive", bool(row.get("portfolio_cost10_avg_r", 0) > 0), "Portfolio average remains positive after extra 10bps cost proxy."),
             ("portfolio_median_positive", bool(row.get("portfolio_median_r", 0) > 0), "Portfolio median trade is positive."),
             ("portfolio_win_rate_ge_0p50", bool(row.get("portfolio_win_rate", 0) >= 0.50), "Portfolio win rate is at least 50%."),
-            ("portfolio_calendar_positive_ge_0p50", bool(row.get("calendar_positive_day_rate", 0) >= 0.50), "At least half of OOS calendar days are positive."),
+            ("portfolio_calendar_positive_gt_0p60", bool(row.get("calendar_positive_day_rate", 0) > min_calendar_positive_day_rate), f"Strictly more than {calendar_pct:.0f}% of OOS calendar days are positive."),
             ("portfolio_median_trades_per_day_ge_3", bool(row.get("calendar_median_trades_per_day", 0) >= 3.0), "Portfolio meets the target frequency."),
-            ("portfolio_top40_pass", bool(row.get("top_removed_pass", False)), "Portfolio remains positive after removing top 40% winners."),
+            ("portfolio_top_removal_pass", bool(row.get("top_removed_pass", False)), f"Portfolio remains positive after removing top {top_remove_pct:.0f}% winners."),
             ("portfolio_mc_pass", bool(row.get("mc_pass", False)), "Portfolio passes Monte Carlo stress."),
         ]
         for check, passed, note in portfolio_checks:
@@ -1753,7 +1777,7 @@ def _build_improvement_plan(
             elif reason == "median_not_positive":
                 action = "Avoid tail-only pockets; require positive median before ranking by average."
             elif reason == "top_trade_dependent":
-                action = "Diversify away from top winners; prefer candidates with top40 removal pass and wider symbols."
+                action = "Diversify away from top winners; prefer candidates with top-removal pass and wider symbols."
             elif reason == "positive_day_rate_low":
                 action = "Gate by session/regime; current returns are too clustered by day."
             else:
@@ -2218,6 +2242,7 @@ def run_all(args: argparse.Namespace) -> None:
         mc_iterations=args.mc_iterations,
         risk_per_trade_pct=args.risk_per_trade_pct,
         top_removal_pct=args.top_removal_pct,
+        min_calendar_positive_day_rate=args.min_calendar_positive_day_rate,
     )
 
 
@@ -2256,6 +2281,7 @@ def _add_scan_args(
     parser.add_argument("--mc-iterations", type=int, default=DEFAULT_MC_ITERATIONS)
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
     parser.add_argument("--top-removal-pct", type=float, default=DEFAULT_TOP_REMOVAL_PCT)
+    parser.add_argument("--min-calendar-positive-day-rate", type=float, default=DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE)
 
 
 def main() -> None:
@@ -2313,6 +2339,7 @@ def main() -> None:
         mc_iterations=250,
         risk_per_trade_pct=DEFAULT_RISK_PER_TRADE_PCT,
         top_removal_pct=DEFAULT_TOP_REMOVAL_PCT,
+        min_calendar_positive_day_rate=DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE,
     )
 
     args = parser.parse_args()
@@ -2345,6 +2372,7 @@ def main() -> None:
             mc_iterations=args.mc_iterations,
             risk_per_trade_pct=args.risk_per_trade_pct,
             top_removal_pct=args.top_removal_pct,
+            min_calendar_positive_day_rate=args.min_calendar_positive_day_rate,
         )
         print(f"report={Path(args.output_dir) / 'final_report.md'}")
     elif args.command in {"all", "smoke", "run-365d"}:

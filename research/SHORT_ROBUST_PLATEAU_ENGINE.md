@@ -72,6 +72,8 @@ step_days=30
 final_holdout_days=30
 min_is_trades=25
 min_oos_trades=8
+top_removal_pct=0.35
+min_calendar_positive_day_rate=>0.60
 ```
 
 The `balanced_365d` candidate profile is intentionally not a first-N nested
@@ -158,7 +160,7 @@ final holdout validation
 cost10 expectancy
 median R
 positive-day rate
-top-40 trade removal
+top-removal stress, default removes the top 35% winning trades
 Monte Carlo shuffle/bootstrap stress
 top-trade independence
 top-symbol independence
@@ -168,6 +170,14 @@ plateau score-degradation clusters
 strict/theoretical model gates
 marginal portfolio contribution
 same-symbol/time collision removal
+```
+
+Current strict gates:
+
+```text
+calendar_positive_day_rate must be strictly > 60%
+top_removal_pct=35%, meaning the remaining 65% of trades must stay positive
+final holdout uses the same calendar and top-removal gates
 ```
 
 ## 365d One-Command Result
@@ -217,14 +227,15 @@ strategy candidates: no sleeve passes top-40 removal, calendar consistency,
 plateau robustness and final holdout together.
 ```
 
-Main model-gate bottlenecks:
+P561 model-gate bottlenecks with top-removal at 35% and calendar gate >60%:
 
 ```text
-candidate_oos top40_pass: 2 / 78
+candidate_oos top_removal_pass: 5 / 78
 candidate_oos mc_pass: 29 / 78
-candidate_oos calendar_positive_ge_0p50: 0 / 78
+candidate_oos calendar_positive_gt_0p60: 0 / 78
 candidate_oos median_trades_per_day_ge_3: 0 / 78
-final_holdout final_top40_pass: 0 / 78
+final_holdout final_calendar_positive_gt_0p60: 0 / 78
+final_holdout final_top_removal_pass: 1 / 78
 final_holdout final_pass_basic: 0 / 78
 ```
 
@@ -254,10 +265,55 @@ median: +0.217R
 WR: 68.4%
 cost10 avg: +0.046R
 MC pass: true
-top-40 removal pass: false
+top-35 removal pass: false
 calendar_positive_day_rate: 32.1%
 calendar_median_trades_per_day: 0
 ```
+
+## Self-Improving Research Loop Roadmap
+
+The current engine is a strict verifier and plateau filter. It is not yet a
+self-organizing researcher. The next professional layer should be a constrained
+research loop, not an unconstrained optimizer:
+
+```text
+1. Hypothesis grammar
+   Define allowed event sources, entry-known features, session partitions,
+   stop/management families and risk buckets as typed search primitives.
+
+2. Plateau neighborhood generator
+   For each promising rule, automatically test nearby thresholds and adjacent
+   categorical variants, then promote only broad flat regions, not points.
+
+3. Diversity / novelty scoring
+   Penalize candidates that trade the same symbols, same timestamps, same
+   sessions or same return drivers as already selected sleeves.
+
+4. Failure-driven iteration
+   Use model_gate_diagnostics.csv to choose the next search direction:
+   top-removal failure -> diversify nature/session;
+   calendar failure -> search higher-frequency independent sleeves;
+   final-holdout failure -> freeze and move to a new source/period.
+
+5. Sealed experiment ledger
+   Every generated hypothesis gets a hash, source data hash, IS/OOS/final
+   boundaries, parent hypothesis id and status. Final holdout can be opened
+   only once per hypothesis family.
+
+6. Multi-objective portfolio builder
+   Select sleeve sets by marginal contribution after collision removal, not by
+   individual best score. Optimize expectancy, calendar stability, top-removal,
+   drawdown, session balance and symbol breadth together.
+
+7. Compute budget controller
+   Cheap reject first, expensive replay/MC only for survivors. This keeps the
+   loop practical on 16GB RAM / i5.
+```
+
+This is worthwhile only if the loop is adversarial and ledgered. An autonomous
+loop that freely mutates rules until something passes will overfit faster than
+a manual researcher. A constrained loop that generates different fader natures,
+rejects weak branches early and preserves sealed holdouts is useful.
 
 ## Smoke Result
 
