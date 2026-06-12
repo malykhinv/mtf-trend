@@ -42,7 +42,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "event_outcome_store"
+IMPLEMENTATION_STAGE = "mechanism_taxonomy"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -64,6 +64,26 @@ SESSION_BUCKETS = (
     "off_session",
 )
 OUTCOME_HORIZONS_MINUTES = (5, 10, 15, 30, 60)
+
+# Deterministic mechanism taxonomy constants.  These are broad descriptive
+# boundaries, not tuned trading thresholds.  They convert entry-known pump
+# features into market-nature axes before any PnL, rule scoring, or OOS
+# selection is allowed.
+ACCEPTED_HIGH_CLOSE_TO_HIGH_MIN = 0.70
+PARTIAL_ACCEPTANCE_CLOSE_TO_HIGH_MIN = 0.35
+FAILED_ACCEPTANCE_CLOSE_TO_HIGH_MAX = 0.35
+IMMEDIATE_REJECTION_CLOSE_TO_HIGH_MAX = 0.15
+WICK_WITHOUT_ACCEPTANCE_MIN = 0.012
+BUYER_DOMINANT_TAKER_SHARE_MIN = 0.55
+SELLER_ABSORPTION_TAKER_SHARE_MIN = 0.55
+LATE_BUYER_LAST2_SHARE_MIN = 0.34
+LATE_ACTIVITY_LAST2_SHARE_MIN = 0.34
+LATE_ACCELERATION_MIN = 1.80
+EARLY_FRONT_LOADED_LAST2_SHARE_MAX = 0.18
+HIGH_FLOW_RATIO_MIN = 3.0
+HIGH_VOLUME_LOW_PROGRESS_CLOSE_TO_HIGH_MAX = 0.35
+SEED_LOW_BREAK_BUFFER_PCT = 0.0005
+DEEP_RETRACE_TO_SEED_RETURN_FRACTION = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +225,7 @@ def run_pump_mechanism_stability_research(
             outcomes=pd.DataFrame(),
             quality=pd.DataFrame(),
             cache_coverage={},
+            taxonomy=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -281,10 +302,16 @@ def run_pump_mechanism_stability_research(
 
     _fail_fast_on_empty_input(config=config, events=events, quality=quality)
 
-    _print_stage(progress_label, "writing event/outcome artifacts", started_at)
+    _print_stage(progress_label, "classifying entry-known mechanism taxonomy", started_at)
+    taxonomy = _build_mechanism_taxonomy(events)
+    taxonomy_by_axis = _taxonomy_by_axis_frame(taxonomy)
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
+    _write_csv(config.output_dir / "pump_mechanism_taxonomy.csv", taxonomy)
+    _write_csv(config.output_dir / "pump_mechanism_taxonomy_by_axis.csv", taxonomy_by_axis)
 
     run_config = _run_config_frame(
         config=config,
@@ -296,12 +323,13 @@ def run_pump_mechanism_stability_research(
         outcomes=outcomes,
         quality=quality,
         cache_coverage=cache_coverage,
+        taxonomy=taxonomy,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
 
     print(
-        f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} "
+        f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} taxonomy={len(taxonomy):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -678,6 +706,303 @@ def _build_event_outcomes(
     return row
 
 
+
+def _build_mechanism_taxonomy(events: pd.DataFrame) -> pd.DataFrame:
+    """Classify ok pump events into deterministic entry-known mechanism axes.
+
+    Taxonomy uses only columns from ``pump_mechanism_events``.  It deliberately
+    does not join ``pump_mechanism_outcomes``: future response vectors are labels
+    for later diagnostics, not inputs for market-nature classification.
+    """
+
+    columns = _taxonomy_columns()
+    if events.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    ok_events = events.loc[events.get("event_status", pd.Series(dtype=str)).astype(str) == "ok"]
+    for _, event in ok_events.iterrows():
+        acceptance_regime = _classify_acceptance_regime(event)
+        flow_regime = _classify_flow_regime(event, acceptance_regime=acceptance_regime)
+        price_progress_regime = _classify_price_progress_regime(event, acceptance_regime=acceptance_regime)
+        structure_regime = _classify_structure_regime(event)
+        late_buyer_regime = _classify_late_buyer_regime(event)
+        oi_regime = _normalize_oi_regime(event.get("oi_regime"))
+        session_bucket = str(event.get("session_bucket", "")) or "unknown_session"
+        mechanism_id = "|".join(
+            (
+                acceptance_regime,
+                oi_regime,
+                flow_regime,
+                price_progress_regime,
+                structure_regime,
+                late_buyer_regime,
+                session_bucket,
+            )
+        )
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "event_id": event.get("event_id", ""),
+                "symbol": event.get("symbol", ""),
+                "feature_cutoff_ms": event.get("feature_cutoff_ms", np.nan),
+                "feature_cutoff_time_utc": event.get("feature_cutoff_time_utc", ""),
+                "day_ord": event.get("day_ord", np.nan),
+                "date": event.get("date", ""),
+                "session_bucket": session_bucket,
+                "pump_tier": event.get("pump_tier", ""),
+                "acceptance_regime": acceptance_regime,
+                "oi_regime": oi_regime,
+                "flow_regime": flow_regime,
+                "price_progress_regime": price_progress_regime,
+                "structure_regime": structure_regime,
+                "late_buyer_regime": late_buyer_regime,
+                "mechanism_id": mechanism_id,
+                "mechanism_family": _mechanism_family(
+                    acceptance_regime=acceptance_regime,
+                    oi_regime=oi_regime,
+                    flow_regime=flow_regime,
+                    price_progress_regime=price_progress_regime,
+                    structure_regime=structure_regime,
+                    late_buyer_regime=late_buyer_regime,
+                ),
+                "taxonomy_model": "entry_known_deterministic_mechanism_axes_v1",
+                "taxonomy_feature_source_model": "pump_mechanism_events_only_no_outcomes",
+                "taxonomy_uses_outcome_columns": False,
+                "future_label_available_at_entry": False,
+                "outcomes_available_in_feature_store": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+                "oi_model": OI_MODEL,
+                "close_ret_15m": _float(event.get("close_ret_15m")),
+                "high_ret_15m": _float(event.get("high_ret_15m")),
+                "close15_to_high15_ratio": _float(event.get("close15_to_high15_ratio")),
+                "wick_ret_15m": _float(event.get("wick_ret_15m")),
+                "early_quote_ratio_60m_scaled": _float(event.get("early_quote_ratio_60m_scaled")),
+                "early_trade_ratio_60m_scaled": _float(event.get("early_trade_ratio_60m_scaled")),
+                "early_taker_buy_quote_share": _float(event.get("early_taker_buy_quote_share")),
+                "m1_last2_quote_share": _float(event.get("m1_last2_quote_share")),
+                "m1_last2_trade_share": _float(event.get("m1_last2_trade_share")),
+                "m1_quote_accel_last2_vs_first2": _float(event.get("m1_quote_accel_last2_vs_first2")),
+                "m1_trade_accel_last2_vs_first2": _float(event.get("m1_trade_accel_last2_vs_first2")),
+                "seed_open": _float(event.get("seed_open")),
+                "seed_low": _float(event.get("seed_low")),
+                "seed_close": _float(event.get("seed_close")),
+                "feature_price": _float(event.get("feature_price")),
+                "pump_high": _float(event.get("pump_high")),
+                "structural_low": _float(event.get("structural_low")),
+            }
+        )
+    return _sort_frame(_ensure_columns(pd.DataFrame(rows), columns), ["feature_cutoff_ms", "symbol", "event_id"])
+
+
+def _taxonomy_by_axis_frame(taxonomy: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "research_id", "axis", "axis_value", "events", "symbols", "active_days", "sessions", "mechanism_ids",
+        "taxonomy_model", "taxonomy_feature_source_model", "taxonomy_uses_outcome_columns", "data_access_model",
+    ]
+    if taxonomy.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    axis_columns = [
+        "acceptance_regime",
+        "oi_regime",
+        "flow_regime",
+        "price_progress_regime",
+        "structure_regime",
+        "late_buyer_regime",
+        "mechanism_family",
+        "session_bucket",
+        "pump_tier",
+    ]
+    for axis in axis_columns:
+        if axis not in taxonomy.columns:
+            continue
+        grouped = taxonomy.groupby(axis, dropna=False)
+        for value, frame in grouped:
+            rows.append(
+                {
+                    "research_id": RESEARCH_ID,
+                    "axis": axis,
+                    "axis_value": str(value),
+                    "events": int(len(frame)),
+                    "symbols": int(frame["symbol"].nunique()) if "symbol" in frame.columns else 0,
+                    "active_days": int(frame["date"].nunique()) if "date" in frame.columns else 0,
+                    "sessions": int(frame["session_bucket"].nunique()) if "session_bucket" in frame.columns else 0,
+                    "mechanism_ids": int(frame["mechanism_id"].nunique()) if "mechanism_id" in frame.columns else 0,
+                    "taxonomy_model": "entry_known_deterministic_mechanism_axes_v1",
+                    "taxonomy_feature_source_model": "pump_mechanism_events_only_no_outcomes",
+                    "taxonomy_uses_outcome_columns": False,
+                    "data_access_model": DATA_ACCESS_MODEL,
+                }
+            )
+    return _sort_frame(_ensure_columns(pd.DataFrame(rows), columns), ["axis", "events", "axis_value"])
+
+
+def _taxonomy_columns() -> list[str]:
+    return [
+        "research_id", "event_id", "symbol", "feature_cutoff_ms", "feature_cutoff_time_utc", "day_ord", "date",
+        "session_bucket", "pump_tier", "acceptance_regime", "oi_regime", "flow_regime", "price_progress_regime",
+        "structure_regime", "late_buyer_regime", "mechanism_id", "mechanism_family", "taxonomy_model",
+        "taxonomy_feature_source_model", "taxonomy_uses_outcome_columns", "future_label_available_at_entry",
+        "outcomes_available_in_feature_store", "data_access_model", "oi_model", "close_ret_15m", "high_ret_15m",
+        "close15_to_high15_ratio", "wick_ret_15m", "early_quote_ratio_60m_scaled", "early_trade_ratio_60m_scaled",
+        "early_taker_buy_quote_share", "m1_last2_quote_share", "m1_last2_trade_share", "m1_quote_accel_last2_vs_first2",
+        "m1_trade_accel_last2_vs_first2", "seed_open", "seed_low", "seed_close", "feature_price", "pump_high", "structural_low",
+    ]
+
+
+def _classify_acceptance_regime(event: pd.Series) -> str:
+    close_ret = _float(event.get("close_ret_15m"))
+    high_ret = _float(event.get("high_ret_15m"))
+    close_to_high = _float(event.get("close15_to_high15_ratio"))
+    wick_ret = _float(event.get("wick_ret_15m"))
+    if not math.isfinite(close_ret) or not math.isfinite(high_ret) or high_ret <= 0:
+        return "missing_acceptance"
+    if close_ret <= 0 or (math.isfinite(close_to_high) and close_to_high <= IMMEDIATE_REJECTION_CLOSE_TO_HIGH_MAX):
+        return "immediate_rejection"
+    if math.isfinite(wick_ret) and wick_ret >= WICK_WITHOUT_ACCEPTANCE_MIN and math.isfinite(close_to_high) and close_to_high <= FAILED_ACCEPTANCE_CLOSE_TO_HIGH_MAX:
+        return "failed_acceptance"
+    if math.isfinite(close_to_high) and close_to_high >= ACCEPTED_HIGH_CLOSE_TO_HIGH_MIN:
+        return "accepted_high"
+    if math.isfinite(close_to_high) and close_to_high >= PARTIAL_ACCEPTANCE_CLOSE_TO_HIGH_MIN:
+        return "partial_acceptance"
+    return "failed_acceptance"
+
+
+def _classify_flow_regime(event: pd.Series, *, acceptance_regime: str) -> str:
+    taker_share = _float(event.get("early_taker_buy_quote_share"))
+    quote_ratio = _float(event.get("early_quote_ratio_60m_scaled"))
+    trade_ratio = _float(event.get("early_trade_ratio_60m_scaled"))
+    close_to_high = _float(event.get("close15_to_high15_ratio"))
+    last2_quote_share = _float(event.get("m1_last2_quote_share"))
+    quote_accel = _float(event.get("m1_quote_accel_last2_vs_first2"))
+    if not math.isfinite(taker_share):
+        return "missing_flow"
+    high_flow = _is_high_flow(quote_ratio=quote_ratio, trade_ratio=trade_ratio)
+    weak_acceptance = acceptance_regime in {"failed_acceptance", "immediate_rejection"} or (
+        math.isfinite(close_to_high) and close_to_high <= FAILED_ACCEPTANCE_CLOSE_TO_HIGH_MAX
+    )
+    late_activity = (
+        math.isfinite(last2_quote_share) and last2_quote_share >= LATE_BUYER_LAST2_SHARE_MIN
+    ) or (math.isfinite(quote_accel) and quote_accel >= LATE_ACCELERATION_MIN)
+    if high_flow and taker_share >= SELLER_ABSORPTION_TAKER_SHARE_MIN and weak_acceptance:
+        return "seller_absorption"
+    if late_activity and taker_share >= BUYER_DOMINANT_TAKER_SHARE_MIN and weak_acceptance:
+        return "late_buyer_exhaustion"
+    if taker_share >= BUYER_DOMINANT_TAKER_SHARE_MIN and not weak_acceptance:
+        return "buyer_dominant"
+    if high_flow and weak_acceptance:
+        return "high_flow_weak_acceptance"
+    return "neutral_flow"
+
+
+def _classify_price_progress_regime(event: pd.Series, *, acceptance_regime: str) -> str:
+    ret5 = _float(event.get("close_ret_5m"))
+    ret10 = _float(event.get("close_ret_10m"))
+    ret15 = _float(event.get("close_ret_15m"))
+    high_ret = _float(event.get("high_ret_15m"))
+    close_to_high = _float(event.get("close15_to_high15_ratio"))
+    wick_ret = _float(event.get("wick_ret_15m"))
+    quote_ratio = _float(event.get("early_quote_ratio_60m_scaled"))
+    trade_ratio = _float(event.get("early_trade_ratio_60m_scaled"))
+    if not math.isfinite(ret15) or not math.isfinite(high_ret):
+        return "missing_price_progress"
+    if math.isfinite(wick_ret) and wick_ret >= WICK_WITHOUT_ACCEPTANCE_MIN and math.isfinite(close_to_high) and close_to_high <= FAILED_ACCEPTANCE_CLOSE_TO_HIGH_MAX:
+        return "wick_without_acceptance"
+    if _is_high_flow(quote_ratio=quote_ratio, trade_ratio=trade_ratio) and math.isfinite(close_to_high) and close_to_high <= HIGH_VOLUME_LOW_PROGRESS_CLOSE_TO_HIGH_MAX:
+        return "high_volume_low_progress"
+    if acceptance_regime == "accepted_high" and ret15 > 0:
+        return "efficient_markup"
+    if all(math.isfinite(value) for value in (ret5, ret10, ret15)) and 0 < ret5 <= ret10 <= ret15:
+        return "grind_up"
+    if acceptance_regime in {"failed_acceptance", "immediate_rejection"}:
+        return "pullback_after_spike"
+    return "mixed_progress"
+
+
+def _classify_structure_regime(event: pd.Series) -> str:
+    seed_open = _float(event.get("seed_open"))
+    seed_low = _float(event.get("seed_low"))
+    seed_close = _float(event.get("seed_close"))
+    feature_price = _float(event.get("feature_price"))
+    pump_high = _float(event.get("pump_high"))
+    close_ret = _float(event.get("close_ret_15m"))
+    seed_return = _float(event.get("seed_return_pct"))
+    if not all(math.isfinite(value) and value > 0 for value in (seed_open, seed_low, seed_close, feature_price, pump_high)):
+        return "missing_structure"
+    if feature_price <= seed_low * (1.0 - SEED_LOW_BREAK_BUFFER_PCT):
+        return "seed_low_break_after_pump"
+    if feature_price <= seed_open:
+        return "round_trip_to_seed_open"
+    if math.isfinite(seed_return) and seed_return > 0 and math.isfinite(close_ret) and close_ret <= seed_return * DEEP_RETRACE_TO_SEED_RETURN_FRACTION:
+        return "deep_retrace_to_seed_body"
+    midpoint = seed_open + 0.5 * (pump_high - seed_open)
+    if feature_price < midpoint:
+        return "upper_half_rejected"
+    return "structure_intact_near_high"
+
+
+def _classify_late_buyer_regime(event: pd.Series) -> str:
+    taker_share = _float(event.get("early_taker_buy_quote_share"))
+    last2_quote_share = _float(event.get("m1_last2_quote_share"))
+    last2_trade_share = _float(event.get("m1_last2_trade_share"))
+    quote_accel = _float(event.get("m1_quote_accel_last2_vs_first2"))
+    trade_accel = _float(event.get("m1_trade_accel_last2_vs_first2"))
+    if not any(math.isfinite(value) for value in (last2_quote_share, last2_trade_share, quote_accel, trade_accel)):
+        return "missing_late_activity"
+    late_share = max(_finite_or_negative(last2_quote_share), _finite_or_negative(last2_trade_share))
+    late_accel = max(_finite_or_negative(quote_accel), _finite_or_negative(trade_accel))
+    if late_share >= LATE_BUYER_LAST2_SHARE_MIN and math.isfinite(taker_share) and taker_share >= BUYER_DOMINANT_TAKER_SHARE_MIN:
+        return "concentrated_late_buyers"
+    if late_share >= LATE_ACTIVITY_LAST2_SHARE_MIN or late_accel >= LATE_ACCELERATION_MIN:
+        return "late_activity_spike"
+    if math.isfinite(last2_quote_share) and last2_quote_share <= EARLY_FRONT_LOADED_LAST2_SHARE_MAX:
+        return "early_front_loaded"
+    return "balanced_activity"
+
+
+def _normalize_oi_regime(value: object) -> str:
+    parsed = str(value or "").strip()
+    return parsed if parsed else "missing_closed_5m_oi"
+
+
+def _mechanism_family(
+    *,
+    acceptance_regime: str,
+    oi_regime: str,
+    flow_regime: str,
+    price_progress_regime: str,
+    structure_regime: str,
+    late_buyer_regime: str,
+) -> str:
+    failed = acceptance_regime in {"failed_acceptance", "immediate_rejection"}
+    accepted = acceptance_regime == "accepted_high"
+    if accepted and structure_regime == "structure_intact_near_high":
+        return "accepted_ignition_candidate"
+    if failed and oi_regime == "oi_down_squeeze_unwind":
+        return "squeeze_unwind_failed_acceptance"
+    if failed and oi_regime == "oi_up_fresh_leverage":
+        return "fresh_leverage_trap_candidate"
+    if failed and flow_regime == "seller_absorption":
+        return "absorption_top_candidate"
+    if failed and late_buyer_regime in {"concentrated_late_buyers", "late_activity_spike"}:
+        return "late_buyer_exhaustion_candidate"
+    if price_progress_regime == "wick_without_acceptance":
+        return "stop_run_reversal_candidate"
+    if failed:
+        return "generic_failed_acceptance_candidate"
+    return "mixed_or_continuation_candidate"
+
+
+def _is_high_flow(*, quote_ratio: float, trade_ratio: float) -> bool:
+    quote_ok = math.isfinite(quote_ratio) and quote_ratio >= HIGH_FLOW_RATIO_MIN
+    trade_ok = math.isfinite(trade_ratio) and trade_ratio >= HIGH_FLOW_RATIO_MIN
+    return quote_ok or trade_ok
+
+
+def _finite_or_negative(value: float) -> float:
+    return value if math.isfinite(value) else -1.0
+
+
 def _run_config_frame(
     *,
     config: PumpMechanismStabilityConfig,
@@ -689,11 +1014,14 @@ def _run_config_frame(
     outcomes: pd.DataFrame,
     quality: pd.DataFrame,
     cache_coverage: dict[str, object],
+    taxonomy: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_5m_oi_rows = int(pd.to_numeric(quality.get("5m_oi_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     ok_events = int((events.get("event_status", pd.Series(dtype=str)).astype(str) == "ok").sum()) if not events.empty else 0
+    taxonomy_rows = int(len(taxonomy)) if taxonomy is not None else 0
+    unique_mechanism_ids = int(taxonomy["mechanism_id"].nunique()) if taxonomy is not None and not taxonomy.empty and "mechanism_id" in taxonomy.columns else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -740,6 +1068,10 @@ def _run_config_frame(
         "events": int(len(events)),
         "ok_events": ok_events,
         "outcomes": int(len(outcomes)),
+        "taxonomy_rows": taxonomy_rows,
+        "unique_mechanism_ids": unique_mechanism_ids,
+        "taxonomy_feature_source_model": "entry_known_events_only_no_outcomes",
+        "taxonomy_uses_outcome_columns": False,
         "created_at_utc": datetime.now(UTC).isoformat(),
         "end_timestamp_ms_requested": config.end_timestamp_ms,
         "end_time_utc_requested": _format_timestamp_ms(config.end_timestamp_ms),
@@ -758,7 +1090,8 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_events.parquet", "written", "immutable broad pump event store with entry-known features"),
         ("pump_mechanism_outcomes.parquet", "written", "future response vectors stored only as outcomes"),
         ("pump_mechanism_event_quality.csv", "written", "cache-only data quality and coverage audit"),
-        ("pump_mechanism_taxonomy.csv", "planned", "entry-known mechanism axes per event"),
+        ("pump_mechanism_taxonomy.csv", "written", "entry-known mechanism axes per event"),
+        ("pump_mechanism_taxonomy_by_axis.csv", "written", "axis-level taxonomy counts and breadth diagnostics"),
         ("pump_mechanism_response_surfaces.csv", "planned", "mechanism response diagnostics before PnL"),
         ("pump_mechanism_negative_space.csv", "planned", "all generated neighbors including failed/rejected rules"),
         ("pump_mechanism_plateau_basins.csv", "planned", "basin-level plateau scores"),
