@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_short_trade_verdict"
+IMPLEMENTATION_STAGE = "mechanism_short_portfolio_aggregation"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -196,6 +196,24 @@ SHORT_TRADE_VERDICT_MAX_TOP_SYMBOL_TRADE_SHARE = 0.45
 SHORT_TRADE_VERDICT_MAX_TOP_DAY_TRADE_SHARE = 0.35
 SHORT_TRADE_VERDICT_MAX_MONTH_POSITIVE_R_SHARE = 0.55
 SHORT_TRADE_TOP_REMOVAL_FRACTION = 0.10
+
+SHORT_PORTFOLIO_CANDIDATE_MODEL = "accepted_trading_sleeve_portfolio_candidates_v1"
+SHORT_PORTFOLIO_OOS_MODEL = "accepted_trading_sleeve_constrained_portfolio_oos_v1"
+SHORT_PORTFOLIO_VERDICT_MODEL = "accepted_trading_sleeve_portfolio_verdict_v1"
+SHORT_PORTFOLIO_GUARD_MODEL = "short_portfolio_source_and_overlap_guard_v1"
+SHORT_PORTFOLIO_MAX_CONCURRENT_TRADES = 3
+SHORT_PORTFOLIO_MAX_CONCURRENT_PER_SYMBOL = 1
+SHORT_PORTFOLIO_SYMBOL_COOLDOWN_MINUTES = 30
+SHORT_PORTFOLIO_MIN_TRADES = 20
+SHORT_PORTFOLIO_MIN_ACTIVE_DAYS = 8
+SHORT_PORTFOLIO_MIN_SYMBOLS = 4
+SHORT_PORTFOLIO_MIN_SUM_R = 0.0
+SHORT_PORTFOLIO_MIN_AVG_R = 0.0
+SHORT_PORTFOLIO_MIN_MEDIAN_R = 0.0
+SHORT_PORTFOLIO_MIN_POSITIVE_ACTIVE_DAY_RATE = 0.50
+SHORT_PORTFOLIO_MAX_TOP_SYMBOL_TRADE_SHARE = 0.45
+SHORT_PORTFOLIO_MAX_TOP_DAY_TRADE_SHARE = 0.35
+SHORT_PORTFOLIO_MAX_DRAWDOWN_TO_PROFIT = 1.50
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +375,10 @@ def run_pump_mechanism_stability_research(
             short_trade_top_removal=pd.DataFrame(),
             short_trade_verdict=pd.DataFrame(),
             short_trade_guard=pd.DataFrame(),
+            short_portfolio_candidates=pd.DataFrame(),
+            short_portfolio_oos=pd.DataFrame(),
+            short_portfolio_verdict=pd.DataFrame(),
+            short_portfolio_guard=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -516,7 +538,20 @@ def run_pump_mechanism_stability_research(
         oos_verdict=oos_verdict,
     )
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping/trade-grid/verdict artifacts", started_at)
+    _print_stage(progress_label, "aggregating accepted trading sleeves into constrained portfolio OOS", started_at)
+    short_portfolio_candidates = _build_short_portfolio_candidates(
+        short_trade_grid=short_trade_grid,
+        short_trade_verdict=short_trade_verdict,
+    )
+    short_portfolio_oos = _build_short_portfolio_oos(short_portfolio_candidates=short_portfolio_candidates)
+    short_portfolio_verdict = _build_short_portfolio_verdict(short_portfolio_oos=short_portfolio_oos)
+    short_portfolio_guard = _build_short_portfolio_guard(
+        short_trade_verdict=short_trade_verdict,
+        short_portfolio_candidates=short_portfolio_candidates,
+        short_portfolio_oos=short_portfolio_oos,
+    )
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping/trade-grid/verdict/portfolio artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -541,6 +576,10 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_short_trade_top_removal.csv", short_trade_top_removal)
     _write_csv(config.output_dir / "pump_mechanism_short_trade_verdict.csv", short_trade_verdict)
     _write_csv(config.output_dir / "pump_mechanism_short_trade_guard.csv", short_trade_guard)
+    _write_csv(config.output_dir / "pump_mechanism_short_portfolio_candidates.csv", short_portfolio_candidates)
+    _write_csv(config.output_dir / "pump_mechanism_short_portfolio_oos.csv", short_portfolio_oos)
+    _write_csv(config.output_dir / "pump_mechanism_short_portfolio_verdict.csv", short_portfolio_verdict)
+    _write_csv(config.output_dir / "pump_mechanism_short_portfolio_guard.csv", short_portfolio_guard)
 
     run_config = _run_config_frame(
         config=config,
@@ -572,6 +611,10 @@ def run_pump_mechanism_stability_research(
         short_trade_top_removal=short_trade_top_removal,
         short_trade_verdict=short_trade_verdict,
         short_trade_guard=short_trade_guard,
+        short_portfolio_candidates=short_portfolio_candidates,
+        short_portfolio_oos=short_portfolio_oos,
+        short_portfolio_verdict=short_portfolio_verdict,
+        short_portfolio_guard=short_portfolio_guard,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -585,6 +628,7 @@ def run_pump_mechanism_stability_research(
         f"oos_diagnostics={len(oos_diagnostics):,} oos_top_removal={len(oos_top_removal):,} "
         f"oos_verdict={len(oos_verdict):,} short_trade_candidates={len(short_trade_candidates):,} "
         f"short_trade_grid={len(short_trade_grid):,} short_trade_verdict={len(short_trade_verdict):,} "
+        f"short_portfolio_oos={len(short_portfolio_oos):,} short_portfolio_verdict={len(short_portfolio_verdict):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} "
         f"output_dir={config.output_dir}",
         flush=True,
@@ -4786,6 +4830,440 @@ def _short_trade_guard_columns() -> list[str]:
     ]
 
 
+
+def _build_short_portfolio_candidates(*, short_trade_grid: pd.DataFrame, short_trade_verdict: pd.DataFrame) -> pd.DataFrame:
+    """Create portfolio candidates only from accepted trading sleeves.
+
+    This layer does not rediscover signals or exits.  It filters the already
+    simulated short trade grid through the explicit trading-sleeve verdict and
+    prepares deterministic ranks for a chronological portfolio replay.
+    """
+
+    columns = _short_portfolio_candidate_columns()
+    trades = _simulated_short_trades(short_trade_grid)
+    if trades.empty or short_trade_verdict is None or short_trade_verdict.empty:
+        return pd.DataFrame(columns=columns)
+
+    verdict = short_trade_verdict.copy()
+    allowed = verdict.loc[
+        verdict.get("trading_sleeve_verdict", pd.Series(dtype=str)).astype(str).eq("accepted_trading_sleeve")
+        & verdict.get("allowed_for_portfolio_aggregation", pd.Series(dtype=bool)).map(_to_bool)
+    ].copy()
+    if allowed.empty or "trading_sleeve_key" not in allowed.columns:
+        return pd.DataFrame(columns=columns)
+
+    work = _add_trade_split_columns(trades)
+    work = work.loc[work["trading_sleeve_key"].astype(str).isin(set(allowed["trading_sleeve_key"].astype(str)))].copy()
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+
+    verdict_cols = [
+        "trading_sleeve_key", "trading_sleeve_verdict", "allowed_for_portfolio_aggregation", "sum_r", "avg_r",
+        "median_r", "positive_active_day_rate", "max_drawdown_r", "top_symbol_trade_share", "top_day_trade_share",
+    ]
+    available_verdict_cols = [column for column in verdict_cols if column in allowed.columns]
+    allowed_small = allowed[available_verdict_cols].copy().rename(
+        columns={
+            "sum_r": "sleeve_sum_r",
+            "avg_r": "sleeve_avg_r",
+            "median_r": "sleeve_median_r",
+            "positive_active_day_rate": "sleeve_positive_active_day_rate",
+            "max_drawdown_r": "sleeve_max_drawdown_r",
+            "top_symbol_trade_share": "sleeve_top_symbol_trade_share",
+            "top_day_trade_share": "sleeve_top_day_trade_share",
+        }
+    )
+    work = work.merge(allowed_small, on="trading_sleeve_key", how="left", validate="many_to_one")
+    for column in ("sleeve_sum_r", "sleeve_avg_r", "sleeve_median_r", "sleeve_positive_active_day_rate", "sleeve_max_drawdown_r"):
+        work[column] = pd.to_numeric(work.get(column, pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan)
+    work["portfolio_rank_score"] = (
+        work["sleeve_median_r"].fillna(0.0)
+        + 0.25 * work["sleeve_avg_r"].fillna(0.0)
+        + 0.10 * work["sleeve_positive_active_day_rate"].fillna(0.0)
+        - 0.10 * work["sleeve_max_drawdown_r"].fillna(0.0)
+    )
+    work["portfolio_candidate_status"] = "eligible_portfolio_candidate"
+    work["portfolio_candidate_rejection_reason"] = ""
+    work["portfolio_candidate_model"] = SHORT_PORTFOLIO_CANDIDATE_MODEL
+    work["portfolio_uses_only_accepted_trading_sleeves"] = True
+    work["uses_final_holdout_tuning"] = False
+    work["uses_future_optimal_exit"] = False
+    work["data_access_model"] = DATA_ACCESS_MODEL
+    work["portfolio_candidate_id"] = [
+        "pmspc_" + hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:16]
+        for value in work.get("short_trade_id", pd.Series(dtype=str)).astype(str)
+    ]
+    result = _ensure_columns(work, columns)
+    return _sort_frame(result, ["entry_timestamp_ms", "portfolio_rank_score", "short_trade_id"])
+
+
+def _build_short_portfolio_oos(*, short_portfolio_candidates: pd.DataFrame) -> pd.DataFrame:
+    """Chronologically replay accepted trading sleeves with overlap controls."""
+
+    columns = _short_portfolio_oos_columns()
+    if short_portfolio_candidates is None or short_portfolio_candidates.empty:
+        return pd.DataFrame(columns=columns)
+
+    candidates = short_portfolio_candidates.copy()
+    if "portfolio_candidate_status" not in candidates.columns:
+        return pd.DataFrame(columns=columns)
+    candidates = candidates.loc[candidates["portfolio_candidate_status"].astype(str).eq("eligible_portfolio_candidate")].copy()
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+
+    candidates["_entry_ms"] = pd.to_numeric(candidates.get("entry_timestamp_ms", pd.Series(dtype=float)), errors="coerce")
+    candidates["_exit_ms"] = pd.to_numeric(candidates.get("final_exit_timestamp_ms", pd.Series(dtype=float)), errors="coerce")
+    candidates["_rank_score"] = pd.to_numeric(candidates.get("portfolio_rank_score", pd.Series(dtype=float)), errors="coerce").fillna(0.0)
+    candidates["_selected_rank"] = pd.to_numeric(candidates.get("selected_rank", pd.Series(dtype=float)), errors="coerce").fillna(999999.0)
+    candidates = candidates.loc[candidates["_entry_ms"].notna() & candidates["_exit_ms"].notna()].copy()
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+    candidates = candidates.sort_values(["_entry_ms", "_rank_score", "_selected_rank", "short_trade_id"], ascending=[True, False, True, True])
+
+    open_positions: list[dict[str, object]] = []
+    selected_events: set[str] = set()
+    last_symbol_entry_ms: dict[str, int] = {}
+    cumulative_r = 0.0
+    selected_sequence = 0
+    rows: list[dict[str, object]] = []
+    cooldown_ms = int(SHORT_PORTFOLIO_SYMBOL_COOLDOWN_MINUTES) * MINUTE_MS
+
+    for raw in candidates.to_dict("records"):
+        entry_ms = int(float(raw.get("_entry_ms", 0)))
+        exit_ms = int(float(raw.get("_exit_ms", entry_ms)))
+        symbol = str(raw.get("symbol", ""))
+        event_id = str(raw.get("event_id", ""))
+        open_positions = [position for position in open_positions if int(position.get("exit_ms", 0)) > entry_ms]
+        concurrent_before = len(open_positions)
+        symbol_concurrent_before = sum(1 for position in open_positions if str(position.get("symbol", "")) == symbol)
+        reason = ""
+        action = "selected"
+        if event_id and event_id in selected_events:
+            action = "rejected"
+            reason = "duplicate_event_already_selected"
+        elif concurrent_before >= int(SHORT_PORTFOLIO_MAX_CONCURRENT_TRADES):
+            action = "rejected"
+            reason = "max_concurrent_portfolio_trades_reached"
+        elif symbol_concurrent_before >= int(SHORT_PORTFOLIO_MAX_CONCURRENT_PER_SYMBOL):
+            action = "rejected"
+            reason = "max_concurrent_symbol_trades_reached"
+        elif symbol in last_symbol_entry_ms and entry_ms - int(last_symbol_entry_ms[symbol]) < cooldown_ms:
+            action = "rejected"
+            reason = "symbol_cooldown_active"
+
+        realized_r = _float(raw.get("realized_r"))
+        if action == "selected":
+            selected_sequence += 1
+            cumulative_r += realized_r if math.isfinite(realized_r) else 0.0
+            open_positions.append({"symbol": symbol, "exit_ms": exit_ms, "event_id": event_id})
+            if event_id:
+                selected_events.add(event_id)
+            if symbol:
+                last_symbol_entry_ms[symbol] = entry_ms
+        else:
+            realized_r = 0.0
+
+        rows.append(_short_portfolio_oos_row(
+            raw,
+            portfolio_action=action,
+            rejection_reason=reason,
+            selected_sequence=selected_sequence if action == "selected" else np.nan,
+            concurrent_before_entry=concurrent_before,
+            symbol_concurrent_before_entry=symbol_concurrent_before,
+            cumulative_portfolio_r=cumulative_r,
+            realized_r=realized_r,
+        ))
+
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["entry_timestamp_ms", "portfolio_action", "short_trade_id"])
+
+
+def _build_short_portfolio_verdict(*, short_portfolio_oos: pd.DataFrame) -> pd.DataFrame:
+    columns = _short_portfolio_verdict_columns()
+    if short_portfolio_oos is None or short_portfolio_oos.empty:
+        return pd.DataFrame(columns=columns)
+    selected = short_portfolio_oos.loc[short_portfolio_oos.get("portfolio_action", pd.Series(dtype=str)).astype(str) == "selected"].copy()
+    if selected.empty:
+        return pd.DataFrame(columns=columns)
+    work = _add_trade_split_columns(selected)
+    stats = _short_trade_stats(work)
+    first_half_r, second_half_r = _trade_half_r_sums(work)
+    odd_r, even_r = _trade_odd_even_r_sums(work)
+    month_positive_share = _trade_month_positive_r_share(work)
+    dd_to_profit = float("nan")
+    if math.isfinite(stats["max_drawdown_r"]) and math.isfinite(stats["sum_r"]) and stats["sum_r"] > 0.0:
+        dd_to_profit = stats["max_drawdown_r"] / max(stats["sum_r"], 1e-12)
+
+    fail_reasons: list[str] = []
+    warning_reasons: list[str] = []
+    if stats["trades"] < SHORT_PORTFOLIO_MIN_TRADES:
+        fail_reasons.append("low_portfolio_trade_count")
+    if stats["active_days"] < SHORT_PORTFOLIO_MIN_ACTIVE_DAYS:
+        fail_reasons.append("low_portfolio_active_days")
+    if stats["symbols"] < SHORT_PORTFOLIO_MIN_SYMBOLS:
+        fail_reasons.append("low_portfolio_symbol_breadth")
+    if not math.isfinite(stats["sum_r"]) or stats["sum_r"] <= SHORT_PORTFOLIO_MIN_SUM_R:
+        fail_reasons.append("non_positive_portfolio_sum_r")
+    if not math.isfinite(stats["avg_r"]) or stats["avg_r"] <= SHORT_PORTFOLIO_MIN_AVG_R:
+        fail_reasons.append("non_positive_portfolio_avg_r")
+    if not math.isfinite(stats["median_r"]) or stats["median_r"] <= SHORT_PORTFOLIO_MIN_MEDIAN_R:
+        fail_reasons.append("non_positive_portfolio_median_r")
+    if not math.isfinite(stats["positive_active_day_rate"]) or stats["positive_active_day_rate"] < SHORT_PORTFOLIO_MIN_POSITIVE_ACTIVE_DAY_RATE:
+        fail_reasons.append("low_portfolio_positive_active_day_rate")
+    if not math.isfinite(stats["top_symbol_trade_share"]) or stats["top_symbol_trade_share"] > SHORT_PORTFOLIO_MAX_TOP_SYMBOL_TRADE_SHARE:
+        fail_reasons.append("portfolio_top_symbol_dependency")
+    if not math.isfinite(stats["top_day_trade_share"]) or stats["top_day_trade_share"] > SHORT_PORTFOLIO_MAX_TOP_DAY_TRADE_SHARE:
+        fail_reasons.append("portfolio_top_day_dependency")
+    if math.isfinite(dd_to_profit) and dd_to_profit > SHORT_PORTFOLIO_MAX_DRAWDOWN_TO_PROFIT:
+        fail_reasons.append("portfolio_drawdown_large_vs_profit")
+    if math.isfinite(first_half_r) and math.isfinite(second_half_r) and first_half_r > 0.0 and second_half_r <= 0.0:
+        fail_reasons.append("portfolio_second_half_degraded_to_non_positive")
+    if math.isfinite(odd_r) and math.isfinite(even_r) and (odd_r <= 0.0 or even_r <= 0.0):
+        warning_reasons.append("portfolio_odd_even_split_not_both_positive")
+
+    if not fail_reasons:
+        verdict = "accepted_short_portfolio"
+        allowed_next_stage = "paper_forward_candidate"
+    elif stats["trades"] >= SHORT_PORTFOLIO_MIN_TRADES and math.isfinite(stats["sum_r"]) and stats["sum_r"] > 0.0:
+        verdict = "watchlist_short_portfolio"
+        allowed_next_stage = "portfolio_research_only"
+    else:
+        verdict = "rejected_short_portfolio"
+        allowed_next_stage = "portfolio_research_only"
+
+    selected_ratio = float(len(selected) / len(short_portfolio_oos)) if len(short_portfolio_oos) else float("nan")
+    row = {
+        "research_id": RESEARCH_ID,
+        "portfolio_key": "accepted_short_sleeves_constrained_portfolio",
+        "portfolio_verdict": verdict,
+        "next_allowed_stage": allowed_next_stage,
+        "fail_reasons": ";".join(fail_reasons) if fail_reasons else "pass",
+        "warning_reasons": ";".join(warning_reasons),
+        **stats,
+        "candidate_rows": int(len(short_portfolio_oos)),
+        "selected_rows": int(len(selected)),
+        "selected_candidate_ratio": selected_ratio,
+        "first_trade_date": _safe_min_str(selected.get("test_date", pd.Series(dtype=str))),
+        "last_trade_date": _safe_max_str(selected.get("test_date", pd.Series(dtype=str))),
+        "trading_sleeves_seen": _joined_unique(selected, "trading_sleeve_key"),
+        "exit_policies_seen": _joined_unique(selected, "exit_policy"),
+        "signal_families_seen": _joined_unique(selected, "signal_family"),
+        "mechanism_families_seen": _joined_unique(selected, "mechanism_family"),
+        "sessions_seen": _joined_unique(selected, "session_bucket"),
+        "month_positive_r_share": month_positive_share,
+        "first_half_sum_r": first_half_r,
+        "second_half_sum_r": second_half_r,
+        "odd_day_sum_r": odd_r,
+        "even_day_sum_r": even_r,
+        "drawdown_to_profit_ratio": dd_to_profit,
+        "max_concurrent_trades_gate": int(SHORT_PORTFOLIO_MAX_CONCURRENT_TRADES),
+        "max_concurrent_per_symbol_gate": int(SHORT_PORTFOLIO_MAX_CONCURRENT_PER_SYMBOL),
+        "symbol_cooldown_minutes_gate": int(SHORT_PORTFOLIO_SYMBOL_COOLDOWN_MINUTES),
+        "short_portfolio_verdict_model": SHORT_PORTFOLIO_VERDICT_MODEL,
+        "source_trading_sleeve_verdict_required": "accepted_trading_sleeve",
+        "uses_final_holdout_tuning": False,
+        "uses_future_optimal_exit": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+    return _ensure_columns(pd.DataFrame([row]), columns)
+
+
+def _build_short_portfolio_guard(
+    *,
+    short_trade_verdict: pd.DataFrame,
+    short_portfolio_candidates: pd.DataFrame,
+    short_portfolio_oos: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = _short_portfolio_guard_columns()
+    verdict = short_trade_verdict.copy() if short_trade_verdict is not None else pd.DataFrame()
+    candidates = short_portfolio_candidates.copy() if short_portfolio_candidates is not None else pd.DataFrame()
+    oos = short_portfolio_oos.copy() if short_portfolio_oos is not None else pd.DataFrame()
+    selected = oos.loc[oos.get("portfolio_action", pd.Series(dtype=str)).astype(str) == "selected"].copy() if not oos.empty else pd.DataFrame()
+    rows: list[dict[str, object]] = []
+
+    def add_guard(name: str, failures: int, checked: int, description: str) -> None:
+        rows.append({
+            "research_id": RESEARCH_ID,
+            "guard_name": name,
+            "guard_status": "pass" if int(failures) == 0 else "fail",
+            "checked_rows": int(checked),
+            "failure_rows": int(failures),
+            "description": description,
+            "short_portfolio_guard_model": SHORT_PORTFOLIO_GUARD_MODEL,
+            "uses_final_holdout_tuning": False,
+            "uses_future_optimal_exit": False,
+            "data_access_model": DATA_ACCESS_MODEL,
+        })
+
+    accepted_sleeves = set()
+    if verdict is not None and not verdict.empty and "trading_sleeve_key" in verdict.columns:
+        accepted = verdict.loc[
+            verdict.get("trading_sleeve_verdict", pd.Series(dtype=str)).astype(str).eq("accepted_trading_sleeve")
+            & verdict.get("allowed_for_portfolio_aggregation", pd.Series(dtype=bool)).map(_to_bool)
+        ]
+        accepted_sleeves = set(accepted["trading_sleeve_key"].astype(str))
+    candidate_sleeves = set(candidates.get("trading_sleeve_key", pd.Series(dtype=str)).astype(str)) if not candidates.empty else set()
+    selected_sleeves = set(selected.get("trading_sleeve_key", pd.Series(dtype=str)).astype(str)) if not selected.empty else set()
+
+    add_guard(
+        "portfolio_candidates_from_accepted_trading_sleeves_only",
+        len(candidate_sleeves - accepted_sleeves),
+        len(candidate_sleeves),
+        "portfolio candidate sleeves must be accepted_trading_sleeve rows only",
+    )
+    add_guard(
+        "portfolio_selected_from_accepted_trading_sleeves_only",
+        len(selected_sleeves - accepted_sleeves),
+        len(selected_sleeves),
+        "selected portfolio trades must come from accepted_trading_sleeve rows only",
+    )
+    add_guard(
+        "portfolio_excludes_no_oi_confirmation",
+        int((selected.get("signal_family", pd.Series(dtype=str)).astype(str) == "no_oi_confirmation").sum()) if not selected.empty else 0,
+        int(len(selected)),
+        "audit-only no_oi_confirmation trades must not enter the portfolio",
+    )
+    if not selected.empty and "event_id" in selected.columns:
+        selected_event_ids = selected["event_id"].dropna().astype(str)
+        selected_event_ids = selected_event_ids.loc[selected_event_ids != ""]
+        duplicate_event_failures = int(selected_event_ids.duplicated().sum())
+    else:
+        duplicate_event_failures = 0
+    add_guard(
+        "portfolio_no_duplicate_selected_events",
+        duplicate_event_failures,
+        int(len(selected)),
+        "a single event_id may not be selected more than once in the constrained portfolio",
+    )
+    add_guard(
+        "portfolio_concurrency_gate_respected",
+        int((pd.to_numeric(selected.get("concurrent_before_entry", pd.Series(dtype=float)), errors="coerce").fillna(0) >= int(SHORT_PORTFOLIO_MAX_CONCURRENT_TRADES)).sum()) if not selected.empty else 0,
+        int(len(selected)),
+        "selected rows must have free portfolio concurrency slot before entry",
+    )
+    add_guard(
+        "portfolio_symbol_concurrency_gate_respected",
+        int((pd.to_numeric(selected.get("symbol_concurrent_before_entry", pd.Series(dtype=float)), errors="coerce").fillna(0) >= int(SHORT_PORTFOLIO_MAX_CONCURRENT_PER_SYMBOL)).sum()) if not selected.empty else 0,
+        int(len(selected)),
+        "selected rows must have free same-symbol concurrency slot before entry",
+    )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["guard_status", "guard_name"])
+
+
+def _short_portfolio_oos_row(
+    raw: dict[str, object],
+    *,
+    portfolio_action: str,
+    rejection_reason: str,
+    selected_sequence: object,
+    concurrent_before_entry: int,
+    symbol_concurrent_before_entry: int,
+    cumulative_portfolio_r: float,
+    realized_r: float,
+) -> dict[str, object]:
+    entry_ms = _finite_int_or_none(raw.get("entry_timestamp_ms"))
+    exit_ms = _finite_int_or_none(raw.get("final_exit_timestamp_ms"))
+    return {
+        "research_id": RESEARCH_ID,
+        "portfolio_trade_id": "pmsp_" + hashlib.sha1((str(raw.get("short_trade_id", "")) + "|portfolio").encode("utf-8")).hexdigest()[:16],
+        "portfolio_candidate_id": str(raw.get("portfolio_candidate_id", "")),
+        "short_trade_id": str(raw.get("short_trade_id", "")),
+        "short_candidate_id": str(raw.get("short_candidate_id", "")),
+        "trading_sleeve_key": str(raw.get("trading_sleeve_key", "")),
+        "portfolio_action": str(portfolio_action),
+        "portfolio_rejection_reason": str(rejection_reason),
+        "selected_sequence": selected_sequence,
+        "selection_key": str(raw.get("selection_key", "")),
+        "test_day_ord": int(raw.get("test_day_ord", 0) or 0),
+        "test_date": str(raw.get("test_date", "")),
+        "train_window_days": int(raw.get("train_window_days", 0) or 0),
+        "event_id": str(raw.get("event_id", "")),
+        "symbol": str(raw.get("symbol", "")),
+        "session_bucket": str(raw.get("session_bucket", "")),
+        "mechanism_family": str(raw.get("mechanism_family", "")),
+        "mechanism_id": str(raw.get("mechanism_id", "")),
+        "acceptance_regime": str(raw.get("acceptance_regime", "")),
+        "signal_family": str(raw.get("signal_family", "")),
+        "exit_policy": str(raw.get("exit_policy", "")),
+        "entry_timestamp_ms": entry_ms if entry_ms is not None else np.nan,
+        "entry_time_utc": str(raw.get("entry_time_utc", "")),
+        "final_exit_timestamp_ms": exit_ms if exit_ms is not None else np.nan,
+        "final_exit_time_utc": str(raw.get("final_exit_time_utc", "")),
+        "final_exit_reason": str(raw.get("final_exit_reason", "")),
+        "hold_minutes": _float(raw.get("hold_minutes")),
+        "realized_r": float(realized_r),
+        "mae_r": _float(raw.get("mae_r")),
+        "mfe_r": _float(raw.get("mfe_r")),
+        "win": bool(float(realized_r) > 0.0),
+        "loss": bool(float(realized_r) < 0.0),
+        "partial_tp_hit": _to_bool(raw.get("partial_tp_hit")),
+        "portfolio_rank_score": _float(raw.get("portfolio_rank_score")),
+        "sleeve_sum_r": _float(raw.get("sleeve_sum_r")),
+        "sleeve_avg_r": _float(raw.get("sleeve_avg_r")),
+        "sleeve_median_r": _float(raw.get("sleeve_median_r")),
+        "concurrent_before_entry": int(concurrent_before_entry),
+        "symbol_concurrent_before_entry": int(symbol_concurrent_before_entry),
+        "max_concurrent_trades_gate": int(SHORT_PORTFOLIO_MAX_CONCURRENT_TRADES),
+        "max_concurrent_per_symbol_gate": int(SHORT_PORTFOLIO_MAX_CONCURRENT_PER_SYMBOL),
+        "symbol_cooldown_minutes_gate": int(SHORT_PORTFOLIO_SYMBOL_COOLDOWN_MINUTES),
+        "cumulative_portfolio_r": float(cumulative_portfolio_r),
+        "portfolio_oos_model": SHORT_PORTFOLIO_OOS_MODEL,
+        "source_trading_sleeve_verdict_required": "accepted_trading_sleeve",
+        "uses_final_holdout_tuning": False,
+        "uses_future_optimal_exit": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _short_portfolio_candidate_columns() -> list[str]:
+    return [
+        "research_id", "portfolio_candidate_id", "short_trade_id", "short_candidate_id", "trading_sleeve_key", "portfolio_candidate_status",
+        "portfolio_candidate_rejection_reason", "trading_sleeve_verdict", "allowed_for_portfolio_aggregation", "selection_key",
+        "test_day_ord", "test_date", "train_window_days", "event_id", "symbol", "session_bucket", "mechanism_family", "mechanism_id",
+        "acceptance_regime", "oi_regime_at_confirm", "signal_family", "exit_policy", "entry_timestamp_ms", "entry_time_utc",
+        "final_exit_timestamp_ms", "final_exit_time_utc", "final_exit_reason", "hold_minutes", "realized_r", "mae_r", "mfe_r", "win",
+        "loss", "partial_tp_hit", "portfolio_rank_score", "sleeve_sum_r", "sleeve_avg_r", "sleeve_median_r",
+        "sleeve_positive_active_day_rate", "sleeve_max_drawdown_r", "sleeve_top_symbol_trade_share", "sleeve_top_day_trade_share",
+        "portfolio_candidate_model", "portfolio_uses_only_accepted_trading_sleeves", "uses_final_holdout_tuning",
+        "uses_future_optimal_exit", "data_access_model",
+    ]
+
+
+def _short_portfolio_oos_columns() -> list[str]:
+    return [
+        "research_id", "portfolio_trade_id", "portfolio_candidate_id", "short_trade_id", "short_candidate_id", "trading_sleeve_key",
+        "portfolio_action", "portfolio_rejection_reason", "selected_sequence", "selection_key", "test_day_ord", "test_date", "train_window_days",
+        "event_id", "symbol", "session_bucket", "mechanism_family", "mechanism_id", "acceptance_regime", "signal_family", "exit_policy",
+        "entry_timestamp_ms", "entry_time_utc", "final_exit_timestamp_ms", "final_exit_time_utc", "final_exit_reason", "hold_minutes",
+        "realized_r", "mae_r", "mfe_r", "win", "loss", "partial_tp_hit", "portfolio_rank_score", "sleeve_sum_r", "sleeve_avg_r",
+        "sleeve_median_r", "concurrent_before_entry", "symbol_concurrent_before_entry", "max_concurrent_trades_gate",
+        "max_concurrent_per_symbol_gate", "symbol_cooldown_minutes_gate", "cumulative_portfolio_r", "portfolio_oos_model",
+        "source_trading_sleeve_verdict_required", "uses_final_holdout_tuning", "uses_future_optimal_exit", "data_access_model",
+    ]
+
+
+def _short_portfolio_verdict_columns() -> list[str]:
+    return [
+        "research_id", "portfolio_key", "portfolio_verdict", "next_allowed_stage", "fail_reasons", "warning_reasons", "trades",
+        "active_days", "symbols", "sessions", "selection_keys", "sum_r", "avg_r", "median_r", "win_rate", "loss_rate",
+        "positive_active_days", "positive_active_day_rate", "max_drawdown_r", "avg_hold_minutes", "median_hold_minutes",
+        "median_mae_r", "median_mfe_r", "partial_tp_hit_rate", "stop_exit_rate", "max_hold_exit_rate", "top_symbol_trade_share",
+        "top_day_trade_share", "candidate_rows", "selected_rows", "selected_candidate_ratio", "first_trade_date", "last_trade_date",
+        "trading_sleeves_seen", "exit_policies_seen", "signal_families_seen", "mechanism_families_seen", "sessions_seen",
+        "month_positive_r_share", "first_half_sum_r", "second_half_sum_r", "odd_day_sum_r", "even_day_sum_r",
+        "drawdown_to_profit_ratio", "max_concurrent_trades_gate", "max_concurrent_per_symbol_gate", "symbol_cooldown_minutes_gate",
+        "short_portfolio_verdict_model", "source_trading_sleeve_verdict_required", "uses_final_holdout_tuning",
+        "uses_future_optimal_exit", "data_access_model",
+    ]
+
+
+def _short_portfolio_guard_columns() -> list[str]:
+    return [
+        "research_id", "guard_name", "guard_status", "checked_rows", "failure_rows", "description",
+        "short_portfolio_guard_model", "uses_final_holdout_tuning", "uses_future_optimal_exit", "data_access_model",
+    ]
+
 def _oos_top_removal_lookup(top_removal: pd.DataFrame) -> dict[tuple[str, str], tuple[float, bool]]:
     if top_removal is None or top_removal.empty:
         return {}
@@ -4971,6 +5449,10 @@ def _run_config_frame(
     short_trade_top_removal: pd.DataFrame,
     short_trade_verdict: pd.DataFrame,
     short_trade_guard: pd.DataFrame,
+    short_portfolio_candidates: pd.DataFrame,
+    short_portfolio_oos: pd.DataFrame,
+    short_portfolio_verdict: pd.DataFrame,
+    short_portfolio_guard: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -5006,6 +5488,13 @@ def _run_config_frame(
     short_trade_verdict_rows = int(len(short_trade_verdict)) if short_trade_verdict is not None else 0
     short_trade_verdict_pass_rows = int((short_trade_verdict.get("trading_sleeve_verdict", pd.Series(dtype=str)).astype(str) == "accepted_trading_sleeve").sum()) if short_trade_verdict is not None and not short_trade_verdict.empty else 0
     short_trade_guard_fail_rows = int((short_trade_guard.get("guard_status", pd.Series(dtype=str)).astype(str) != "pass").sum()) if short_trade_guard is not None and not short_trade_guard.empty else 0
+    short_portfolio_candidate_rows = int(len(short_portfolio_candidates)) if short_portfolio_candidates is not None else 0
+    short_portfolio_oos_rows = int(len(short_portfolio_oos)) if short_portfolio_oos is not None else 0
+    short_portfolio_selected_rows = int((short_portfolio_oos.get("portfolio_action", pd.Series(dtype=str)).astype(str) == "selected").sum()) if short_portfolio_oos is not None and not short_portfolio_oos.empty else 0
+    short_portfolio_total_r = float(pd.to_numeric(short_portfolio_oos.loc[short_portfolio_oos.get("portfolio_action", pd.Series(dtype=str)).astype(str) == "selected", "realized_r"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().sum()) if short_portfolio_oos is not None and not short_portfolio_oos.empty and "realized_r" in short_portfolio_oos.columns else 0.0
+    short_portfolio_verdict_rows = int(len(short_portfolio_verdict)) if short_portfolio_verdict is not None else 0
+    short_portfolio_accepted_rows = int((short_portfolio_verdict.get("portfolio_verdict", pd.Series(dtype=str)).astype(str) == "accepted_short_portfolio").sum()) if short_portfolio_verdict is not None and not short_portfolio_verdict.empty else 0
+    short_portfolio_guard_fail_rows = int((short_portfolio_guard.get("guard_status", pd.Series(dtype=str)).astype(str) != "pass").sum()) if short_portfolio_guard is not None and not short_portfolio_guard.empty else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -5130,6 +5619,22 @@ def _run_config_frame(
         "short_trade_verdict_max_top_day_trade_share": float(SHORT_TRADE_VERDICT_MAX_TOP_DAY_TRADE_SHARE),
         "short_trade_verdict_max_month_positive_r_share": float(SHORT_TRADE_VERDICT_MAX_MONTH_POSITIVE_R_SHARE),
         "short_trade_top_removal_fraction": float(SHORT_TRADE_TOP_REMOVAL_FRACTION),
+        "short_portfolio_candidate_rows": short_portfolio_candidate_rows,
+        "short_portfolio_oos_rows": short_portfolio_oos_rows,
+        "short_portfolio_selected_rows": short_portfolio_selected_rows,
+        "short_portfolio_total_realized_r": short_portfolio_total_r,
+        "short_portfolio_verdict_rows": short_portfolio_verdict_rows,
+        "short_portfolio_accepted_rows": short_portfolio_accepted_rows,
+        "short_portfolio_guard_fail_rows": short_portfolio_guard_fail_rows,
+        "short_portfolio_candidate_model": SHORT_PORTFOLIO_CANDIDATE_MODEL,
+        "short_portfolio_oos_model": SHORT_PORTFOLIO_OOS_MODEL,
+        "short_portfolio_verdict_model": SHORT_PORTFOLIO_VERDICT_MODEL,
+        "short_portfolio_guard_model": SHORT_PORTFOLIO_GUARD_MODEL,
+        "short_portfolio_max_concurrent_trades": int(SHORT_PORTFOLIO_MAX_CONCURRENT_TRADES),
+        "short_portfolio_max_concurrent_per_symbol": int(SHORT_PORTFOLIO_MAX_CONCURRENT_PER_SYMBOL),
+        "short_portfolio_symbol_cooldown_minutes": int(SHORT_PORTFOLIO_SYMBOL_COOLDOWN_MINUTES),
+        "short_portfolio_uses_only_accepted_trading_sleeves": True,
+        "short_portfolio_uses_future_optimal_exit": False,
         "oos_verdict_min_active_days": int(OOS_VERDICT_MIN_ACTIVE_DAYS),
         "oos_verdict_min_events": int(OOS_VERDICT_MIN_EVENTS),
         "oos_verdict_min_symbols": int(OOS_VERDICT_MIN_SYMBOLS),
@@ -5206,6 +5711,10 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_short_trade_top_removal.csv", "written", "trade-level top trade and top symbol removal stress"),
         ("pump_mechanism_short_trade_verdict.csv", "written", "explicit trading sleeve acceptance verdict and fail reasons"),
         ("pump_mechanism_short_trade_guard.csv", "written", "guardrail audit proving only accepted non-audit candidates entered the trade grid"),
+        ("pump_mechanism_short_portfolio_candidates.csv", "written", "accepted trading-sleeve trades eligible for portfolio aggregation"),
+        ("pump_mechanism_short_portfolio_oos.csv", "written", "chronological portfolio replay with event/symbol/concurrency overlap controls"),
+        ("pump_mechanism_short_portfolio_verdict.csv", "written", "portfolio-level OOS verdict for accepted trading sleeves"),
+        ("pump_mechanism_short_portfolio_guard.csv", "written", "guardrail audit proving only accepted sleeves enter portfolio aggregation"),
     ]
     rows = []
     for artifact_name, status, description in planned:
