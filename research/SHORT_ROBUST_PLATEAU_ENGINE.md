@@ -1,7 +1,8 @@
 # Short Robust Plateau Engine
 
 Date: 2026-06-12
-Status: implemented / one-command 365d preset with strict meta-validation.
+Status: implemented / one-command 365d preset with strict meta-validation and
+controlled self-improvement queue.
 Commit: UNKNOWN.
 
 This file documents the neutral short-fade plateau mechanism.
@@ -50,6 +51,11 @@ python research_tools/short_robust_plateau_engine.py build-event-store \
 python research_tools/short_robust_plateau_engine.py scan-plateaus \
   --output-dir .output/research_cache/short_robust_plateau_engine
 
+python research_tools/short_robust_plateau_engine.py scan-plateaus \
+  --output-dir .output/research_cache/short_robust_plateau_engine_365d \
+  --candidate-queue-file .output/research_cache/short_robust_plateau_engine_365d/self_improvement_queue.csv \
+  --guided-candidates-limit 400
+
 python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000
 ```
 
@@ -74,6 +80,7 @@ min_is_trades=25
 min_oos_trades=8
 top_removal_pct=0.35
 min_calendar_positive_day_rate=>0.60
+guided_candidates_limit=400 when run-365d sees an existing self_improvement_queue.csv
 ```
 
 The `balanced_365d` candidate profile is intentionally not a first-N nested
@@ -149,6 +156,11 @@ portfolio_oos_trades.csv
 rejected_reasons.csv
 lookahead_audit.csv
 final_report.md
+hypothesis_grammar.csv
+hypothesis_ledger.csv
+diversity_scores.csv
+self_improvement_queue.csv
+self_improvement_report.md
 ```
 
 The engine evaluates:
@@ -170,6 +182,10 @@ plateau score-degradation clusters
 strict/theoretical model gates
 marginal portfolio contribution
 same-symbol/time collision removal
+hypothesis ledger with stable candidate/family hashes
+entry-known hypothesis grammar inventory
+novelty/diversity scoring across events, symbols, days and axes
+failure-driven guided candidate queue
 ```
 
 Current strict gates:
@@ -195,18 +211,26 @@ event_store=.output/research_cache/short_robust_plateau_engine_365d
 event_outcome_rows=179299
 events=3283
 wfa_windows=8
-candidate_universe_rows=5000
+candidate_universe_rows=5399
+base_candidate_universe_rows=5000
+guided_candidate_rows=399
 development_rows=168391
 final_holdout=2026-05-03 -> 2026-06-02 exclusive
-candidate_rows=2589
-promoted=78
-plateau_clusters=64
-plateau_pass_clusters=8
-plateau_strong_pass_clusters=4
+candidate_rows=2854
+promoted=210
+plateau_clusters=176
+plateau_pass_clusters=20
+plateau_strong_pass_clusters=14
 strict_model_pass=0
 theoretical_accept_pass=0
 final_holdout_basic_pass=0
 report=.output/research_cache/short_robust_plateau_engine_365d/final_report.md
+hypothesis_grammar_rows=67
+hypothesis_ledger_rows=5399
+diversity_score_rows=210
+self_improvement_queue_rows=400
+self_improvement_queue_new_guided=400
+self_improvement_report=.output/research_cache/short_robust_plateau_engine_365d/self_improvement_report.md
 ```
 
 Lookahead audit:
@@ -221,22 +245,23 @@ large_close10_requires_delay10: 0 violations / 61372 rows
 Read:
 
 ```text
-The old rolling scan still finds 78 promoted rows, mostly structural
-failed-pump rows. The stricter theoretical gate rejects all of them as final
-strategy candidates: no sleeve passes top-40 removal, calendar consistency,
-plateau robustness and final holdout together.
+The latest guided rolling scan finds 210 promoted rows after adding 399
+queue-generated candidates, mostly structural failed-pump rows. The stricter
+theoretical gate still rejects all of them as final strategy candidates: no
+sleeve passes top-removal, calendar consistency, plateau robustness and final
+holdout together.
 ```
 
-P561 model-gate bottlenecks with top-removal at 35% and calendar gate >60%:
+Latest guided model-gate bottlenecks with top-removal at 35% and calendar gate >60%:
 
 ```text
-candidate_oos top_removal_pass: 5 / 78
-candidate_oos mc_pass: 29 / 78
-candidate_oos calendar_positive_gt_0p60: 0 / 78
-candidate_oos median_trades_per_day_ge_3: 0 / 78
-final_holdout final_calendar_positive_gt_0p60: 0 / 78
-final_holdout final_top_removal_pass: 1 / 78
-final_holdout final_pass_basic: 0 / 78
+candidate_oos top_removal_pass: 15 / 210
+candidate_oos mc_pass: 95 / 210
+candidate_oos calendar_positive_gt_0p60: 0 / 210
+candidate_oos median_trades_per_day_ge_3: 0 / 210
+final_holdout final_calendar_positive_gt_0p60: 0 / 210
+final_holdout final_top_removal_pass: 3 / 210
+final_holdout final_pass_basic: 0 / 210
 ```
 
 The strongest portfolio-accepted marginal rows in the final report are:
@@ -258,62 +283,81 @@ top-trade independence 40.74%.
 Portfolio-level read:
 
 ```text
-selected marginal OOS trades: 193
-symbols: 128
-avg: +0.067R
-median: +0.217R
-WR: 68.4%
-cost10 avg: +0.046R
+selected marginal OOS trades: 130
+symbols: 90
+avg: +0.109R
+median: +0.226R
+WR: 67.7%
+cost10 avg: +0.090R
 MC pass: true
 top-35 removal pass: false
-calendar_positive_day_rate: 32.1%
+calendar_positive_day_rate: 24.2%
 calendar_median_trades_per_day: 0
 ```
 
-## Self-Improving Research Loop Roadmap
+## Controlled Self-Improving Research Loop
 
-The current engine is a strict verifier and plateau filter. It is not yet a
-self-organizing researcher. The next professional layer should be a constrained
-research loop, not an unconstrained optimizer:
+The engine now includes the first constrained self-improvement layer. It is not
+an unconstrained optimizer. It generates concrete next candidates from
+development/WFA failures, diversity scores and entry-known grammar only. Final
+holdout fields are ledgered for audit, but they are not used as a generation
+target.
 
 ```text
 1. Hypothesis grammar
-   Define allowed event sources, entry-known features, session partitions,
-   stop/management families and risk buckets as typed search primitives.
+   hypothesis_grammar.csv lists allowed event sources, entry-known features,
+   sessions, stop/management families, risk buckets and trigger rules.
 
-2. Plateau neighborhood generator
-   For each promising rule, automatically test nearby thresholds and adjacent
-   categorical variants, then promote only broad flat regions, not points.
+2. Hypothesis ledger
+   hypothesis_ledger.csv assigns stable hypothesis/family hashes, source-data
+   fingerprint, generation source, selection scope, rejection reason and final
+   holdout audit fields.
 
 3. Diversity / novelty scoring
-   Penalize candidates that trade the same symbols, same timestamps, same
-   sessions or same return drivers as already selected sleeves.
+   diversity_scores.csv penalizes candidates that overlap on events, symbols,
+   days or peer sleeves, and marks independent/complementary/redundant sleeves.
 
-4. Failure-driven iteration
-   Use model_gate_diagnostics.csv to choose the next search direction:
-   top-removal failure -> diversify nature/session;
-   calendar failure -> search higher-frequency independent sleeves;
-   final-holdout failure -> freeze and move to a new source/period.
+4. Failure-driven iteration queue
+   self_improvement_queue.csv mutates candidate axes by failure driver:
+   calendar/frequency failure -> session and nature diversification;
+   top-removal failure -> nature/session/trigger diversification;
+   plateau fragility -> adjacent risk buckets;
+   MC fragility -> execution and management neighbors.
 
-5. Sealed experiment ledger
-   Every generated hypothesis gets a hash, source data hash, IS/OOS/final
-   boundaries, parent hypothesis id and status. Final holdout can be opened
-   only once per hypothesis family.
+5. Guided next scan
+   A later scan can consume the queue:
+
+   python research_tools/short_robust_plateau_engine.py scan-plateaus \
+     --output-dir .output/research_cache/short_robust_plateau_engine_365d \
+     --candidate-queue-file .output/research_cache/short_robust_plateau_engine_365d/self_improvement_queue.csv \
+     --guided-candidates-limit 400
 
 6. Multi-objective portfolio builder
-   Select sleeve sets by marginal contribution after collision removal, not by
-   individual best score. Optimize expectancy, calendar stability, top-removal,
-   drawdown, session balance and symbol breadth together.
+   Current portfolio selection is still greedy marginal contribution after
+   collision removal. The new diversity scores are the required input for the
+   next upgrade to portfolio-level multi-objective selection.
 
 7. Compute budget controller
-   Cheap reject first, expensive replay/MC only for survivors. This keeps the
-   loop practical on 16GB RAM / i5.
+   The queue is capped to 400 rows by default and separates already-analyzed,
+   already-rejected and new guided candidates, keeping iteration practical on
+   16GB RAM / i5.
 ```
 
-This is worthwhile only if the loop is adversarial and ledgered. An autonomous
-loop that freely mutates rules until something passes will overfit faster than
-a manual researcher. A constrained loop that generates different fader natures,
-rejects weak branches early and preserves sealed holdouts is useful.
+365d self-improvement output:
+
+```text
+hypothesis_ledger_rows: 5399
+diversity_scores_rows: 210
+diversity_grade independent_watchlist: 1
+diversity_grade complementary_research: 51
+diversity_grade redundant: 158
+self_improvement_queue_rows: 400
+self_improvement_queue new_guided_candidate: 400
+```
+
+The queue is a research input, not an acceptance shortcut. A proposed candidate
+must still survive normal WFA, top-removal, MC, plateau, calendar and final
+holdout diagnostics.
 
 ## Smoke Result
 

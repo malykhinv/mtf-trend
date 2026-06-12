@@ -8898,3 +8898,115 @@ calendar-stable diversified edge. The next research value is an iterative
 hypothesis generator over new independent fader natures and path-replay event
 sources.
 ```
+
+## 2026-06-12 - P562 self-improving queue smoke and 365d rescan
+
+Smoke command:
+
+```text
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000 --output-dir .output/research_cache/short_robust_plateau_engine_self_improve_smoke
+```
+
+Smoke output:
+
+```text
+candidate_rows=286
+promoted=6
+hypothesis_grammar_rows=56
+hypothesis_ledger_rows=350
+diversity_scores_rows=6
+self_improvement_queue_rows=80
+```
+
+Guided-smoke command:
+
+```text
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_self_improve_smoke --candidate-profile balanced_365d --max-candidates 50 --max-natures-per-source 4 --is-days 45 --oos-days 15 --step-days 15 --final-holdout-days 15 --min-is-trades 8 --min-oos-trades 3 --mc-iterations 100 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_self_improve_smoke/self_improvement_queue.csv --guided-candidates-limit 20
+```
+
+Guided-smoke output:
+
+```text
+base_candidate_universe_rows=50
+guided_candidate_rows=20
+candidate_universe_rows=70
+candidate_rows=55
+hypothesis_ledger_rows=70
+self_improvement_queue_rows=68
+```
+
+Full cached 365d queue-generation command:
+
+```text
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500
+```
+
+Full cached 365d queue-generation output:
+
+```text
+candidate_rows=2589
+promoted=78
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
+hypothesis_grammar_rows=67
+hypothesis_ledger_rows=5000
+diversity_scores_rows=78
+self_improvement_queue_rows=400
+self_improvement_queue new_guided_candidate=399
+self_improvement_queue already_rejected=1
+```
+
+Guided full cached 365d command:
+
+```text
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_365d/self_improvement_queue.csv --guided-candidates-limit 400
+```
+
+Guided full cached 365d output:
+
+```text
+base_candidate_universe_rows=5000
+guided_candidate_rows=399
+candidate_universe_rows=5399
+candidate_rows=2854
+promoted=210
+guided_analyzed=265
+guided_promoted=132
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
+hypothesis_ledger_rows=5399
+diversity_scores_rows=210
+self_improvement_queue_rows=400
+self_improvement_queue new_guided_candidate=400
+```
+
+Diversity read:
+
+```text
+independent_watchlist=1
+complementary_research=51
+redundant=158
+```
+
+Queue mutation mix:
+
+```text
+session_rule=83
+nature_id=75
+trigger_rule=74
+risk_bucket=71
+management_id=57
+stop_model=40
+```
+
+Conclusion:
+
+```text
+The new loop successfully turns model failures into concrete guided candidates
+without using final holdout as a generator target, then consumes that queue in
+a guided scan. Guided candidates add many promoted rolling rows, but the
+current 365d sleeves still remain rejected by strict gates. Calendar stability
+and top-removal robustness remain the bottlenecks.
+```

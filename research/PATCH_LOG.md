@@ -12870,3 +12870,43 @@ Risk:
 Research tooling only. This changes acceptance/reporting thresholds, not live
 entry/exit logic.
 ```
+
+## 2026-06-12 - P562 controlled self-improving plateau generator
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added a typed hypothesis grammar artifact over entry-known search axes.
+- Added `hypothesis_ledger.csv` with stable hypothesis/family ids, source-data
+  fingerprint, generation source, rejection reason and final-holdout audit
+  fields.
+- Added `diversity_scores.csv` to rank sleeves by novelty, overlap and
+  robustness instead of only individual PnL score.
+- Added `self_improvement_queue.csv`, a failure-driven concrete candidate queue
+  that mutates nature/session/trigger/risk/stop/management axes.
+- Added `self_improvement_report.md`.
+- Added `--candidate-queue-file` and `--guided-candidates-limit` so a later
+  scan can consume the generated queue.
+- `run-365d` now defaults to a guided-candidate limit of 400 when an existing
+  queue is present in the output directory.
+- Updated `research/SHORT_ROBUST_PLATEAU_ENGINE.md`,
+  `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md` and
+  `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+python -m compileall research_tools/short_robust_plateau_engine.py
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000 --output-dir .output/research_cache/short_robust_plateau_engine_self_improve_smoke
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_self_improve_smoke --candidate-profile balanced_365d --max-candidates 50 --max-natures-per-source 4 --is-days 45 --oos-days 15 --step-days 15 --final-holdout-days 15 --min-is-trades 8 --min-oos-trades 3 --mc-iterations 100 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_self_improve_smoke/self_improvement_queue.csv --guided-candidates-limit 20
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500 --candidate-queue-file .output/research_cache/short_robust_plateau_engine_365d/self_improvement_queue.csv --guided-candidates-limit 400
+```
+
+Risk:
+
+```text
+Research tooling only. The new queue must not be treated as proof. It is a
+controlled next-search input and still needs the normal robustness gates.
+```

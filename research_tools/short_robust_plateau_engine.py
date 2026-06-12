@@ -41,6 +41,7 @@ DEFAULT_RISK_PER_TRADE_PCT = 0.04
 DEFAULT_TOP_REMOVAL_PCT = 0.35
 DEFAULT_MC_ITERATIONS = 1000
 DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE = 0.60
+DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS = 400
 MANUAL_RESEARCH_DOCS = [
     Path("research/SHORT_FADE_CORE_EDGE.md"),
     Path("research/SHORT_FADE_DIVERSIFIED_SLEEVES.md"),
@@ -67,6 +68,30 @@ RISK_BUCKETS = {
     "risk_3_8": (0.03, 0.08),
     "risk_5_12": (0.05, 0.12),
 }
+
+HYPOTHESIS_AXES = [
+    "source",
+    "nature_id",
+    "session_rule",
+    "stop_model",
+    "management_id",
+    "risk_bucket",
+    "trigger_rule",
+]
+
+SESSION_NEIGHBORS = {
+    "all": ["not_asia_overlap", "non_us", "asia_only", "europe_only", "europe_us_overlap", "us_only"],
+    "asia_only": ["all", "not_asia_overlap", "off_session"],
+    "europe_only": ["all", "not_europe_only", "europe_us_overlap"],
+    "europe_us_overlap": ["all", "europe_only", "us_only", "non_us"],
+    "us_only": ["all", "non_us", "europe_us_overlap"],
+    "off_session": ["all", "asia_only", "not_asia_overlap"],
+    "non_us": ["all", "asia_only", "europe_only", "europe_us_overlap"],
+    "not_europe_only": ["all", "non_us", "europe_us_overlap"],
+    "not_asia_overlap": ["all", "non_us", "asia_only", "off_session"],
+}
+
+RISK_ORDER = ["risk_1_3", "risk_2_5", "risk_3_8", "risk_5_12", "risk_all"]
 
 ENTRY_FEATURES = {
     "source",
@@ -121,6 +146,31 @@ class CandidateSpec:
     management_id: str
     risk_bucket: str
     trigger_rule: str
+
+
+def _stable_id(prefix: str, text: str) -> str:
+    return f"{prefix}{zlib.crc32(text.encode('utf-8')) & 0xFFFFFFFF:08x}"
+
+
+def _candidate_id(
+    *,
+    source: str,
+    nature_id: str,
+    session_rule: str,
+    stop_model: str,
+    management_id: str,
+    risk_bucket: str,
+    trigger_rule: str,
+) -> str:
+    return "|".join([source, nature_id, session_rule, stop_model, management_id, risk_bucket, trigger_rule])
+
+
+def _candidate_family_key(row: pd.Series | dict[str, object]) -> str:
+    return "|".join(str(row.get(axis, "")) for axis in HYPOTHESIS_AXES if axis != "risk_bucket")
+
+
+def _spec_family_key(spec: CandidateSpec) -> str:
+    return "|".join([spec.source, spec.nature_id, spec.session_rule, spec.stop_model, spec.management_id, spec.trigger_rule])
 
 
 def _read_csv_selected(path: Path, usecols: list[str], *, nrows: int | None = None) -> pd.DataFrame:
@@ -1037,6 +1087,155 @@ def generate_candidates(
     return specs
 
 
+def _as_bool(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (float, np.floating)) and not np.isfinite(float(value)):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return bool(value)
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if np.isfinite(out) else default
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    return int(_safe_float(value, float(default)))
+
+
+def _spec_from_parts(
+    *,
+    source: str,
+    nature_id: str,
+    session_rule: str,
+    stop_model: str,
+    management_id: str,
+    risk_bucket: str,
+    trigger_rule: str,
+) -> CandidateSpec:
+    return CandidateSpec(
+        candidate_id=_candidate_id(
+            source=source,
+            nature_id=nature_id,
+            session_rule=session_rule,
+            stop_model=stop_model,
+            management_id=management_id,
+            risk_bucket=risk_bucket,
+            trigger_rule=trigger_rule,
+        ),
+        source=source,
+        nature_id=nature_id,
+        session_rule=session_rule,
+        stop_model=stop_model,
+        management_id=management_id,
+        risk_bucket=risk_bucket,
+        trigger_rule=trigger_rule,
+    )
+
+
+def _spec_from_series(row: pd.Series) -> CandidateSpec:
+    return _spec_from_parts(
+        source=str(row.get("source", "")),
+        nature_id=str(row.get("nature_id", "")),
+        session_rule=str(row.get("session_rule", "")),
+        stop_model=str(row.get("stop_model", "")),
+        management_id=str(row.get("management_id", "")),
+        risk_bucket=str(row.get("risk_bucket", "")),
+        trigger_rule=str(row.get("trigger_rule", "")),
+    )
+
+
+def _mutate_spec(spec: CandidateSpec, **updates: str) -> CandidateSpec:
+    values = {
+        "source": spec.source,
+        "nature_id": spec.nature_id,
+        "session_rule": spec.session_rule,
+        "stop_model": spec.stop_model,
+        "management_id": spec.management_id,
+        "risk_bucket": spec.risk_bucket,
+        "trigger_rule": spec.trigger_rule,
+    }
+    values.update(updates)
+    return _spec_from_parts(**values)
+
+
+def _adjacent_values(values: list[str], current: str, *, radius: int = 1) -> list[str]:
+    if current not in values:
+        return [value for value in values[: max(0, radius * 2 + 1)] if value != current]
+    idx = values.index(current)
+    lo = max(0, idx - radius)
+    hi = min(len(values), idx + radius + 1)
+    out = [value for value in values[lo:hi] if value != current]
+    if not out:
+        out = [value for value in values if value != current][:2]
+    return out
+
+
+def _build_hypothesis_grammar(
+    df: pd.DataFrame,
+    specs: list[CandidateSpec],
+    trigger_masks: dict[str, pd.Series],
+) -> pd.DataFrame:
+    """Describe the typed, entry-known search grammar used by this scan."""
+    rows: list[dict[str, object]] = []
+    spec_rows = pd.DataFrame([spec.__dict__ for spec in specs])
+
+    def add(axis: str, value: str, *, source: str = "ALL", rows_count: int = 0, unique_events: int = 0, primitive_kind: str = "categorical") -> None:
+        rows.append(
+            {
+                "axis": axis,
+                "value": value,
+                "source": source,
+                "primitive_kind": primitive_kind,
+                "entry_known": True,
+                "event_rows": int(rows_count),
+                "unique_events": int(unique_events),
+                "candidate_universe_uses": int((spec_rows[axis].astype(str).eq(value)).sum()) if axis in spec_rows.columns and not spec_rows.empty else 0,
+                "notes": "All primitives must be available at or before entry_timestamp_ms.",
+            }
+        )
+
+    for source, group in df.groupby("source", dropna=False):
+        source_s = str(source)
+        add("source", source_s, source=source_s, rows_count=len(group), unique_events=group["event_id"].nunique(), primitive_kind="event_source")
+        for nature, ng in group.groupby("nature_id", dropna=False):
+            add("nature_id", str(nature), source=source_s, rows_count=len(ng), unique_events=ng["event_id"].nunique(), primitive_kind="source_descriptor")
+        for stop, sg in group.groupby("stop_model", dropna=False):
+            add("stop_model", str(stop), source=source_s, rows_count=len(sg), unique_events=sg["event_id"].nunique(), primitive_kind="execution_model")
+        for management, mg in group.groupby("management_id", dropna=False):
+            add("management_id", str(management), source=source_s, rows_count=len(mg), unique_events=mg["event_id"].nunique(), primitive_kind="position_management")
+
+    for session in SESSION_RULES:
+        mask = SESSION_RULES[session](df).fillna(False)
+        sub = df[mask]
+        add("session_rule", session, rows_count=len(sub), unique_events=sub["event_id"].nunique(), primitive_kind="time_partition")
+    for risk in RISK_BUCKETS:
+        mask = _risk_mask(df, risk).fillna(False)
+        sub = df[mask]
+        add("risk_bucket", risk, rows_count=len(sub), unique_events=sub["event_id"].nunique(), primitive_kind="risk_filter")
+    for trigger, mask in trigger_masks.items():
+        sub = df[mask.fillna(False)]
+        source = "failed_pump_structural" if trigger.startswith("failed_") else "large_runner_local_high" if trigger.startswith("large_") else "ALL"
+        add("trigger_rule", trigger, source=source, rows_count=len(sub), unique_events=sub["event_id"].nunique(), primitive_kind="entry_known_trigger")
+
+    out = pd.DataFrame(rows)
+    return out.sort_values(["axis", "source", "event_rows"], ascending=[True, True, False]) if not out.empty else out
+
+
+def _event_store_fingerprint(metadata: dict[str, object], scan_config: dict[str, object]) -> str:
+    payload = {
+        "metadata": {key: metadata.get(key) for key in ["schema_version", "rows", "events", "sources"]},
+        "scan": {key: scan_config.get(key) for key in ["is_days", "oos_days", "step_days", "final_holdout_days", "candidate_profile", "candidate_universe_rows"]},
+    }
+    return _stable_id("D", json.dumps(payload, sort_keys=True, default=str))
+
+
 def _date_windows(
     df: pd.DataFrame,
     *,
@@ -1080,6 +1279,51 @@ def _prefilter_candidate(cand: pd.DataFrame, min_is_trades: int) -> str | None:
     return None
 
 
+def _load_guided_candidate_specs(
+    path: Path | None,
+    *,
+    limit: int,
+    existing_ids: set[str],
+) -> list[CandidateSpec]:
+    if path is None or limit <= 0 or not path.exists():
+        return []
+    queue = pd.read_csv(path)
+    if queue.empty:
+        return []
+    if "priority_score" in queue.columns:
+        queue = queue.sort_values("priority_score", ascending=False)
+    specs: list[CandidateSpec] = []
+    seen = set(existing_ids)
+    for _, row in queue.iterrows():
+        source = str(row.get("source", row.get("proposed_source", "")))
+        nature_id = str(row.get("nature_id", row.get("proposed_nature_id", "")))
+        session_rule = str(row.get("session_rule", row.get("proposed_session_rule", "")))
+        stop_model = str(row.get("stop_model", row.get("proposed_stop_model", "")))
+        management_id = str(row.get("management_id", row.get("proposed_management_id", "")))
+        risk_bucket = str(row.get("risk_bucket", row.get("proposed_risk_bucket", "")))
+        trigger_rule = str(row.get("trigger_rule", row.get("proposed_trigger_rule", "")))
+        if not all([source, nature_id, session_rule, stop_model, management_id, risk_bucket, trigger_rule]):
+            continue
+        if session_rule not in SESSION_RULES or risk_bucket not in RISK_BUCKETS:
+            continue
+        spec = _spec_from_parts(
+            source=source,
+            nature_id=nature_id,
+            session_rule=session_rule,
+            stop_model=stop_model,
+            management_id=management_id,
+            risk_bucket=risk_bucket,
+            trigger_rule=trigger_rule,
+        )
+        if spec.candidate_id in seen:
+            continue
+        specs.append(spec)
+        seen.add(spec.candidate_id)
+        if len(specs) >= limit:
+            break
+    return specs
+
+
 def scan_plateaus(
     output_dir: Path,
     *,
@@ -1097,6 +1341,8 @@ def scan_plateaus(
     risk_per_trade_pct: float = DEFAULT_RISK_PER_TRADE_PCT,
     top_removal_pct: float = DEFAULT_TOP_REMOVAL_PCT,
     min_calendar_positive_day_rate: float = DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE,
+    candidate_queue_file: Path | None = None,
+    guided_candidates_limit: int = 0,
 ) -> None:
     df = _load_outcomes(output_dir)
     _, final_end, final_start = _date_bounds(df, final_holdout_days=final_holdout_days)
@@ -1109,32 +1355,50 @@ def scan_plateaus(
         max_specs=max_candidates,
         candidate_profile=candidate_profile,
     )
+    queue_path = candidate_queue_file
+    if queue_path is None and guided_candidates_limit > 0:
+        queue_path = output_dir / "self_improvement_queue.csv"
+    guided_specs = _load_guided_candidate_specs(
+        queue_path,
+        limit=guided_candidates_limit,
+        existing_ids={spec.candidate_id for spec in specs},
+    )
+    if guided_specs:
+        specs = specs + guided_specs
     windows = _date_windows(df, is_days=is_days, oos_days=oos_days, step_days=step_days, final_holdout_days=final_holdout_days)
     if not windows:
         raise ValueError("Not enough date coverage for requested WFA windows.")
     pd.DataFrame([spec.__dict__ for spec in specs]).to_csv(output_dir / "candidate_universe.csv", index=False)
+    metadata_path = output_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
+    scan_config = {
+        "is_days": is_days,
+        "oos_days": oos_days,
+        "step_days": step_days,
+        "final_holdout_days": final_holdout_days,
+        "min_is_trades": min_is_trades,
+        "min_oos_trades": min_oos_trades,
+        "max_candidates": max_candidates,
+        "max_natures_per_source": max_natures_per_source,
+        "candidate_profile": candidate_profile,
+        "candidate_universe_rows": len(specs),
+        "base_candidate_universe_rows": len(specs) - len(guided_specs),
+        "guided_candidate_rows": len(guided_specs),
+        "guided_candidates_limit": guided_candidates_limit,
+        "candidate_queue_file": str(queue_path) if queue_path is not None else "",
+        "development_rows": int(len(dev_df)),
+        "wfa_windows": len(windows),
+        "final_holdout_start": final_start.date().isoformat(),
+        "final_holdout_end_exclusive": final_end.date().isoformat(),
+        "mc_iterations": mc_iterations,
+        "risk_per_trade_pct": risk_per_trade_pct,
+        "top_removal_pct": top_removal_pct,
+        "min_calendar_positive_day_rate": min_calendar_positive_day_rate,
+        "event_store_fingerprint": _event_store_fingerprint(metadata, {"candidate_profile": candidate_profile, "candidate_universe_rows": len(specs), "is_days": is_days, "oos_days": oos_days, "step_days": step_days, "final_holdout_days": final_holdout_days}),
+    }
     _write_json(
         output_dir / "scan_config.json",
-        {
-            "is_days": is_days,
-            "oos_days": oos_days,
-            "step_days": step_days,
-            "final_holdout_days": final_holdout_days,
-            "min_is_trades": min_is_trades,
-            "min_oos_trades": min_oos_trades,
-            "max_candidates": max_candidates,
-            "max_natures_per_source": max_natures_per_source,
-            "candidate_profile": candidate_profile,
-            "candidate_universe_rows": len(specs),
-            "development_rows": int(len(dev_df)),
-            "wfa_windows": len(windows),
-            "final_holdout_start": final_start.date().isoformat(),
-            "final_holdout_end_exclusive": final_end.date().isoformat(),
-            "mc_iterations": mc_iterations,
-            "risk_per_trade_pct": risk_per_trade_pct,
-            "top_removal_pct": top_removal_pct,
-            "min_calendar_positive_day_rate": min_calendar_positive_day_rate,
-        },
+        scan_config,
     )
 
     wfa_rows: list[dict] = []
@@ -1295,7 +1559,38 @@ def scan_plateaus(
         top_removal_pct=top_removal_pct,
         min_calendar_positive_day_rate=min_calendar_positive_day_rate,
     )
-    improvement_plan = _build_improvement_plan(candidates, rejected, axis_summary, meta_validation, portfolio_meta)
+    hypothesis_grammar = _build_hypothesis_grammar(dev_df, specs, trigger_masks)
+    hypothesis_ledger = _build_hypothesis_ledger(
+        specs,
+        candidates,
+        rejected,
+        meta_validation,
+        final_holdout,
+        clusters,
+        scan_config=scan_config,
+    )
+    diversity_scores = _build_diversity_scores(meta_validation, ledgers, portfolio, portfolio_trades)
+    self_improvement_queue = _build_self_improvement_queue(
+        dev_df,
+        trigger_masks,
+        specs,
+        candidates,
+        rejected,
+        meta_validation,
+        diversity_scores,
+        min_is_trades=min_is_trades,
+        min_calendar_positive_day_rate=min_calendar_positive_day_rate,
+        max_rows=DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS,
+    )
+    improvement_plan = _build_improvement_plan(
+        candidates,
+        rejected,
+        axis_summary,
+        meta_validation,
+        portfolio_meta,
+        diversity_scores,
+        self_improvement_queue,
+    )
 
     wfa.to_csv(output_dir / "wfa_results.csv", index=False)
     candidates.to_csv(output_dir / "plateau_candidates.csv", index=False)
@@ -1305,6 +1600,10 @@ def scan_plateaus(
     final_holdout.to_csv(output_dir / "final_holdout_validation.csv", index=False)
     portfolio_meta.to_csv(output_dir / "portfolio_meta_validation.csv", index=False)
     gate_diagnostics.to_csv(output_dir / "model_gate_diagnostics.csv", index=False)
+    hypothesis_grammar.to_csv(output_dir / "hypothesis_grammar.csv", index=False)
+    hypothesis_ledger.to_csv(output_dir / "hypothesis_ledger.csv", index=False)
+    diversity_scores.to_csv(output_dir / "diversity_scores.csv", index=False)
+    self_improvement_queue.to_csv(output_dir / "self_improvement_queue.csv", index=False)
     improvement_plan.to_csv(output_dir / "improvement_plan.csv", index=False)
     rejected.to_csv(output_dir / "rejected_reasons.csv", index=False)
     portfolio.to_csv(output_dir / "portfolio_candidates.csv", index=False)
@@ -1321,9 +1620,22 @@ def scan_plateaus(
         final_holdout,
         portfolio_meta,
         gate_diagnostics,
+        hypothesis_grammar,
+        hypothesis_ledger,
+        diversity_scores,
+        self_improvement_queue,
         improvement_plan,
         lookahead,
         windows,
+    )
+    _write_self_improvement_report(
+        output_dir,
+        hypothesis_grammar,
+        hypothesis_ledger,
+        diversity_scores,
+        self_improvement_queue,
+        gate_diagnostics,
+        portfolio_meta,
     )
 
 
@@ -1760,12 +2072,447 @@ def _build_model_gate_diagnostics(
     return pd.DataFrame(rows)
 
 
+def _build_hypothesis_ledger(
+    specs: list[CandidateSpec],
+    candidates: pd.DataFrame,
+    rejected: pd.DataFrame,
+    meta_validation: pd.DataFrame,
+    final_holdout: pd.DataFrame,
+    clusters: pd.DataFrame,
+    *,
+    scan_config: dict[str, object],
+) -> pd.DataFrame:
+    cand_by = candidates.drop_duplicates("candidate_id").set_index("candidate_id") if not candidates.empty else pd.DataFrame()
+    meta_by = meta_validation.drop_duplicates("candidate_id").set_index("candidate_id") if not meta_validation.empty else pd.DataFrame()
+    final_by = final_holdout.drop_duplicates("candidate_id").set_index("candidate_id") if not final_holdout.empty else pd.DataFrame()
+    if not rejected.empty and "candidate_id" in rejected.columns:
+        rejected_by = rejected.groupby("candidate_id", dropna=False).agg(
+            rejection_reason=("reason", "first"),
+            rejected_rows=("rows", "max") if "rows" in rejected.columns else ("reason", "size"),
+        )
+    else:
+        rejected_by = pd.DataFrame()
+    cluster_membership = _plateau_membership(clusters)
+    event_store_fingerprint = str(scan_config.get("event_store_fingerprint", ""))
+    rows: list[dict[str, object]] = []
+    for idx, spec in enumerate(specs):
+        cid = spec.candidate_id
+        family_key = _spec_family_key(spec)
+        base: dict[str, object] = {
+            "hypothesis_id": _stable_id("H", cid),
+            "family_id": _stable_id("F", family_key),
+            "candidate_id": cid,
+            "family_key": family_key,
+            "candidate_universe_order": idx,
+            "source_data_hash": event_store_fingerprint,
+            "selection_scope": "development_wfa",
+            "final_holdout_opened": False,
+            "parent_hypothesis_id": "",
+            "generation_source": "balanced_or_guided_scan",
+            "source": spec.source,
+            "nature_id": spec.nature_id,
+            "session_rule": spec.session_rule,
+            "stop_model": spec.stop_model,
+            "management_id": spec.management_id,
+            "risk_bucket": spec.risk_bucket,
+            "trigger_rule": spec.trigger_rule,
+        }
+        if cid in cand_by.index:
+            cand = cand_by.loc[cid]
+            base.update(
+                {
+                    "scan_status": "analyzed",
+                    "promoted": bool(cand.get("promoted", False)),
+                    "candidate_score": _safe_float(cand.get("candidate_score", np.nan), float("nan")),
+                    "oos_trades": _safe_int(cand.get("oos_trades", 0)),
+                    "oos_cost10_avg_r": _safe_float(cand.get("oos_cost10_avg_r", np.nan), float("nan")),
+                    "oos_cost10_sum_r": _safe_float(cand.get("oos_cost10_sum_r", np.nan), float("nan")),
+                    "oos_median_r": _safe_float(cand.get("oos_median_r", np.nan), float("nan")),
+                    "oos_win_rate": _safe_float(cand.get("oos_win_rate", np.nan), float("nan")),
+                    "efficiency_ratio": _safe_float(cand.get("efficiency_ratio", np.nan), float("nan")),
+                }
+            )
+        else:
+            base.update({"scan_status": "not_analyzed", "promoted": False})
+        if cid in rejected_by.index:
+            rej = rejected_by.loc[cid]
+            base["rejection_reason"] = str(rej.get("rejection_reason", ""))
+            base["rejected_rows"] = _safe_int(rej.get("rejected_rows", 0))
+        else:
+            base["rejection_reason"] = ""
+            base["rejected_rows"] = 0
+        if cid in meta_by.index:
+            meta = meta_by.loc[cid]
+            strict = _as_bool(meta.get("strict_model_pass", False))
+            theoretical = _as_bool(meta.get("theoretical_accept_pass", False))
+            grade = str(meta.get("model_grade", "research_only"))
+            base.update(
+                {
+                    "model_grade": grade,
+                    "strict_model_pass": strict,
+                    "theoretical_accept_pass": theoretical,
+                    "top_removal_pass": _as_bool(meta.get("top_removal_pass", meta.get("top_removed_pass", False))),
+                    "mc_pass": _as_bool(meta.get("mc_pass", False)),
+                    "plateau_pass": _as_bool(meta.get("plateau_pass", False)),
+                    "plateau_strong_pass": _as_bool(meta.get("plateau_strong_pass", False)),
+                    "calendar_positive_day_rate": _safe_float(meta.get("calendar_positive_day_rate", np.nan), float("nan")),
+                    "calendar_median_trades_per_day": _safe_float(meta.get("calendar_median_trades_per_day", np.nan), float("nan")),
+                    "model_quality_score": _safe_float(meta.get("model_quality_score", np.nan), float("nan")),
+                }
+            )
+            if theoretical:
+                status = "theoretical_accept"
+            elif strict:
+                status = "robust_watchlist"
+            else:
+                status = grade
+        elif _as_bool(base.get("promoted", False)):
+            status = "promoted_without_meta"
+        elif base.get("rejection_reason"):
+            status = "rejected_" + str(base["rejection_reason"])
+        else:
+            status = "not_evaluated"
+        if cid in final_by.index:
+            final = final_by.loc[cid]
+            base.update(
+                {
+                    "final_holdout_opened": True,
+                    "final_pass_basic": _as_bool(final.get("final_pass_basic", False)),
+                    "final_trades": _safe_int(final.get("final_trades", 0)),
+                    "final_cost10_avg_r": _safe_float(final.get("final_cost10_avg_r", np.nan), float("nan")),
+                    "final_median_r": _safe_float(final.get("final_median_r", np.nan), float("nan")),
+                    "final_calendar_positive_day_rate": _safe_float(final.get("final_calendar_positive_day_rate", np.nan), float("nan")),
+                }
+            )
+        else:
+            base.update({"final_pass_basic": False})
+        base.update(cluster_membership.get(cid, {}))
+        base["ledger_status"] = status
+        rows.append(base)
+    ledger = pd.DataFrame(rows)
+    return ledger.sort_values(["theoretical_accept_pass", "strict_model_pass", "promoted", "candidate_score"], ascending=[False, False, False, False]) if not ledger.empty else ledger
+
+
+def _ledger_key_set(df: pd.DataFrame) -> set[str]:
+    if df.empty or "event_id" not in df.columns:
+        return set()
+    source = df["source"].astype(str) if "source" in df.columns else pd.Series("", index=df.index)
+    return set((df["event_id"].astype(str) + "|" + source).tolist())
+
+
+def _overlap_pct(left: set[str], right: set[str]) -> float:
+    if not left:
+        return 0.0
+    return float(len(left & right) / len(left))
+
+
+def _build_diversity_scores(
+    meta_validation: pd.DataFrame,
+    ledgers: dict[str, pd.DataFrame],
+    portfolio: pd.DataFrame,
+    portfolio_trades: pd.DataFrame,
+) -> pd.DataFrame:
+    if meta_validation.empty:
+        return pd.DataFrame()
+    work = meta_validation.copy()
+    if not portfolio.empty and "candidate_id" in portfolio.columns and "accepted" in portfolio.columns:
+        accepted_ids = set(portfolio.loc[portfolio["accepted"].astype(bool), "candidate_id"].astype(str))
+    else:
+        accepted_ids = set()
+    candidate_keys = {cid: _ledger_key_set(ledger) for cid, ledger in ledgers.items()}
+    candidate_symbols = {
+        cid: set(ledger["symbol"].astype(str)) if not ledger.empty and "symbol" in ledger.columns else set()
+        for cid, ledger in ledgers.items()
+    }
+    candidate_days = {
+        cid: set(ledger["date"].astype(str)) if not ledger.empty and "date" in ledger.columns else set()
+        for cid, ledger in ledgers.items()
+    }
+    total = max(1, len(work))
+    axis_freq: dict[str, dict[str, float]] = {}
+    for axis in HYPOTHESIS_AXES:
+        if axis in work.columns:
+            counts = work[axis].astype(str).value_counts(normalize=True)
+            axis_freq[axis] = counts.to_dict()
+
+    ranked = work.sort_values(["model_quality_score", "oos_cost10_sum_r"], ascending=[False, False]) if "model_quality_score" in work.columns else work
+    peer_ids = ranked["candidate_id"].astype(str).head(80).tolist()
+    rows: list[dict[str, object]] = []
+    for _, row in work.iterrows():
+        cid = str(row["candidate_id"])
+        keys = candidate_keys.get(cid, set())
+        symbols = candidate_symbols.get(cid, set())
+        days = candidate_days.get(cid, set())
+        other_portfolio = portfolio_trades
+        if not portfolio_trades.empty and "portfolio_candidate_id" in portfolio_trades.columns:
+            other_portfolio = portfolio_trades[~portfolio_trades["portfolio_candidate_id"].astype(str).eq(cid)]
+        portfolio_keys = _ledger_key_set(other_portfolio)
+        portfolio_symbols = set(other_portfolio["symbol"].astype(str)) if not other_portfolio.empty and "symbol" in other_portfolio.columns else set()
+        portfolio_days = set(other_portfolio["date"].astype(str)) if not other_portfolio.empty and "date" in other_portfolio.columns else set()
+        max_peer_overlap = 0.0
+        for other_id in peer_ids:
+            if other_id == cid:
+                continue
+            max_peer_overlap = max(max_peer_overlap, _overlap_pct(keys, candidate_keys.get(other_id, set())))
+        axis_uniqueness = 0.0
+        axis_count = 0
+        for axis, freqs in axis_freq.items():
+            axis_uniqueness += 1.0 - float(freqs.get(str(row.get(axis, "")), 1.0))
+            axis_count += 1
+        axis_uniqueness = axis_uniqueness / axis_count if axis_count else 0.0
+        portfolio_event_overlap = _overlap_pct(keys, portfolio_keys)
+        portfolio_symbol_overlap = _overlap_pct(symbols, portfolio_symbols)
+        portfolio_day_overlap = _overlap_pct(days, portfolio_days)
+        robustness_score = (
+            0.25 * float(_as_bool(row.get("top_removal_pass", row.get("top_removed_pass", False))))
+            + 0.25 * float(_as_bool(row.get("mc_pass", False)))
+            + 0.20 * float(_as_bool(row.get("plateau_pass", False)))
+            + 0.15 * min(max(_safe_float(row.get("calendar_positive_day_rate", 0.0)), 0.0), 1.0)
+            + 0.15 * min(max(_safe_float(row.get("oos_top_symbol_independence_pct", 0.0)) / 0.50, 0.0), 1.0)
+        )
+        novelty_score = (
+            0.35 * (1.0 - portfolio_event_overlap)
+            + 0.20 * (1.0 - max_peer_overlap)
+            + 0.20 * (1.0 - portfolio_symbol_overlap)
+            + 0.15 * (1.0 - portfolio_day_overlap)
+            + 0.10 * axis_uniqueness
+        )
+        selection_utility = 0.45 * _safe_float(row.get("model_quality_score", 0.0)) + 0.35 * novelty_score + 0.20 * robustness_score
+        if portfolio_event_overlap >= 0.70 or max_peer_overlap >= 0.70:
+            grade = "redundant"
+        elif novelty_score >= 0.70 and robustness_score >= 0.45:
+            grade = "independent_watchlist"
+        elif cid in accepted_ids:
+            grade = "portfolio_selected"
+        else:
+            grade = "complementary_research"
+        rows.append(
+            {
+                "candidate_id": cid,
+                "diversity_grade": grade,
+                "novelty_score": float(novelty_score),
+                "robustness_score": float(robustness_score),
+                "selection_utility_score": float(selection_utility),
+                "portfolio_event_overlap_pct": float(portfolio_event_overlap),
+                "portfolio_symbol_overlap_pct": float(portfolio_symbol_overlap),
+                "portfolio_day_overlap_pct": float(portfolio_day_overlap),
+                "max_peer_event_overlap_pct": float(max_peer_overlap),
+                "axis_uniqueness_score": float(axis_uniqueness),
+                "candidate_trades": int(len(keys)),
+                "portfolio_selected": cid in accepted_ids,
+            }
+        )
+    out = pd.DataFrame(rows)
+    return out.sort_values(["selection_utility_score", "novelty_score"], ascending=[False, False]) if not out.empty else out
+
+
+def _candidate_failure_driver(row: pd.Series, *, min_calendar_positive_day_rate: float) -> str:
+    drivers: list[str] = []
+    if _safe_float(row.get("calendar_positive_day_rate", 0.0)) <= min_calendar_positive_day_rate:
+        drivers.append("calendar_sparse")
+    if _safe_float(row.get("calendar_median_trades_per_day", 0.0)) < 3.0:
+        drivers.append("frequency_low")
+    if not _as_bool(row.get("top_removal_pass", row.get("top_removed_pass", False))):
+        drivers.append("tail_dependent")
+    if not _as_bool(row.get("mc_pass", False)):
+        drivers.append("mc_fragile")
+    if not _as_bool(row.get("plateau_pass", False)):
+        drivers.append("plateau_fragile")
+    return "+".join(drivers) if drivers else "exploit_neighborhood"
+
+
+def _queue_status_hint(candidate_id: str, *, universe_ids: set[str], analyzed_ids: set[str], rejected_ids: set[str]) -> str:
+    if candidate_id in analyzed_ids:
+        return "already_analyzed"
+    if candidate_id in rejected_ids:
+        return "already_rejected"
+    if candidate_id in universe_ids:
+        return "in_current_universe_unanalyzed"
+    return "new_guided_candidate"
+
+
+def _build_self_improvement_queue(
+    dev_df: pd.DataFrame,
+    trigger_masks: dict[str, pd.Series],
+    specs: list[CandidateSpec],
+    candidates: pd.DataFrame,
+    rejected: pd.DataFrame,
+    meta_validation: pd.DataFrame,
+    diversity_scores: pd.DataFrame,
+    *,
+    min_is_trades: int,
+    min_calendar_positive_day_rate: float,
+    max_rows: int = DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS,
+) -> pd.DataFrame:
+    if meta_validation.empty:
+        return pd.DataFrame()
+    universe_ids = {spec.candidate_id for spec in specs}
+    analyzed_ids = set(candidates["candidate_id"].astype(str)) if not candidates.empty and "candidate_id" in candidates.columns else set()
+    rejected_ids = set(rejected["candidate_id"].astype(str)) if not rejected.empty and "candidate_id" in rejected.columns else set()
+    div = diversity_scores.set_index("candidate_id") if not diversity_scores.empty and "candidate_id" in diversity_scores.columns else pd.DataFrame()
+    seeds = meta_validation.copy()
+    if not div.empty:
+        seeds = seeds.merge(div[["novelty_score", "selection_utility_score", "diversity_grade"]], left_on="candidate_id", right_index=True, how="left")
+    else:
+        seeds["novelty_score"] = 0.0
+        seeds["selection_utility_score"] = seeds.get("model_quality_score", 0.0)
+        seeds["diversity_grade"] = "unknown"
+    seeds["seed_failure_driver"] = seeds.apply(lambda row: _candidate_failure_driver(row, min_calendar_positive_day_rate=min_calendar_positive_day_rate), axis=1)
+    seeds["seed_priority"] = (
+        pd.to_numeric(seeds.get("selection_utility_score", 0.0), errors="coerce").fillna(0.0)
+        + 0.15 * seeds["seed_failure_driver"].str.contains("calendar_sparse").astype(float)
+        + 0.10 * seeds["seed_failure_driver"].str.contains("tail_dependent").astype(float)
+        + 0.05 * seeds["seed_failure_driver"].str.contains("plateau_fragile").astype(float)
+    )
+    seeds = seeds.sort_values(["seed_priority", "model_quality_score", "oos_cost10_sum_r"], ascending=[False, False, False]).head(120)
+
+    options_by_source: dict[str, dict[str, list[str]]] = {}
+    for source, source_df in dev_df.groupby("source", dropna=False):
+        natures, sessions, stops, managements, risks, triggers = _axis_values_for_source(
+            str(source),
+            source_df,
+            trigger_masks,
+            max_natures_per_source=12,
+            candidate_profile="exhaustive",
+        )
+        options_by_source[str(source)] = {
+            "nature_id": natures,
+            "session_rule": sessions,
+            "stop_model": stops,
+            "management_id": managements,
+            "risk_bucket": risks,
+            "trigger_rule": triggers,
+        }
+
+    rows: list[dict[str, object]] = []
+    emitted: set[str] = set()
+
+    def add_proposal(seed: pd.Series, spec: CandidateSpec, *, mutation_axis: str, mutation_value: str, rationale: str, generation_reason: str) -> None:
+        if spec.candidate_id == str(seed["candidate_id"]):
+            return
+        key = f"{seed['candidate_id']}->{spec.candidate_id}|{mutation_axis}"
+        if key in emitted:
+            return
+        emitted.add(key)
+        try:
+            est_rows = int(_candidate_mask(dev_df, spec, trigger_masks).sum())
+        except KeyError:
+            est_rows = 0
+        status_hint = _queue_status_hint(spec.candidate_id, universe_ids=universe_ids, analyzed_ids=analyzed_ids, rejected_ids=rejected_ids)
+        seed_score = _safe_float(seed.get("seed_priority", 0.0))
+        novelty = _safe_float(seed.get("novelty_score", 0.0))
+        status_bonus = 0.30 if status_hint == "new_guided_candidate" else -0.30 if status_hint == "already_analyzed" else -0.15
+        row_penalty = -0.40 if est_rows < min_is_trades else 0.05 * min(est_rows / 250.0, 1.0)
+        priority_score = seed_score + 0.25 * novelty + status_bonus + row_penalty
+        rows.append(
+            {
+                "priority_score": float(priority_score),
+                "seed_candidate_id": str(seed["candidate_id"]),
+                "proposed_candidate_id": spec.candidate_id,
+                "mutation_axis": mutation_axis,
+                "mutation_value": mutation_value,
+                "generation_reason": generation_reason,
+                "failure_driver": str(seed.get("seed_failure_driver", "")),
+                "rationale": rationale,
+                "status_hint": status_hint,
+                "estimated_development_rows": est_rows,
+                "source": spec.source,
+                "nature_id": spec.nature_id,
+                "session_rule": spec.session_rule,
+                "stop_model": spec.stop_model,
+                "management_id": spec.management_id,
+                "risk_bucket": spec.risk_bucket,
+                "trigger_rule": spec.trigger_rule,
+                "seed_model_quality_score": _safe_float(seed.get("model_quality_score", np.nan), float("nan")),
+                "seed_novelty_score": novelty,
+                "seed_diversity_grade": str(seed.get("diversity_grade", "")),
+            }
+        )
+
+    for _, seed in seeds.iterrows():
+        source = str(seed["source"])
+        opts = options_by_source.get(source)
+        if not opts:
+            continue
+        seed_spec = _spec_from_series(seed)
+        failure = str(seed.get("seed_failure_driver", ""))
+        session_values = SESSION_NEIGHBORS.get(seed_spec.session_rule, ["all", "non_us", "not_asia_overlap"])
+        if "calendar_sparse" in failure or "frequency_low" in failure or "tail_dependent" in failure:
+            for session in session_values[:4]:
+                add_proposal(
+                    seed,
+                    _mutate_spec(seed_spec, session_rule=session),
+                    mutation_axis="session_rule",
+                    mutation_value=session,
+                    generation_reason="calendar_or_tail_diversification",
+                    rationale="Search a different session partition to improve calendar density and reduce same-regime tails.",
+                )
+        if "tail_dependent" in failure or "mc_fragile" in failure or "plateau_fragile" in failure:
+            for risk in _adjacent_values([r for r in RISK_ORDER if r in opts["risk_bucket"]], seed_spec.risk_bucket, radius=1):
+                add_proposal(
+                    seed,
+                    _mutate_spec(seed_spec, risk_bucket=risk),
+                    mutation_axis="risk_bucket",
+                    mutation_value=risk,
+                    generation_reason="risk_plateau_neighbor",
+                    rationale="Check whether the edge survives adjacent risk buckets instead of a single sharp point.",
+                )
+        for trigger in _adjacent_values(opts["trigger_rule"], seed_spec.trigger_rule, radius=2)[:4]:
+            add_proposal(
+                seed,
+                _mutate_spec(seed_spec, trigger_rule=trigger),
+                mutation_axis="trigger_rule",
+                mutation_value=trigger,
+                generation_reason="trigger_family_neighbor",
+                rationale="Explore nearby entry-known trigger definitions around the current fader nature.",
+            )
+        if "tail_dependent" in failure or "mc_fragile" in failure:
+            for stop in _adjacent_values(opts["stop_model"], seed_spec.stop_model, radius=1)[:3]:
+                add_proposal(
+                    seed,
+                    _mutate_spec(seed_spec, stop_model=stop),
+                    mutation_axis="stop_model",
+                    mutation_value=stop,
+                    generation_reason="execution_model_neighbor",
+                    rationale="Stress whether a nearby local-structure stop makes the distribution less tail-dependent.",
+                )
+            for management in _adjacent_values(opts["management_id"], seed_spec.management_id, radius=1)[:3]:
+                add_proposal(
+                    seed,
+                    _mutate_spec(seed_spec, management_id=management),
+                    mutation_axis="management_id",
+                    mutation_value=management,
+                    generation_reason="management_neighbor",
+                    rationale="Test adjacent partial/exit management families without changing event source.",
+                )
+        nature_options = opts["nature_id"]
+        nature_neighbors = [n for n in nature_options if n != seed_spec.nature_id][:4] if seed_spec.nature_id == "ALL" else ["ALL"] + _adjacent_values(nature_options, seed_spec.nature_id, radius=1)
+        for nature in nature_neighbors[:4]:
+            add_proposal(
+                seed,
+                _mutate_spec(seed_spec, nature_id=nature),
+                mutation_axis="nature_id",
+                mutation_value=nature,
+                generation_reason="nature_diversification",
+                rationale="Search a different fader nature to reduce dependence on one event family.",
+            )
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out = out.sort_values(["priority_score", "estimated_development_rows"], ascending=[False, False])
+    out = out.drop_duplicates("proposed_candidate_id", keep="first")
+    return out.head(max_rows).reset_index(drop=True)
+
+
 def _build_improvement_plan(
     candidates: pd.DataFrame,
     rejected: pd.DataFrame,
     axis_summary: pd.DataFrame,
     meta_validation: pd.DataFrame,
     portfolio_meta: pd.DataFrame,
+    diversity_scores: pd.DataFrame | None = None,
+    self_improvement_queue: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     if not rejected.empty and "reason" in rejected.columns:
@@ -1818,6 +2565,28 @@ def _build_improvement_plan(
                     "recommended_action": "Prioritize session-specific sleeve portfolios: " + ", ".join(top_sessions["value"].astype(str).tolist()),
                 }
             )
+    if diversity_scores is not None and not diversity_scores.empty:
+        independent = int(diversity_scores["diversity_grade"].astype(str).eq("independent_watchlist").sum()) if "diversity_grade" in diversity_scores.columns else 0
+        rows.append(
+            {
+                "priority": len(rows) + 1,
+                "source": "diversity",
+                "signal": "independent_watchlist_candidates",
+                "count": independent,
+                "recommended_action": "Use diversity_scores.csv to prefer sleeves with low event/symbol/day overlap before adding more variants of the same pattern.",
+            }
+        )
+    if self_improvement_queue is not None and not self_improvement_queue.empty:
+        new_guided = int(self_improvement_queue["status_hint"].astype(str).eq("new_guided_candidate").sum()) if "status_hint" in self_improvement_queue.columns else 0
+        rows.append(
+            {
+                "priority": len(rows) + 1,
+                "source": "self_improvement_queue",
+                "signal": "next_guided_candidates",
+                "count": new_guided,
+                "recommended_action": "Run the next scan with this queue as guided candidates; keep final holdout as diagnostic only, not as a generator target.",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -1929,6 +2698,10 @@ def _write_final_report(
     final_holdout: pd.DataFrame,
     portfolio_meta: pd.DataFrame,
     gate_diagnostics: pd.DataFrame,
+    hypothesis_grammar: pd.DataFrame,
+    hypothesis_ledger: pd.DataFrame,
+    diversity_scores: pd.DataFrame,
+    self_improvement_queue: pd.DataFrame,
     improvement_plan: pd.DataFrame,
     lookahead: pd.DataFrame,
     windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
@@ -2026,6 +2799,53 @@ def _write_final_report(
         "total",
         "pass_rate",
         "note",
+    ]
+    ledger_cols = [
+        "hypothesis_id",
+        "family_id",
+        "candidate_id",
+        "ledger_status",
+        "model_grade",
+        "promoted",
+        "strict_model_pass",
+        "theoretical_accept_pass",
+        "top_removal_pass",
+        "mc_pass",
+        "calendar_positive_day_rate",
+        "final_pass_basic",
+        "rejection_reason",
+    ]
+    diversity_cols = [
+        "candidate_id",
+        "diversity_grade",
+        "novelty_score",
+        "robustness_score",
+        "selection_utility_score",
+        "portfolio_event_overlap_pct",
+        "portfolio_symbol_overlap_pct",
+        "max_peer_event_overlap_pct",
+        "axis_uniqueness_score",
+    ]
+    queue_cols = [
+        "priority_score",
+        "status_hint",
+        "seed_candidate_id",
+        "proposed_candidate_id",
+        "mutation_axis",
+        "mutation_value",
+        "generation_reason",
+        "failure_driver",
+        "estimated_development_rows",
+    ]
+    grammar_cols = [
+        "axis",
+        "value",
+        "source",
+        "primitive_kind",
+        "entry_known",
+        "event_rows",
+        "unique_events",
+        "candidate_universe_uses",
     ]
     axis_cols = [
         "axis",
@@ -2155,6 +2975,30 @@ Model gate diagnostics:
 {gate_diagnostics[[c for c in gate_cols if c in gate_diagnostics.columns]].to_string(index=False) if not gate_diagnostics.empty else 'none'}
 ```
 
+Hypothesis grammar:
+
+```text
+{hypothesis_grammar.head(40)[[c for c in grammar_cols if c in hypothesis_grammar.columns]].to_string(index=False) if not hypothesis_grammar.empty else 'none'}
+```
+
+Hypothesis ledger:
+
+```text
+{hypothesis_ledger.head(30)[[c for c in ledger_cols if c in hypothesis_ledger.columns]].to_string(index=False) if not hypothesis_ledger.empty else 'none'}
+```
+
+Diversity scores:
+
+```text
+{diversity_scores.head(25)[[c for c in diversity_cols if c in diversity_scores.columns]].to_string(index=False) if not diversity_scores.empty else 'none'}
+```
+
+Self-improvement queue:
+
+```text
+{self_improvement_queue.head(30)[[c for c in queue_cols if c in self_improvement_queue.columns]].to_string(index=False) if not self_improvement_queue.empty else 'none'}
+```
+
 Improvement plan:
 
 ```text
@@ -2175,6 +3019,120 @@ candidate generation, rejection reasons, plateau clustering, WFA accounting,
 and portfolio marginal checks.
 """
     (output_dir / "final_report.md").write_text(text, encoding="utf-8")
+
+
+def _write_self_improvement_report(
+    output_dir: Path,
+    hypothesis_grammar: pd.DataFrame,
+    hypothesis_ledger: pd.DataFrame,
+    diversity_scores: pd.DataFrame,
+    self_improvement_queue: pd.DataFrame,
+    gate_diagnostics: pd.DataFrame,
+    portfolio_meta: pd.DataFrame,
+) -> None:
+    status_counts = hypothesis_ledger["ledger_status"].value_counts().head(12).to_string() if not hypothesis_ledger.empty and "ledger_status" in hypothesis_ledger.columns else "none"
+    diversity_counts = diversity_scores["diversity_grade"].value_counts().to_string() if not diversity_scores.empty and "diversity_grade" in diversity_scores.columns else "none"
+    queue_counts = self_improvement_queue["status_hint"].value_counts().to_string() if not self_improvement_queue.empty and "status_hint" in self_improvement_queue.columns else "none"
+    gate_view = gate_diagnostics[["scope", "check", "passed", "total", "pass_rate"]] if not gate_diagnostics.empty else pd.DataFrame()
+    portfolio_view = portfolio_meta.head(5).to_string(index=False) if not portfolio_meta.empty else "none"
+    queue_cols = [
+        "priority_score",
+        "status_hint",
+        "seed_candidate_id",
+        "proposed_candidate_id",
+        "mutation_axis",
+        "mutation_value",
+        "failure_driver",
+        "estimated_development_rows",
+    ]
+    diversity_cols = [
+        "candidate_id",
+        "diversity_grade",
+        "novelty_score",
+        "robustness_score",
+        "selection_utility_score",
+        "portfolio_event_overlap_pct",
+        "max_peer_event_overlap_pct",
+    ]
+    grammar_summary = (
+        hypothesis_grammar.groupby("axis", dropna=False)
+        .agg(values=("value", "nunique"), event_rows=("event_rows", "sum"), candidate_uses=("candidate_universe_uses", "sum"))
+        .reset_index()
+        .to_string(index=False)
+        if not hypothesis_grammar.empty
+        else "none"
+    )
+    text = f"""# Self-Improving Plateau Research Report
+
+Status: controlled hypothesis generator over cached entry-known event outcomes.
+
+This is not an unconstrained optimizer. The queue is generated from development
+WFA/meta failures and diversity scores. Final holdout fields are ledgered for
+audit, but they are not used as a generation target.
+
+Grammar summary:
+
+```text
+{grammar_summary}
+```
+
+Ledger status counts:
+
+```text
+{status_counts}
+```
+
+Diversity grade counts:
+
+```text
+{diversity_counts}
+```
+
+Queue status counts:
+
+```text
+{queue_counts}
+```
+
+Model gate bottlenecks:
+
+```text
+{gate_view.to_string(index=False) if not gate_view.empty else 'none'}
+```
+
+Portfolio meta:
+
+```text
+{portfolio_view}
+```
+
+Top independent / complementary sleeves:
+
+```text
+{diversity_scores.head(30)[[c for c in diversity_cols if c in diversity_scores.columns]].to_string(index=False) if not diversity_scores.empty else 'none'}
+```
+
+Next guided candidate queue:
+
+```text
+{self_improvement_queue.head(40)[[c for c in queue_cols if c in self_improvement_queue.columns]].to_string(index=False) if not self_improvement_queue.empty else 'none'}
+```
+
+How to iterate:
+
+```text
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir {output_dir} --candidate-queue-file {output_dir / 'self_improvement_queue.csv'} --guided-candidates-limit {DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS}
+```
+
+Research control:
+
+```text
+Do not accept a candidate because it appears in this queue.
+Accept only after it survives WFA, top-removal, Monte Carlo, plateau,
+calendar and final-holdout diagnostics under the normal model gates.
+```
+"""
+    (output_dir / "self_improvement_report.md").write_text(text, encoding="utf-8")
 
 
 def update_registry(path: Path = Path("research/HYPOTHESIS_REGISTRY.md")) -> None:
@@ -2243,6 +3201,8 @@ def run_all(args: argparse.Namespace) -> None:
         risk_per_trade_pct=args.risk_per_trade_pct,
         top_removal_pct=args.top_removal_pct,
         min_calendar_positive_day_rate=args.min_calendar_positive_day_rate,
+        candidate_queue_file=Path(args.candidate_queue_file) if args.candidate_queue_file else None,
+        guided_candidates_limit=args.guided_candidates_limit,
     )
 
 
@@ -2282,6 +3242,8 @@ def _add_scan_args(
     parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
     parser.add_argument("--top-removal-pct", type=float, default=DEFAULT_TOP_REMOVAL_PCT)
     parser.add_argument("--min-calendar-positive-day-rate", type=float, default=DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE)
+    parser.add_argument("--candidate-queue-file", default="")
+    parser.add_argument("--guided-candidates-limit", type=int, default=0)
 
 
 def main() -> None:
@@ -2321,6 +3283,7 @@ def main() -> None:
         candidate_profile="balanced_365d",
         progress_every=250,
     )
+    run365.set_defaults(guided_candidates_limit=DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS)
 
     smoke = sub.add_parser("smoke")
     _add_common_args(smoke)
@@ -2340,6 +3303,8 @@ def main() -> None:
         risk_per_trade_pct=DEFAULT_RISK_PER_TRADE_PCT,
         top_removal_pct=DEFAULT_TOP_REMOVAL_PCT,
         min_calendar_positive_day_rate=DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE,
+        candidate_queue_file="",
+        guided_candidates_limit=0,
     )
 
     args = parser.parse_args()
@@ -2373,6 +3338,8 @@ def main() -> None:
             risk_per_trade_pct=args.risk_per_trade_pct,
             top_removal_pct=args.top_removal_pct,
             min_calendar_positive_day_rate=args.min_calendar_positive_day_rate,
+            candidate_queue_file=Path(args.candidate_queue_file) if args.candidate_queue_file else None,
+            guided_candidates_limit=args.guided_candidates_limit,
         )
         print(f"report={Path(args.output_dir) / 'final_report.md'}")
     elif args.command in {"all", "smoke", "run-365d"}:

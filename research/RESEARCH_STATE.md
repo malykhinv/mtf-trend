@@ -6601,3 +6601,57 @@ set still fails because it is not calendar-dense/diversified enough. The next
 mechanism should search new independent fader natures and portfolio-level
 diversification, not loosen acceptance gates further.
 ```
+
+## 2026-06-12 - P562 controlled self-improving plateau generator
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Implemented a constrained research loop on top of the cached event store:
+
+```text
+hypothesis_grammar.csv
+hypothesis_ledger.csv
+diversity_scores.csv
+self_improvement_queue.csv
+self_improvement_report.md
+```
+
+Mechanism:
+
+```text
+1. Grammar inventories entry-known axes and primitive availability.
+2. Ledger assigns stable hypothesis/family ids and source-data fingerprint.
+3. Diversity scores penalize event/symbol/day/peer overlap.
+4. Queue mutates candidate axes by development/WFA failure driver.
+5. Existing queue can be consumed by a later guided scan.
+```
+
+Full cached 365d self-improvement iteration:
+
+```text
+base_candidate_universe_rows: 5000
+guided_candidate_rows: 399
+candidate_universe_rows: 5399
+candidate_rows: 2854
+promoted: 210
+strict_model_pass: 0
+theoretical_accept_pass: 0
+final_holdout_basic_pass: 0
+hypothesis_grammar_rows: 67
+hypothesis_ledger_rows: 5399
+diversity_scores_rows: 210
+self_improvement_queue_rows: 400
+self_improvement_queue new_guided_candidate: 400
+guided_analyzed: 265
+guided_promoted: 132
+```
+
+Read:
+
+```text
+The mechanism is now more than a verifier: it generated a controlled next
+candidate queue and consumed it in a guided 365d scan. Promoted rows increased
+from 78 to 210, but strict/final gates still remain zero because calendar
+stability and top-removal robustness are still weak. The queue is useful for
+search, not proof of edge.
+```
