@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_plateau_basin_scoring"
+IMPLEMENTATION_STAGE = "mechanism_daily_prequential_oos"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -133,6 +133,13 @@ PLATEAU_STRONG_NEIGHBOR_SURVIVAL_RATE = 0.70
 PLATEAU_SIGN_CONSISTENCY_MIN = 0.60
 PLATEAU_STRONG_SIGN_CONSISTENCY_MIN = 0.70
 PLATEAU_P25_SCORE_MIN = 0.0
+
+DAILY_PREQUENTIAL_OOS_MODEL = "daily_prequential_oos_selected_basins_v1"
+DAILY_SELECTION_MODEL = "select_train_only_plateau_basins_for_test_day_v1"
+WINDOW_HEALTH_MODEL = "daily_window_health_from_train_only_basins_and_oos_v1"
+SELECTION_DRIFT_MODEL = "selected_basin_key_drift_over_prequential_days_v1"
+MAX_SELECTED_BASINS_PER_DAY_WINDOW = 20
+DAILY_ALLOWED_BASIN_STATUSES = ("strong_candidate", "tactical", "challenger")
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +286,10 @@ def run_pump_mechanism_stability_research(
             rule_universe=pd.DataFrame(),
             negative_space=pd.DataFrame(),
             plateau_basins=pd.DataFrame(),
+            daily_selection=pd.DataFrame(),
+            daily_oos=pd.DataFrame(),
+            window_health=pd.DataFrame(),
+            selection_drift=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -377,7 +388,16 @@ def run_pump_mechanism_stability_research(
         outcomes=outcomes,
     )
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin artifacts", started_at)
+    _print_stage(progress_label, "evaluating daily prequential OOS selected basins", started_at)
+    daily_selection, daily_oos, window_health, selection_drift = _build_daily_prequential_oos(
+        plateau_basins=plateau_basins,
+        rule_universe=rule_universe,
+        taxonomy=taxonomy,
+        events=events,
+        outcomes=outcomes,
+    )
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -387,6 +407,10 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_rule_universe.csv", rule_universe)
     _write_csv(config.output_dir / "pump_mechanism_negative_space.csv", negative_space)
     _write_csv(config.output_dir / "pump_mechanism_plateau_basins.csv", plateau_basins)
+    _write_csv(config.output_dir / "pump_mechanism_daily_selection.csv", daily_selection)
+    _write_csv(config.output_dir / "pump_mechanism_daily_oos.csv", daily_oos)
+    _write_csv(config.output_dir / "pump_mechanism_window_health.csv", window_health)
+    _write_csv(config.output_dir / "pump_mechanism_selection_drift.csv", selection_drift)
 
     run_config = _run_config_frame(
         config=config,
@@ -403,6 +427,10 @@ def run_pump_mechanism_stability_research(
         rule_universe=rule_universe,
         negative_space=negative_space,
         plateau_basins=plateau_basins,
+        daily_selection=daily_selection,
+        daily_oos=daily_oos,
+        window_health=window_health,
+        selection_drift=selection_drift,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -411,7 +439,8 @@ def run_pump_mechanism_stability_research(
         f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} "
         f"taxonomy={len(taxonomy):,} response_surfaces={len(response_surfaces):,} "
         f"rule_universe={len(rule_universe):,} negative_space={len(negative_space):,} "
-        f"plateau_basins={len(plateau_basins):,} "
+        f"plateau_basins={len(plateau_basins):,} daily_selection={len(daily_selection):,} "
+        f"daily_oos={len(daily_oos):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -2348,11 +2377,402 @@ def _plateau_basin_columns() -> list[str]:
         "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
     ]
 
+def _build_daily_prequential_oos(
+    *,
+    plateau_basins: pd.DataFrame,
+    rule_universe: pd.DataFrame,
+    taxonomy: pd.DataFrame,
+    events: pd.DataFrame,
+    outcomes: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Evaluate selected train-only basins on their held-out test day.
+
+    The selection side reads only plateau basin rows that were already scored on
+    days < D.  The evaluation side then applies the selected center rule to
+    events whose feature snapshot day is exactly D and joins outcomes only for
+    measuring the held-out response.  This is the first artifact that answers
+    the professional question: would a basin selected from the past have kept
+    its response sign on the next day?
+    """
+
+    selection_columns = _daily_selection_columns()
+    oos_columns = _daily_oos_columns()
+    window_columns = _window_health_columns()
+    drift_columns = _selection_drift_columns()
+    if plateau_basins.empty or rule_universe.empty:
+        empty_selection = pd.DataFrame(columns=selection_columns)
+        empty_oos = pd.DataFrame(columns=oos_columns)
+        return empty_selection, empty_oos, pd.DataFrame(columns=window_columns), pd.DataFrame(columns=drift_columns)
+
+    selected = _select_daily_basins(plateau_basins=plateau_basins)
+    daily_selection = _ensure_columns(selected, selection_columns)
+    if daily_selection.empty:
+        empty_oos = pd.DataFrame(columns=oos_columns)
+        return (
+            daily_selection,
+            pd.DataFrame(columns=oos_columns),
+            _build_window_health(plateau_basins=plateau_basins, daily_selection=daily_selection, daily_oos=empty_oos),
+            pd.DataFrame(columns=drift_columns),
+        )
+
+    rule_lookup = rule_universe.drop_duplicates("rule_id", keep="last").set_index("rule_id", drop=False) if "rule_id" in rule_universe.columns else pd.DataFrame()
+    oos_input = _joined_rule_outcome_input(taxonomy=taxonomy, events=events, outcomes=outcomes)
+    rows: list[dict[str, object]] = []
+    for selection_row in daily_selection.to_dict("records"):
+        center_rule_id = str(selection_row.get("center_rule_id", ""))
+        if rule_lookup.empty or center_rule_id not in rule_lookup.index:
+            rows.append(_daily_oos_missing_rule_row(selection_row, reason="center_rule_missing_from_rule_universe"))
+            continue
+        rule = rule_lookup.loc[center_rule_id]
+        if isinstance(rule, pd.DataFrame):
+            rule = rule.iloc[-1]
+        rows.append(_evaluate_selected_basin_on_test_day(selection=selection_row, rule=rule.to_dict(), oos_input=oos_input))
+
+    daily_oos = _ensure_columns(pd.DataFrame(rows), oos_columns)
+    daily_oos = _sort_frame(daily_oos, ["test_day_ord", "train_window_days", "oos_response_score", "selected_rank", "basin_id"])
+    window_health = _build_window_health(plateau_basins=plateau_basins, daily_selection=daily_selection, daily_oos=daily_oos)
+    selection_drift = _build_selection_drift(daily_selection=daily_selection)
+    return (
+        _sort_frame(daily_selection, ["test_day_ord", "train_window_days", "selected_rank", "basin_id"]),
+        daily_oos,
+        window_health,
+        selection_drift,
+    )
+
+
+def _select_daily_basins(*, plateau_basins: pd.DataFrame) -> pd.DataFrame:
+    if plateau_basins.empty:
+        return pd.DataFrame(columns=_daily_selection_columns())
+    work = plateau_basins.copy()
+    if "basin_passes_plateau_gate" in work.columns:
+        pass_mask = work["basin_passes_plateau_gate"].map(_to_bool)
+    else:
+        pass_mask = work.get("basin_status", pd.Series(dtype=str)).astype(str).isin(DAILY_ALLOWED_BASIN_STATUSES)
+    status_mask = work.get("basin_status", pd.Series(dtype=str)).astype(str).isin(DAILY_ALLOWED_BASIN_STATUSES)
+    work = work.loc[pass_mask & status_mask].copy()
+    if work.empty:
+        return pd.DataFrame(columns=_daily_selection_columns())
+    work["_status_rank"] = work["basin_status"].astype(str).map({"strong_candidate": 0, "tactical": 1, "challenger": 2}).fillna(99).astype(int)
+    work["_basin_score_sort"] = pd.to_numeric(work.get("basin_score", pd.Series(np.nan, index=work.index)), errors="coerce").fillna(-np.inf)
+    work["_neighbor_survival_sort"] = pd.to_numeric(work.get("neighbor_survival_rate", pd.Series(np.nan, index=work.index)), errors="coerce").fillna(-np.inf)
+    rows: list[dict[str, object]] = []
+    grouped = work.groupby(["test_day_ord", "train_window_days"], dropna=False, sort=True)
+    for (_test_day_ord, _train_window_days), frame in grouped:
+        ordered = frame.sort_values(
+            ["_status_rank", "_basin_score_sort", "_neighbor_survival_sort", "basin_id"],
+            ascending=[True, False, False, True],
+        ).head(MAX_SELECTED_BASINS_PER_DAY_WINDOW)
+        for rank, row in enumerate(ordered.to_dict("records"), start=1):
+            rows.append(_daily_selection_row(row=row, selected_rank=rank))
+    return _ensure_columns(pd.DataFrame(rows), _daily_selection_columns())
+
+
+def _daily_selection_row(*, row: dict[str, object], selected_rank: int) -> dict[str, object]:
+    test_day_ord = int(row.get("test_day_ord", 0) or 0)
+    train_start_day_ord = int(row.get("train_start_day_ord", test_day_ord) or test_day_ord)
+    train_end_day_ord = int(row.get("train_end_day_ord", test_day_ord - 1) or (test_day_ord - 1))
+    selection_key = _selection_key(row)
+    return {
+        "research_id": RESEARCH_ID,
+        "test_day_ord": test_day_ord,
+        "test_date": _date_from_day_ord(test_day_ord),
+        "train_window_days": int(row.get("train_window_days", 0) or 0),
+        "train_start_day_ord": train_start_day_ord,
+        "train_end_day_ord": train_end_day_ord,
+        "train_start_date": _date_from_day_ord(train_start_day_ord),
+        "train_end_date": _date_from_day_ord(train_end_day_ord),
+        "selected_rank": int(selected_rank),
+        "basin_id": str(row.get("basin_id", "")),
+        "center_rule_id": str(row.get("center_rule_id", "")),
+        "center_rule_key": str(row.get("center_rule_key", "")),
+        "selection_key": selection_key,
+        "center_scope_name": str(row.get("center_scope_name", "")),
+        "center_scope_conditions": str(row.get("center_scope_conditions", "")),
+        "center_threshold_feature": str(row.get("center_threshold_feature", "")),
+        "center_threshold_side": str(row.get("center_threshold_side", "")),
+        "center_threshold_quantile": _float(row.get("center_threshold_quantile")),
+        "basin_status": str(row.get("basin_status", "")),
+        "basin_score": _float(row.get("basin_score")),
+        "center_response_score": _float(row.get("center_response_score")),
+        "median_neighbor_score": _float(row.get("median_neighbor_score")),
+        "p25_neighbor_score": _float(row.get("p25_neighbor_score")),
+        "neighbor_survival_rate": _float(row.get("neighbor_survival_rate")),
+        "min_sample_survival_rate": _float(row.get("min_sample_survival_rate")),
+        "sign_consistency": _float(row.get("sign_consistency")),
+        "cliff_penalty": _float(row.get("cliff_penalty")),
+        "dependency_penalty": _float(row.get("dependency_penalty")),
+        "daily_selection_model": DAILY_SELECTION_MODEL,
+        "train_uses_only_days_before_test": True,
+        "selection_uses_test_day_outcomes": False,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _joined_rule_outcome_input(*, taxonomy: pd.DataFrame, events: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
+    rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
+    if rule_input.empty or outcomes.empty or "event_id" not in rule_input.columns or "event_id" not in outcomes.columns:
+        return pd.DataFrame()
+    outcome_columns = [
+        "event_id", "outcome_status", "future_ret_30m", "future_ret_60m", "future_min_ret_30m",
+        "future_min_ret_60m", "future_max_ret_30m", "future_max_ret_60m", "down_mfe_30m", "down_mfe_60m",
+        "up_mae_30m", "up_mae_60m", "reclaimed_pump_high_60m", "broke_structural_low_60m",
+        "time_to_reclaim_pump_high_minutes", "time_to_structural_low_break_minutes",
+    ]
+    available = [column for column in outcome_columns if column in outcomes.columns]
+    if not available:
+        return pd.DataFrame()
+    joined = rule_input.merge(outcomes[available].drop_duplicates("event_id", keep="last"), on="event_id", how="left")
+    if "day_ord" in joined.columns:
+        joined = joined.loc[pd.to_numeric(joined["day_ord"], errors="coerce").notna()].copy()
+        joined["day_ord"] = pd.to_numeric(joined["day_ord"], errors="coerce").astype("int64")
+    return joined
+
+
+def _evaluate_selected_basin_on_test_day(*, selection: dict[str, object], rule: dict[str, object], oos_input: pd.DataFrame) -> dict[str, object]:
+    test_day_ord = _finite_int_or_none(selection.get("test_day_ord"))
+    if test_day_ord is None or oos_input.empty or "day_ord" not in oos_input.columns:
+        return _daily_oos_missing_rule_row(selection, reason="missing_test_day_or_oos_input")
+    test = oos_input.loc[oos_input["day_ord"] == int(test_day_ord)].copy()
+    if test.empty:
+        return _daily_oos_row(selection=selection, metrics=_plateau_response_metrics(test), reason="no_test_day_events")
+    conditions = _parse_scope_conditions(rule.get("scope_conditions"))
+    filtered = _apply_rule_scope(test, conditions)
+    threshold_feature = str(rule.get("threshold_feature") or "")
+    threshold_side = str(rule.get("threshold_side") or "none")
+    threshold_value = _float(rule.get("threshold_value"))
+    if threshold_feature and threshold_side != "none" and math.isfinite(threshold_value):
+        filtered = _apply_threshold(filtered, feature=threshold_feature, side=threshold_side, threshold_value=threshold_value)
+    elif threshold_feature and threshold_side != "none":
+        filtered = filtered.iloc[0:0].copy()
+    metrics = _plateau_response_metrics(filtered)
+    reason = "pass" if int(metrics.get("events", 0) or 0) > 0 else "selected_rule_no_test_events"
+    return _daily_oos_row(selection=selection, metrics=metrics, reason=reason)
+
+
+def _daily_oos_missing_rule_row(selection: dict[str, object], *, reason: str) -> dict[str, object]:
+    return _daily_oos_row(selection=selection, metrics=_plateau_response_metrics(pd.DataFrame()), reason=reason)
+
+
+def _daily_oos_row(*, selection: dict[str, object], metrics: dict[str, object], reason: str) -> dict[str, object]:
+    test_day_ord = int(selection.get("test_day_ord", 0) or 0)
+    score = _plateau_neighbor_score(metrics)
+    expected_downside = _plateau_expected_downside(metrics)
+    events = int(metrics.get("events", 0) or 0)
+    return {
+        "research_id": RESEARCH_ID,
+        "test_day_ord": test_day_ord,
+        "test_date": _date_from_day_ord(test_day_ord),
+        "train_window_days": int(selection.get("train_window_days", 0) or 0),
+        "train_start_day_ord": int(selection.get("train_start_day_ord", 0) or 0),
+        "train_end_day_ord": int(selection.get("train_end_day_ord", 0) or 0),
+        "selected_rank": int(selection.get("selected_rank", 0) or 0),
+        "basin_id": str(selection.get("basin_id", "")),
+        "center_rule_id": str(selection.get("center_rule_id", "")),
+        "selection_key": str(selection.get("selection_key", "")),
+        "basin_status_at_selection": str(selection.get("basin_status", "")),
+        "train_basin_score": _float(selection.get("basin_score")),
+        "train_neighbor_survival_rate": _float(selection.get("neighbor_survival_rate")),
+        "train_sign_consistency": _float(selection.get("sign_consistency")),
+        "oos_events": events,
+        "oos_symbols": int(metrics.get("symbols", 0) or 0),
+        "oos_active_days": int(metrics.get("active_days", 0) or 0),
+        "oos_median_future_ret_30m": _float(metrics.get("median_future_ret_30m")),
+        "oos_median_future_ret_60m": _float(metrics.get("median_future_ret_60m")),
+        "oos_median_future_min_ret_30m": _float(metrics.get("median_future_min_ret_30m")),
+        "oos_median_future_min_ret_60m": _float(metrics.get("median_future_min_ret_60m")),
+        "oos_downside_hit_rate_30m": _float(metrics.get("downside_hit_rate_30m")),
+        "oos_downside_hit_rate_60m": _float(metrics.get("downside_hit_rate_60m")),
+        "oos_reclaim_rate_60m": _float(metrics.get("reclaim_rate_60m")),
+        "oos_structural_low_break_rate_60m": _float(metrics.get("structural_low_break_rate_60m")),
+        "oos_top_symbol_dependency_pct": _float(metrics.get("top_symbol_dependency_pct")),
+        "oos_largest_day_event_share": _float(metrics.get("largest_day_event_share")),
+        "oos_response_score": score,
+        "oos_expected_downside": bool(expected_downside),
+        "oos_has_events": bool(events > 0),
+        "oos_evaluation_status": reason,
+        "daily_prequential_oos_model": DAILY_PREQUENTIAL_OOS_MODEL,
+        "selection_model": DAILY_SELECTION_MODEL,
+        "test_day_not_in_train_window": True,
+        "selection_uses_test_day_outcomes": False,
+        "evaluation_uses_test_day_outcomes": True,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _build_window_health(*, plateau_basins: pd.DataFrame, daily_selection: pd.DataFrame, daily_oos: pd.DataFrame) -> pd.DataFrame:
+    columns = _window_health_columns()
+    if plateau_basins.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    grouped = plateau_basins.groupby(["test_day_ord", "train_window_days"], dropna=False, sort=True)
+    selection_grouped = daily_selection.groupby(["test_day_ord", "train_window_days"], dropna=False) if not daily_selection.empty else {}
+    oos_grouped = daily_oos.groupby(["test_day_ord", "train_window_days"], dropna=False) if not daily_oos.empty else {}
+    for key, frame in grouped:
+        test_day_ord, train_window_days = int(key[0]), int(key[1])
+        selected_frame = selection_grouped.get_group(key) if hasattr(selection_grouped, "groups") and key in selection_grouped.groups else pd.DataFrame()
+        oos_frame = oos_grouped.get_group(key) if hasattr(oos_grouped, "groups") and key in oos_grouped.groups else pd.DataFrame()
+        status = frame.get("basin_status", pd.Series(dtype=str)).astype(str)
+        pass_mask = frame.get("basin_passes_plateau_gate", pd.Series(False, index=frame.index)).map(_to_bool)
+        oos_scores = pd.to_numeric(oos_frame.get("oos_response_score", pd.Series(dtype=float)), errors="coerce") if not oos_frame.empty else pd.Series(dtype=float)
+        oos_events = pd.to_numeric(oos_frame.get("oos_events", pd.Series(dtype=float)), errors="coerce") if not oos_frame.empty else pd.Series(dtype=float)
+        expected = oos_frame.get("oos_expected_downside", pd.Series(dtype=bool)).map(_to_bool) if not oos_frame.empty else pd.Series(dtype=bool)
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "test_day_ord": test_day_ord,
+                "test_date": _date_from_day_ord(test_day_ord),
+                "train_window_days": train_window_days,
+                "train_basin_rows": int(len(frame)),
+                "train_pass_basin_rows": int(pass_mask.sum()),
+                "train_strong_candidate_rows": int((status == "strong_candidate").sum()),
+                "train_tactical_rows": int((status == "tactical").sum()),
+                "train_challenger_rows": int((status == "challenger").sum()),
+                "train_cooldown_rows": int((status == "cooldown").sum()),
+                "train_rejected_rows": int((status == "rejected").sum()),
+                "train_median_basin_score": _safe_median(frame.get("basin_score", pd.Series(dtype=float))),
+                "train_p75_basin_score": _safe_quantile(frame.get("basin_score", pd.Series(dtype=float)), 0.75),
+                "selected_basin_rows": int(len(selected_frame)),
+                "selected_unique_keys": int(selected_frame["selection_key"].nunique()) if not selected_frame.empty and "selection_key" in selected_frame.columns else 0,
+                "oos_rows": int(len(oos_frame)),
+                "oos_rows_with_events": int((oos_events.fillna(0) > 0).sum()) if not oos_events.empty else 0,
+                "oos_total_events": int(oos_events.fillna(0).sum()) if not oos_events.empty else 0,
+                "oos_median_response_score": _safe_median(oos_scores),
+                "oos_expected_downside_rate": _rate(expected) if not expected.empty else float("nan"),
+                "window_health_model": WINDOW_HEALTH_MODEL,
+                "train_uses_only_days_before_test": True,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days"])
+
+
+def _build_selection_drift(*, daily_selection: pd.DataFrame) -> pd.DataFrame:
+    columns = _selection_drift_columns()
+    if daily_selection.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    ordered = daily_selection.sort_values(["train_window_days", "test_day_ord", "selected_rank", "selection_key"]).copy()
+    seen_by_window: dict[int, dict[str, int]] = {}
+    last_day_by_window_key: dict[tuple[int, str], int] = {}
+    for row in ordered.to_dict("records"):
+        window = int(row.get("train_window_days", 0) or 0)
+        key = str(row.get("selection_key", ""))
+        test_day = int(row.get("test_day_ord", 0) or 0)
+        seen = seen_by_window.setdefault(window, {})
+        previous_count = int(seen.get(key, 0))
+        previous_day = last_day_by_window_key.get((window, key))
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "test_day_ord": test_day,
+                "test_date": _date_from_day_ord(test_day),
+                "train_window_days": window,
+                "selected_rank": int(row.get("selected_rank", 0) or 0),
+                "basin_id": str(row.get("basin_id", "")),
+                "selection_key": key,
+                "center_scope_conditions": str(row.get("center_scope_conditions", "")),
+                "center_threshold_feature": str(row.get("center_threshold_feature", "")),
+                "center_threshold_side": str(row.get("center_threshold_side", "")),
+                "center_threshold_quantile": _float(row.get("center_threshold_quantile")),
+                "basin_status": str(row.get("basin_status", "")),
+                "basin_score": _float(row.get("basin_score")),
+                "previous_selected_count_same_window": previous_count,
+                "is_new_selection_key_for_window": bool(previous_count == 0),
+                "days_since_previous_same_key": int(test_day - previous_day) if previous_day is not None else np.nan,
+                "selection_drift_model": SELECTION_DRIFT_MODEL,
+                "selection_uses_test_day_outcomes": False,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+        seen[key] = previous_count + 1
+        last_day_by_window_key[(window, key)] = test_day
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["train_window_days", "test_day_ord", "selected_rank", "selection_key"])
+
+
+def _selection_key(row: dict[str, object]) -> str:
+    return "|".join(
+        (
+            str(row.get("center_scope_conditions", "")),
+            str(row.get("center_threshold_feature", "")),
+            str(row.get("center_threshold_side", "")),
+            _quantile_label(_float(row.get("center_threshold_quantile"))),
+        )
+    )
+
+
+def _daily_selection_columns() -> list[str]:
+    return [
+        "research_id", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
+        "train_start_date", "train_end_date", "selected_rank", "basin_id", "center_rule_id", "center_rule_key",
+        "selection_key", "center_scope_name", "center_scope_conditions", "center_threshold_feature",
+        "center_threshold_side", "center_threshold_quantile", "basin_status", "basin_score", "center_response_score",
+        "median_neighbor_score", "p25_neighbor_score", "neighbor_survival_rate", "min_sample_survival_rate",
+        "sign_consistency", "cliff_penalty", "dependency_penalty", "daily_selection_model",
+        "train_uses_only_days_before_test", "selection_uses_test_day_outcomes", "uses_pnl", "uses_short_entry",
+        "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+
+
+def _daily_oos_columns() -> list[str]:
+    return [
+        "research_id", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
+        "selected_rank", "basin_id", "center_rule_id", "selection_key", "basin_status_at_selection",
+        "train_basin_score", "train_neighbor_survival_rate", "train_sign_consistency", "oos_events", "oos_symbols",
+        "oos_active_days", "oos_median_future_ret_30m", "oos_median_future_ret_60m", "oos_median_future_min_ret_30m",
+        "oos_median_future_min_ret_60m", "oos_downside_hit_rate_30m", "oos_downside_hit_rate_60m",
+        "oos_reclaim_rate_60m", "oos_structural_low_break_rate_60m", "oos_top_symbol_dependency_pct",
+        "oos_largest_day_event_share", "oos_response_score", "oos_expected_downside", "oos_has_events",
+        "oos_evaluation_status", "daily_prequential_oos_model", "selection_model", "test_day_not_in_train_window",
+        "selection_uses_test_day_outcomes", "evaluation_uses_test_day_outcomes", "uses_pnl", "uses_short_entry",
+        "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+
+
+def _window_health_columns() -> list[str]:
+    return [
+        "research_id", "test_day_ord", "test_date", "train_window_days", "train_basin_rows", "train_pass_basin_rows",
+        "train_strong_candidate_rows", "train_tactical_rows", "train_challenger_rows", "train_cooldown_rows",
+        "train_rejected_rows", "train_median_basin_score", "train_p75_basin_score", "selected_basin_rows",
+        "selected_unique_keys", "oos_rows", "oos_rows_with_events", "oos_total_events", "oos_median_response_score",
+        "oos_expected_downside_rate", "window_health_model", "train_uses_only_days_before_test", "uses_pnl",
+        "uses_short_entry", "uses_final_holdout_tuning", "data_access_model",
+    ]
+
+
+def _selection_drift_columns() -> list[str]:
+    return [
+        "research_id", "test_day_ord", "test_date", "train_window_days", "selected_rank", "basin_id", "selection_key",
+        "center_scope_conditions", "center_threshold_feature", "center_threshold_side", "center_threshold_quantile",
+        "basin_status", "basin_score", "previous_selected_count_same_window", "is_new_selection_key_for_window",
+        "days_since_previous_same_key", "selection_drift_model", "selection_uses_test_day_outcomes", "uses_pnl",
+        "uses_short_entry", "uses_final_holdout_tuning", "data_access_model",
+    ]
+
+
 def _to_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return bool(value)
+    if value is None:
+        return False
+    if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
+        parsed = float(value)
+        return bool(math.isfinite(parsed) and parsed != 0.0)
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 def _run_config_frame(
@@ -2371,6 +2791,10 @@ def _run_config_frame(
     rule_universe: pd.DataFrame,
     negative_space: pd.DataFrame,
     plateau_basins: pd.DataFrame,
+    daily_selection: pd.DataFrame,
+    daily_oos: pd.DataFrame,
+    window_health: pd.DataFrame,
+    selection_drift: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -2384,7 +2808,12 @@ def _run_config_frame(
     negative_space_rows = int(len(negative_space)) if negative_space is not None else 0
     negative_space_pass_rows = int((negative_space.get("neighbor_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if negative_space is not None and not negative_space.empty else 0
     plateau_basin_rows = int(len(plateau_basins)) if plateau_basins is not None else 0
-    plateau_basin_pass_rows = int((plateau_basins.get("basin_passes_plateau_gate", pd.Series(dtype=bool)).astype(bool)).sum()) if plateau_basins is not None and not plateau_basins.empty else 0
+    plateau_basin_pass_rows = int((plateau_basins.get("basin_passes_plateau_gate", pd.Series(dtype=bool)).map(_to_bool)).sum()) if plateau_basins is not None and not plateau_basins.empty else 0
+    daily_selection_rows = int(len(daily_selection)) if daily_selection is not None else 0
+    daily_oos_rows = int(len(daily_oos)) if daily_oos is not None else 0
+    daily_oos_rows_with_events = int((pd.to_numeric(daily_oos.get("oos_events", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()) if daily_oos is not None and not daily_oos.empty else 0
+    window_health_rows = int(len(window_health)) if window_health is not None else 0
+    selection_drift_rows = int(len(selection_drift)) if selection_drift is not None else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -2451,6 +2880,21 @@ def _run_config_frame(
         "plateau_basins_use_pnl": False,
         "plateau_basins_use_short_entry": False,
         "plateau_basins_use_final_holdout_tuning": False,
+        "daily_selection_rows": daily_selection_rows,
+        "daily_oos_rows": daily_oos_rows,
+        "daily_oos_rows_with_events": daily_oos_rows_with_events,
+        "window_health_rows": window_health_rows,
+        "selection_drift_rows": selection_drift_rows,
+        "daily_prequential_oos_model": DAILY_PREQUENTIAL_OOS_MODEL,
+        "daily_selection_model": DAILY_SELECTION_MODEL,
+        "window_health_model": WINDOW_HEALTH_MODEL,
+        "selection_drift_model": SELECTION_DRIFT_MODEL,
+        "max_selected_basins_per_day_window": int(MAX_SELECTED_BASINS_PER_DAY_WINDOW),
+        "daily_allowed_basin_statuses": ",".join(DAILY_ALLOWED_BASIN_STATUSES),
+        "daily_selection_uses_test_day_outcomes": False,
+        "daily_oos_uses_pnl": False,
+        "daily_oos_uses_short_entry": False,
+        "daily_oos_uses_final_holdout_tuning": False,
         "negative_space_threshold_radius_steps": int(NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS),
         "negative_space_max_scope_replacement_values_per_axis": int(MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS),
         "negative_space_uses_outcomes": False,
@@ -2488,10 +2932,10 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_rule_universe.csv", "written", "train-only entry-known mechanism rule specs"),
         ("pump_mechanism_negative_space.csv", "written", "all generated train-only neighbors including failed/rejected rules"),
         ("pump_mechanism_plateau_basins.csv", "written", "train-only basin-level plateau scores from full negative space"),
-        ("pump_mechanism_daily_oos.csv", "planned", "daily prequential OOS ledger"),
-        ("pump_mechanism_daily_selection.csv", "planned", "train-only basin selection per test day"),
-        ("pump_mechanism_window_health.csv", "planned", "15/30/60d train-window health"),
-        ("pump_mechanism_selection_drift.csv", "planned", "selected mechanism drift over time"),
+        ("pump_mechanism_daily_selection.csv", "written", "train-only basin selection per test day"),
+        ("pump_mechanism_daily_oos.csv", "written", "daily prequential OOS ledger for selected basins"),
+        ("pump_mechanism_window_health.csv", "written", "15/30/60d train-window health plus selected-basin OOS summary"),
+        ("pump_mechanism_selection_drift.csv", "written", "selected mechanism-key drift over time"),
     ]
     rows = []
     for artifact_name, status, description in planned:
