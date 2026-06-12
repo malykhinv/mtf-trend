@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_negative_space_neighborhoods"
+IMPLEMENTATION_STAGE = "mechanism_plateau_basin_scoring"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -124,6 +124,15 @@ RULE_PAIR_SCOPES: tuple[tuple[str, str], ...] = (
 NEGATIVE_SPACE_MODEL = "train_only_full_generated_neighbor_space_including_rejected_v1"
 NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS = 2
 MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS = 12
+
+PLATEAU_BASIN_MODEL = "train_only_basin_score_from_full_negative_space_v1"
+PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD = -0.0075
+PLATEAU_MIN_NEIGHBORS = 3
+PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE = 0.55
+PLATEAU_STRONG_NEIGHBOR_SURVIVAL_RATE = 0.70
+PLATEAU_SIGN_CONSISTENCY_MIN = 0.60
+PLATEAU_STRONG_SIGN_CONSISTENCY_MIN = 0.70
+PLATEAU_P25_SCORE_MIN = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +278,7 @@ def run_pump_mechanism_stability_research(
             response_surfaces=pd.DataFrame(),
             rule_universe=pd.DataFrame(),
             negative_space=pd.DataFrame(),
+            plateau_basins=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -358,7 +368,16 @@ def run_pump_mechanism_stability_research(
     _print_stage(progress_label, "building full negative-space rule neighborhoods", started_at)
     negative_space = _build_negative_space_neighborhoods(rule_universe=rule_universe, taxonomy=taxonomy, events=events)
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space artifacts", started_at)
+    _print_stage(progress_label, "scoring train-only plateau basins", started_at)
+    plateau_basins = _build_plateau_basins(
+        rule_universe=rule_universe,
+        negative_space=negative_space,
+        taxonomy=taxonomy,
+        events=events,
+        outcomes=outcomes,
+    )
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -367,6 +386,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_response_surfaces.csv", response_surfaces)
     _write_csv(config.output_dir / "pump_mechanism_rule_universe.csv", rule_universe)
     _write_csv(config.output_dir / "pump_mechanism_negative_space.csv", negative_space)
+    _write_csv(config.output_dir / "pump_mechanism_plateau_basins.csv", plateau_basins)
 
     run_config = _run_config_frame(
         config=config,
@@ -382,6 +402,7 @@ def run_pump_mechanism_stability_research(
         response_surfaces=response_surfaces,
         rule_universe=rule_universe,
         negative_space=negative_space,
+        plateau_basins=plateau_basins,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -390,6 +411,7 @@ def run_pump_mechanism_stability_research(
         f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} "
         f"taxonomy={len(taxonomy):,} response_surfaces={len(response_surfaces):,} "
         f"rule_universe={len(rule_universe):,} negative_space={len(negative_space):,} "
+        f"plateau_basins={len(plateau_basins):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -1931,6 +1953,401 @@ def _basin_id_for_center(center: dict[str, object]) -> str:
     return "pmb_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
+
+def _build_plateau_basins(
+    *,
+    rule_universe: pd.DataFrame,
+    negative_space: pd.DataFrame,
+    taxonomy: pd.DataFrame,
+    events: pd.DataFrame,
+    outcomes: pd.DataFrame,
+) -> pd.DataFrame:
+    """Score train-only plateau basins from the full generated neighbor space.
+
+    This is still pre-trade mechanism research.  It joins future-response
+    outcomes only after the entry-known event/taxonomy rule masks have been
+    constructed, and it scores every generated neighbor, including low-sample
+    and rejected neighbors.  The output is a basin-level diagnostic for later
+    daily prequential selection; it is not a trading system and it does not use
+    PnL, short entries, or final-holdout artifacts.
+    """
+
+    columns = _plateau_basin_columns()
+    if negative_space.empty or outcomes.empty:
+        return pd.DataFrame(columns=columns)
+    rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
+    if rule_input.empty or "event_id" not in rule_input.columns:
+        return pd.DataFrame(columns=columns)
+    outcome_columns = [
+        "event_id", "outcome_status", "future_ret_30m", "future_ret_60m", "future_min_ret_30m",
+        "future_min_ret_60m", "future_max_ret_30m", "future_max_ret_60m", "down_mfe_30m", "down_mfe_60m",
+        "up_mae_30m", "up_mae_60m", "reclaimed_pump_high_60m", "broke_structural_low_60m",
+        "time_to_reclaim_pump_high_minutes", "time_to_structural_low_break_minutes",
+    ]
+    available_outcome_columns = [column for column in outcome_columns if column in outcomes.columns]
+    if available_outcome_columns:
+        joined_outcomes = outcomes[available_outcome_columns].drop_duplicates("event_id", keep="last")
+        rule_input = rule_input.merge(joined_outcomes, on="event_id", how="left", suffixes=("", "_outcome"))
+    else:
+        return pd.DataFrame(columns=columns)
+    rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
+    if rule_input.empty:
+        return pd.DataFrame(columns=columns)
+    rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+
+    rows: list[dict[str, object]] = []
+    grouped = negative_space.groupby("basin_id", dropna=False, sort=True)
+    for basin_id, basin_neighbors in grouped:
+        first = basin_neighbors.iloc[0]
+        train_start_day_ord = _finite_int_or_none(first.get("train_start_day_ord"))
+        train_end_day_ord = _finite_int_or_none(first.get("train_end_day_ord"))
+        test_day_ord = _finite_int_or_none(first.get("test_day_ord"))
+        train_window_days = _finite_int_or_none(first.get("train_window_days"))
+        if train_start_day_ord is None or train_end_day_ord is None or test_day_ord is None or train_window_days is None:
+            continue
+        train = rule_input.loc[
+            (rule_input["day_ord"] >= int(train_start_day_ord)) & (rule_input["day_ord"] <= int(train_end_day_ord))
+        ].copy()
+        if train.empty:
+            continue
+        scored_neighbors = [_score_negative_space_neighbor(row=neighbor, train=train) for neighbor in basin_neighbors.to_dict("records")]
+        rows.append(
+            _plateau_basin_row(
+                basin_id=str(basin_id),
+                first=first.to_dict(),
+                scored_neighbors=scored_neighbors,
+                test_day_ord=int(test_day_ord),
+                train_window_days=int(train_window_days),
+                train_start_day_ord=int(train_start_day_ord),
+                train_end_day_ord=int(train_end_day_ord),
+            )
+        )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days", "basin_status", "basin_score", "basin_id"])
+
+
+def _score_negative_space_neighbor(*, row: dict[str, object], train: pd.DataFrame) -> dict[str, object]:
+    conditions = _parse_scope_conditions(row.get("neighbor_scope_conditions"))
+    scoped = _apply_rule_scope(train, conditions)
+    threshold_feature = str(row.get("neighbor_threshold_feature") or "")
+    threshold_side = str(row.get("neighbor_threshold_side") or "none")
+    threshold_value = _float(row.get("neighbor_threshold_value"))
+    if threshold_feature and threshold_side != "none" and math.isfinite(threshold_value):
+        filtered = _apply_threshold(scoped, feature=threshold_feature, side=threshold_side, threshold_value=threshold_value)
+    elif threshold_feature and threshold_side != "none":
+        filtered = scoped.iloc[0:0].copy()
+    else:
+        filtered = scoped.copy()
+    metrics = _plateau_response_metrics(filtered)
+    min_sample_pass = _to_bool(row.get("neighbor_passes_min_sample"))
+    score = _plateau_neighbor_score(metrics)
+    expected_downside = _plateau_expected_downside(metrics)
+    scored_pass = bool(min_sample_pass and math.isfinite(score) and score > PLATEAU_P25_SCORE_MIN and expected_downside)
+    return {
+        **metrics,
+        "neighbor_rule_id": str(row.get("neighbor_rule_id", "")),
+        "neighbor_kind": str(row.get("neighbor_kind", "")),
+        "neighbor_distance": int(row.get("neighbor_distance", 0) or 0),
+        "neighbor_axis_changed": str(row.get("neighbor_axis_changed", "")),
+        "neighbor_passes_min_sample": bool(min_sample_pass),
+        "neighbor_passes_score_gate": scored_pass,
+        "neighbor_response_score": score,
+        "neighbor_expected_downside": bool(expected_downside),
+    }
+
+
+def _plateau_response_metrics(frame: pd.DataFrame) -> dict[str, object]:
+    events = int(len(frame))
+    symbols = int(frame["symbol"].nunique()) if "symbol" in frame.columns and not frame.empty else 0
+    active_days = int(frame["date"].nunique()) if "date" in frame.columns and not frame.empty else 0
+    dependency = _dependency_metrics(frame)
+    future_min_30 = pd.to_numeric(frame.get("future_min_ret_30m", pd.Series(dtype=float)), errors="coerce")
+    future_min_60 = pd.to_numeric(frame.get("future_min_ret_60m", pd.Series(dtype=float)), errors="coerce")
+    reclaimed = _as_bool_series(frame.get("reclaimed_pump_high_60m", pd.Series(dtype=bool))) if not frame.empty else pd.Series(dtype=bool)
+    broke = _as_bool_series(frame.get("broke_structural_low_60m", pd.Series(dtype=bool))) if not frame.empty else pd.Series(dtype=bool)
+    return {
+        "events": events,
+        "symbols": symbols,
+        "active_days": active_days,
+        "median_future_ret_30m": _safe_median(frame.get("future_ret_30m", pd.Series(dtype=float))),
+        "median_future_ret_60m": _safe_median(frame.get("future_ret_60m", pd.Series(dtype=float))),
+        "median_future_min_ret_30m": _safe_median(future_min_30),
+        "median_future_min_ret_60m": _safe_median(future_min_60),
+        "median_future_max_ret_30m": _safe_median(frame.get("future_max_ret_30m", pd.Series(dtype=float))),
+        "median_future_max_ret_60m": _safe_median(frame.get("future_max_ret_60m", pd.Series(dtype=float))),
+        "median_down_mfe_30m": _safe_median(frame.get("down_mfe_30m", pd.Series(dtype=float))),
+        "median_down_mfe_60m": _safe_median(frame.get("down_mfe_60m", pd.Series(dtype=float))),
+        "median_up_mae_30m": _safe_median(frame.get("up_mae_30m", pd.Series(dtype=float))),
+        "median_up_mae_60m": _safe_median(frame.get("up_mae_60m", pd.Series(dtype=float))),
+        "downside_hit_rate_30m": _rate(future_min_30 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
+        "downside_hit_rate_60m": _rate(future_min_60 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
+        "reclaim_rate_60m": _rate(reclaimed) if not reclaimed.empty else float("nan"),
+        "structural_low_break_rate_60m": _rate(broke) if not broke.empty else float("nan"),
+        "median_time_to_reclaim_pump_high_minutes": _safe_median(frame.get("time_to_reclaim_pump_high_minutes", pd.Series(dtype=float))),
+        "median_time_to_structural_low_break_minutes": _safe_median(frame.get("time_to_structural_low_break_minutes", pd.Series(dtype=float))),
+        **dependency,
+    }
+
+
+def _plateau_neighbor_score(metrics: dict[str, object]) -> float:
+    # A positive score means the train-window response surface points down after
+    # the feature cutoff.  The score is intentionally pre-trade: it uses outcome
+    # distributions, not entries/exits/R-multiples.
+    components = [
+        -_float(metrics.get("median_future_ret_30m")),
+        -_float(metrics.get("median_future_ret_60m")),
+        -_float(metrics.get("median_future_min_ret_30m")),
+        -_float(metrics.get("median_future_min_ret_60m")),
+        0.02 * (_float(metrics.get("downside_hit_rate_30m")) - 0.50),
+        0.02 * (_float(metrics.get("downside_hit_rate_60m")) - 0.50),
+        0.02 * (_float(metrics.get("structural_low_break_rate_60m")) - 0.30),
+        0.02 * (0.50 - _float(metrics.get("reclaim_rate_60m"))),
+    ]
+    finite = [float(value) for value in components if math.isfinite(float(value))]
+    return float(np.mean(finite)) if finite else float("nan")
+
+
+def _plateau_expected_downside(metrics: dict[str, object]) -> bool:
+    median_min_30 = _float(metrics.get("median_future_min_ret_30m"))
+    median_min_60 = _float(metrics.get("median_future_min_ret_60m"))
+    downside_30 = _float(metrics.get("downside_hit_rate_30m"))
+    downside_60 = _float(metrics.get("downside_hit_rate_60m"))
+    median_ret_60 = _float(metrics.get("median_future_ret_60m"))
+    has_negative_path = (math.isfinite(median_min_30) and median_min_30 < 0.0) or (math.isfinite(median_min_60) and median_min_60 < 0.0)
+    has_downside_frequency = (math.isfinite(downside_30) and downside_30 >= 0.45) or (math.isfinite(downside_60) and downside_60 >= 0.45)
+    no_strong_positive_drift = not math.isfinite(median_ret_60) or median_ret_60 <= 0.005
+    return bool(has_negative_path and has_downside_frequency and no_strong_positive_drift)
+
+
+def _plateau_basin_row(
+    *,
+    basin_id: str,
+    first: dict[str, object],
+    scored_neighbors: list[dict[str, object]],
+    test_day_ord: int,
+    train_window_days: int,
+    train_start_day_ord: int,
+    train_end_day_ord: int,
+) -> dict[str, object]:
+    all_scores = [_float(row.get("neighbor_response_score")) for row in scored_neighbors]
+    finite_scores = [score for score in all_scores if math.isfinite(score)]
+    score_pass_flags = [bool(row.get("neighbor_passes_score_gate")) for row in scored_neighbors]
+    min_sample_flags = [bool(row.get("neighbor_passes_min_sample")) for row in scored_neighbors]
+    expected_downside_flags = [bool(row.get("neighbor_expected_downside")) for row in scored_neighbors]
+    center_rows = [row for row in scored_neighbors if str(row.get("neighbor_kind")) == "center"]
+    center = center_rows[0] if center_rows else (scored_neighbors[0] if scored_neighbors else {})
+    center_score = _float(center.get("neighbor_response_score"))
+    neighbor_count = int(len(scored_neighbors))
+    scoreable_count = int(len(finite_scores))
+    score_pass_count = int(sum(score_pass_flags))
+    min_sample_pass_count = int(sum(min_sample_flags))
+    expected_downside_count = int(sum(expected_downside_flags))
+    neighbor_survival_rate = score_pass_count / neighbor_count if neighbor_count else float("nan")
+    min_sample_survival_rate = min_sample_pass_count / neighbor_count if neighbor_count else float("nan")
+    sign_consistency = expected_downside_count / neighbor_count if neighbor_count else float("nan")
+    median_neighbor_score = float(np.median(finite_scores)) if finite_scores else float("nan")
+    p25_neighbor_score = float(np.quantile(finite_scores, 0.25)) if finite_scores else float("nan")
+    worst_neighbor_score = float(np.min(finite_scores)) if finite_scores else float("nan")
+    best_neighbor_score = float(np.max(finite_scores)) if finite_scores else float("nan")
+    score_degradation_pct = _score_degradation_pct(center_score=center_score, median_neighbor_score=median_neighbor_score)
+    cliff_penalty = _cliff_penalty(
+        center_score=center_score,
+        p25_neighbor_score=p25_neighbor_score,
+        neighbor_survival_rate=neighbor_survival_rate,
+        min_sample_survival_rate=min_sample_survival_rate,
+    )
+    dependency_penalty = _basin_dependency_penalty(scored_neighbors)
+    basin_score = _basin_score(
+        median_neighbor_score=median_neighbor_score,
+        p25_neighbor_score=p25_neighbor_score,
+        sign_consistency=sign_consistency,
+        neighbor_survival_rate=neighbor_survival_rate,
+        min_sample_survival_rate=min_sample_survival_rate,
+        cliff_penalty=cliff_penalty,
+        dependency_penalty=dependency_penalty,
+    )
+    status = _plateau_basin_status(
+        neighbor_count=neighbor_count,
+        neighbor_survival_rate=neighbor_survival_rate,
+        sign_consistency=sign_consistency,
+        p25_neighbor_score=p25_neighbor_score,
+        basin_score=basin_score,
+        cliff_penalty=cliff_penalty,
+    )
+    passes_gate = status in {"challenger", "tactical", "strong_candidate"}
+    return {
+        "research_id": RESEARCH_ID,
+        "basin_id": basin_id,
+        "center_rule_id": str(first.get("center_rule_id", "")),
+        "center_rule_key": str(first.get("center_rule_key", "")),
+        "test_day_ord": int(test_day_ord),
+        "test_date": _date_from_day_ord(test_day_ord),
+        "train_window_days": int(train_window_days),
+        "train_start_day_ord": int(train_start_day_ord),
+        "train_end_day_ord": int(train_end_day_ord),
+        "train_start_date": _date_from_day_ord(train_start_day_ord),
+        "train_end_date": _date_from_day_ord(train_end_day_ord),
+        "center_scope_name": str(first.get("center_scope_name", "")),
+        "center_scope_conditions": str(first.get("center_scope_conditions", "")),
+        "center_threshold_feature": str(first.get("center_threshold_feature", "")),
+        "center_threshold_side": str(first.get("center_threshold_side", "")),
+        "center_threshold_quantile": _float(first.get("center_threshold_quantile")),
+        "center_train_events": int(first.get("center_train_events", 0) or 0),
+        "center_train_symbols": int(first.get("center_train_symbols", 0) or 0),
+        "center_train_active_days": int(first.get("center_train_active_days", 0) or 0),
+        "center_response_score": center_score,
+        "center_expected_downside": bool(center.get("neighbor_expected_downside", False)),
+        "center_median_future_ret_30m": _float(center.get("median_future_ret_30m")),
+        "center_median_future_ret_60m": _float(center.get("median_future_ret_60m")),
+        "center_median_future_min_ret_30m": _float(center.get("median_future_min_ret_30m")),
+        "center_median_future_min_ret_60m": _float(center.get("median_future_min_ret_60m")),
+        "center_downside_hit_rate_30m": _float(center.get("downside_hit_rate_30m")),
+        "center_downside_hit_rate_60m": _float(center.get("downside_hit_rate_60m")),
+        "neighbor_count": neighbor_count,
+        "neighbor_scoreable_count": scoreable_count,
+        "neighbor_min_sample_pass_count": min_sample_pass_count,
+        "neighbor_score_pass_count": score_pass_count,
+        "neighbor_expected_downside_count": expected_downside_count,
+        "neighbor_survival_rate": neighbor_survival_rate,
+        "min_sample_survival_rate": min_sample_survival_rate,
+        "sign_consistency": sign_consistency,
+        "median_neighbor_score": median_neighbor_score,
+        "p25_neighbor_score": p25_neighbor_score,
+        "worst_neighbor_score": worst_neighbor_score,
+        "best_neighbor_score": best_neighbor_score,
+        "score_degradation_pct": score_degradation_pct,
+        "cliff_penalty": cliff_penalty,
+        "dependency_penalty": dependency_penalty,
+        "max_neighbor_top_symbol_dependency_pct": _max_neighbor_metric(scored_neighbors, "top_symbol_dependency_pct"),
+        "max_neighbor_largest_day_event_share": _max_neighbor_metric(scored_neighbors, "largest_day_event_share"),
+        "basin_score": basin_score,
+        "basin_status": status,
+        "basin_passes_plateau_gate": bool(passes_gate),
+        "plateau_basin_model": PLATEAU_BASIN_MODEL,
+        "outcome_usage_model": FUTURE_OUTCOME_USAGE_MODEL,
+        "train_uses_only_days_before_test": True,
+        "uses_outcome_columns": True,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _score_degradation_pct(*, center_score: float, median_neighbor_score: float) -> float:
+    if not math.isfinite(center_score) or not math.isfinite(median_neighbor_score):
+        return float("nan")
+    denominator = max(abs(center_score), 1e-9)
+    return float(max(0.0, center_score - median_neighbor_score) / denominator)
+
+
+def _cliff_penalty(
+    *,
+    center_score: float,
+    p25_neighbor_score: float,
+    neighbor_survival_rate: float,
+    min_sample_survival_rate: float,
+) -> float:
+    penalty = 0.0
+    if math.isfinite(center_score) and math.isfinite(p25_neighbor_score):
+        penalty += max(0.0, center_score - p25_neighbor_score)
+    if math.isfinite(neighbor_survival_rate):
+        penalty += max(0.0, PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE - neighbor_survival_rate)
+    if math.isfinite(min_sample_survival_rate):
+        penalty += 0.5 * max(0.0, PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE - min_sample_survival_rate)
+    return float(penalty)
+
+
+def _basin_dependency_penalty(scored_neighbors: list[dict[str, object]]) -> float:
+    symbol_dependency = _max_neighbor_metric(scored_neighbors, "top_symbol_dependency_pct")
+    day_dependency = _max_neighbor_metric(scored_neighbors, "largest_day_event_share")
+    components = []
+    if math.isfinite(symbol_dependency):
+        components.append(max(0.0, symbol_dependency - 0.50))
+    if math.isfinite(day_dependency):
+        components.append(max(0.0, day_dependency - 0.35))
+    return float(sum(components)) if components else 0.0
+
+
+def _basin_score(
+    *,
+    median_neighbor_score: float,
+    p25_neighbor_score: float,
+    sign_consistency: float,
+    neighbor_survival_rate: float,
+    min_sample_survival_rate: float,
+    cliff_penalty: float,
+    dependency_penalty: float,
+) -> float:
+    components = [
+        median_neighbor_score,
+        p25_neighbor_score,
+        0.02 * (sign_consistency - 0.50),
+        0.02 * (neighbor_survival_rate - 0.50),
+        0.01 * (min_sample_survival_rate - 0.50),
+        -cliff_penalty,
+        -dependency_penalty,
+    ]
+    finite = [float(value) for value in components if math.isfinite(float(value))]
+    return float(np.sum(finite)) if finite else float("nan")
+
+
+def _plateau_basin_status(
+    *,
+    neighbor_count: int,
+    neighbor_survival_rate: float,
+    sign_consistency: float,
+    p25_neighbor_score: float,
+    basin_score: float,
+    cliff_penalty: float,
+) -> str:
+    if int(neighbor_count) < PLATEAU_MIN_NEIGHBORS:
+        return "rejected"
+    if not all(math.isfinite(value) for value in (neighbor_survival_rate, sign_consistency, p25_neighbor_score, basin_score)):
+        return "rejected"
+    if p25_neighbor_score <= PLATEAU_P25_SCORE_MIN:
+        return "rejected"
+    if neighbor_survival_rate < PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE or sign_consistency < PLATEAU_SIGN_CONSISTENCY_MIN:
+        return "cooldown"
+    if basin_score <= 0.0:
+        return "cooldown"
+    if (
+        neighbor_survival_rate >= PLATEAU_STRONG_NEIGHBOR_SURVIVAL_RATE
+        and sign_consistency >= PLATEAU_STRONG_SIGN_CONSISTENCY_MIN
+        and cliff_penalty <= 0.02
+        and basin_score > 0.02
+    ):
+        return "strong_candidate"
+    if neighbor_survival_rate >= 0.62 and sign_consistency >= 0.65 and basin_score > 0.01:
+        return "tactical"
+    return "challenger"
+
+
+def _max_neighbor_metric(scored_neighbors: list[dict[str, object]], key: str) -> float:
+    values = [_float(row.get(key)) for row in scored_neighbors]
+    finite = [value for value in values if math.isfinite(value)]
+    return float(max(finite)) if finite else float("nan")
+
+
+def _plateau_basin_columns() -> list[str]:
+    return [
+        "research_id", "basin_id", "center_rule_id", "center_rule_key", "test_day_ord", "test_date",
+        "train_window_days", "train_start_day_ord", "train_end_day_ord", "train_start_date", "train_end_date",
+        "center_scope_name", "center_scope_conditions", "center_threshold_feature", "center_threshold_side",
+        "center_threshold_quantile", "center_train_events", "center_train_symbols", "center_train_active_days",
+        "center_response_score", "center_expected_downside", "center_median_future_ret_30m",
+        "center_median_future_ret_60m", "center_median_future_min_ret_30m", "center_median_future_min_ret_60m",
+        "center_downside_hit_rate_30m", "center_downside_hit_rate_60m", "neighbor_count", "neighbor_scoreable_count",
+        "neighbor_min_sample_pass_count", "neighbor_score_pass_count", "neighbor_expected_downside_count",
+        "neighbor_survival_rate", "min_sample_survival_rate", "sign_consistency", "median_neighbor_score",
+        "p25_neighbor_score", "worst_neighbor_score", "best_neighbor_score", "score_degradation_pct", "cliff_penalty",
+        "dependency_penalty", "max_neighbor_top_symbol_dependency_pct", "max_neighbor_largest_day_event_share", "basin_score",
+        "basin_status", "basin_passes_plateau_gate", "plateau_basin_model", "outcome_usage_model",
+        "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl", "uses_short_entry",
+        "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+
 def _to_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -1953,6 +2370,7 @@ def _run_config_frame(
     response_surfaces: pd.DataFrame,
     rule_universe: pd.DataFrame,
     negative_space: pd.DataFrame,
+    plateau_basins: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -1965,6 +2383,8 @@ def _run_config_frame(
     sampled_train_rule_rows = int((rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if rule_universe is not None and not rule_universe.empty else 0
     negative_space_rows = int(len(negative_space)) if negative_space is not None else 0
     negative_space_pass_rows = int((negative_space.get("neighbor_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if negative_space is not None and not negative_space.empty else 0
+    plateau_basin_rows = int(len(plateau_basins)) if plateau_basins is not None else 0
+    plateau_basin_pass_rows = int((plateau_basins.get("basin_passes_plateau_gate", pd.Series(dtype=bool)).astype(bool)).sum()) if plateau_basins is not None and not plateau_basins.empty else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -2019,6 +2439,18 @@ def _run_config_frame(
         "negative_space_rows": negative_space_rows,
         "negative_space_pass_rows": negative_space_pass_rows,
         "negative_space_model": NEGATIVE_SPACE_MODEL,
+        "plateau_basin_rows": plateau_basin_rows,
+        "plateau_basin_pass_rows": plateau_basin_pass_rows,
+        "plateau_basin_model": PLATEAU_BASIN_MODEL,
+        "plateau_expected_downside_ret_threshold": float(PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
+        "plateau_min_neighbors": int(PLATEAU_MIN_NEIGHBORS),
+        "plateau_min_neighbor_survival_rate": float(PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE),
+        "plateau_strong_neighbor_survival_rate": float(PLATEAU_STRONG_NEIGHBOR_SURVIVAL_RATE),
+        "plateau_sign_consistency_min": float(PLATEAU_SIGN_CONSISTENCY_MIN),
+        "plateau_p25_score_min": float(PLATEAU_P25_SCORE_MIN),
+        "plateau_basins_use_pnl": False,
+        "plateau_basins_use_short_entry": False,
+        "plateau_basins_use_final_holdout_tuning": False,
         "negative_space_threshold_radius_steps": int(NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS),
         "negative_space_max_scope_replacement_values_per_axis": int(MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS),
         "negative_space_uses_outcomes": False,
@@ -2055,7 +2487,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_response_surfaces.csv", "written", "mechanism response diagnostics before PnL"),
         ("pump_mechanism_rule_universe.csv", "written", "train-only entry-known mechanism rule specs"),
         ("pump_mechanism_negative_space.csv", "written", "all generated train-only neighbors including failed/rejected rules"),
-        ("pump_mechanism_plateau_basins.csv", "planned", "basin-level plateau scores"),
+        ("pump_mechanism_plateau_basins.csv", "written", "train-only basin-level plateau scores from full negative space"),
         ("pump_mechanism_daily_oos.csv", "planned", "daily prequential OOS ledger"),
         ("pump_mechanism_daily_selection.csv", "planned", "train-only basin selection per test day"),
         ("pump_mechanism_window_health.csv", "planned", "15/30/60d train-window health"),
