@@ -42,7 +42,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_taxonomy"
+IMPLEMENTATION_STAGE = "mechanism_response_surfaces"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -226,6 +226,7 @@ def run_pump_mechanism_stability_research(
             quality=pd.DataFrame(),
             cache_coverage={},
             taxonomy=pd.DataFrame(),
+            response_surfaces=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -306,12 +307,16 @@ def run_pump_mechanism_stability_research(
     taxonomy = _build_mechanism_taxonomy(events)
     taxonomy_by_axis = _taxonomy_by_axis_frame(taxonomy)
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy artifacts", started_at)
+    _print_stage(progress_label, "building pre-trade mechanism response surfaces", started_at)
+    response_surfaces = _build_response_surfaces(taxonomy=taxonomy, outcomes=outcomes)
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
     _write_csv(config.output_dir / "pump_mechanism_taxonomy.csv", taxonomy)
     _write_csv(config.output_dir / "pump_mechanism_taxonomy_by_axis.csv", taxonomy_by_axis)
+    _write_csv(config.output_dir / "pump_mechanism_response_surfaces.csv", response_surfaces)
 
     run_config = _run_config_frame(
         config=config,
@@ -324,12 +329,14 @@ def run_pump_mechanism_stability_research(
         quality=quality,
         cache_coverage=cache_coverage,
         taxonomy=taxonomy,
+        response_surfaces=response_surfaces,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
 
     print(
-        f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} taxonomy={len(taxonomy):,} "
+        f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} "
+        f"taxonomy={len(taxonomy):,} response_surfaces={len(response_surfaces):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -1003,6 +1010,202 @@ def _finite_or_negative(value: float) -> float:
     return value if math.isfinite(value) else -1.0
 
 
+
+RESPONSE_SURFACE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("mechanism_id", ("mechanism_id",)),
+    ("mechanism_family", ("mechanism_family",)),
+    ("session", ("session_bucket",)),
+    ("acceptance", ("acceptance_regime",)),
+    ("oi", ("oi_regime",)),
+    ("flow", ("flow_regime",)),
+    ("price_progress", ("price_progress_regime",)),
+    ("structure", ("structure_regime",)),
+    ("late_buyer", ("late_buyer_regime",)),
+    ("acceptance_session", ("acceptance_regime", "session_bucket")),
+    ("oi_acceptance", ("oi_regime", "acceptance_regime")),
+    ("family_session", ("mechanism_family", "session_bucket")),
+)
+
+DOWNSIDE_HIT_THRESHOLDS: tuple[tuple[str, float], ...] = (
+    ("minus_0p50pct", -0.005),
+    ("minus_1p00pct", -0.010),
+    ("minus_2p00pct", -0.020),
+)
+
+
+def _build_response_surfaces(*, taxonomy: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
+    """Summarize future response distributions by entry-known mechanism groups.
+
+    This is still a pre-trade diagnostics layer: taxonomy/event features define
+    the groups, outcomes supply labels after ``feature_cutoff_ms``.  The function
+    never ranks candidate entries, builds stops, computes PnL, or changes rule
+    thresholds from final/holdout information.
+    """
+
+    columns = _response_surface_columns()
+    if taxonomy.empty or outcomes.empty:
+        return pd.DataFrame(columns=columns)
+    required_taxonomy = {"event_id", "symbol", "date", "session_bucket"}
+    required_outcomes = {"event_id", "outcome_status"}
+    if not required_taxonomy.issubset(taxonomy.columns) or not required_outcomes.issubset(outcomes.columns):
+        return pd.DataFrame(columns=columns)
+
+    taxonomy_input_columns = [
+        "event_id", "symbol", "feature_cutoff_ms", "feature_cutoff_time_utc", "day_ord", "date", "session_bucket",
+        "pump_tier", "acceptance_regime", "oi_regime", "flow_regime", "price_progress_regime", "structure_regime",
+        "late_buyer_regime", "mechanism_id", "mechanism_family",
+    ]
+    available_taxonomy_columns = [column for column in taxonomy_input_columns if column in taxonomy.columns]
+    outcome_columns = [
+        "event_id", "outcome_status", "future_1m_rows", "future_ret_5m", "future_ret_10m", "future_ret_15m",
+        "future_ret_30m", "future_ret_60m", "future_min_ret_15m", "future_min_ret_30m", "future_min_ret_60m",
+        "future_max_ret_15m", "future_max_ret_30m", "future_max_ret_60m", "down_mfe_15m", "down_mfe_30m",
+        "down_mfe_60m", "up_mae_15m", "up_mae_30m", "up_mae_60m", "reclaimed_pump_high_60m",
+        "broke_structural_low_60m", "time_to_reclaim_pump_high_minutes", "time_to_structural_low_break_minutes",
+    ]
+    available_outcome_columns = [column for column in outcome_columns if column in outcomes.columns]
+    joined = taxonomy[available_taxonomy_columns].merge(outcomes[available_outcome_columns], on="event_id", how="inner")
+    if joined.empty:
+        return pd.DataFrame(columns=columns)
+    joined = joined.loc[joined["outcome_status"].astype(str) == "ok"].copy()
+    if joined.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    for surface_name, group_columns in RESPONSE_SURFACE_GROUPS:
+        if not all(column in joined.columns for column in group_columns):
+            continue
+        grouped = joined.groupby(list(group_columns), dropna=False)
+        for group_key, frame in grouped:
+            key_values = group_key if isinstance(group_key, tuple) else (group_key,)
+            group_value = "|".join(str(value) for value in key_values)
+            rows.append(_response_surface_row(surface_name=surface_name, group_columns=group_columns, group_value=group_value, frame=frame))
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["surface_name", "events", "group_value"])
+
+
+def _response_surface_row(*, surface_name: str, group_columns: tuple[str, ...], group_value: str, frame: pd.DataFrame) -> dict[str, object]:
+    event_count = int(len(frame))
+    row: dict[str, object] = {
+        "research_id": RESEARCH_ID,
+        "surface_name": surface_name,
+        "group_columns": ",".join(group_columns),
+        "group_value": group_value,
+        "events": event_count,
+        "symbols": int(frame["symbol"].nunique()) if "symbol" in frame.columns else 0,
+        "active_days": int(frame["date"].nunique()) if "date" in frame.columns else 0,
+        "sessions": int(frame["session_bucket"].nunique()) if "session_bucket" in frame.columns else 0,
+        "mechanism_ids": int(frame["mechanism_id"].nunique()) if "mechanism_id" in frame.columns else 0,
+        "families": int(frame["mechanism_family"].nunique()) if "mechanism_family" in frame.columns else 0,
+        "response_surface_model": "pre_trade_mechanism_outcome_distribution_v1",
+        "taxonomy_source_model": "entry_known_deterministic_mechanism_axes_v1",
+        "outcome_source_model": OUTCOME_MODEL,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+    for minutes in OUTCOME_HORIZONS_MINUTES:
+        future_ret = _numeric_series(frame, f"future_ret_{minutes}m")
+        future_min = _numeric_series(frame, f"future_min_ret_{minutes}m")
+        future_max = _numeric_series(frame, f"future_max_ret_{minutes}m")
+        row[f"median_future_ret_{minutes}m"] = _safe_median(future_ret)
+        row[f"avg_future_ret_{minutes}m"] = _safe_mean(future_ret)
+        row[f"p25_future_ret_{minutes}m"] = _safe_quantile(future_ret, 0.25)
+        row[f"p75_future_ret_{minutes}m"] = _safe_quantile(future_ret, 0.75)
+        row[f"median_future_min_ret_{minutes}m"] = _safe_median(future_min)
+        row[f"median_future_max_ret_{minutes}m"] = _safe_median(future_max)
+        row[f"future_ret_positive_rate_{minutes}m"] = _numeric_condition_rate(future_ret, threshold=0.0, side="gt")
+        for label, threshold in DOWNSIDE_HIT_THRESHOLDS:
+            row[f"downside_hit_rate_{label}_{minutes}m"] = _numeric_condition_rate(future_min, threshold=threshold, side="le")
+    row["reclaim_rate_60m"] = _rate(_as_bool_series(frame.get("reclaimed_pump_high_60m", pd.Series(dtype=object))))
+    row["structural_low_break_rate_60m"] = _rate(_as_bool_series(frame.get("broke_structural_low_60m", pd.Series(dtype=object))))
+    row["median_time_to_reclaim_pump_high_minutes"] = _safe_median(_numeric_series(frame, "time_to_reclaim_pump_high_minutes"))
+    row["median_time_to_structural_low_break_minutes"] = _safe_median(_numeric_series(frame, "time_to_structural_low_break_minutes"))
+    row["downside_monotonicity_score"] = _downside_monotonicity_score(row)
+    row["directional_response_score"] = _directional_response_score(row)
+    row.update(_dependency_metrics(frame))
+    return row
+
+
+def _response_surface_columns() -> list[str]:
+    columns = [
+        "research_id", "surface_name", "group_columns", "group_value", "events", "symbols", "active_days", "sessions",
+        "mechanism_ids", "families", "response_surface_model", "taxonomy_source_model", "outcome_source_model",
+        "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+    for minutes in OUTCOME_HORIZONS_MINUTES:
+        columns.extend(
+            [
+                f"median_future_ret_{minutes}m", f"avg_future_ret_{minutes}m", f"p25_future_ret_{minutes}m",
+                f"p75_future_ret_{minutes}m", f"median_future_min_ret_{minutes}m", f"median_future_max_ret_{minutes}m",
+                f"future_ret_positive_rate_{minutes}m",
+            ]
+        )
+        for label, _threshold in DOWNSIDE_HIT_THRESHOLDS:
+            columns.append(f"downside_hit_rate_{label}_{minutes}m")
+    columns.extend(
+        [
+            "reclaim_rate_60m", "structural_low_break_rate_60m", "median_time_to_reclaim_pump_high_minutes",
+            "median_time_to_structural_low_break_minutes", "downside_monotonicity_score", "directional_response_score",
+            "top_event_dependency_pct", "top_symbol_dependency_pct", "largest_symbol_event_share", "largest_day_event_share",
+        ]
+    )
+    return columns
+
+
+def _downside_monotonicity_score(row: dict[str, object]) -> float:
+    values = [_float(row.get(f"median_future_min_ret_{minutes}m")) for minutes in OUTCOME_HORIZONS_MINUTES]
+    finite_values = [value for value in values if math.isfinite(value)]
+    if len(finite_values) < 2:
+        return float("nan")
+    non_increasing = 0
+    comparisons = 0
+    previous = finite_values[0]
+    for value in finite_values[1:]:
+        comparisons += 1
+        if value <= previous + 1e-12:
+            non_increasing += 1
+        previous = value
+    return non_increasing / comparisons if comparisons else float("nan")
+
+
+def _directional_response_score(row: dict[str, object]) -> float:
+    median_ret_30 = _float(row.get("median_future_ret_30m"))
+    median_ret_60 = _float(row.get("median_future_ret_60m"))
+    median_min_30 = _float(row.get("median_future_min_ret_30m"))
+    median_min_60 = _float(row.get("median_future_min_ret_60m"))
+    break_rate = _float(row.get("structural_low_break_rate_60m"))
+    reclaim_rate = _float(row.get("reclaim_rate_60m"))
+    components = [
+        -median_ret_30 if math.isfinite(median_ret_30) else np.nan,
+        -median_ret_60 if math.isfinite(median_ret_60) else np.nan,
+        -median_min_30 if math.isfinite(median_min_30) else np.nan,
+        -median_min_60 if math.isfinite(median_min_60) else np.nan,
+        break_rate if math.isfinite(break_rate) else np.nan,
+        1.0 - reclaim_rate if math.isfinite(reclaim_rate) else np.nan,
+    ]
+    finite = [float(value) for value in components if math.isfinite(float(value))]
+    return float(np.mean(finite)) if finite else float("nan")
+
+
+def _dependency_metrics(frame: pd.DataFrame) -> dict[str, float]:
+    event_count = max(int(len(frame)), 1)
+    largest_symbol_share = 0.0
+    largest_day_share = 0.0
+    if "symbol" in frame.columns and not frame.empty:
+        largest_symbol_share = float(frame["symbol"].value_counts(dropna=False).iloc[0]) / event_count
+    if "date" in frame.columns and not frame.empty:
+        largest_day_share = float(frame["date"].value_counts(dropna=False).iloc[0]) / event_count
+    return {
+        "top_event_dependency_pct": 1.0 / event_count,
+        "top_symbol_dependency_pct": largest_symbol_share,
+        "largest_symbol_event_share": largest_symbol_share,
+        "largest_day_event_share": largest_day_share,
+    }
+
+
 def _run_config_frame(
     *,
     config: PumpMechanismStabilityConfig,
@@ -1015,6 +1218,7 @@ def _run_config_frame(
     quality: pd.DataFrame,
     cache_coverage: dict[str, object],
     taxonomy: pd.DataFrame,
+    response_surfaces: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -1022,6 +1226,7 @@ def _run_config_frame(
     ok_events = int((events.get("event_status", pd.Series(dtype=str)).astype(str) == "ok").sum()) if not events.empty else 0
     taxonomy_rows = int(len(taxonomy)) if taxonomy is not None else 0
     unique_mechanism_ids = int(taxonomy["mechanism_id"].nunique()) if taxonomy is not None and not taxonomy.empty and "mechanism_id" in taxonomy.columns else 0
+    response_surface_rows = int(len(response_surfaces)) if response_surfaces is not None else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -1070,6 +1275,10 @@ def _run_config_frame(
         "outcomes": int(len(outcomes)),
         "taxonomy_rows": taxonomy_rows,
         "unique_mechanism_ids": unique_mechanism_ids,
+        "response_surface_rows": response_surface_rows,
+        "response_surface_model": "pre_trade_mechanism_outcome_distribution_v1",
+        "response_surfaces_use_pnl": False,
+        "response_surfaces_use_short_entry": False,
         "taxonomy_feature_source_model": "entry_known_events_only_no_outcomes",
         "taxonomy_uses_outcome_columns": False,
         "created_at_utc": datetime.now(UTC).isoformat(),
@@ -1092,7 +1301,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_event_quality.csv", "written", "cache-only data quality and coverage audit"),
         ("pump_mechanism_taxonomy.csv", "written", "entry-known mechanism axes per event"),
         ("pump_mechanism_taxonomy_by_axis.csv", "written", "axis-level taxonomy counts and breadth diagnostics"),
-        ("pump_mechanism_response_surfaces.csv", "planned", "mechanism response diagnostics before PnL"),
+        ("pump_mechanism_response_surfaces.csv", "written", "mechanism response diagnostics before PnL"),
         ("pump_mechanism_negative_space.csv", "planned", "all generated neighbors including failed/rejected rules"),
         ("pump_mechanism_plateau_basins.csv", "planned", "basin-level plateau scores"),
         ("pump_mechanism_daily_oos.csv", "planned", "daily prequential OOS ledger"),
@@ -1633,6 +1842,46 @@ def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
         return pd.Series(np.nan, index=frame.index, dtype=float)
     return pd.to_numeric(frame[column], errors="coerce")
 
+
+
+def _safe_mean(series: pd.Series) -> float:
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    return float(values.mean()) if not values.empty else float("nan")
+
+
+def _safe_quantile(series: pd.Series, quantile: float) -> float:
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    return float(values.quantile(float(quantile))) if not values.empty else float("nan")
+
+
+
+def _numeric_condition_rate(series: pd.Series, *, threshold: float, side: str) -> float:
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        return float("nan")
+    if side == "gt":
+        return float((values > float(threshold)).mean())
+    if side == "le":
+        return float((values <= float(threshold)).mean())
+    raise ValueError(f"unsupported numeric condition side: {side}")
+
+def _rate(mask: pd.Series | np.ndarray | Sequence[object]) -> float:
+    if isinstance(mask, pd.Series):
+        values = mask.dropna()
+    else:
+        values = pd.Series(mask).dropna()
+    if values.empty:
+        return float("nan")
+    return float(values.astype(bool).mean())
+
+
+def _as_bool_series(values: pd.Series) -> pd.Series:
+    if values.empty:
+        return pd.Series(dtype=bool)
+    if values.dtype == bool:
+        return values
+    normalized = values.astype(str).str.strip().str.lower()
+    return normalized.isin({"1", "true", "yes", "y"})
 
 def _safe_median(series: pd.Series) -> float:
     values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
