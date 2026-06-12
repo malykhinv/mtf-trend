@@ -43,6 +43,22 @@ DEFAULT_MC_ITERATIONS = 1000
 DEFAULT_MIN_CALENDAR_POSITIVE_DAY_RATE = 0.60
 DEFAULT_SELF_IMPROVEMENT_QUEUE_ROWS = 400
 DEFAULT_DIVERSIFIED_PORTFOLIO_MAX_CANDIDATES = 18
+SOURCE_TRIGGER_PREFIXES = {
+    "failed_pump_structural": "failed_",
+    "failed_pump_075_path": "path075_",
+    "large_runner_local_high": "large_",
+    "large_runner_failed_continuation": "lfail_",
+}
+LARGE_FAILURE_NATURE_BY_CANDIDATE_ID = {
+    "S1_close15_fail": "failed_continuation_close15_le0",
+    "S1_quote5_close15_fail": "high_quote_failed_close15_le0",
+    "S1_trade10_close15_fail": "high_trade_failed_close15_le0",
+    "S1_sustain_close15_fail": "sustained_m1_failed_close15_le0",
+    "S2_close10_le2": "failed_continuation_close10_le2",
+    "S2_last2_close10_le2": "late_buyer_failed_close10_le2",
+    "S3_last2_close15_le2": "late_buyer_failed_close15_le2",
+    "S4_big_early_close15_le4": "big_early_stall_close15_le4",
+}
 MANUAL_RESEARCH_DOCS = [
     Path("research/SHORT_FADE_CORE_EDGE.md"),
     Path("research/SHORT_FADE_DIVERSIFIED_SLEEVES.md"),
@@ -127,11 +143,16 @@ ENTRY_FEATURES = {
     "early_return_pct",
     "early_quote_ratio_24h_scaled",
     "early_trade_ratio_24h_scaled",
+    "early_taker_buy_quote_share",
     "m1_taker_buy_quote_share",
     "m1_quote_top1_share",
     "m1_trade_top1_share",
+    "m1_last2_quote_share",
     "m1_last2_trade_share",
+    "m1_quote_accel_last2_vs_first2",
+    "m1_trade_accel_last2_vs_first2",
     "m1_sustain_strict",
+    "close15_to_high15_ratio",
     "base_touched_before_entry",
     "deep2_touched_before_entry",
     "fader_classifier_15",
@@ -554,6 +575,74 @@ def build_failed_outcomes(failed_dir: Path, *, max_rows: int | None = None) -> p
     return _normalize_outcome_columns(df)
 
 
+def build_failed_075_path_outcomes(failed_dir: Path, *, max_rows: int | None = None) -> pd.DataFrame:
+    path = failed_dir / "short_structural_075_path_replay_trades.csv"
+    usecols = [
+        "status",
+        "policy",
+        "symbol",
+        "signal_id",
+        "setup_id",
+        "family",
+        "stop_model",
+        "entry_timestamp_ms",
+        "entry_time_utc",
+        "date",
+        "month",
+        "session_bucket",
+        "signal_variant",
+        "pump_tier",
+        "entry_price",
+        "initial_stop",
+        "initial_risk_pct",
+        "net_r",
+        "mfe_r",
+        "mae_r",
+        "exit_timestamp_ms",
+        "exit_reason",
+        "hold_minutes",
+        "partial_taken",
+        "be_armed",
+        "trail_updates",
+        "structural_break_depth_pct",
+        "failed_retest_distance_pct",
+        "minutes_from_seed_to_break",
+        "post_dist",
+        "seed_dist",
+    ]
+    df = _read_csv_selected(path, usecols, nrows=max_rows)
+    if df.empty:
+        return df
+    df = df[df["status"].astype(str).eq("closed")].copy()
+    df["source"] = "failed_pump_075_path"
+    df["event_id"] = "fp075:" + _series_or(df, "signal_id", "").astype(str)
+    missing_signal = df["event_id"].eq("fp075:")
+    if missing_signal.any():
+        df.loc[missing_signal, "event_id"] = (
+            "fp075:"
+            + _series_or(df.loc[missing_signal], "setup_id", "").astype(str)
+            + ":"
+            + _series_or(df.loc[missing_signal], "entry_timestamp_ms", "").astype(str)
+        )
+    df["nature_id"] = _series_or(df, "family", "unknown").astype(str)
+    df["trigger_id"] = _series_or(df, "signal_variant", "unknown").astype(str)
+    df["management_id"] = _series_or(df, "policy", "unknown").astype(str)
+    df["entry_timestamp_ms"] = _num(df, "entry_timestamp_ms")
+    df["known_at_ms"] = df["entry_timestamp_ms"]
+    df["feature_available_at_ms"] = df["entry_timestamp_ms"]
+    df["date"] = pd.to_datetime(df["entry_timestamp_ms"], unit="ms", utc=True, errors="coerce").dt.normalize()
+    df["month"] = df["date"].dt.tz_localize(None).dt.to_period("M").astype(str)
+    df["symbol_norm"] = df["symbol"].map(_norm_symbol)
+    df["entry_model_id"] = "structural_next_open_075_path"
+    df["data_quality_status"] = "replay_artifact_075_path"
+    df["base_touched_before_entry"] = False
+    df["deep2_touched_before_entry"] = False
+    df["fader_classifier_15"] = False
+    risk = _num(df, "initial_risk_pct")
+    df["cost10_r"] = _num(df, "net_r") - (0.001 / risk.replace(0, np.nan))
+    return _normalize_outcome_columns(df)
+
+
 def _entry_known_large_desc(df: pd.DataFrame) -> pd.Series:
     desc = _series_or(df, "candidate_desc", "").astype(str)
     delay = _num(df, "delay_min")
@@ -660,6 +749,113 @@ def build_large_outcomes(large_dir: Path, *, max_rows: int | None = None) -> pd.
     return _normalize_outcome_columns(df)
 
 
+def build_large_failure_outcomes(large_dir: Path, *, max_rows: int | None = None) -> pd.DataFrame:
+    replay_path = large_dir / "large_runner_short_failure_replay_trades.csv"
+    setup_path = large_dir / "large_runner_session_outcome_research_table.csv"
+    replay_cols = [
+        "candidate_id",
+        "candidate_desc",
+        "policy",
+        "symbol",
+        "setup_id",
+        "status",
+        "skip_reason",
+        "entry_timestamp_ms",
+        "entry_time_utc",
+        "seed_close_ms",
+        "raw_entry_price",
+        "entry_price",
+        "initial_stop",
+        "initial_risk_pct",
+        "exit_timestamp_ms",
+        "exit_time_utc",
+        "exit_price",
+        "exit_reason",
+        "gross_r",
+        "net_r",
+        "mfe_r",
+        "mae_r",
+        "runner10_label",
+        "fader_label",
+        "future_min_path_pct",
+    ]
+    setup_cols = [
+        "symbol",
+        "seed_close_ms",
+        "seed_close_utc",
+        "session_bucket",
+        "outcome_class",
+        "future60_low_break_offset_min",
+        "runner_high10_hit_offset_min",
+        "base_touch_offset_min",
+        "deep2_touch_offset_min",
+        "close_ret_10m",
+        "close_ret_15m",
+        "high_ret_15m",
+        "wick_ret_15m",
+        "pre60_range_pct",
+        "pre60_return_pct",
+        "early_return_pct",
+        "early_quote_ratio_24h_scaled",
+        "early_trade_ratio_24h_scaled",
+        "early_taker_buy_quote_share",
+        "m1_taker_buy_quote_share",
+        "m1_quote_top1_share",
+        "m1_trade_top1_share",
+        "m1_last2_quote_share",
+        "m1_last2_trade_share",
+        "m1_quote_accel_last2_vs_first2",
+        "m1_trade_accel_last2_vs_first2",
+        "m1_sustain_strict",
+        "close15_to_high15_ratio",
+    ]
+    replay = _read_csv_selected(replay_path, replay_cols, nrows=max_rows)
+    if replay.empty:
+        return replay
+    setup = _read_csv_selected(setup_path, setup_cols)
+    replay = replay[replay["status"].astype(str).eq("closed")].copy()
+    if not setup.empty:
+        df = replay.merge(setup, on=["symbol", "seed_close_ms"], how="left", validate="many_to_one")
+    else:
+        df = replay
+    df["entry_timestamp_ms"] = _num(df, "entry_timestamp_ms")
+    df["seed_close_ms"] = _num(df, "seed_close_ms")
+    df["delay_min"] = (df["entry_timestamp_ms"] - df["seed_close_ms"]) / 60_000.0
+    df = df[_entry_known_large_desc(df)].copy()
+    df["source"] = "large_runner_failed_continuation"
+    candidate_id = _series_or(df, "candidate_id", "").astype(str)
+    df["event_id"] = "lrf:" + df["symbol"].astype(str) + ":" + _series_or(df, "seed_close_ms", "").astype(str)
+    df["nature_id"] = candidate_id.map(LARGE_FAILURE_NATURE_BY_CANDIDATE_ID).fillna(
+        _series_or(df, "candidate_desc", "unknown").astype(str)
+    )
+    df["trigger_id"] = df["nature_id"]
+    df["management_id"] = _series_or(df, "policy", "unknown").astype(str)
+    df["stop_model"] = "failure_window_initial_stop"
+    df["known_at_ms"] = df["entry_timestamp_ms"]
+    df["feature_available_at_ms"] = df["entry_timestamp_ms"]
+    df["date"] = pd.to_datetime(df["entry_timestamp_ms"], unit="ms", utc=True, errors="coerce").dt.normalize()
+    df["month"] = df["date"].dt.tz_localize(None).dt.to_period("M").astype(str)
+    df["symbol_norm"] = df["symbol"].map(_norm_symbol)
+    df["entry_model_id"] = "failure_close10_15_next_open_proxy"
+    df["data_quality_status"] = "replay_artifact_short_failure"
+    delay = _num(df, "delay_min").fillna(0)
+    df["base_touched_before_entry"] = _num(df, "base_touch_offset_min").le(delay).fillna(False)
+    df["deep2_touched_before_entry"] = _num(df, "deep2_touch_offset_min").le(delay).fillna(False)
+    df["fader_classifier_15"] = delay.ge(15) & _num(df, "close_ret_15m").le(0.0339) & _num(df, "pre60_range_pct").ge(0.10)
+    low_offset = _num(df, "future60_low_break_offset_min")
+    rel = low_offset - delay
+    timing = pd.Series("no_low_break", index=df.index)
+    timing[low_offset.notna() & rel.lt(0)] = "already_faded_before_entry"
+    timing[low_offset.notna() & rel.ge(0) & rel.le(5)] = "fade_0_5_after_entry"
+    timing[low_offset.notna() & rel.gt(5) & rel.le(10)] = "fade_5_10_after_entry"
+    timing[low_offset.notna() & rel.gt(10) & rel.le(20)] = "fade_10_20_after_entry"
+    timing[low_offset.notna() & rel.gt(20)] = "fade_late_20plus"
+    df["eval_timing_bucket"] = timing
+    risk = _num(df, "initial_risk_pct")
+    df["cost10_r"] = _num(df, "net_r") - (0.001 / risk.replace(0, np.nan))
+    return _normalize_outcome_columns(df)
+
+
 def _normalize_outcome_columns(df: pd.DataFrame) -> pd.DataFrame:
     normalized = df.copy()
     required_defaults: dict[str, object] = {
@@ -701,11 +897,16 @@ def _normalize_outcome_columns(df: pd.DataFrame) -> pd.DataFrame:
         "early_return_pct": np.nan,
         "early_quote_ratio_24h_scaled": np.nan,
         "early_trade_ratio_24h_scaled": np.nan,
+        "early_taker_buy_quote_share": np.nan,
         "m1_taker_buy_quote_share": np.nan,
         "m1_quote_top1_share": np.nan,
         "m1_trade_top1_share": np.nan,
+        "m1_last2_quote_share": np.nan,
         "m1_last2_trade_share": np.nan,
+        "m1_quote_accel_last2_vs_first2": np.nan,
+        "m1_trade_accel_last2_vs_first2": np.nan,
         "m1_sustain_strict": False,
+        "close15_to_high15_ratio": np.nan,
         "base_touched_before_entry": False,
         "deep2_touched_before_entry": False,
         "fader_classifier_15": False,
@@ -741,10 +942,15 @@ def _normalize_outcome_columns(df: pd.DataFrame) -> pd.DataFrame:
         "early_return_pct",
         "early_quote_ratio_24h_scaled",
         "early_trade_ratio_24h_scaled",
+        "early_taker_buy_quote_share",
         "m1_taker_buy_quote_share",
         "m1_quote_top1_share",
         "m1_trade_top1_share",
+        "m1_last2_quote_share",
         "m1_last2_trade_share",
+        "m1_quote_accel_last2_vs_first2",
+        "m1_trade_accel_last2_vs_first2",
+        "close15_to_high15_ratio",
         "future60_low_break_offset_min",
     ]:
         normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
@@ -764,8 +970,10 @@ def build_event_store(
 ) -> pd.DataFrame:
     output_dir.mkdir(parents=True, exist_ok=True)
     failed = build_failed_outcomes(failed_dir, max_rows=max_rows_per_source)
+    failed_075 = build_failed_075_path_outcomes(failed_dir, max_rows=max_rows_per_source)
     large = build_large_outcomes(large_dir, max_rows=max_rows_per_source)
-    frames = [frame for frame in [failed, large] if not frame.empty]
+    large_failure = build_large_failure_outcomes(large_dir, max_rows=max_rows_per_source)
+    frames = [frame for frame in [failed, failed_075, large, large_failure] if not frame.empty]
     if not frames:
         raise FileNotFoundError("No supported replay artifacts were found.")
     outcomes = pd.concat(frames, ignore_index=True)
@@ -774,7 +982,7 @@ def build_event_store(
     outcomes.to_parquet(output_dir / "event_outcomes.parquet", index=False)
     events.to_parquet(output_dir / "events.parquet", index=False)
     metadata = {
-        "schema_version": "short_robust_plateau_event_store_v1",
+        "schema_version": "short_robust_plateau_event_store_v2",
         "rows": int(len(outcomes)),
         "events": int(events["event_id"].nunique()),
         "sources": outcomes["source"].value_counts().to_dict(),
@@ -784,6 +992,7 @@ def build_event_store(
     }
     _write_json(output_dir / "metadata.json", metadata)
     _write_data_quality_report(output_dir, outcomes)
+    _write_source_session_nature_summary(output_dir, outcomes)
     return outcomes
 
 
@@ -816,10 +1025,58 @@ Limitations:
 ```text
 This event store is built from existing replay artifacts. It is suitable for
 plateau/WFA engine development and candidate rejection. It is not a fresh OOS
-proof and does not replace a true path replay for new lower-high triggers.
+proof and does not replace a true raw-candle/live-forward path replay.
+
+large_runner_failed_continuation uses the replay artifact initial_stop label as
+failure_window_initial_stop because the artifact does not expose the exact
+local-high construction. Do not treat that source as exchange/live proof of a
+specific stop placement until the raw replay builder exports the stop source.
 ```
 """
     (output_dir / "data_quality_report.md").write_text(text, encoding="utf-8")
+
+
+def _write_source_session_nature_summary(output_dir: Path, outcomes: pd.DataFrame) -> None:
+    if outcomes.empty:
+        pd.DataFrame().to_csv(output_dir / "source_session_nature_summary.csv", index=False)
+        return
+    rows: list[dict[str, object]] = []
+    group_cols = ["source", "session_bucket", "nature_id"]
+    for keys, group in outcomes.groupby(group_cols, dropna=False):
+        source, session, nature = keys
+        net = pd.to_numeric(group["net_r"], errors="coerce")
+        cost = pd.to_numeric(group["cost10_r"], errors="coerce")
+        trade_pct, removed_trades, winning_trades = _top_remove_pct_to_negative(net)
+        symbol_pct, removed_symbols, winning_symbols = _top_remove_pct_to_negative(group.groupby("symbol")["cost10_r"].sum())
+        rows.append(
+            {
+                "source": source,
+                "session_bucket": session,
+                "nature_id": nature,
+                "rows": int(len(group)),
+                "events": int(group["event_id"].nunique()),
+                "symbols": int(group["symbol"].nunique()),
+                "days": int(group["date"].nunique()),
+                "avg_r": float(net.mean()) if len(net.dropna()) else float("nan"),
+                "median_r": float(net.median()) if len(net.dropna()) else float("nan"),
+                "cost10_avg_r": float(cost.mean()) if len(cost.dropna()) else float("nan"),
+                "cost10_median_r": float(cost.median()) if len(cost.dropna()) else float("nan"),
+                "win_rate": float(net.gt(0).mean()) if len(net.dropna()) else float("nan"),
+                "top_trade_independence_pct": float(trade_pct),
+                "removed_top_trades_to_negative": int(removed_trades),
+                "winning_trades": int(winning_trades),
+                "top_symbol_independence_pct": float(symbol_pct),
+                "removed_top_symbols_to_negative": int(removed_symbols),
+                "winning_symbols": int(winning_symbols),
+                "avg_initial_risk_pct": float(pd.to_numeric(group["initial_risk_pct"], errors="coerce").mean()),
+                "fader_label_rate": float(group["fader_label"].astype(bool).mean()) if "fader_label" in group else float("nan"),
+                "runner10_label_rate": float(group["runner10_label"].astype(bool).mean()) if "runner10_label" in group else float("nan"),
+            }
+        )
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(["cost10_avg_r", "events"], ascending=[False, False])
+    out.to_csv(output_dir / "source_session_nature_summary.csv", index=False)
 
 
 def _load_outcomes(output_dir: Path) -> pd.DataFrame:
@@ -848,26 +1105,57 @@ def _trigger_rules(df: pd.DataFrame) -> dict[str, pd.Series]:
     delay = _num(df, "delay_min")
     close10 = _num(df, "close_ret_10m")
     close15 = _num(df, "close_ret_15m")
+    high15 = _num(df, "high_ret_15m")
+    wick15 = _num(df, "wick_ret_15m")
     pre60_range = _num(df, "pre60_range_pct")
     pre60_ret = _num(df, "pre60_return_pct")
+    early_return = _num(df, "early_return_pct")
+    early_quote = _num(df, "early_quote_ratio_24h_scaled")
+    early_trade = _num(df, "early_trade_ratio_24h_scaled")
+    early_taker = _num(df, "early_taker_buy_quote_share")
     m1_taker = _num(df, "m1_taker_buy_quote_share")
     last2_trade = _num(df, "m1_last2_trade_share")
+    top1_trade = _num(df, "m1_trade_top1_share")
+    close15_ratio = _num(df, "close15_to_high15_ratio")
+    failed_source = df["source"].eq("failed_pump_structural")
+    path075_source = df["source"].eq("failed_pump_075_path")
+    large_source = df["source"].eq("large_runner_local_high")
+    lfail_source = df["source"].eq("large_runner_failed_continuation")
     return {
         "trigger_all": pd.Series(True, index=df.index),
-        "failed_break_le_15": df["source"].eq("failed_pump_structural") & break_min.le(15),
-        "failed_break_le_20": df["source"].eq("failed_pump_structural") & break_min.le(20),
-        "failed_break_ge_1p5": df["source"].eq("failed_pump_structural") & break_depth.ge(0.015),
-        "failed_break_ge_2p0": df["source"].eq("failed_pump_structural") & break_depth.ge(0.020),
-        "failed_retest_ge_0p8": df["source"].eq("failed_pump_structural") & retest.ge(0.008),
-        "failed_fast_break_retest": df["source"].eq("failed_pump_structural") & break_min.le(20) & retest.ge(0.008),
-        "failed_taker_45_55": df["source"].eq("failed_pump_structural") & taker.between(0.45, 0.55, inclusive="both"),
-        "large_fader15": df["source"].eq("large_runner_local_high") & delay.ge(15) & close15.le(0.0339) & pre60_range.ge(0.10),
-        "large_fader15_no_base": df["source"].eq("large_runner_local_high") & delay.ge(15) & close15.le(0.0339) & pre60_range.ge(0.10) & ~df["base_touched_before_entry"].fillna(False),
-        "large_close15_le0": df["source"].eq("large_runner_local_high") & delay.ge(15) & close15.le(0.0) & pre60_range.ge(0.10),
-        "large_close10_le2": df["source"].eq("large_runner_local_high") & delay.ge(10) & close10.le(0.02),
-        "large_taker_45_55": df["source"].eq("large_runner_local_high") & m1_taker.between(0.45, 0.55, inclusive="both"),
-        "large_pre60_down": df["source"].eq("large_runner_local_high") & pre60_ret.le(0),
-        "large_last2_trade_le45": df["source"].eq("large_runner_local_high") & last2_trade.le(0.45),
+        "failed_break_le_15": failed_source & break_min.le(15),
+        "failed_break_le_20": failed_source & break_min.le(20),
+        "failed_break_ge_1p5": failed_source & break_depth.ge(0.015),
+        "failed_break_ge_2p0": failed_source & break_depth.ge(0.020),
+        "failed_retest_ge_0p8": failed_source & retest.ge(0.008),
+        "failed_fast_break_retest": failed_source & break_min.le(20) & retest.ge(0.008),
+        "failed_taker_45_55": failed_source & taker.between(0.45, 0.55, inclusive="both"),
+        "path075_break_le_15": path075_source & break_min.le(15),
+        "path075_break_le_20": path075_source & break_min.le(20),
+        "path075_break_ge_1p5": path075_source & break_depth.ge(0.015),
+        "path075_break_ge_2p0": path075_source & break_depth.ge(0.020),
+        "path075_retest_ge_0p8": path075_source & retest.ge(0.008),
+        "path075_fast_break_retest": path075_source & break_min.le(20) & retest.ge(0.008),
+        "path075_last_lower_high_stop": path075_source & df["stop_model"].astype(str).eq("last_lower_high"),
+        "large_fader15": large_source & delay.ge(15) & close15.le(0.0339) & pre60_range.ge(0.10),
+        "large_fader15_no_base": large_source & delay.ge(15) & close15.le(0.0339) & pre60_range.ge(0.10) & ~df["base_touched_before_entry"].fillna(False),
+        "large_close15_le0": large_source & delay.ge(15) & close15.le(0.0) & pre60_range.ge(0.10),
+        "large_close10_le2": large_source & delay.ge(10) & close10.le(0.02),
+        "large_taker_45_55": large_source & m1_taker.between(0.45, 0.55, inclusive="both"),
+        "large_pre60_down": large_source & pre60_ret.le(0),
+        "large_last2_trade_le45": large_source & last2_trade.le(0.45),
+        "lfail_close15_le0": lfail_source & delay.ge(15) & close15.le(0.0),
+        "lfail_close10_le2": lfail_source & delay.ge(10) & close10.le(0.02),
+        "lfail_big_early_stall": lfail_source & delay.ge(15) & early_return.ge(0.06) & close15.le(0.04),
+        "lfail_high_flow_failed": lfail_source & delay.ge(15) & close15.le(0.0) & (early_quote.ge(5.0) | early_trade.ge(10.0)),
+        "lfail_sustain_failed": lfail_source & delay.ge(15) & close15.le(0.0) & df["m1_sustain_strict"].fillna(False),
+        "lfail_late_buyer_failed": lfail_source & delay.ge(10) & last2_trade.ge(0.50) & (close10.le(0.02) | close15.le(0.02)),
+        "lfail_neutral_taker": lfail_source & m1_taker.between(0.45, 0.55, inclusive="both"),
+        "lfail_pre60_up_failed": lfail_source & delay.ge(15) & pre60_ret.ge(0.0) & close15.le(0.0),
+        "lfail_low_top1_late_flow": lfail_source & last2_trade.ge(0.45) & top1_trade.le(0.45),
+        "lfail_wick_rejection": lfail_source & delay.ge(15) & wick15.ge(0.02) & close15_ratio.le(0.55),
+        "lfail_high15_not_extended": lfail_source & delay.ge(15) & high15.le(0.08) & close15.le(0.04),
+        "lfail_early_taker_not_extreme": lfail_source & early_taker.between(0.40, 0.62, inclusive="both"),
     }
 
 
@@ -1010,7 +1298,7 @@ def _axis_values_for_source(
     managements_available = ["ALL"] + source_df["management_id"].value_counts().head(12).index.astype(str).tolist()
     all_sessions = list(SESSION_RULES)
     all_risks = list(RISK_BUCKETS)
-    trigger_prefix = "failed_" if source == "failed_pump_structural" else "large_"
+    trigger_prefix = SOURCE_TRIGGER_PREFIXES.get(source, "")
     source_triggers = [name for name in trigger_masks if name == "trigger_all" or name.startswith(trigger_prefix)]
 
     if candidate_profile == "balanced_365d":
@@ -1033,7 +1321,20 @@ def _axis_values_for_source(
                 ],
                 source_triggers,
             )
-        else:
+        elif source == "failed_pump_075_path":
+            triggers = _ordered_existing(
+                [
+                    "trigger_all",
+                    "path075_fast_break_retest",
+                    "path075_last_lower_high_stop",
+                    "path075_break_le_15",
+                    "path075_break_ge_2p0",
+                    "path075_retest_ge_0p8",
+                    "path075_break_le_20",
+                ],
+                source_triggers,
+            )
+        elif source == "large_runner_local_high":
             triggers = _ordered_existing(
                 [
                     "trigger_all",
@@ -1044,6 +1345,24 @@ def _axis_values_for_source(
                     "large_close15_le0",
                     "large_taker_45_55",
                     "large_pre60_down",
+                ],
+                source_triggers,
+            )
+        else:
+            triggers = _ordered_existing(
+                [
+                    "trigger_all",
+                    "lfail_late_buyer_failed",
+                    "lfail_high_flow_failed",
+                    "lfail_big_early_stall",
+                    "lfail_close15_le0",
+                    "lfail_close10_le2",
+                    "lfail_sustain_failed",
+                    "lfail_neutral_taker",
+                    "lfail_pre60_up_failed",
+                    "lfail_wick_rejection",
+                    "lfail_high15_not_extended",
+                    "lfail_early_taker_not_extreme",
                 ],
                 source_triggers,
             )
@@ -1231,7 +1550,11 @@ def _build_hypothesis_grammar(
         add("risk_bucket", risk, rows_count=len(sub), unique_events=sub["event_id"].nunique(), primitive_kind="risk_filter")
     for trigger, mask in trigger_masks.items():
         sub = df[mask.fillna(False)]
-        source = "failed_pump_structural" if trigger.startswith("failed_") else "large_runner_local_high" if trigger.startswith("large_") else "ALL"
+        source = "ALL"
+        for source_name, prefix in SOURCE_TRIGGER_PREFIXES.items():
+            if prefix and trigger.startswith(prefix):
+                source = source_name
+                break
         add("trigger_rule", trigger, source=source, rows_count=len(sub), unique_events=sub["event_id"].nunique(), primitive_kind="entry_known_trigger")
 
     out = pd.DataFrame(rows)
@@ -2834,13 +3157,15 @@ def _build_theoretical_model_gap_analysis(
         return "missing"
 
     lookahead_ok = bool(not lookahead.empty and "status" in lookahead.columns and lookahead["status"].astype(str).eq("pass").all())
+    grammar_sources = set(hypothesis_grammar.loc[hypothesis_grammar["axis"].eq("source"), "value"].astype(str)) if not hypothesis_grammar.empty and "axis" in hypothesis_grammar.columns else set()
+    new_fader_sources_ok = {"large_runner_failed_continuation", "failed_pump_075_path"}.issubset(grammar_sources)
     rows = [
         {
             "capability": "entry_known_hypothesis_grammar",
             "theoretical_goal": "Typed primitives only from features available at or before entry.",
             "current_status": status(not hypothesis_grammar.empty),
             "implemented_artifact": "hypothesis_grammar.csv",
-            "remaining_gap": "Add new raw event sources before expanding grammar beyond existing artifacts.",
+            "remaining_gap": "Grammar now covers four replay event sources; raw/live-forward replay is still the final proof layer.",
             "priority": 2,
         },
         {
@@ -2872,7 +3197,7 @@ def _build_theoretical_model_gap_analysis(
             "theoretical_goal": "Use model failures to generate the next bounded search queue.",
             "current_status": status(not self_improvement_queue.empty),
             "implemented_artifact": "self_improvement_queue.csv",
-            "remaining_gap": "Queue still mutates existing artifact axes; it cannot invent unbuilt path-replay event sources.",
+            "remaining_gap": "Queue can mutate all cached replay sources; future work is central cross-run memory, not blind expansion.",
             "priority": 1,
         },
         {
@@ -2902,9 +3227,9 @@ def _build_theoretical_model_gap_analysis(
         {
             "capability": "new_fader_nature_discovery",
             "theoretical_goal": "Discover genuinely different fader natures, not just variants of the same failed-pump source.",
-            "current_status": "partial",
-            "implemented_artifact": "self_improvement_queue.csv",
-            "remaining_gap": "Requires new executable event-source/path replay builders for fresh lower-high, failed retest and static/runner separators.",
+            "current_status": status(new_fader_sources_ok, partial=True),
+            "implemented_artifact": "event_outcomes.parquet, source_session_nature_summary.csv, hypothesis_grammar.csv",
+            "remaining_gap": "Fresh failed-continuation and 0.75R lower-high path sources are now cached replay sources; true unseen/live-forward validation is still required.",
             "priority": 1,
         },
     ]
@@ -3122,6 +3447,32 @@ def _lookahead_audit(outcomes: pd.DataFrame, candidates: pd.DataFrame) -> pd.Dat
             "rows": int(outcomes["source"].eq("large_runner_local_high").sum()),
             "status": "pass",
         },
+        {
+            "check": "large_failure_close15_requires_delay15",
+            "violations": int((
+                outcomes["source"].eq("large_runner_failed_continuation")
+                & outcomes["nature_id"].astype(str).str.contains("close15", case=False, na=False)
+                & _num(outcomes, "delay_min").lt(15)
+            ).sum()),
+            "rows": int(outcomes["source"].eq("large_runner_failed_continuation").sum()),
+            "status": "pass",
+        },
+        {
+            "check": "large_failure_close10_requires_delay10",
+            "violations": int((
+                outcomes["source"].eq("large_runner_failed_continuation")
+                & outcomes["nature_id"].astype(str).str.contains("close10", case=False, na=False)
+                & _num(outcomes, "delay_min").lt(10)
+            ).sum()),
+            "rows": int(outcomes["source"].eq("large_runner_failed_continuation").sum()),
+            "status": "pass",
+        },
+        {
+            "check": "path075_source_has_no_delay_trigger_dependency",
+            "violations": int(any(str(rule).startswith("path075_m1_") or str(rule).startswith("path075_m3_") for rule in used_rules)),
+            "rows": int(outcomes["source"].eq("failed_pump_075_path").sum()),
+            "status": "pass",
+        },
     ]
     for row in rows:
         if int(row["violations"]) > 0:
@@ -3161,6 +3512,10 @@ def _write_final_report(
         scan_config = json.loads(scan_config_path.read_text(encoding="utf-8"))
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    source_session_nature = pd.DataFrame()
+    source_session_nature_path = output_dir / "source_session_nature_summary.csv"
+    if source_session_nature_path.exists():
+        source_session_nature = pd.read_csv(source_session_nature_path)
     cand_cols = [
         "candidate_id",
         "promoted",
@@ -3347,6 +3702,19 @@ def _write_final_report(
         "best_oos_trades",
         "best_candidate_id",
     ]
+    source_nature_cols = [
+        "source",
+        "session_bucket",
+        "nature_id",
+        "events",
+        "symbols",
+        "days",
+        "cost10_avg_r",
+        "cost10_median_r",
+        "win_rate",
+        "top_trade_independence_pct",
+        "top_symbol_independence_pct",
+    ]
     rejected_summary = rejected["reason"].value_counts().head(20).to_string() if not rejected.empty and "reason" in rejected.columns else "none"
     strict_count = int(meta_validation["strict_model_pass"].sum()) if not meta_validation.empty and "strict_model_pass" in meta_validation.columns else 0
     theoretical_count = int(meta_validation["theoretical_accept_pass"].sum()) if not meta_validation.empty and "theoretical_accept_pass" in meta_validation.columns else 0
@@ -3447,6 +3815,12 @@ Candidate axis summary:
 
 ```text
 {axis_summary.head(40)[[c for c in axis_cols if c in axis_summary.columns]].to_string(index=False) if not axis_summary.empty else 'none'}
+```
+
+Source/session/nature summary:
+
+```text
+{source_session_nature.head(40)[[c for c in source_nature_cols if c in source_session_nature.columns]].to_string(index=False) if not source_session_nature.empty else 'none'}
 ```
 
 Portfolio candidates:
@@ -3738,7 +4112,8 @@ final_judge: future unseen/live-forward period
 ```text
 H001 failed-pump A_plus_fast core
 H002 failed-pump diversified structural sleeves
-H003 large-runner 15m fader context + fresh lower-high retest, not yet replayed
+H003 large-runner failed-continuation fader contexts, cached replay source
+H004 failed-pump 0.75R lower-high/local-high path management, cached replay source
 ```
 """
     path.write_text(text, encoding="utf-8")

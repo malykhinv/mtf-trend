@@ -12950,3 +12950,58 @@ Research tooling only. This does not change live trading logic. Diversified
 portfolio output is still a research artifact and must pass strict robustness
 gates before strategy use.
 ```
+
+## 2026-06-12 - P564 scientist fader-source expansion
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Added `failed_pump_075_path` event source from
+  `short_structural_075_path_replay_trades.csv`.
+- Added `large_runner_failed_continuation` event source from
+  `large_runner_short_failure_replay_trades.csv`.
+- Added source-specific trigger families:
+  `path075_*` and `lfail_*`.
+- Added entry-known fields for failed-continuation analysis:
+  `early_taker_buy_quote_share`, `close15_to_high15_ratio`,
+  `m1_last2_quote_share`, and m1 acceleration features.
+- Added `source_session_nature_summary.csv` for source/session/nature readout.
+- Added lookahead checks for large-runner failed-continuation close10/close15
+  delay requirements and for avoiding post-entry path075 micro triggers.
+- Updated theory-vs-bot gap analysis so new fader nature discovery is backed by
+  cached replay sources, while still requiring future/live-forward validation.
+- Updated `research/HYPOTHESIS_REGISTRY.md`,
+  `research/SHORT_ROBUST_PLATEAU_ENGINE.md`,
+  `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`,
+  `research/EXPERIMENT_LOG.md`, and `research/STRATEGY_SPEC.md`.
+
+Validation:
+
+```text
+.\.venv\Scripts\python.exe -m compileall research_tools\short_robust_plateau_engine.py
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py build-event-store --output-dir .output\research_cache\short_robust_plateau_engine_source_smoke --max-rows-per-source 3000
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py smoke --output-dir .output\research_cache\short_robust_plateau_engine_scientist_smoke --max-rows-per-source 8000
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py run-365d --output-dir .output\research_cache\short_robust_plateau_engine_scientist_365d --progress-every 500
+```
+
+Full 365d validation output:
+
+```text
+event_outcome_rows=217910
+events=5147
+candidate_rows=3030
+promoted=168
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
+lookahead_audit=pass, 0 violations
+```
+
+Risk:
+
+```text
+Research tooling only. The new sources are replay-backed, not unseen proof.
+`large_runner_failed_continuation` uses the artifact's initial stop because the
+artifact does not expose the exact local-high stop construction.
+```

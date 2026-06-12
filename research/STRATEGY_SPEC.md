@@ -1418,3 +1418,29 @@ E_extreme_range_distributed
 `preheat_ignition`, E10 market continuation, and E15 market continuation remain
 research/readout branches only. They may help label confirmed runners or future
 retest hypotheses, but they are not part of the selected E5 quality category.
+
+## Short-Fader Research Candidate Families
+
+These are research-only short-fade candidate families. They are not live trading
+logic until they pass strict robustness gates and a fresh unseen/live-forward
+validation period.
+
+```text
+large_runner_failed_continuation:
+  after a long anomaly, wait until the 10m/15m decision window confirms that
+  continuation failed. Examples: close15<=0, high flow with close15 failure,
+  late-buyer flow with weak close10/15. The strongest current session read is
+  europe_us_overlap, but it is still not launch-ready.
+
+failed_pump_075_path:
+  structural failed-pump short replay with 0.75R minimum target families,
+  partial/BE/trail variants, and local stop variants including last_lower_high.
+```
+
+Guardrails:
+
+```text
+Only entry-known fields may select a short candidate.
+future labels, fader_label, outcome_class, MFE/MAE and post-entry 1m/m3/m5 path
+features are evaluation-only.
+```

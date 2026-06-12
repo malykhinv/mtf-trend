@@ -103,6 +103,7 @@ events.parquet
 event_outcomes.parquet
 metadata.json
 data_quality_report.md
+source_session_nature_summary.csv
 ```
 
 Every outcome row carries:
@@ -139,6 +140,26 @@ close15 descriptors require delay_min >= 15
 close10 descriptors require delay_min >= 10
 ```
 
+Current replay-backed sources:
+
+```text
+failed_pump_structural
+  Original structural failed-pump replay source.
+
+failed_pump_075_path
+  Structural failed-pump path replay with 0.75R / BE / trail policies and
+  local stop variants including last_lower_high.
+
+large_runner_local_high
+  Large-runner local-high structural-exit replay source.
+
+large_runner_failed_continuation
+  Long anomaly failed-continuation source: close10/close15 stalls after the
+  initial long anomaly. Stop is exported only as artifact initial_stop and is
+  labeled failure_window_initial_stop until raw replay exports the exact stop
+  construction.
+```
+
 ## Plateau Research Outputs
 
 ```text
@@ -155,6 +176,7 @@ portfolio_candidates.csv
 portfolio_oos_trades.csv
 rejected_reasons.csv
 lookahead_audit.csv
+source_session_nature_summary.csv
 final_report.md
 hypothesis_grammar.csv
 hypothesis_ledger.csv
@@ -319,6 +341,80 @@ MC pass: false
 top-35 removal pass: false
 calendar_positive_day_rate: 40.4%
 calendar_median_trades_per_day: 1
+```
+
+## Scientist Source Expansion Result
+
+Command:
+
+```text
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py run-365d --output-dir .output\research_cache\short_robust_plateau_engine_scientist_365d --progress-every 500
+```
+
+Output:
+
+```text
+runtime: about 15.6 minutes
+event_outcome_rows=217910
+events=5147
+candidate_rows=3030
+promoted=168
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
+```
+
+Source rows:
+
+```text
+failed_pump_structural=117927
+failed_pump_075_path=31264
+large_runner_local_high=61372
+large_runner_failed_continuation=7347
+```
+
+Lookahead audit:
+
+```text
+feature_available_at_or_before_entry: 0 / 217910
+evaluation_only_columns_not_in_trigger_rules: 0 / 13
+large_close15_requires_delay15: 0 / 61372
+large_close10_requires_delay10: 0 / 61372
+large_failure_close15_requires_delay15: 0 / 7347
+large_failure_close10_requires_delay10: 0 / 7347
+path075_source_has_no_delay_trigger_dependency: 0 / 31264
+```
+
+Best new source/session/nature read:
+
+```text
+large_runner_failed_continuation + europe_us_overlap:
+- high_trade_failed_close15_le0: 25 events, cost10_avg +0.198R, WR 72.0%
+- high_quote_failed_close15_le0: 36 events, cost10_avg +0.141R, WR 66.7%
+- sustained_m1_failed_close15_le0: 27 events, cost10_avg +0.125R, WR 63.0%
+- late_buyer_failed_close15_le2: 67 events, cost10_avg +0.121R, WR 66.2%
+```
+
+Diversified portfolio:
+
+```text
+trades=511
+symbols=238
+cost10_avg=+0.108R
+cost10_sum=+55.28R
+WR=63.2%
+calendar_positive_day_rate=53.3%
+calendar_median_trades_per_day=2
+top35 pass=false
+MC pass=false
+```
+
+Read:
+
+```text
+The engine now searches multiple fader natures by source and session, but it
+still rejects the result as launch-ready. Calendar >60%, top-35 removal and
+final holdout remain the hard blockers.
 ```
 
 ## Controlled Self-Improving Research Loop

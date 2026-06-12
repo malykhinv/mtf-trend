@@ -9110,3 +9110,102 @@ coverage, but does not produce a launch-ready edge. Remaining work is not more
 postprocessing; it is new executable event-source/path replay for genuinely
 different fader natures and future/live-forward validation.
 ```
+
+## 2026-06-12 - P564 scientist fader-source expansion run
+
+Smoke command:
+
+```text
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py smoke --output-dir .output\research_cache\short_robust_plateau_engine_scientist_smoke --max-rows-per-source 8000
+```
+
+Smoke output:
+
+```text
+event_store=.output\research_cache\short_robust_plateau_engine_scientist_smoke
+candidate_rows=304
+promoted=15
+lookahead_audit=pass, 0 violations
+new sources in grammar:
+  failed_pump_075_path
+  large_runner_failed_continuation
+```
+
+Full 365d command:
+
+```text
+.\.venv\Scripts\python.exe research_tools\short_robust_plateau_engine.py run-365d --output-dir .output\research_cache\short_robust_plateau_engine_scientist_365d --progress-every 500
+```
+
+Full 365d output:
+
+```text
+runtime: about 15.6 minutes
+event_outcome_rows=217910
+events=5147
+candidate_rows=3030
+promoted=168
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
+self_improvement_queue_rows=400
+```
+
+Sources:
+
+```text
+failed_pump_structural: 117927 rows
+failed_pump_075_path: 31264 rows
+large_runner_local_high: 61372 rows
+large_runner_failed_continuation: 7347 rows
+```
+
+Lookahead audit:
+
+```text
+feature_available_at_or_before_entry: pass, 0 / 217910
+evaluation_only_columns_not_in_trigger_rules: pass, 0 / 13
+large_close15_requires_delay15: pass, 0 / 61372
+large_close10_requires_delay10: pass, 0 / 61372
+large_failure_close15_requires_delay15: pass, 0 / 7347
+large_failure_close10_requires_delay10: pass, 0 / 7347
+path075_source_has_no_delay_trigger_dependency: pass, 0 / 31264
+```
+
+Best new-source session/nature observations:
+
+```text
+large_runner_failed_continuation + europe_us_overlap:
+  high_trade_failed_close15_le0: 25 events, cost10_avg +0.198R, WR 72.0%
+  high_quote_failed_close15_le0: 36 events, cost10_avg +0.141R, WR 66.7%
+  sustained_m1_failed_close15_le0: 27 events, cost10_avg +0.125R, WR 63.0%
+  late_buyer_failed_close15_le2: 67 events, cost10_avg +0.121R, WR 66.2%
+
+failed_pump_075_path:
+  mostly improves the structural failed-pump replay vocabulary and management
+  axes, especially 0.75R/BE/trail and last_lower_high stop variants, but it is
+  still sparse by calendar.
+```
+
+Diversified portfolio:
+
+```text
+trades=511
+symbols=238
+cost10_avg=+0.108R
+cost10_sum=+55.28R
+WR=63.2%
+calendar_positive_day_rate=53.3%
+calendar_median_trades_per_day=2
+top35 pass=false
+MC pass=false
+```
+
+Conclusion:
+
+```text
+The scientist expansion found plausible separate fader natures, especially
+Europe/US-overlap failed close15 high-flow cases. They are not launch-ready:
+strict calendar, top-removal and final holdout gates still fail. Treat these as
+next research sleeves, not as tradeable strategy output.
+```

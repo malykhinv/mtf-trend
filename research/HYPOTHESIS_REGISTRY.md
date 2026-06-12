@@ -27,5 +27,6 @@ final_judge: future unseen/live-forward period
 ```text
 H001 failed-pump A_plus_fast core
 H002 failed-pump diversified structural sleeves
-H003 large-runner 15m fader context + fresh lower-high retest, not yet replayed
+H003 large-runner failed-continuation fader contexts, cached replay source
+H004 failed-pump 0.75R lower-high/local-high path management, cached replay source
 ```

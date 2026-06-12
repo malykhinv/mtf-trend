@@ -6722,3 +6722,90 @@ remain insufficient. The remaining theoretical advantage requires new raw
 event-source/path replay, especially fresh lower-high failed-retest and
 static/runner separator sources.
 ```
+
+## 2026-06-12 - P564 scientist event-source expansion
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Implemented the first replay-backed "scientist" expansion of fader natures:
+
+```text
+source=large_runner_failed_continuation
+meaning=long anomaly failed to continue by close10/close15, short replay rows
+
+source=failed_pump_075_path
+meaning=failed-pump structural short replay with 0.75R / BE / trail policies
+and local stop variants including last_lower_high
+```
+
+Added `source_session_nature_summary.csv` so every run shows which source,
+session and fader nature has positive/negative distribution before WFA
+acceptance.
+
+Full 365d run in a new output directory:
+
+```text
+command:
+python research_tools/short_robust_plateau_engine.py run-365d --output-dir .output/research_cache/short_robust_plateau_engine_scientist_365d --progress-every 500
+
+runtime: about 15.6 minutes on the current machine
+event_outcome_rows: 217910
+events: 5147
+sources:
+  failed_pump_structural: 117927 rows
+  failed_pump_075_path: 31264 rows
+  large_runner_local_high: 61372 rows
+  large_runner_failed_continuation: 7347 rows
+candidate_rows: 3030
+promoted: 168
+strict_model_pass: 0
+theoretical_accept_pass: 0
+final_holdout_basic_pass: 0
+```
+
+Lookahead audit:
+
+```text
+feature_available_at_or_before_entry: 0 / 217910
+evaluation_only_columns_not_in_trigger_rules: 0 / 13
+large_close15_requires_delay15: 0 / 61372
+large_close10_requires_delay10: 0 / 61372
+large_failure_close15_requires_delay15: 0 / 7347
+large_failure_close10_requires_delay10: 0 / 7347
+path075_source_has_no_delay_trigger_dependency: 0 / 31264
+```
+
+Best new nature read:
+
+```text
+large_runner_failed_continuation + europe_us_overlap is the most coherent new
+fader family. Examples:
+- high_trade_failed_close15_le0: 25 events, cost10_avg +0.198R, WR 72.0%
+- high_quote_failed_close15_le0: 36 events, cost10_avg +0.141R, WR 66.7%
+- sustained_m1_failed_close15_le0: 27 events, cost10_avg +0.125R, WR 63.0%
+- late_buyer_failed_close15_le2: 67 events, cost10_avg +0.121R, WR 66.2%
+```
+
+Portfolio read:
+
+```text
+diversified portfolio trades: 511
+symbols: 238
+cost10_avg: +0.108R
+cost10_sum: +55.28R
+WR: 63.2%
+calendar_positive_day_rate: 53.3%
+calendar_median_trades_per_day: 2
+top35 pass: false
+MC pass: false
+```
+
+Conclusion:
+
+```text
+The bot is now a broader scientist over cached replay sources, not just a
+verifier of two old sources. It still correctly refuses to call the result
+launch-ready: top-removal, calendar >60%, frequency and final holdout are not
+good enough. The next improvement should target robust frequency and tail
+dependence, not looser acceptance.
+```
