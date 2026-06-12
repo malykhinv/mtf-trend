@@ -1993,6 +1993,34 @@ def run_failed_pump_short_research(config: AppConfig, args: argparse.Namespace) 
     return _run_with_logging("run-failed-pump-short-research", config, _run)
 
 
+def run_pump_mechanism_stability_research(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs the cache-only pump mechanism stability research scaffold."""
+
+    def _run() -> int:
+        from research_tools.pump_mechanism_stability_research import (
+            PumpMechanismStabilityConfig,
+            parse_research_end_timestamp_ms,
+            run_pump_mechanism_stability_research as run_research,
+        )
+
+        days = int(getattr(args, "days", 365))
+        cache_dir = Path(getattr(args, "cache_dir", None) or config.backtest.cache_dir)
+        end_timestamp_ms = parse_research_end_timestamp_ms(getattr(args, "end_date", "latest-cache"))
+        output_dir = config.backtest.results_dir / f"pump_mechanism_stability_research_{days}d"
+        research_config = PumpMechanismStabilityConfig(
+            cache_dir=cache_dir,
+            output_dir=output_dir,
+            days=days,
+            end_timestamp_ms=end_timestamp_ms,
+            symbol_workers=int(getattr(args, "workers", 4)),
+        )
+        result_dir = run_research(research_config, progress_label="pump mechanism stability research")
+        print(f"pump mechanism stability research artifacts: {result_dir}", flush=True)
+        return 0
+
+    return _run_with_logging("run-pump-mechanism-stability-research", config, _run)
+
+
 def materialize_anomaly_subminute_cache(config: AppConfig, args: argparse.Namespace) -> int:
     """Materializes 1s-derived subminute anomaly entry caches."""
 

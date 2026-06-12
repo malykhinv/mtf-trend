@@ -470,6 +470,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Symbol-level read-only worker processes for failed-pump short research. Use --workers 1 for sequential diagnostics.",
     )
 
+    pump_mechanism = subparsers.add_parser(
+        "run-pump-mechanism-stability-research",
+        help="Install cache-only pump mechanism stability research scaffold",
+    )
+    pump_mechanism.add_argument("--days", type=_positive_int_for("--days"), default=365)
+    pump_mechanism.add_argument(
+        "--end-date",
+        default="latest-cache",
+        help="UTC research end time: latest-cache (default), YYYY-MM-DD, ISO datetime, or timestamp ms",
+    )
+    pump_mechanism.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Read-only parquet cache directory. Default: configured backtest cache_dir",
+    )
+    pump_mechanism.add_argument(
+        "--workers",
+        type=_positive_int_for("--workers"),
+        default=4,
+        help="Symbol-level read-only worker processes for pump mechanism research. Use --workers 1 for sequential diagnostics.",
+    )
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -495,6 +517,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-anomaly-top-growth": commands.run_anomaly_top_growth,
         "run-hourly-levels": commands.run_hourly_levels,
         "run-failed-pump-short-research": commands.run_failed_pump_short_research,
+        "run-pump-mechanism-stability-research": commands.run_pump_mechanism_stability_research,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }
