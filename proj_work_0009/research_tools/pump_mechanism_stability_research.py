@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_oos_diagnostics"
+IMPLEMENTATION_STAGE = "mechanism_oos_verdict"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -142,6 +142,17 @@ DAILY_OOS_EVENT_LEDGER_MODEL = "daily_prequential_selected_event_ledger_v1"
 OOS_DIAGNOSTICS_MODEL = "daily_prequential_oos_split_diagnostics_v1"
 OOS_TOP_REMOVAL_MODEL = "daily_prequential_oos_top_removal_stress_v1"
 OOS_SELECTION_SUMMARY_MODEL = "daily_prequential_selection_key_summary_v1"
+OOS_VERDICT_MODEL = "daily_prequential_oos_mechanism_verdict_v1"
+OOS_VERDICT_MIN_ACTIVE_DAYS = 20
+OOS_VERDICT_MIN_EVENTS = 40
+OOS_VERDICT_MIN_SYMBOLS = 5
+OOS_VERDICT_MIN_SESSIONS = 2
+OOS_VERDICT_MIN_POSITIVE_ACTIVE_SCORE_RATE = 0.55
+OOS_VERDICT_MIN_MEDIAN_RESPONSE_SCORE = 0.0
+OOS_VERDICT_MAX_TOP_SYMBOL_EVENT_SHARE = 0.40
+OOS_VERDICT_MAX_TOP_DAY_EVENT_SHARE = 0.25
+OOS_VERDICT_MAX_MONTH_POSITIVE_SCORE_SHARE = 0.50
+OOS_VERDICT_TOP_REMOVAL_FRACTION = 0.10
 MAX_SELECTED_BASINS_PER_DAY_WINDOW = 20
 DAILY_ALLOWED_BASIN_STATUSES = ("strong_candidate", "tactical", "challenger")
 
@@ -294,6 +305,11 @@ def run_pump_mechanism_stability_research(
             daily_oos=pd.DataFrame(),
             window_health=pd.DataFrame(),
             selection_drift=pd.DataFrame(),
+            daily_oos_events=pd.DataFrame(),
+            oos_diagnostics=pd.DataFrame(),
+            oos_top_removal=pd.DataFrame(),
+            oos_selection_summary=pd.DataFrame(),
+            oos_verdict=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -417,6 +433,14 @@ def run_pump_mechanism_stability_research(
         daily_oos_events=daily_oos_events,
     )
 
+    _print_stage(progress_label, "building OOS mechanism verdict and pass/fail reasons", started_at)
+    oos_verdict = _build_oos_verdict(
+        daily_oos=daily_oos,
+        daily_oos_events=daily_oos_events,
+        oos_top_removal=oos_top_removal,
+        oos_selection_summary=oos_selection_summary,
+    )
+
     _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
@@ -435,6 +459,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_oos_diagnostics.csv", oos_diagnostics)
     _write_csv(config.output_dir / "pump_mechanism_oos_top_removal.csv", oos_top_removal)
     _write_csv(config.output_dir / "pump_mechanism_oos_selection_summary.csv", oos_selection_summary)
+    _write_csv(config.output_dir / "pump_mechanism_oos_verdict.csv", oos_verdict)
 
     run_config = _run_config_frame(
         config=config,
@@ -459,6 +484,7 @@ def run_pump_mechanism_stability_research(
         oos_diagnostics=oos_diagnostics,
         oos_top_removal=oos_top_removal,
         oos_selection_summary=oos_selection_summary,
+        oos_verdict=oos_verdict,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -470,6 +496,7 @@ def run_pump_mechanism_stability_research(
         f"plateau_basins={len(plateau_basins):,} daily_selection={len(daily_selection):,} "
         f"daily_oos={len(daily_oos):,} daily_oos_events={len(daily_oos_events):,} "
         f"oos_diagnostics={len(oos_diagnostics):,} oos_top_removal={len(oos_top_removal):,} "
+        f"oos_verdict={len(oos_verdict):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -3170,6 +3197,262 @@ def _build_oos_selection_summary(
     return _sort_frame(result, ["oos_median_response_score", "event_score_sum", "selection_key"])
 
 
+def _build_oos_verdict(
+    *,
+    daily_oos: pd.DataFrame,
+    daily_oos_events: pd.DataFrame,
+    oos_top_removal: pd.DataFrame,
+    oos_selection_summary: pd.DataFrame,
+) -> pd.DataFrame:
+    """Produce explicit OOS pass/fail verdicts for selected mechanism keys.
+
+    This is a downstream diagnostic artifact.  It may read OOS outcomes because
+    it never feeds daily selection or threshold fitting.  Its only job is to say
+    which prequentially selected mechanism keys survived the OOS stability gates
+    and which reasons block them from the later short-mapping layer.
+    """
+
+    columns = _oos_verdict_columns()
+    key_values: set[str] = set()
+    for frame in (oos_selection_summary, daily_oos, daily_oos_events):
+        if frame is not None and not frame.empty and "selection_key" in frame.columns:
+            key_values.update(frame["selection_key"].astype(str).dropna().tolist())
+    if not key_values:
+        return pd.DataFrame(columns=columns)
+
+    summary_lookup = (
+        oos_selection_summary.drop_duplicates("selection_key", keep="last").set_index("selection_key", drop=False)
+        if oos_selection_summary is not None and not oos_selection_summary.empty and "selection_key" in oos_selection_summary.columns
+        else pd.DataFrame()
+    )
+    oos_grouped = daily_oos.groupby("selection_key", dropna=False) if daily_oos is not None and not daily_oos.empty and "selection_key" in daily_oos.columns else None
+    event_grouped = daily_oos_events.groupby("selection_key", dropna=False) if daily_oos_events is not None and not daily_oos_events.empty and "selection_key" in daily_oos_events.columns else None
+    top_removal_lookup = _oos_top_removal_lookup(oos_top_removal)
+
+    rows: list[dict[str, object]] = []
+    for selection_key in sorted(key_values):
+        summary = summary_lookup.loc[selection_key].to_dict() if not summary_lookup.empty and selection_key in summary_lookup.index else {}
+        oos = oos_grouped.get_group(selection_key) if oos_grouped is not None and selection_key in oos_grouped.groups else pd.DataFrame()
+        events = event_grouped.get_group(selection_key) if event_grouped is not None and selection_key in event_grouped.groups else pd.DataFrame()
+        active = pd.to_numeric(oos.get("oos_events", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0 if not oos.empty else pd.Series(dtype=bool)
+        active_oos = oos.loc[active].copy() if not oos.empty and len(active) == len(oos) else pd.DataFrame()
+        active_score = pd.to_numeric(active_oos.get("oos_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan)
+        event_score = pd.to_numeric(events.get("event_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan) if not events.empty else pd.Series(dtype=float)
+
+        selected_days = int(summary.get("selected_days", 0) or 0)
+        train_windows_seen = int(summary.get("train_windows_seen", 0) or 0)
+        oos_active_days = int(active.sum()) if not active.empty else int(summary.get("oos_active_rows", 0) or 0)
+        total_events = int(len(events)) if not events.empty else int(summary.get("event_rows", 0) or 0)
+        event_symbols = int(events["symbol"].nunique()) if "symbol" in events.columns and not events.empty else int(summary.get("event_symbols", 0) or 0)
+        event_sessions = int(events["session_bucket"].nunique()) if "session_bucket" in events.columns and not events.empty else int(summary.get("event_sessions", 0) or 0)
+        event_months = _event_month_count(events)
+        median_response_score = _safe_median(active_score)
+        avg_response_score = _safe_mean(active_score)
+        positive_active_score_rate = _rate(active_score > 0.0) if not active_score.empty else float("nan")
+        event_median_response_score = _safe_median(event_score)
+        event_score_sum = _safe_sum(event_score)
+        event_positive_score_rate = _rate(event_score > 0.0) if not event_score.empty else float("nan")
+        expected_downside_rate = _rate(events.get("event_expected_downside", pd.Series(dtype=bool)).map(_to_bool)) if not events.empty else float("nan")
+        top_symbol_event_share = _top_share(events, column="symbol")
+        top_day_event_share = _top_share(events, column="test_day_ord")
+        month_positive_score_share = _month_positive_score_share(events)
+        first_half_score, second_half_score = _half_event_score_sums(events)
+        odd_score, even_score = _odd_even_event_score_sums(events)
+        top_event_retention, top_event_positive = top_removal_lookup.get((selection_key, "top_events"), (float("nan"), False))
+        top_symbol_retention, top_symbol_positive = top_removal_lookup.get((selection_key, "top_symbols"), (float("nan"), False))
+
+        fail_reasons: list[str] = []
+        warning_reasons: list[str] = []
+        if oos_active_days < OOS_VERDICT_MIN_ACTIVE_DAYS:
+            fail_reasons.append("low_oos_active_days")
+        if total_events < OOS_VERDICT_MIN_EVENTS:
+            fail_reasons.append("low_oos_event_count")
+        if event_symbols < OOS_VERDICT_MIN_SYMBOLS:
+            fail_reasons.append("low_symbol_breadth")
+        if event_sessions < OOS_VERDICT_MIN_SESSIONS:
+            fail_reasons.append("low_session_breadth")
+        if not math.isfinite(median_response_score) or median_response_score <= OOS_VERDICT_MIN_MEDIAN_RESPONSE_SCORE:
+            fail_reasons.append("non_positive_oos_median_response_score")
+        if not math.isfinite(positive_active_score_rate) or positive_active_score_rate < OOS_VERDICT_MIN_POSITIVE_ACTIVE_SCORE_RATE:
+            fail_reasons.append("low_positive_active_score_rate")
+        if not math.isfinite(top_symbol_event_share) or top_symbol_event_share > OOS_VERDICT_MAX_TOP_SYMBOL_EVENT_SHARE:
+            fail_reasons.append("top_symbol_dependency")
+        if not math.isfinite(top_day_event_share) or top_day_event_share > OOS_VERDICT_MAX_TOP_DAY_EVENT_SHARE:
+            fail_reasons.append("top_day_dependency")
+        if not math.isfinite(month_positive_score_share) or month_positive_score_share > OOS_VERDICT_MAX_MONTH_POSITIVE_SCORE_SHARE:
+            fail_reasons.append("month_positive_score_concentration")
+        if not bool(top_event_positive):
+            fail_reasons.append("top_event_removal_not_positive")
+        if not bool(top_symbol_positive):
+            fail_reasons.append("top_symbol_removal_not_positive")
+        if math.isfinite(first_half_score) and math.isfinite(second_half_score) and first_half_score > 0.0 and second_half_score <= 0.0:
+            fail_reasons.append("second_half_degraded_to_non_positive")
+        if math.isfinite(odd_score) and math.isfinite(even_score) and (odd_score <= 0.0 or even_score <= 0.0):
+            warning_reasons.append("odd_even_split_not_both_positive")
+        if selected_days > 0 and oos_active_days / max(selected_days, 1) < 0.35:
+            warning_reasons.append("selected_oos_sparse_after_rule_application")
+
+        if not fail_reasons:
+            verdict = "accepted_mechanism"
+            next_stage = "short_mapping_candidate"
+            allowed = True
+        elif (
+            total_events >= OOS_VERDICT_MIN_EVENTS
+            and math.isfinite(median_response_score)
+            and median_response_score > OOS_VERDICT_MIN_MEDIAN_RESPONSE_SCORE
+            and math.isfinite(positive_active_score_rate)
+            and positive_active_score_rate >= OOS_VERDICT_MIN_POSITIVE_ACTIVE_SCORE_RATE
+        ):
+            verdict = "watchlist_mechanism"
+            next_stage = "mechanism_research_only"
+            allowed = False
+        else:
+            verdict = "rejected_mechanism"
+            next_stage = "mechanism_research_only"
+            allowed = False
+
+        rows.append(
+            {
+                "research_id": RESEARCH_ID,
+                "selection_key": selection_key,
+                "oos_verdict": verdict,
+                "allowed_for_short_mapping": allowed,
+                "next_allowed_stage": next_stage,
+                "fail_reasons": ";".join(fail_reasons) if fail_reasons else "pass",
+                "warning_reasons": ";".join(warning_reasons),
+                "selected_days": selected_days,
+                "train_windows_seen": train_windows_seen,
+                "first_selected_date": str(summary.get("first_selected_date", "")),
+                "last_selected_date": str(summary.get("last_selected_date", "")),
+                "basin_statuses_seen": str(summary.get("basin_statuses_seen", "")),
+                "oos_rows": int(len(oos)),
+                "oos_active_days": oos_active_days,
+                "oos_total_events": total_events,
+                "event_rows": int(len(events)),
+                "event_symbols": event_symbols,
+                "event_sessions": event_sessions,
+                "event_months": event_months,
+                "dominant_mechanism_family": _mode_value(events, "mechanism_family"),
+                "dominant_acceptance_regime": _mode_value(events, "acceptance_regime"),
+                "dominant_oi_regime": _mode_value(events, "oi_regime"),
+                "dominant_flow_regime": _mode_value(events, "flow_regime"),
+                "dominant_structure_regime": _mode_value(events, "structure_regime"),
+                "oos_median_response_score": median_response_score,
+                "oos_avg_response_score": avg_response_score,
+                "oos_positive_active_score_rate": positive_active_score_rate,
+                "event_median_response_score": event_median_response_score,
+                "event_score_sum": event_score_sum,
+                "event_positive_score_rate": event_positive_score_rate,
+                "expected_downside_rate": expected_downside_rate,
+                "median_future_ret_30m": _safe_median(events.get("future_ret_30m", pd.Series(dtype=float))),
+                "median_future_ret_60m": _safe_median(events.get("future_ret_60m", pd.Series(dtype=float))),
+                "median_future_min_ret_30m": _safe_median(events.get("future_min_ret_30m", pd.Series(dtype=float))),
+                "median_future_min_ret_60m": _safe_median(events.get("future_min_ret_60m", pd.Series(dtype=float))),
+                "downside_hit_rate_30m": _rate(events.get("downside_hit_30m", pd.Series(dtype=bool)).map(_to_bool)) if not events.empty else float("nan"),
+                "downside_hit_rate_60m": _rate(events.get("downside_hit_60m", pd.Series(dtype=bool)).map(_to_bool)) if not events.empty else float("nan"),
+                "reclaim_rate_60m": _rate(events.get("reclaimed_pump_high_60m", pd.Series(dtype=bool)).map(_to_bool)) if not events.empty else float("nan"),
+                "top_symbol_event_share": top_symbol_event_share,
+                "top_day_event_share": top_day_event_share,
+                "month_positive_score_share": month_positive_score_share,
+                "first_half_event_score_sum": first_half_score,
+                "second_half_event_score_sum": second_half_score,
+                "odd_day_event_score_sum": odd_score,
+                "even_day_event_score_sum": even_score,
+                "top_event_removal_10pct_score_retention_rate": top_event_retention,
+                "top_event_removal_10pct_remaining_positive": bool(top_event_positive),
+                "top_symbol_removal_10pct_score_retention_rate": top_symbol_retention,
+                "top_symbol_removal_10pct_remaining_positive": bool(top_symbol_positive),
+                "min_active_days_gate": int(OOS_VERDICT_MIN_ACTIVE_DAYS),
+                "min_events_gate": int(OOS_VERDICT_MIN_EVENTS),
+                "min_symbols_gate": int(OOS_VERDICT_MIN_SYMBOLS),
+                "min_sessions_gate": int(OOS_VERDICT_MIN_SESSIONS),
+                "min_positive_active_score_rate_gate": float(OOS_VERDICT_MIN_POSITIVE_ACTIVE_SCORE_RATE),
+                "min_median_response_score_gate": float(OOS_VERDICT_MIN_MEDIAN_RESPONSE_SCORE),
+                "max_top_symbol_event_share_gate": float(OOS_VERDICT_MAX_TOP_SYMBOL_EVENT_SHARE),
+                "max_top_day_event_share_gate": float(OOS_VERDICT_MAX_TOP_DAY_EVENT_SHARE),
+                "max_month_positive_score_share_gate": float(OOS_VERDICT_MAX_MONTH_POSITIVE_SCORE_SHARE),
+                "top_removal_fraction_gate": float(OOS_VERDICT_TOP_REMOVAL_FRACTION),
+                "oos_verdict_model": OOS_VERDICT_MODEL,
+                "selection_uses_test_day_outcomes": False,
+                "verdict_uses_oos_outcomes": True,
+                "uses_pnl": False,
+                "uses_short_entry": False,
+                "uses_final_holdout_tuning": False,
+                "future_label_available_at_entry": False,
+                "data_access_model": DATA_ACCESS_MODEL,
+            }
+        )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["oos_verdict", "oos_median_response_score", "event_score_sum", "selection_key"])
+
+
+def _oos_top_removal_lookup(top_removal: pd.DataFrame) -> dict[tuple[str, str], tuple[float, bool]]:
+    if top_removal is None or top_removal.empty:
+        return {}
+    frame = top_removal.loc[top_removal.get("group_axis", pd.Series(dtype=str)).astype(str) == "selection_key"].copy()
+    if frame.empty:
+        return {}
+    fraction = pd.to_numeric(frame.get("remove_fraction", pd.Series(dtype=float)), errors="coerce")
+    frame = frame.loc[(fraction - float(OOS_VERDICT_TOP_REMOVAL_FRACTION)).abs() < 1e-12].copy()
+    lookup: dict[tuple[str, str], tuple[float, bool]] = {}
+    for row in frame.to_dict("records"):
+        key = (str(row.get("group_value", "")), str(row.get("removal_kind", "")))
+        lookup[key] = (_float(row.get("score_retention_rate")), _to_bool(row.get("remaining_score_positive")))
+    return lookup
+
+
+def _event_month_count(events: pd.DataFrame) -> int:
+    if events.empty or "test_date" not in events.columns:
+        return 0
+    months = events["test_date"].astype(str).str.slice(0, 7)
+    return int(months.nunique())
+
+
+def _month_positive_score_share(events: pd.DataFrame) -> float:
+    if events.empty or "test_date" not in events.columns:
+        return float("nan")
+    score = pd.to_numeric(events.get("event_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    months = events["test_date"].astype(str).str.slice(0, 7)
+    grouped = score.groupby(months).sum()
+    positive = grouped.loc[grouped > 0.0]
+    total_positive = float(positive.sum())
+    if total_positive <= 0.0 or positive.empty:
+        return float("nan")
+    return float(positive.max() / total_positive)
+
+
+def _half_event_score_sums(events: pd.DataFrame) -> tuple[float, float]:
+    if events.empty or "test_day_ord" not in events.columns:
+        return (float("nan"), float("nan"))
+    day = pd.to_numeric(events["test_day_ord"], errors="coerce")
+    valid = day.notna()
+    if not bool(valid.any()):
+        return (float("nan"), float("nan"))
+    score = pd.to_numeric(events.get("event_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    midpoint = float((day.loc[valid].min() + day.loc[valid].max()) / 2.0)
+    return (float(score.loc[day <= midpoint].sum()), float(score.loc[day > midpoint].sum()))
+
+
+def _odd_even_event_score_sums(events: pd.DataFrame) -> tuple[float, float]:
+    if events.empty or "test_day_ord" not in events.columns:
+        return (float("nan"), float("nan"))
+    day = pd.to_numeric(events["test_day_ord"], errors="coerce")
+    score = pd.to_numeric(events.get("event_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    valid = day.notna()
+    if not bool(valid.any()):
+        return (float("nan"), float("nan"))
+    day_int = day.loc[valid].astype("int64")
+    score_valid = score.loc[valid]
+    return (float(score_valid.loc[(day_int % 2) == 1].sum()), float(score_valid.loc[(day_int % 2) == 0].sum()))
+
+
+def _mode_value(frame: pd.DataFrame, column: str) -> str:
+    if frame.empty or column not in frame.columns:
+        return ""
+    counts = frame[column].astype(str).value_counts(dropna=False)
+    return str(counts.index[0]) if not counts.empty else ""
+
+
 def _top_share(frame: pd.DataFrame, *, column: str) -> float:
     if frame.empty or column not in frame.columns:
         return float("nan")
@@ -3177,6 +3460,30 @@ def _top_share(frame: pd.DataFrame, *, column: str) -> float:
     if counts.empty:
         return float("nan")
     return float(counts.iloc[0] / counts.sum())
+
+
+
+def _oos_verdict_columns() -> list[str]:
+    return [
+        "research_id", "selection_key", "oos_verdict", "allowed_for_short_mapping", "next_allowed_stage",
+        "fail_reasons", "warning_reasons", "selected_days", "train_windows_seen", "first_selected_date",
+        "last_selected_date", "basin_statuses_seen", "oos_rows", "oos_active_days", "oos_total_events",
+        "event_rows", "event_symbols", "event_sessions", "event_months", "dominant_mechanism_family",
+        "dominant_acceptance_regime", "dominant_oi_regime", "dominant_flow_regime", "dominant_structure_regime",
+        "oos_median_response_score", "oos_avg_response_score", "oos_positive_active_score_rate",
+        "event_median_response_score", "event_score_sum", "event_positive_score_rate", "expected_downside_rate",
+        "median_future_ret_30m", "median_future_ret_60m", "median_future_min_ret_30m",
+        "median_future_min_ret_60m", "downside_hit_rate_30m", "downside_hit_rate_60m", "reclaim_rate_60m",
+        "top_symbol_event_share", "top_day_event_share", "month_positive_score_share", "first_half_event_score_sum",
+        "second_half_event_score_sum", "odd_day_event_score_sum", "even_day_event_score_sum",
+        "top_event_removal_10pct_score_retention_rate", "top_event_removal_10pct_remaining_positive",
+        "top_symbol_removal_10pct_score_retention_rate", "top_symbol_removal_10pct_remaining_positive",
+        "min_active_days_gate", "min_events_gate", "min_symbols_gate", "min_sessions_gate",
+        "min_positive_active_score_rate_gate", "min_median_response_score_gate", "max_top_symbol_event_share_gate",
+        "max_top_day_event_share_gate", "max_month_positive_score_share_gate", "top_removal_fraction_gate",
+        "oos_verdict_model", "selection_uses_test_day_outcomes", "verdict_uses_oos_outcomes", "uses_pnl",
+        "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
 
 
 def _daily_oos_event_columns() -> list[str]:
@@ -3257,6 +3564,7 @@ def _run_config_frame(
     oos_diagnostics: pd.DataFrame,
     oos_top_removal: pd.DataFrame,
     oos_selection_summary: pd.DataFrame,
+    oos_verdict: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -3280,6 +3588,8 @@ def _run_config_frame(
     oos_diagnostics_rows = int(len(oos_diagnostics)) if oos_diagnostics is not None else 0
     oos_top_removal_rows = int(len(oos_top_removal)) if oos_top_removal is not None else 0
     oos_selection_summary_rows = int(len(oos_selection_summary)) if oos_selection_summary is not None else 0
+    oos_verdict_rows = int(len(oos_verdict)) if oos_verdict is not None else 0
+    oos_verdict_pass_rows = int((oos_verdict.get("oos_verdict", pd.Series(dtype=str)).astype(str) == "accepted_mechanism").sum()) if oos_verdict is not None and not oos_verdict.empty else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -3355,6 +3665,19 @@ def _run_config_frame(
         "oos_diagnostics_rows": oos_diagnostics_rows,
         "oos_top_removal_rows": oos_top_removal_rows,
         "oos_selection_summary_rows": oos_selection_summary_rows,
+        "oos_verdict_rows": oos_verdict_rows,
+        "oos_verdict_pass_rows": oos_verdict_pass_rows,
+        "oos_verdict_model": OOS_VERDICT_MODEL,
+        "oos_verdict_min_active_days": int(OOS_VERDICT_MIN_ACTIVE_DAYS),
+        "oos_verdict_min_events": int(OOS_VERDICT_MIN_EVENTS),
+        "oos_verdict_min_symbols": int(OOS_VERDICT_MIN_SYMBOLS),
+        "oos_verdict_min_sessions": int(OOS_VERDICT_MIN_SESSIONS),
+        "oos_verdict_min_positive_active_score_rate": float(OOS_VERDICT_MIN_POSITIVE_ACTIVE_SCORE_RATE),
+        "oos_verdict_min_median_response_score": float(OOS_VERDICT_MIN_MEDIAN_RESPONSE_SCORE),
+        "oos_verdict_max_top_symbol_event_share": float(OOS_VERDICT_MAX_TOP_SYMBOL_EVENT_SHARE),
+        "oos_verdict_max_top_day_event_share": float(OOS_VERDICT_MAX_TOP_DAY_EVENT_SHARE),
+        "oos_verdict_max_month_positive_score_share": float(OOS_VERDICT_MAX_MONTH_POSITIVE_SCORE_SHARE),
+        "oos_verdict_top_removal_fraction": float(OOS_VERDICT_TOP_REMOVAL_FRACTION),
         "daily_oos_event_ledger_model": DAILY_OOS_EVENT_LEDGER_MODEL,
         "oos_diagnostics_model": OOS_DIAGNOSTICS_MODEL,
         "oos_top_removal_model": OOS_TOP_REMOVAL_MODEL,
@@ -3414,6 +3737,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_oos_diagnostics.csv", "written", "daily OOS split diagnostics by time/window/status"),
         ("pump_mechanism_oos_top_removal.csv", "written", "selected-event top-removal stress by event and symbol"),
         ("pump_mechanism_oos_selection_summary.csv", "written", "selection-key OOS aggregation and breadth diagnostics"),
+        ("pump_mechanism_oos_verdict.csv", "written", "explicit OOS mechanism acceptance verdict and fail reasons"),
     ]
     rows = []
     for artifact_name, status, description in planned:
