@@ -6463,7 +6463,7 @@ run balanced rolling IS/OOS plateau scan
 write lookahead audit, axis summaries, rejection funnel and portfolio checks
 ```
 
-Final local output:
+Original P559 local output before P560 strict meta-validation:
 
 ```text
 .output/research_cache/short_robust_plateau_engine_365d/final_report.md
@@ -6473,17 +6473,16 @@ WFA: 8 windows, 90d IS / 30d OOS / 30d step / 30d holdout
 candidate_universe: 5000 balanced candidates
 candidate_rows: 2587
 promoted: 78
-strict plateau_pass clusters: 10
+legacy plateau_pass clusters: 10
 lookahead violations: 0
 ```
 
 Read:
 
 ```text
-The mechanism is now operational and reproducible. It found several promising
-failed-pump structural short-fade sleeves, especially around Asia-only and
-not-Asia-overlap sessions, local-high stops, full025/full05 management and
-risk_3_8/risk_5_12 buckets.
+This baseline made the mechanism operational and reproducible. P560 tightened
+the validation gates; the current strict verdict is recorded below and
+supersedes the P559 acceptance wording.
 ```
 
 Important limitation:
@@ -6492,4 +6491,67 @@ Important limitation:
 This is still not fresh proof. The 365d artifacts have been heavily inspected.
 Use this engine as the repeatable discovery/filtering mechanism and treat the
 final judge as future unseen/live-forward data or a newly built period.
+```
+
+## 2026-06-12 - P560 strict plateau meta-validation
+
+Status: APPLIED locally / UNKNOWN commit.
+
+The 365d plateau engine was tightened to match the theoretical robustness
+model more closely:
+
+```text
+candidate generation and WFA now use development rows only
+final holdout is evaluated only after candidate selection
+top-40 trade removal is an explicit gate
+Monte Carlo shuffle/bootstrap stress is an explicit gate
+plateau clusters measure score degradation across risk buckets
+model_gate_diagnostics.csv explains which criteria fail
+```
+
+Full cached rescan:
+
+```text
+event_outcome_rows: 179299
+development_rows: 168391
+final_holdout: 2026-05-03 -> 2026-06-02 exclusive
+candidate_universe: 5000
+candidate_rows: 2589
+promoted by old rolling filter: 78
+plateau_pass clusters: 8
+plateau_strong_pass clusters: 4
+strict_model_pass: 0
+theoretical_accept_pass: 0
+final_holdout_basic_pass: 0
+lookahead violations: 0
+```
+
+Read:
+
+```text
+The bot worked technically and the lookahead audit is clean, but the stricter
+model rejects the current 365d sleeves as launch-ready. The main failures are
+frequency/calendar consistency and top-40 independence, especially in the final
+holdout. This is the correct behavior: the engine now refuses to promote a
+beautiful rolling window into a strategy when robustness gates disagree.
+```
+
+Portfolio-level watchlist:
+
+```text
+193 marginal OOS trades, 128 symbols
+avg +0.067R, median +0.217R, WR 68.4%
+cost10 avg +0.046R
+MC pass true
+top-40 removal pass false
+calendar positive-day rate 32.1%
+median calendar trades/day 0
+```
+
+Next:
+
+```text
+Do not weaken the gates to force acceptance. The next valuable work is adding
+new executable event sources/path replay for other fader natures, then letting
+the same one-command engine judge them by the strict model.
 ```

@@ -1,7 +1,7 @@
 # Short Robust Plateau Engine
 
-Date: 2026-06-11
-Status: implemented / one-command 365d preset passed.
+Date: 2026-06-12
+Status: implemented / one-command 365d preset with strict meta-validation.
 Commit: UNKNOWN.
 
 This file documents the neutral short-fade plateau mechanism.
@@ -137,6 +137,11 @@ wfa_results.csv
 plateau_candidates.csv
 plateau_clusters.csv
 candidate_axis_summary.csv
+meta_validation.csv
+final_holdout_validation.csv
+portfolio_meta_validation.csv
+model_gate_diagnostics.csv
+improvement_plan.csv
 portfolio_candidates.csv
 portfolio_oos_trades.csv
 rejected_reasons.csv
@@ -148,14 +153,19 @@ The engine evaluates:
 
 ```text
 rolling IS/OOS windows
+development-only candidate generation
+final holdout validation
 cost10 expectancy
 median R
 positive-day rate
+top-40 trade removal
+Monte Carlo shuffle/bootstrap stress
 top-trade independence
 top-symbol independence
 symbol/day breadth
 efficiency ratio
-plateau clusters
+plateau score-degradation clusters
+strict/theoretical model gates
 marginal portfolio contribution
 same-symbol/time collision removal
 ```
@@ -176,10 +186,16 @@ event_outcome_rows=179299
 events=3283
 wfa_windows=8
 candidate_universe_rows=5000
-candidate_rows=2587
+development_rows=168391
+final_holdout=2026-05-03 -> 2026-06-02 exclusive
+candidate_rows=2589
 promoted=78
 plateau_clusters=64
-strict_plateau_pass_clusters=10
+plateau_pass_clusters=8
+plateau_strong_pass_clusters=4
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
 report=.output/research_cache/short_robust_plateau_engine_365d/final_report.md
 ```
 
@@ -192,11 +208,25 @@ large_close15_requires_delay15: 0 violations / 61372 rows
 large_close10_requires_delay10: 0 violations / 61372 rows
 ```
 
-Best robust-looking promoted sleeves in the generated report are mostly
-structural failed-pump rows. The large-runner source produced some promoted
-rows, but the top one has only 8 OOS trades and fails marginal portfolio
-acceptance after collision removal, so it is watchlist material rather than
-strategy proof.
+Read:
+
+```text
+The old rolling scan still finds 78 promoted rows, mostly structural
+failed-pump rows. The stricter theoretical gate rejects all of them as final
+strategy candidates: no sleeve passes top-40 removal, calendar consistency,
+plateau robustness and final holdout together.
+```
+
+Main model-gate bottlenecks:
+
+```text
+candidate_oos top40_pass: 2 / 78
+candidate_oos mc_pass: 29 / 78
+candidate_oos calendar_positive_ge_0p50: 0 / 78
+candidate_oos median_trades_per_day_ge_3: 0 / 78
+final_holdout final_top40_pass: 0 / 78
+final_holdout final_pass_basic: 0 / 78
+```
 
 The strongest portfolio-accepted marginal rows in the final report are:
 
@@ -214,6 +244,21 @@ failed_pump_structural|ALL|asia_only|recent5|full025|risk_3_8|trigger_all
 top-trade independence 40.74%.
 ```
 
+Portfolio-level read:
+
+```text
+selected marginal OOS trades: 193
+symbols: 128
+avg: +0.067R
+median: +0.217R
+WR: 68.4%
+cost10 avg: +0.046R
+MC pass: true
+top-40 removal pass: false
+calendar_positive_day_rate: 32.1%
+calendar_median_trades_per_day: 0
+```
+
 ## Smoke Result
 
 Command:
@@ -225,10 +270,11 @@ python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source
 Output:
 
 ```text
-event_store=.output/research_cache/short_robust_plateau_engine_smoke
-candidate_rows=265
-promoted=21
-report=.output/research_cache/short_robust_plateau_engine_smoke/final_report.md
+event_store=.output/research_cache/short_robust_plateau_engine_meta_smoke2
+candidate_rows=286
+promoted=6
+report=.output/research_cache/short_robust_plateau_engine_meta_smoke2/final_report.md
+model_gate_diagnostics.csv created: yes
 ```
 
 Lookahead audit:

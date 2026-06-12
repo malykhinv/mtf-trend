@@ -8727,14 +8727,15 @@ events=3283
 candidate_rows=2587
 promoted=78
 plateau_clusters=64
-strict plateau_pass clusters=10
+legacy plateau_pass clusters=10
 lookahead violations=0
 ```
 
 Key read:
 
 ```text
-Promoted rows are dominated by failed_pump_structural. Session effects are
+This is the pre-P560 rolling baseline. Promoted rows are dominated by
+failed_pump_structural. Session effects are
 visible: asia_only had 46 promoted rows, all had 11, non_us had 9,
 not_asia_overlap had 8. Large-runner rows appeared, but the best top row had
 only 8 OOS trades and was not accepted by the marginal portfolio step after
@@ -8755,4 +8756,79 @@ Conclusion:
 The mechanism is ready to run by one command on the current 365d replay
 artifacts. It is a robust discovery/filtering engine, not final fresh OOS
 proof, because the current 365d data has been heavily inspected.
+```
+
+## 2026-06-12 - P560 strict plateau meta-validation rescan
+
+Command:
+
+```text
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500
+```
+
+Additional smoke:
+
+```text
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000 --output-dir .output/research_cache/short_robust_plateau_engine_meta_smoke2
+```
+
+New artifacts:
+
+```text
+.output/research_cache/short_robust_plateau_engine_365d/meta_validation.csv
+.output/research_cache/short_robust_plateau_engine_365d/final_holdout_validation.csv
+.output/research_cache/short_robust_plateau_engine_365d/portfolio_meta_validation.csv
+.output/research_cache/short_robust_plateau_engine_365d/model_gate_diagnostics.csv
+.output/research_cache/short_robust_plateau_engine_365d/improvement_plan.csv
+```
+
+Output:
+
+```text
+event_outcome_rows=179299
+development_rows=168391
+final_holdout=2026-05-03 -> 2026-06-02 exclusive
+candidate_rows=2589
+promoted=78
+plateau_clusters=64
+plateau_pass_clusters=8
+plateau_strong_pass_clusters=4
+strict_model_pass=0
+theoretical_accept_pass=0
+final_holdout_basic_pass=0
+lookahead violations=0
+```
+
+Model gate diagnostics:
+
+```text
+candidate_oos top40_pass: 2 / 78
+candidate_oos mc_pass: 29 / 78
+candidate_oos calendar_positive_ge_0p50: 0 / 78
+candidate_oos median_trades_per_day_ge_3: 0 / 78
+final_holdout final_top40_pass: 0 / 78
+final_holdout final_pass_basic: 0 / 78
+```
+
+Portfolio meta:
+
+```text
+portfolio_trades=193
+symbols=128
+avg=+0.067R
+median=+0.217R
+WR=68.4%
+cost10_avg=+0.046R
+MC pass=true
+top40 pass=false
+calendar_positive_day_rate=32.1%
+calendar_median_trades_per_day=0
+```
+
+Conclusion:
+
+```text
+The 365d engine now behaves as a strict verifier, not a result beautifier. It
+finds rolling-positive sleeves but refuses to promote them because no sleeve or
+portfolio passes the full robustness/frequency/final-holdout criteria.
 ```

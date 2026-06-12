@@ -19,6 +19,7 @@ import json
 import math
 import shutil
 import sys
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -36,6 +37,9 @@ from research_tools.session_edge_workbench import _top_remove_pct_to_negative
 DEFAULT_OUTPUT_DIR = Path(".output/research_cache/short_robust_plateau_engine")
 RUN_365D_OUTPUT_DIR = Path(".output/research_cache/short_robust_plateau_engine_365d")
 DEFAULT_ARCHIVE_DIR = Path("research/archive/2026-06-11_short_fade_manual_research")
+DEFAULT_RISK_PER_TRADE_PCT = 0.04
+DEFAULT_TOP_REMOVAL_PCT = 0.40
+DEFAULT_MC_ITERATIONS = 1000
 MANUAL_RESEARCH_DOCS = [
     Path("research/SHORT_FADE_CORE_EDGE.md"),
     Path("research/SHORT_FADE_DIVERSIFIED_SLEEVES.md"),
@@ -266,6 +270,130 @@ def _quality_score(metrics: dict[str, float | int]) -> float:
         + 0.08 * breadth
         - 0.14 * dd
     )
+
+
+def _model_quality_score(metrics: dict[str, float | int]) -> float:
+    """Fixed-weight score from the theoretical model, with bounded inputs."""
+    def finite(name: str, default: float = 0.0) -> float:
+        value = float(metrics.get(name, default) or default)
+        return value if np.isfinite(value) else default
+
+    sharpe = np.tanh(finite("daily_sharpe") / 2.0)
+    win_rate = max(min(finite("win_rate"), 1.0), 0.0)
+    pf = np.tanh((finite("profit_factor") - 1.0) / 2.0)
+    positive_days = max(min(finite("positive_day_rate"), 1.0), 0.0)
+    drawdown_penalty = min(abs(finite("max_drawdown_r")) / 12.0, 1.0)
+    return float(0.30 * sharpe + 0.20 * win_rate + 0.20 * pf + 0.20 * positive_days - 0.10 * drawdown_penalty)
+
+
+def _top_removal_summary(vals: pd.Series, *, remove_pct: float = DEFAULT_TOP_REMOVAL_PCT) -> dict[str, float | int | bool]:
+    clean = pd.to_numeric(vals, errors="coerce").dropna().sort_values(ascending=False)
+    if clean.empty:
+        return {
+            "top_removed_pct": remove_pct,
+            "top_removed_count": 0,
+            "top_removed_remaining_trades": 0,
+            "top_removed_remaining_sum_r": 0.0,
+            "top_removed_remaining_avg_r": float("nan"),
+            "top_removed_pass": False,
+        }
+    remove_count = int(math.ceil(len(clean) * remove_pct))
+    keep = clean.iloc[remove_count:]
+    return {
+        "top_removed_pct": remove_pct,
+        "top_removed_count": remove_count,
+        "top_removed_remaining_trades": int(len(keep)),
+        "top_removed_remaining_sum_r": float(keep.sum()) if len(keep) else 0.0,
+        "top_removed_remaining_avg_r": float(keep.mean()) if len(keep) else float("nan"),
+        "top_removed_pass": bool(len(keep) > 0 and keep.sum() > 0),
+    }
+
+
+def _monte_carlo_stress(
+    vals: pd.Series,
+    *,
+    iterations: int = DEFAULT_MC_ITERATIONS,
+    risk_per_trade_pct: float = DEFAULT_RISK_PER_TRADE_PCT,
+    seed: int = 42,
+) -> dict[str, float | int | bool]:
+    clean = pd.to_numeric(vals, errors="coerce").dropna().to_numpy(dtype="float64")
+    if len(clean) == 0 or iterations <= 0:
+        return {
+            "mc_iterations": int(max(iterations, 0)),
+            "mc_shuffle_dd95_r": float("nan"),
+            "mc_shuffle_dd95_pct": float("nan"),
+            "mc_bootstrap_positive_rate": float("nan"),
+            "mc_bootstrap_sum_p05_r": float("nan"),
+            "mc_pass": False,
+        }
+    rng = np.random.default_rng(seed)
+    dd_vals = np.empty(iterations, dtype="float64")
+    boot_sums = np.empty(iterations, dtype="float64")
+    for idx in range(iterations):
+        shuffled = rng.permutation(clean)
+        curve = np.cumsum(shuffled)
+        dd_vals[idx] = float((curve - np.maximum.accumulate(curve)).min()) if len(curve) else 0.0
+        boot_sums[idx] = float(rng.choice(clean, size=len(clean), replace=True).sum())
+    dd95_r = float(np.percentile(np.abs(dd_vals), 95))
+    positive_rate = float((boot_sums > 0).mean())
+    return {
+        "mc_iterations": int(iterations),
+        "mc_shuffle_dd95_r": dd95_r,
+        "mc_shuffle_dd95_pct": dd95_r * risk_per_trade_pct,
+        "mc_bootstrap_positive_rate": positive_rate,
+        "mc_bootstrap_sum_p05_r": float(np.percentile(boot_sums, 5)),
+        "mc_pass": bool((dd95_r * risk_per_trade_pct) < 0.15 and positive_rate >= 0.90),
+    }
+
+
+def _calendar_days_from_windows(windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]]) -> pd.DatetimeIndex:
+    parts = []
+    for _, _, oos_start, oos_end in windows:
+        parts.append(pd.date_range(oos_start, oos_end - pd.Timedelta(days=1), freq="D", tz="UTC"))
+    if not parts:
+        return pd.DatetimeIndex([], tz="UTC")
+    out = parts[0]
+    for part in parts[1:]:
+        out = out.union(part)
+    return out
+
+
+def _calendar_stats(df: pd.DataFrame, calendar_days: pd.DatetimeIndex, value_col: str = "cost10_r") -> dict[str, float | int]:
+    if len(calendar_days) == 0:
+        return {
+            "calendar_days": 0,
+            "calendar_median_trades_per_day": float("nan"),
+            "calendar_positive_day_rate": float("nan"),
+            "calendar_sum_r": 0.0,
+        }
+    if df.empty:
+        daily_sum = pd.Series(0.0, index=calendar_days)
+        daily_count = pd.Series(0, index=calendar_days)
+    else:
+        work = df.copy()
+        work["date"] = pd.to_datetime(work["date"], utc=True, errors="coerce").dt.normalize()
+        daily_sum = work.groupby("date")[value_col].sum().reindex(calendar_days, fill_value=0.0)
+        daily_count = work.groupby("date")[value_col].size().reindex(calendar_days, fill_value=0)
+    return {
+        "calendar_days": int(len(calendar_days)),
+        "calendar_median_trades_per_day": float(daily_count.median()),
+        "calendar_positive_day_rate": float((daily_sum > 0).mean()),
+        "calendar_sum_r": float(daily_sum.sum()),
+    }
+
+
+def _date_bounds(
+    df: pd.DataFrame,
+    *,
+    final_holdout_days: int,
+) -> tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp]:
+    dates = pd.to_datetime(df["date"], utc=True, errors="coerce").dropna()
+    if dates.empty:
+        raise ValueError("No valid dates in event store.")
+    start = dates.min().normalize()
+    end_exclusive = dates.max().normalize() + pd.Timedelta(days=1)
+    final_start = end_exclusive - pd.Timedelta(days=final_holdout_days)
+    return start, end_exclusive, final_start
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -916,12 +1044,10 @@ def _date_windows(
     step_days: int,
     final_holdout_days: int,
 ) -> list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]]:
-    dates = pd.to_datetime(df["date"], utc=True, errors="coerce").dropna()
-    if dates.empty:
+    try:
+        start, _, dev_end = _date_bounds(df, final_holdout_days=final_holdout_days)
+    except ValueError:
         return []
-    start = dates.min().normalize()
-    end = dates.max().normalize()
-    dev_end = end - pd.Timedelta(days=final_holdout_days)
     windows = []
     train_start = start
     while True:
@@ -966,11 +1092,17 @@ def scan_plateaus(
     max_natures_per_source: int = 12,
     candidate_profile: str = "exhaustive",
     progress_every: int = 0,
+    mc_iterations: int = DEFAULT_MC_ITERATIONS,
+    risk_per_trade_pct: float = DEFAULT_RISK_PER_TRADE_PCT,
+    top_removal_pct: float = DEFAULT_TOP_REMOVAL_PCT,
 ) -> None:
     df = _load_outcomes(output_dir)
-    trigger_masks = _trigger_rules(df)
+    _, final_end, final_start = _date_bounds(df, final_holdout_days=final_holdout_days)
+    dev_df = df[df["date"].lt(final_start)].copy()
+    trigger_masks = _trigger_rules(dev_df)
+    full_trigger_masks = _trigger_rules(df)
     specs = generate_candidates(
-        df,
+        dev_df,
         max_natures_per_source=max_natures_per_source,
         max_specs=max_candidates,
         candidate_profile=candidate_profile,
@@ -992,7 +1124,13 @@ def scan_plateaus(
             "max_natures_per_source": max_natures_per_source,
             "candidate_profile": candidate_profile,
             "candidate_universe_rows": len(specs),
+            "development_rows": int(len(dev_df)),
             "wfa_windows": len(windows),
+            "final_holdout_start": final_start.date().isoformat(),
+            "final_holdout_end_exclusive": final_end.date().isoformat(),
+            "mc_iterations": mc_iterations,
+            "risk_per_trade_pct": risk_per_trade_pct,
+            "top_removal_pct": top_removal_pct,
         },
     )
 
@@ -1004,8 +1142,8 @@ def scan_plateaus(
     for idx, spec in enumerate(specs):
         if progress_every and (idx == 0 or (idx + 1) % progress_every == 0 or idx + 1 == len(specs)):
             print(f"scan_progress={idx + 1}/{len(specs)} analyzed={len(candidate_rows)} rejected={len(rejected_rows)}", flush=True)
-        mask = _candidate_mask(df, spec, trigger_masks)
-        cand = df[mask]
+        mask = _candidate_mask(dev_df, spec, trigger_masks)
+        cand = dev_df[mask]
         prefilter_reason = _prefilter_candidate(cand, min_is_trades)
         if prefilter_reason:
             rejected_rows.append({"candidate_id": spec.candidate_id, "reason": prefilter_reason, "rows": int(len(cand))})
@@ -1124,16 +1262,58 @@ def scan_plateaus(
     portfolio, portfolio_trades = _build_portfolio(candidates, ledgers)
     lookahead = _lookahead_audit(df, candidates)
     axis_summary = _build_candidate_axis_summary(candidates)
+    meta_validation, final_holdout = _build_meta_validation(
+        df,
+        candidates,
+        clusters,
+        ledgers,
+        full_trigger_masks,
+        windows,
+        final_start=final_start,
+        final_end=final_end,
+        min_oos_trades=min_oos_trades,
+        mc_iterations=mc_iterations,
+        risk_per_trade_pct=risk_per_trade_pct,
+        top_removal_pct=top_removal_pct,
+    )
+    portfolio_meta = _build_portfolio_meta_validation(
+        portfolio_trades,
+        windows,
+        mc_iterations=mc_iterations,
+        risk_per_trade_pct=risk_per_trade_pct,
+        top_removal_pct=top_removal_pct,
+    )
+    gate_diagnostics = _build_model_gate_diagnostics(meta_validation, final_holdout, portfolio_meta, min_oos_trades=min_oos_trades)
+    improvement_plan = _build_improvement_plan(candidates, rejected, axis_summary, meta_validation, portfolio_meta)
 
     wfa.to_csv(output_dir / "wfa_results.csv", index=False)
     candidates.to_csv(output_dir / "plateau_candidates.csv", index=False)
     clusters.to_csv(output_dir / "plateau_clusters.csv", index=False)
     axis_summary.to_csv(output_dir / "candidate_axis_summary.csv", index=False)
+    meta_validation.to_csv(output_dir / "meta_validation.csv", index=False)
+    final_holdout.to_csv(output_dir / "final_holdout_validation.csv", index=False)
+    portfolio_meta.to_csv(output_dir / "portfolio_meta_validation.csv", index=False)
+    gate_diagnostics.to_csv(output_dir / "model_gate_diagnostics.csv", index=False)
+    improvement_plan.to_csv(output_dir / "improvement_plan.csv", index=False)
     rejected.to_csv(output_dir / "rejected_reasons.csv", index=False)
     portfolio.to_csv(output_dir / "portfolio_candidates.csv", index=False)
     portfolio_trades.to_csv(output_dir / "portfolio_oos_trades.csv", index=False)
     lookahead.to_csv(output_dir / "lookahead_audit.csv", index=False)
-    _write_final_report(output_dir, candidates, clusters, portfolio, rejected, axis_summary, lookahead, windows)
+    _write_final_report(
+        output_dir,
+        candidates,
+        clusters,
+        portfolio,
+        rejected,
+        axis_summary,
+        meta_validation,
+        final_holdout,
+        portfolio_meta,
+        gate_diagnostics,
+        improvement_plan,
+        lookahead,
+        windows,
+    )
 
 
 def _reject_reason(row: dict) -> str:
@@ -1177,13 +1357,20 @@ def _build_plateau_clusters(candidates: pd.DataFrame) -> pd.DataFrame:
     for idx, (keys, group) in enumerate(work.groupby(group_cols, dropna=False), start=1):
         best = group.sort_values(["candidate_score", "oos_cost10_sum_r"], ascending=[False, False]).iloc[0]
         s = _summary_from_candidate_group(group)
+        scores = pd.to_numeric(group["candidate_score"], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        best_score = float(scores.max()) if len(scores) else float("nan")
+        worst_score = float(scores.min()) if len(scores) else float("nan")
+        degradation = 1.0 - (worst_score / best_score) if best_score and np.isfinite(best_score) and best_score > 0 and np.isfinite(worst_score) else float("nan")
         row = {
             "plateau_id": f"plateau_{idx:04d}",
             "members": int(len(group)),
             "risk_buckets": ",".join(sorted(group["risk_bucket"].astype(str).unique())),
+            "member_candidate_ids": ";".join(group["candidate_id"].astype(str).tolist()),
             "best_candidate_id": best["candidate_id"],
             "best_candidate_score": float(best["candidate_score"]),
-            "plateau_pass": bool(len(group) >= 2),
+            "plateau_score_degradation_pct": float(degradation),
+            "plateau_pass": bool(len(group) >= 2 and np.isfinite(degradation) and degradation <= 0.30),
+            "plateau_strong_pass": bool(len(group) >= 2 and np.isfinite(degradation) and degradation <= 0.15),
         }
         for col, value in zip(group_cols, keys if isinstance(keys, tuple) else (keys,)):
             row[col] = value
@@ -1240,6 +1427,374 @@ def _build_candidate_axis_summary(candidates: pd.DataFrame) -> pd.DataFrame:
             )
     out = pd.DataFrame(rows)
     return out.sort_values(["axis", "promoted_rows", "best_candidate_score"], ascending=[True, False, False])
+
+
+def _candidate_spec_from_row(row: pd.Series) -> CandidateSpec:
+    return CandidateSpec(
+        candidate_id=str(row["candidate_id"]),
+        source=str(row["source"]),
+        nature_id=str(row["nature_id"]),
+        session_rule=str(row["session_rule"]),
+        stop_model=str(row["stop_model"]),
+        management_id=str(row["management_id"]),
+        risk_bucket=str(row["risk_bucket"]),
+        trigger_rule=str(row["trigger_rule"]),
+    )
+
+
+def _plateau_membership(clusters: pd.DataFrame) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    if clusters.empty or "member_candidate_ids" not in clusters.columns:
+        return out
+    for _, cluster in clusters.iterrows():
+        for cid in str(cluster.get("member_candidate_ids", "")).split(";"):
+            if not cid:
+                continue
+            out[cid] = {
+                "plateau_id": cluster.get("plateau_id", ""),
+                "plateau_pass": bool(cluster.get("plateau_pass", False)),
+                "plateau_strong_pass": bool(cluster.get("plateau_strong_pass", False)),
+                "plateau_members": int(cluster.get("members", 0) or 0),
+                "plateau_score_degradation_pct": float(cluster.get("plateau_score_degradation_pct", np.nan)),
+            }
+    return out
+
+
+def _model_gate(
+    *,
+    base: dict[str, object],
+    min_oos_trades: int,
+) -> tuple[bool, bool, str]:
+    strict = (
+        int(base.get("oos_trades", 0) or 0) >= min_oos_trades
+        and bool(base.get("plateau_pass", False))
+        and float(base.get("efficiency_ratio", 0.0) or 0.0) >= 0.70
+        and bool(base.get("top40_pass", False))
+        and bool(base.get("mc_pass", False))
+        and float(base.get("oos_win_rate", 0.0) or 0.0) >= 0.50
+        and float(base.get("calendar_positive_day_rate", 0.0) or 0.0) >= 0.50
+        and float(base.get("oos_cost10_avg_r", 0.0) or 0.0) > 0
+        and float(base.get("oos_median_r", 0.0) or 0.0) > 0
+    )
+    theoretical = (
+        strict
+        and bool(base.get("plateau_strong_pass", False))
+        and float(base.get("calendar_positive_day_rate", 0.0) or 0.0) >= 0.75
+        and float(base.get("calendar_median_trades_per_day", 0.0) or 0.0) >= 3.0
+    )
+    if theoretical:
+        grade = "theoretical_accept"
+    elif strict:
+        grade = "robust_watchlist"
+    elif bool(base.get("top40_pass", False)) and bool(base.get("mc_pass", False)):
+        grade = "stress_pass_but_plateau_or_consistency_weak"
+    else:
+        grade = "research_only"
+    return strict, theoretical, grade
+
+
+def _build_meta_validation(
+    df: pd.DataFrame,
+    candidates: pd.DataFrame,
+    clusters: pd.DataFrame,
+    ledgers: dict[str, pd.DataFrame],
+    trigger_masks: dict[str, pd.Series],
+    windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
+    *,
+    final_start: pd.Timestamp,
+    final_end: pd.Timestamp,
+    min_oos_trades: int,
+    mc_iterations: int,
+    risk_per_trade_pct: float,
+    top_removal_pct: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if candidates.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    calendar_days = _calendar_days_from_windows(windows)
+    final_days = pd.date_range(final_start, final_end - pd.Timedelta(days=1), freq="D", tz="UTC")
+    membership = _plateau_membership(clusters)
+    promoted = candidates[candidates["promoted"].astype(bool)].copy()
+    rows: list[dict] = []
+    final_rows: list[dict] = []
+    for _, cand in promoted.iterrows():
+        cid = str(cand["candidate_id"])
+        ledger = ledgers.get(cid, pd.DataFrame()).copy()
+        if ledger.empty:
+            continue
+        net_m = _summary(ledger, "net_r")
+        cost_m = _summary(ledger, "cost10_r")
+        calendar = _calendar_stats(ledger, calendar_days, "cost10_r")
+        top40 = _top_removal_summary(ledger["cost10_r"], remove_pct=top_removal_pct)
+        mc = _monte_carlo_stress(
+            ledger["cost10_r"],
+            iterations=mc_iterations,
+            risk_per_trade_pct=risk_per_trade_pct,
+            seed=zlib.crc32(cid.encode("utf-8")),
+        )
+        base: dict[str, object] = {
+            "candidate_id": cid,
+            "source": cand["source"],
+            "nature_id": cand["nature_id"],
+            "session_rule": cand["session_rule"],
+            "stop_model": cand["stop_model"],
+            "management_id": cand["management_id"],
+            "risk_bucket": cand["risk_bucket"],
+            "trigger_rule": cand["trigger_rule"],
+            "oos_trades": int(net_m["trades"]),
+            "oos_avg_r": net_m["avg_r"],
+            "oos_median_r": net_m["median_r"],
+            "oos_win_rate": net_m["win_rate"],
+            "oos_profit_factor": net_m["profit_factor"],
+            "oos_positive_day_rate_active": net_m["positive_day_rate"],
+            "oos_cost10_avg_r": cost_m["avg_r"],
+            "oos_cost10_sum_r": cost_m["sum_r"],
+            "oos_top_trade_independence_pct": net_m["top_trade_independence_pct"],
+            "oos_top_symbol_independence_pct": net_m["top_symbol_independence_pct"],
+            "oos_max_drawdown_r": net_m["max_drawdown_r"],
+            "oos_daily_sharpe": net_m["daily_sharpe"],
+            "model_quality_score": _model_quality_score(net_m),
+            "efficiency_ratio": cand.get("efficiency_ratio", np.nan),
+            "oos_window_positive_score_rate": cand.get("oos_window_positive_score_rate", np.nan),
+            **calendar,
+            **top40,
+            **mc,
+            **membership.get(cid, {}),
+        }
+        base["top40_pass"] = bool(base.get("top_removed_pass", False))
+        strict, theoretical, grade = _model_gate(base=base, min_oos_trades=min_oos_trades)
+        base["strict_model_pass"] = strict
+        base["theoretical_accept_pass"] = theoretical
+        base["model_grade"] = grade
+        rows.append(base)
+
+        spec = _candidate_spec_from_row(cand)
+        final_mask = _candidate_mask(df, spec, trigger_masks)
+        final = df[final_mask & df["date"].ge(final_start) & df["date"].lt(final_end)].copy()
+        final_net = _summary(final, "net_r")
+        final_cost = _summary(final, "cost10_r")
+        final_cal = _calendar_stats(final, final_days, "cost10_r")
+        final_top40 = _top_removal_summary(final["cost10_r"], remove_pct=top_removal_pct) if not final.empty else _top_removal_summary(pd.Series(dtype=float), remove_pct=top_removal_pct)
+        final_pass = (
+            final_net["trades"] >= min_oos_trades
+            and float(final_net["median_r"]) > 0
+            and float(final_cost["avg_r"]) > 0
+            and float(final_net["win_rate"]) >= 0.50
+            and bool(final_top40["top_removed_pass"])
+        )
+        final_rows.append(
+            {
+                "candidate_id": cid,
+                "final_start": final_start.date().isoformat(),
+                "final_end_exclusive": final_end.date().isoformat(),
+                "final_pass_basic": bool(final_pass),
+                "final_trades": int(final_net["trades"]),
+                "final_avg_r": final_net["avg_r"],
+                "final_median_r": final_net["median_r"],
+                "final_win_rate": final_net["win_rate"],
+                "final_cost10_avg_r": final_cost["avg_r"],
+                "final_cost10_sum_r": final_cost["sum_r"],
+                "final_top_trade_independence_pct": final_net["top_trade_independence_pct"],
+                "final_top_symbol_independence_pct": final_net["top_symbol_independence_pct"],
+                **{f"final_{k}": v for k, v in final_cal.items()},
+                **{f"final_{k}": v for k, v in final_top40.items()},
+            }
+        )
+    meta = pd.DataFrame(rows)
+    final_df = pd.DataFrame(final_rows)
+    if not meta.empty:
+        meta = meta.sort_values(
+            ["theoretical_accept_pass", "strict_model_pass", "model_quality_score", "oos_cost10_sum_r"],
+            ascending=[False, False, False, False],
+        )
+    if not final_df.empty:
+        final_df = final_df.sort_values(["final_pass_basic", "final_cost10_sum_r"], ascending=[False, False])
+    return meta, final_df
+
+
+def _build_portfolio_meta_validation(
+    portfolio_trades: pd.DataFrame,
+    windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
+    *,
+    mc_iterations: int,
+    risk_per_trade_pct: float,
+    top_removal_pct: float,
+) -> pd.DataFrame:
+    if portfolio_trades.empty:
+        return pd.DataFrame()
+    calendar_days = _calendar_days_from_windows(windows)
+    net_m = _summary(portfolio_trades, "net_r")
+    cost_m = _summary(portfolio_trades, "cost10_r")
+    top40 = _top_removal_summary(portfolio_trades["cost10_r"], remove_pct=top_removal_pct)
+    mc = _monte_carlo_stress(
+        portfolio_trades["cost10_r"],
+        iterations=mc_iterations,
+        risk_per_trade_pct=risk_per_trade_pct,
+        seed=20260612,
+    )
+    calendar = _calendar_stats(portfolio_trades, calendar_days, "cost10_r")
+    return pd.DataFrame(
+        [
+            {
+                "portfolio_trades": int(net_m["trades"]),
+                "portfolio_symbols": int(net_m["symbols"]),
+                "portfolio_days_active": int(net_m["days"]),
+                "portfolio_avg_r": net_m["avg_r"],
+                "portfolio_median_r": net_m["median_r"],
+                "portfolio_win_rate": net_m["win_rate"],
+                "portfolio_cost10_avg_r": cost_m["avg_r"],
+                "portfolio_cost10_sum_r": cost_m["sum_r"],
+                "portfolio_top_trade_independence_pct": net_m["top_trade_independence_pct"],
+                "portfolio_top_symbol_independence_pct": net_m["top_symbol_independence_pct"],
+                "portfolio_model_quality_score": _model_quality_score(net_m),
+                **calendar,
+                **top40,
+                **mc,
+            }
+        ]
+    )
+
+
+def _diagnostic_count(
+    rows: list[dict[str, object]],
+    *,
+    scope: str,
+    check: str,
+    condition: pd.Series | list[bool] | np.ndarray,
+    total: int,
+    note: str,
+) -> None:
+    passed = int(pd.Series(condition).fillna(False).sum()) if total else 0
+    rows.append(
+        {
+            "scope": scope,
+            "check": check,
+            "passed": passed,
+            "total": int(total),
+            "pass_rate": float(passed / total) if total else float("nan"),
+            "note": note,
+        }
+    )
+
+
+def _build_model_gate_diagnostics(
+    meta_validation: pd.DataFrame,
+    final_holdout: pd.DataFrame,
+    portfolio_meta: pd.DataFrame,
+    *,
+    min_oos_trades: int,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    total = int(len(meta_validation))
+    if total:
+        candidate_checks = [
+            ("min_oos_trades", meta_validation["oos_trades"].ge(min_oos_trades), "Enough rolling OOS trades for a sleeve."),
+            ("plateau_pass", meta_validation["plateau_pass"].fillna(False), "Candidate belongs to a risk-bucket plateau with <=30% score degradation."),
+            ("plateau_strong_pass", meta_validation["plateau_strong_pass"].fillna(False), "Candidate belongs to a risk-bucket plateau with <=15% score degradation."),
+            ("efficiency_ratio_ge_0p70", meta_validation["efficiency_ratio"].ge(0.70), "OOS score does not collapse versus IS score."),
+            ("top40_pass", meta_validation["top_removed_pass"].fillna(False), "Remaining 60% of trades is still positive after removing top 40% winners."),
+            ("mc_pass", meta_validation["mc_pass"].fillna(False), "Monte Carlo drawdown/positive-rate stress survives fixed risk."),
+            ("win_rate_ge_0p50", meta_validation["oos_win_rate"].ge(0.50), "Rolling OOS win rate is at least 50%."),
+            ("calendar_positive_ge_0p50", meta_validation["calendar_positive_day_rate"].ge(0.50), "At least half of rolling OOS calendar days are positive."),
+            ("calendar_positive_ge_0p75", meta_validation["calendar_positive_day_rate"].ge(0.75), "The theoretical full model's profitable-day target."),
+            ("median_trades_per_day_ge_3", meta_validation["calendar_median_trades_per_day"].ge(3.0), "The theoretical full model's frequency target."),
+            ("cost10_avg_positive", meta_validation["oos_cost10_avg_r"].gt(0), "Average trade remains positive after extra 10bps cost proxy."),
+            ("median_r_positive", meta_validation["oos_median_r"].gt(0), "Median trade is positive; not only tail-driven."),
+            ("strict_model_pass", meta_validation["strict_model_pass"].fillna(False), "All strict sleeve-level gates passed."),
+            ("theoretical_accept_pass", meta_validation["theoretical_accept_pass"].fillna(False), "Full theoretical sleeve target passed."),
+        ]
+        for check, condition, note in candidate_checks:
+            _diagnostic_count(rows, scope="candidate_oos", check=check, condition=condition, total=total, note=note)
+
+    final_total = int(len(final_holdout))
+    if final_total:
+        final_checks = [
+            ("final_trades_ge_min", final_holdout["final_trades"].ge(min_oos_trades), "Enough trades in the unopened final holdout."),
+            ("final_median_positive", final_holdout["final_median_r"].gt(0), "Final holdout median trade is positive."),
+            ("final_cost10_avg_positive", final_holdout["final_cost10_avg_r"].gt(0), "Final holdout survives extra 10bps cost proxy."),
+            ("final_win_rate_ge_0p50", final_holdout["final_win_rate"].ge(0.50), "Final holdout win rate is at least 50%."),
+            ("final_top40_pass", final_holdout["final_top_removed_pass"].fillna(False), "Final holdout remains positive after removing top 40% winners."),
+            ("final_pass_basic", final_holdout["final_pass_basic"].fillna(False), "All basic final holdout gates passed."),
+        ]
+        for check, condition, note in final_checks:
+            _diagnostic_count(rows, scope="final_holdout", check=check, condition=condition, total=final_total, note=note)
+
+    if not portfolio_meta.empty:
+        row = portfolio_meta.iloc[0]
+        portfolio_checks = [
+            ("portfolio_trades_positive", bool(row.get("portfolio_trades", 0) > 0), "Portfolio has selected marginal trades."),
+            ("portfolio_cost10_avg_positive", bool(row.get("portfolio_cost10_avg_r", 0) > 0), "Portfolio average remains positive after extra 10bps cost proxy."),
+            ("portfolio_median_positive", bool(row.get("portfolio_median_r", 0) > 0), "Portfolio median trade is positive."),
+            ("portfolio_win_rate_ge_0p50", bool(row.get("portfolio_win_rate", 0) >= 0.50), "Portfolio win rate is at least 50%."),
+            ("portfolio_calendar_positive_ge_0p50", bool(row.get("calendar_positive_day_rate", 0) >= 0.50), "At least half of OOS calendar days are positive."),
+            ("portfolio_median_trades_per_day_ge_3", bool(row.get("calendar_median_trades_per_day", 0) >= 3.0), "Portfolio meets the target frequency."),
+            ("portfolio_top40_pass", bool(row.get("top_removed_pass", False)), "Portfolio remains positive after removing top 40% winners."),
+            ("portfolio_mc_pass", bool(row.get("mc_pass", False)), "Portfolio passes Monte Carlo stress."),
+        ]
+        for check, passed, note in portfolio_checks:
+            _diagnostic_count(rows, scope="portfolio_oos", check=check, condition=[passed], total=1, note=note)
+
+    return pd.DataFrame(rows)
+
+
+def _build_improvement_plan(
+    candidates: pd.DataFrame,
+    rejected: pd.DataFrame,
+    axis_summary: pd.DataFrame,
+    meta_validation: pd.DataFrame,
+    portfolio_meta: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if not rejected.empty and "reason" in rejected.columns:
+        for reason, count in rejected["reason"].value_counts().head(8).items():
+            if reason == "cost10_not_positive":
+                action = "Tighten entry quality or improve execution cost/risk buckets; current edge is eaten by costs."
+            elif reason == "no_train_pass_oos_rows":
+                action = "Increase sample breadth or reduce sparse rule intersections before WFA promotion."
+            elif reason == "median_not_positive":
+                action = "Avoid tail-only pockets; require positive median before ranking by average."
+            elif reason == "top_trade_dependent":
+                action = "Diversify away from top winners; prefer candidates with top40 removal pass and wider symbols."
+            elif reason == "positive_day_rate_low":
+                action = "Gate by session/regime; current returns are too clustered by day."
+            else:
+                action = "Inspect rejected_reasons.csv and candidate_axis_summary.csv for the responsible axis."
+            rows.append({"priority": len(rows) + 1, "source": "reject_funnel", "signal": reason, "count": int(count), "recommended_action": action})
+    if not meta_validation.empty:
+        strict = int(meta_validation["strict_model_pass"].sum()) if "strict_model_pass" in meta_validation.columns else 0
+        theoretical = int(meta_validation["theoretical_accept_pass"].sum()) if "theoretical_accept_pass" in meta_validation.columns else 0
+        rows.append(
+            {
+                "priority": len(rows) + 1,
+                "source": "model_gate",
+                "signal": "strict_vs_theoretical_acceptance",
+                "count": strict,
+                "recommended_action": f"Strict model passes={strict}, theoretical full passes={theoretical}. If theoretical is zero, combine sleeves at portfolio level rather than forcing each sleeve to trade 3/day.",
+            }
+        )
+    if not portfolio_meta.empty:
+        row = portfolio_meta.iloc[0]
+        rows.append(
+            {
+                "priority": len(rows) + 1,
+                "source": "portfolio",
+                "signal": "portfolio_frequency_and_mc",
+                "count": int(row.get("portfolio_trades", 0) or 0),
+                "recommended_action": "Use portfolio_meta_validation.csv to decide whether sleeve combination, not single-sleeve optimization, meets frequency/drawdown targets.",
+            }
+        )
+    if not axis_summary.empty:
+        top_sessions = axis_summary[(axis_summary["axis"].eq("session_rule")) & (axis_summary["promoted_rows"] > 0)].head(4)
+        if not top_sessions.empty:
+            rows.append(
+                {
+                    "priority": len(rows) + 1,
+                    "source": "axis_summary",
+                    "signal": "best_sessions",
+                    "count": int(top_sessions["promoted_rows"].sum()),
+                    "recommended_action": "Prioritize session-specific sleeve portfolios: " + ", ".join(top_sessions["value"].astype(str).tolist()),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def _remove_collisions(candidate: pd.DataFrame, selected: pd.DataFrame, *, window_ms: int = 60 * 60_000) -> pd.DataFrame:
@@ -1346,6 +1901,11 @@ def _write_final_report(
     portfolio: pd.DataFrame,
     rejected: pd.DataFrame,
     axis_summary: pd.DataFrame,
+    meta_validation: pd.DataFrame,
+    final_holdout: pd.DataFrame,
+    portfolio_meta: pd.DataFrame,
+    gate_diagnostics: pd.DataFrame,
+    improvement_plan: pd.DataFrame,
     lookahead: pd.DataFrame,
     windows: list[tuple[pd.Timestamp, pd.Timestamp, pd.Timestamp, pd.Timestamp]],
 ) -> None:
@@ -1394,6 +1954,55 @@ def _write_final_report(
         "marginal_cost10_avg_r",
         "marginal_top_trade_independence_pct",
     ]
+    meta_cols = [
+        "candidate_id",
+        "model_grade",
+        "strict_model_pass",
+        "theoretical_accept_pass",
+        "plateau_pass",
+        "plateau_strong_pass",
+        "oos_trades",
+        "oos_cost10_avg_r",
+        "oos_median_r",
+        "oos_win_rate",
+        "calendar_positive_day_rate",
+        "calendar_median_trades_per_day",
+        "top_removed_remaining_sum_r",
+        "mc_shuffle_dd95_pct",
+        "mc_bootstrap_positive_rate",
+        "model_quality_score",
+    ]
+    final_cols = [
+        "candidate_id",
+        "final_pass_basic",
+        "final_trades",
+        "final_cost10_avg_r",
+        "final_median_r",
+        "final_win_rate",
+        "final_calendar_positive_day_rate",
+        "final_top_removed_remaining_sum_r",
+    ]
+    portfolio_meta_cols = [
+        "portfolio_trades",
+        "portfolio_cost10_avg_r",
+        "portfolio_cost10_sum_r",
+        "portfolio_median_r",
+        "portfolio_win_rate",
+        "calendar_positive_day_rate",
+        "calendar_median_trades_per_day",
+        "top_removed_remaining_sum_r",
+        "mc_shuffle_dd95_pct",
+        "mc_bootstrap_positive_rate",
+        "mc_pass",
+    ]
+    gate_cols = [
+        "scope",
+        "check",
+        "passed",
+        "total",
+        "pass_rate",
+        "note",
+    ]
     axis_cols = [
         "axis",
         "value",
@@ -1406,6 +2015,11 @@ def _write_final_report(
         "best_candidate_id",
     ]
     rejected_summary = rejected["reason"].value_counts().head(20).to_string() if not rejected.empty and "reason" in rejected.columns else "none"
+    strict_count = int(meta_validation["strict_model_pass"].sum()) if not meta_validation.empty and "strict_model_pass" in meta_validation.columns else 0
+    theoretical_count = int(meta_validation["theoretical_accept_pass"].sum()) if not meta_validation.empty and "theoretical_accept_pass" in meta_validation.columns else 0
+    final_pass_count = int(final_holdout["final_pass_basic"].sum()) if not final_holdout.empty and "final_pass_basic" in final_holdout.columns else 0
+    plateau_pass_count = int(clusters["plateau_pass"].sum()) if not clusters.empty and "plateau_pass" in clusters.columns else 0
+    plateau_strong_count = int(clusters["plateau_strong_pass"].sum()) if not clusters.empty and "plateau_strong_pass" in clusters.columns else 0
     text = f"""# Short Robust Plateau Engine Report
 
 Status: automated plateau/WFA postprocess over immutable replay event store.
@@ -1448,6 +2062,21 @@ Plateau clusters:
 {len(clusters)}
 ```
 
+Strict plateau pass clusters:
+
+```text
+plateau_pass={plateau_pass_count}
+plateau_strong_pass={plateau_strong_count}
+```
+
+Model gate:
+
+```text
+strict_model_pass={strict_count}
+theoretical_accept_pass={theoretical_count}
+final_holdout_basic_pass={final_pass_count}
+```
+
 Lookahead audit:
 
 ```text
@@ -1476,6 +2105,36 @@ Portfolio candidates:
 
 ```text
 {portfolio.head(20)[[c for c in port_cols if c in portfolio.columns]].to_string(index=False) if not portfolio.empty else 'none'}
+```
+
+Meta validation:
+
+```text
+{meta_validation.head(25)[[c for c in meta_cols if c in meta_validation.columns]].to_string(index=False) if not meta_validation.empty else 'none'}
+```
+
+Final holdout validation:
+
+```text
+{final_holdout.head(25)[[c for c in final_cols if c in final_holdout.columns]].to_string(index=False) if not final_holdout.empty else 'none'}
+```
+
+Portfolio meta validation:
+
+```text
+{portfolio_meta.head(10)[[c for c in portfolio_meta_cols if c in portfolio_meta.columns]].to_string(index=False) if not portfolio_meta.empty else 'none'}
+```
+
+Model gate diagnostics:
+
+```text
+{gate_diagnostics[[c for c in gate_cols if c in gate_diagnostics.columns]].to_string(index=False) if not gate_diagnostics.empty else 'none'}
+```
+
+Improvement plan:
+
+```text
+{improvement_plan.head(20).to_string(index=False) if not improvement_plan.empty else 'none'}
 ```
 
 Top rejected reasons:
@@ -1556,6 +2215,9 @@ def run_all(args: argparse.Namespace) -> None:
         max_natures_per_source=args.max_natures_per_source,
         candidate_profile=args.candidate_profile,
         progress_every=args.progress_every,
+        mc_iterations=args.mc_iterations,
+        risk_per_trade_pct=args.risk_per_trade_pct,
+        top_removal_pct=args.top_removal_pct,
     )
 
 
@@ -1591,6 +2253,9 @@ def _add_scan_args(
     parser.add_argument("--max-natures-per-source", type=int, default=max_natures_per_source)
     parser.add_argument("--candidate-profile", choices=["exhaustive", "balanced_365d"], default=candidate_profile)
     parser.add_argument("--progress-every", type=int, default=progress_every)
+    parser.add_argument("--mc-iterations", type=int, default=DEFAULT_MC_ITERATIONS)
+    parser.add_argument("--risk-per-trade-pct", type=float, default=DEFAULT_RISK_PER_TRADE_PCT)
+    parser.add_argument("--top-removal-pct", type=float, default=DEFAULT_TOP_REMOVAL_PCT)
 
 
 def main() -> None:
@@ -1645,6 +2310,9 @@ def main() -> None:
         max_natures_per_source=4,
         candidate_profile="balanced_365d",
         progress_every=0,
+        mc_iterations=250,
+        risk_per_trade_pct=DEFAULT_RISK_PER_TRADE_PCT,
+        top_removal_pct=DEFAULT_TOP_REMOVAL_PCT,
     )
 
     args = parser.parse_args()
@@ -1674,6 +2342,9 @@ def main() -> None:
             max_natures_per_source=args.max_natures_per_source,
             candidate_profile=args.candidate_profile,
             progress_every=args.progress_every,
+            mc_iterations=args.mc_iterations,
+            risk_per_trade_pct=args.risk_per_trade_pct,
+            top_removal_pct=args.top_removal_pct,
         )
         print(f"report={Path(args.output_dir) / 'final_report.md'}")
     elif args.command in {"all", "smoke", "run-365d"}:

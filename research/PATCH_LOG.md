@@ -12800,3 +12800,39 @@ Research tooling only. This does not make the inspected 365d window fresh OOS.
 The engine should be used for repeatable discovery/filtering and then judged on
 future unseen/live-forward data or a newly built period.
 ```
+
+## 2026-06-12 - P560 strict plateau meta-validation gates
+
+Status: APPLIED locally / UNKNOWN commit.
+
+Changes:
+
+- Updated `research_tools/short_robust_plateau_engine.py` so candidate
+  generation, prefiltering and WFA use development rows only, not the final
+  holdout.
+- Added explicit final-holdout validation artifacts.
+- Added top-40 removal gate, Monte Carlo shuffle/bootstrap stress and fixed
+  risk drawdown stress.
+- Added plateau score-degradation checks and `plateau_strong_pass`.
+- Added `meta_validation.csv`, `final_holdout_validation.csv`,
+  `portfolio_meta_validation.csv`, `model_gate_diagnostics.csv` and
+  `improvement_plan.csv`.
+- Updated `research/SHORT_ROBUST_PLATEAU_ENGINE.md`,
+  `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md` and
+  `research/EXPERIMENT_LOG.md`.
+
+Validation:
+
+```text
+python -m compileall research_tools/short_robust_plateau_engine.py
+python research_tools/short_robust_plateau_engine.py smoke --max-rows-per-source 8000 --output-dir .output/research_cache/short_robust_plateau_engine_meta_smoke2
+python research_tools/short_robust_plateau_engine.py scan-plateaus --output-dir .output/research_cache/short_robust_plateau_engine_365d --candidate-profile balanced_365d --max-candidates 5000 --max-natures-per-source 8 --progress-every 500
+```
+
+Risk:
+
+```text
+Research tooling only. This tightens validation and reporting. It does not
+change live trading logic or prove freshness of the heavily inspected 365d
+dataset.
+```
