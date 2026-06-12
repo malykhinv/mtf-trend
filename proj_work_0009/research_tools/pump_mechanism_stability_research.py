@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_oos_verdict"
+IMPLEMENTATION_STAGE = "mechanism_short_mapping_candidates"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -155,6 +155,21 @@ OOS_VERDICT_MAX_MONTH_POSITIVE_SCORE_SHARE = 0.50
 OOS_VERDICT_TOP_REMOVAL_FRACTION = 0.10
 MAX_SELECTED_BASINS_PER_DAY_WINDOW = 20
 DAILY_ALLOWED_BASIN_STATUSES = ("strong_candidate", "tactical", "challenger")
+
+SHORT_MAPPING_MODEL = "accepted_mechanism_to_short_confirm_candidates_v1"
+SHORT_CONFIRM_MODEL = "closed_1m_structural_low_break_after_feature_cutoff_v1"
+SHORT_ENTRY_MODEL = "next_1m_open_after_confirm_plus_slippage"
+SHORT_STOP_MODEL = "structural_high_plus_buffer_no_future_high"
+SHORT_OI_MODEL = "closed_5m_oi_asof_confirm_close"
+SHORT_CONFIRM_WINDOW_MINUTES = 60
+SHORT_CONFIRM_CLOSE_BELOW_STRUCTURAL_LOW_BUFFER_PCT = 0.0005
+SHORT_CONFIRM_NEAR_LOW_MAX = 0.35
+SHORT_CONFIRM_MIN_BODY_PCT = 0.0002
+SHORT_CONFIRM_MIN_ENTRY_RISK_PCT = 0.0025
+SHORT_CONFIRM_MAX_ENTRY_RISK_PCT = 0.08
+SHORT_STOP_BUFFER_PCT = 0.0010
+SHORT_ENTRY_ADVERSE_SLIPPAGE_BPS = 2.0
+SHORT_ALLOWED_VERDICT = "accepted_mechanism"
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +325,7 @@ def run_pump_mechanism_stability_research(
             oos_top_removal=pd.DataFrame(),
             oos_selection_summary=pd.DataFrame(),
             oos_verdict=pd.DataFrame(),
+            short_trade_candidates=pd.DataFrame(),
         )
         _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
         _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -441,7 +457,16 @@ def run_pump_mechanism_stability_research(
         oos_selection_summary=oos_selection_summary,
     )
 
-    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS artifacts", started_at)
+    _print_stage(progress_label, "mapping accepted mechanisms to honest short confirm candidates", started_at)
+    short_trade_candidates = _build_short_trade_candidates(
+        config=config,
+        storage=storage,
+        oos_verdict=oos_verdict,
+        daily_oos_events=daily_oos_events,
+        events=events,
+    )
+
+    _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/short-mapping artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
     _write_csv(config.output_dir / "pump_mechanism_event_quality.csv", quality)
@@ -460,6 +485,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_oos_top_removal.csv", oos_top_removal)
     _write_csv(config.output_dir / "pump_mechanism_oos_selection_summary.csv", oos_selection_summary)
     _write_csv(config.output_dir / "pump_mechanism_oos_verdict.csv", oos_verdict)
+    _write_csv(config.output_dir / "pump_mechanism_short_trade_candidates.csv", short_trade_candidates)
 
     run_config = _run_config_frame(
         config=config,
@@ -485,6 +511,7 @@ def run_pump_mechanism_stability_research(
         oos_top_removal=oos_top_removal,
         oos_selection_summary=oos_selection_summary,
         oos_verdict=oos_verdict,
+        short_trade_candidates=short_trade_candidates,
     )
     _write_csv(config.output_dir / "pump_mechanism_run_config.csv", run_config)
     _write_csv(config.output_dir / "pump_mechanism_artifact_manifest.csv", _artifact_manifest_frame(config=config))
@@ -496,7 +523,7 @@ def run_pump_mechanism_stability_research(
         f"plateau_basins={len(plateau_basins):,} daily_selection={len(daily_selection):,} "
         f"daily_oos={len(daily_oos):,} daily_oos_events={len(daily_oos_events):,} "
         f"oos_diagnostics={len(oos_diagnostics):,} oos_top_removal={len(oos_top_removal):,} "
-        f"oos_verdict={len(oos_verdict):,} "
+        f"oos_verdict={len(oos_verdict):,} short_trade_candidates={len(short_trade_candidates):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -3386,6 +3413,396 @@ def _build_oos_verdict(
     return _sort_frame(result, ["oos_verdict", "oos_median_response_score", "event_score_sum", "selection_key"])
 
 
+
+def _build_short_trade_candidates(
+    *,
+    config: PumpMechanismStabilityConfig,
+    storage: ParquetStorage,
+    oos_verdict: pd.DataFrame,
+    daily_oos_events: pd.DataFrame,
+    events: pd.DataFrame,
+) -> pd.DataFrame:
+    """Map accepted mechanism OOS rows to honest short confirm candidates.
+
+    This is the first execution-adjacent layer, but it still does not simulate
+    exits or PnL.  It only asks whether an OOS event selected by an accepted
+    mechanism later produced a closed 1m structural-low-break confirmation that
+    can be entered on the next 1m open.  Rejected/watchlist mechanisms are not
+    eligible, and no outcome columns are used for the mapping decision.
+    """
+
+    columns = _short_trade_candidate_columns()
+    accepted = _accepted_oos_events_for_short_mapping(oos_verdict=oos_verdict, daily_oos_events=daily_oos_events, events=events)
+    if accepted.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    for symbol, symbol_events in accepted.groupby("symbol", dropna=False, sort=True):
+        symbol_str = str(symbol)
+        if not symbol_str:
+            continue
+        min_cutoff = _finite_int_or_none(pd.to_numeric(symbol_events.get("feature_cutoff_ms", pd.Series(dtype=float)), errors="coerce").min())
+        max_cutoff = _finite_int_or_none(pd.to_numeric(symbol_events.get("feature_cutoff_ms", pd.Series(dtype=float)), errors="coerce").max())
+        if min_cutoff is None or max_cutoff is None:
+            for selected in symbol_events.to_dict("records"):
+                rows.append(_short_mapping_rejection_row(selected, status="missing_feature_cutoff", reason="feature_cutoff_ms_missing"))
+            continue
+        load_start_ms = int(min_cutoff) - FIVE_MINUTE_MS
+        load_end_ms = int(max_cutoff) + (int(SHORT_CONFIRM_WINDOW_MINUTES) + 5) * MINUTE_MS
+        frame_1m_result = _load_frame_result(storage, symbol_str, "1m", start_ms=load_start_ms, end_ms=load_end_ms)
+        frame_5m_result = _load_frame_result(storage, symbol_str, "5m", start_ms=load_start_ms - 15 * MINUTE_MS, end_ms=load_end_ms)
+        frame_1m = _prepare_ohlcv(frame_1m_result.frame) if frame_1m_result.ok and not frame_1m_result.frame.empty else pd.DataFrame()
+        oi_lookup = _prepare_oi_lookup(_prepare_oi(frame_5m_result.frame)) if frame_5m_result.ok and not frame_5m_result.frame.empty else _prepare_oi_lookup(pd.DataFrame())
+        if frame_1m.empty:
+            for selected in symbol_events.to_dict("records"):
+                rows.append(
+                    _short_mapping_rejection_row(
+                        selected,
+                        status="missing_1m_cache_for_mapping",
+                        reason=str(frame_1m_result.reason or "missing_1m_cache"),
+                    )
+                )
+            continue
+        for selected in symbol_events.to_dict("records"):
+            rows.append(_find_short_confirm_candidate(selected=selected, frame_1m=frame_1m, oi_lookup=oi_lookup, config=config))
+
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days", "selected_rank", "event_rank", "event_id"])
+
+
+def _accepted_oos_events_for_short_mapping(*, oos_verdict: pd.DataFrame, daily_oos_events: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "selection_key", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord", "selected_rank",
+        "basin_id", "center_rule_id", "basin_status_at_selection", "event_rank", "event_id", "symbol", "session_bucket",
+        "mechanism_family", "mechanism_id", "acceptance_regime", "oi_regime", "flow_regime", "price_progress_regime", "structure_regime",
+        "late_buyer_regime", "feature_cutoff_ms", "feature_cutoff_time_utc", "pump_high", "pump_high_timestamp_ms", "structural_low",
+        "structural_low_timestamp_ms", "structural_high", "structural_high_timestamp_ms", "feature_price", "seed_open_ms", "seed_close_ms",
+    ]
+    if oos_verdict.empty or daily_oos_events.empty:
+        return pd.DataFrame(columns=columns)
+    verdict = oos_verdict.copy()
+    verdict = verdict.loc[
+        verdict.get("allowed_for_short_mapping", pd.Series(dtype=bool)).map(_to_bool)
+        & verdict.get("oos_verdict", pd.Series(dtype=str)).astype(str).eq(SHORT_ALLOWED_VERDICT)
+    ].copy()
+    if verdict.empty or "selection_key" not in verdict.columns:
+        return pd.DataFrame(columns=columns)
+    accepted_keys = set(verdict["selection_key"].astype(str))
+    selected = daily_oos_events.loc[daily_oos_events.get("selection_key", pd.Series(dtype=str)).astype(str).isin(accepted_keys)].copy()
+    if selected.empty:
+        return pd.DataFrame(columns=columns)
+    selected = selected[[column for column in selected.columns if not column.startswith("future_") and column not in {"down_mfe_30m", "down_mfe_60m", "up_mae_30m", "up_mae_60m"}]].copy()
+    if events.empty or "event_id" not in events.columns:
+        return _ensure_columns(selected, columns)
+    event_columns = [
+        "event_id", "feature_cutoff_ms", "feature_cutoff_time_utc", "pump_high", "pump_high_timestamp_ms", "structural_low",
+        "structural_low_timestamp_ms", "structural_high", "structural_high_timestamp_ms", "feature_price", "seed_open_ms", "seed_close_ms",
+    ]
+    event_features = events[[column for column in event_columns if column in events.columns]].drop_duplicates("event_id", keep="last")
+    work = selected.merge(event_features, on="event_id", how="left", suffixes=("", "_event"))
+    result = _ensure_columns(work, columns)
+    return _sort_frame(result, ["test_day_ord", "train_window_days", "selected_rank", "event_rank", "event_id"])
+
+
+def _find_short_confirm_candidate(
+    *,
+    selected: dict[str, object],
+    frame_1m: pd.DataFrame,
+    oi_lookup: _OiLookup,
+    config: PumpMechanismStabilityConfig,
+) -> dict[str, object]:
+    feature_cutoff_ms = _finite_int_or_none(selected.get("feature_cutoff_ms"))
+    structural_low = _float(selected.get("structural_low"))
+    structural_high = _float(selected.get("structural_high"))
+    if feature_cutoff_ms is None:
+        return _short_mapping_rejection_row(selected, status="missing_feature_cutoff", reason="feature_cutoff_ms_missing")
+    if not math.isfinite(structural_low) or structural_low <= 0.0:
+        return _short_mapping_rejection_row(selected, status="missing_structural_low", reason="structural_low_missing_or_invalid")
+    if not math.isfinite(structural_high) or structural_high <= 0.0:
+        return _short_mapping_rejection_row(selected, status="missing_structural_high", reason="structural_high_missing_or_invalid")
+    if not {"timestamp", "open", "high", "low", "close"}.issubset(frame_1m.columns):
+        return _short_mapping_rejection_row(selected, status="missing_1m_ohlc_columns", reason="required_1m_ohlc_columns_missing")
+    if "quote_volume" not in frame_1m.columns or "number_of_trades" not in frame_1m.columns:
+        return _short_mapping_rejection_row(selected, status="missing_1m_flow_columns", reason="quote_volume_or_number_of_trades_missing")
+
+    search_end_ms = int(feature_cutoff_ms) + int(SHORT_CONFIRM_WINDOW_MINUTES) * MINUTE_MS
+    window = _time_window(frame_1m, start_ms=int(feature_cutoff_ms), end_ms=search_end_ms, include_end=False)
+    if window.empty:
+        return _short_mapping_rejection_row(selected, status="no_confirm_window_1m_rows", reason="no_1m_rows_after_feature_cutoff")
+
+    ts_to_row = {int(row["timestamp"]): row for row in frame_1m.to_dict("records") if math.isfinite(_float(row.get("timestamp")))}
+    break_level = float(structural_low) * (1.0 - float(SHORT_CONFIRM_CLOSE_BELOW_STRUCTURAL_LOW_BUFFER_PCT))
+    stop_price = float(structural_high) * (1.0 + float(SHORT_STOP_BUFFER_PCT))
+
+    for candle in window.to_dict("records"):
+        confirm_open = _float(candle.get("open"))
+        confirm_high = _float(candle.get("high"))
+        confirm_low = _float(candle.get("low"))
+        confirm_close = _float(candle.get("close"))
+        confirm_ts = _finite_int_or_none(candle.get("timestamp"))
+        quote_volume = _float(candle.get("quote_volume"))
+        trades = _float(candle.get("number_of_trades"))
+        if confirm_ts is None or not all(math.isfinite(value) and value > 0.0 for value in (confirm_open, confirm_high, confirm_low, confirm_close)):
+            continue
+        if confirm_close > break_level:
+            continue
+        if confirm_close >= confirm_open:
+            continue
+        body_pct = (confirm_open - confirm_close) / confirm_open if confirm_open > 0.0 else float("nan")
+        if not math.isfinite(body_pct) or body_pct < float(SHORT_CONFIRM_MIN_BODY_PCT):
+            continue
+        close_location = _candle_close_location(candle)
+        if math.isfinite(close_location) and close_location > float(SHORT_CONFIRM_NEAR_LOW_MAX):
+            continue
+        if not math.isfinite(quote_volume) or quote_volume <= 0.0 or not math.isfinite(trades) or trades <= 0.0:
+            continue
+        confirm_close_ms = int(confirm_ts) + MINUTE_MS
+        next_row = ts_to_row.get(confirm_close_ms)
+        if next_row is None:
+            return _short_mapping_rejection_row(
+                selected,
+                status="confirm_found_but_missing_next_1m_open",
+                reason="next_1m_open_not_available_after_confirm_close",
+                confirm_candle=candle,
+            )
+        next_open = _float(next_row.get("open"))
+        if not math.isfinite(next_open) or next_open <= 0.0:
+            return _short_mapping_rejection_row(
+                selected,
+                status="confirm_found_but_invalid_next_1m_open",
+                reason="next_1m_open_invalid",
+                confirm_candle=candle,
+            )
+        entry_price = next_open * (1.0 - float(SHORT_ENTRY_ADVERSE_SLIPPAGE_BPS) / 10_000.0)
+        # For a short, adverse slippage means selling slightly lower than the next open.
+        risk_pct = stop_price / entry_price - 1.0 if entry_price > 0.0 else float("nan")
+        if not math.isfinite(risk_pct) or risk_pct < float(SHORT_CONFIRM_MIN_ENTRY_RISK_PCT):
+            return _short_mapping_rejection_row(
+                selected,
+                status="confirm_found_but_invalid_stop_risk",
+                reason="entry_stop_risk_too_small_or_invalid",
+                confirm_candle=candle,
+                entry_timestamp_ms=confirm_close_ms,
+                entry_price=entry_price,
+                stop_price=stop_price,
+            )
+        if risk_pct > float(SHORT_CONFIRM_MAX_ENTRY_RISK_PCT):
+            return _short_mapping_rejection_row(
+                selected,
+                status="confirm_found_but_invalid_stop_risk",
+                reason="entry_stop_risk_too_large",
+                confirm_candle=candle,
+                entry_timestamp_ms=confirm_close_ms,
+                entry_price=entry_price,
+                stop_price=stop_price,
+            )
+        oi_context = _closed_5m_oi_context(
+            oi_lookup,
+            asof_timestamp_ms=confirm_close_ms,
+            threshold_pct=float(config.oi_change_threshold_pct),
+            strong_threshold_pct=float(config.oi_strong_change_threshold_pct),
+        )
+        signal_family = _short_signal_family(oi_context)
+        if signal_family == "no_oi_confirmation":
+            status = "confirmed_audit_only_no_oi_candidate"
+            allowed_for_exit_grid = False
+        else:
+            status = "confirmed_short_candidate"
+            allowed_for_exit_grid = True
+        return _short_trade_candidate_row(
+            selected=selected,
+            status=status,
+            rejection_reason="pass" if status == "confirmed_short_candidate" else "no_oi_confirmation_audit_only",
+            signal_family=signal_family,
+            allowed_for_exit_grid=allowed_for_exit_grid,
+            confirm_candle=candle,
+            entry_timestamp_ms=confirm_close_ms,
+            entry_raw_next_open=next_open,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            risk_pct=risk_pct,
+            oi_context=oi_context,
+        )
+    return _short_mapping_rejection_row(selected, status="no_closed_1m_confirm", reason="no_bearish_structural_low_break_in_confirm_window")
+
+
+def _short_signal_family(oi_context: dict[str, object]) -> str:
+    regime = str(oi_context.get("oi_regime", ""))
+    if regime == "oi_down_squeeze_unwind":
+        return "oi_drop_position_exit"
+    if regime == "oi_up_fresh_leverage":
+        return "oi_rise_fresh_shorts"
+    return "no_oi_confirmation"
+
+
+def _candle_close_location(candle: dict[str, object]) -> float:
+    high = _float(candle.get("high"))
+    low = _float(candle.get("low"))
+    close = _float(candle.get("close"))
+    if not all(math.isfinite(value) for value in (high, low, close)) or high <= low:
+        return float("nan")
+    return (close - low) / (high - low)
+
+
+def _short_mapping_rejection_row(
+    selected: dict[str, object],
+    *,
+    status: str,
+    reason: str,
+    confirm_candle: dict[str, object] | None = None,
+    entry_timestamp_ms: int | None = None,
+    entry_price: float = float("nan"),
+    stop_price: float = float("nan"),
+) -> dict[str, object]:
+    return _short_trade_candidate_row(
+        selected=selected,
+        status=status,
+        rejection_reason=reason,
+        signal_family="not_mapped",
+        allowed_for_exit_grid=False,
+        confirm_candle=confirm_candle or {},
+        entry_timestamp_ms=entry_timestamp_ms,
+        entry_raw_next_open=float("nan"),
+        entry_price=entry_price,
+        stop_price=stop_price,
+        risk_pct=(stop_price / entry_price - 1.0) if math.isfinite(entry_price) and entry_price > 0.0 and math.isfinite(stop_price) else float("nan"),
+        oi_context={},
+    )
+
+
+def _short_trade_candidate_row(
+    *,
+    selected: dict[str, object],
+    status: str,
+    rejection_reason: str,
+    signal_family: str,
+    allowed_for_exit_grid: bool,
+    confirm_candle: dict[str, object],
+    entry_timestamp_ms: int | None,
+    entry_raw_next_open: float,
+    entry_price: float,
+    stop_price: float,
+    risk_pct: float,
+    oi_context: dict[str, object],
+) -> dict[str, object]:
+    confirm_ts = _finite_int_or_none(confirm_candle.get("timestamp")) if confirm_candle else None
+    confirm_close_ms = int(confirm_ts) + MINUTE_MS if confirm_ts is not None else np.nan
+    confirm_close = _float(confirm_candle.get("close")) if confirm_candle else float("nan")
+    structural_low = _float(selected.get("structural_low"))
+    structural_high = _float(selected.get("structural_high"))
+    entry_ts = int(entry_timestamp_ms) if entry_timestamp_ms is not None else np.nan
+    candidate_key = "|".join(
+        (
+            str(selected.get("selection_key", "")),
+            str(selected.get("event_id", "")),
+            str(confirm_ts or "no_confirm"),
+            str(status),
+        )
+    )
+    return {
+        "research_id": RESEARCH_ID,
+        "short_candidate_id": "pms_" + hashlib.sha1(candidate_key.encode("utf-8")).hexdigest()[:16],
+        "selection_key": str(selected.get("selection_key", "")),
+        "test_day_ord": int(selected.get("test_day_ord", 0) or 0),
+        "test_date": str(selected.get("test_date", "")),
+        "train_window_days": int(selected.get("train_window_days", 0) or 0),
+        "train_start_day_ord": int(selected.get("train_start_day_ord", 0) or 0),
+        "train_end_day_ord": int(selected.get("train_end_day_ord", 0) or 0),
+        "selected_rank": int(selected.get("selected_rank", 0) or 0),
+        "basin_id": str(selected.get("basin_id", "")),
+        "center_rule_id": str(selected.get("center_rule_id", "")),
+        "basin_status_at_selection": str(selected.get("basin_status_at_selection", "")),
+        "event_rank": int(selected.get("event_rank", 0) or 0),
+        "event_id": str(selected.get("event_id", "")),
+        "symbol": str(selected.get("symbol", "")),
+        "session_bucket": str(selected.get("session_bucket", "")),
+        "mechanism_family": str(selected.get("mechanism_family", "")),
+        "mechanism_id": str(selected.get("mechanism_id", "")),
+        "acceptance_regime": str(selected.get("acceptance_regime", "")),
+        "oi_regime_at_feature_cutoff": str(selected.get("oi_regime", "")),
+        "flow_regime": str(selected.get("flow_regime", "")),
+        "price_progress_regime": str(selected.get("price_progress_regime", "")),
+        "structure_regime": str(selected.get("structure_regime", "")),
+        "late_buyer_regime": str(selected.get("late_buyer_regime", "")),
+        "feature_cutoff_ms": _finite_int_or_none(selected.get("feature_cutoff_ms")) or np.nan,
+        "feature_cutoff_time_utc": str(selected.get("feature_cutoff_time_utc", "")),
+        "confirm_search_window_minutes": int(SHORT_CONFIRM_WINDOW_MINUTES),
+        "short_mapping_status": status,
+        "short_mapping_rejection_reason": rejection_reason,
+        "allowed_for_exit_grid": bool(allowed_for_exit_grid),
+        "signal_family": signal_family,
+        "confirm_candle_timestamp_ms": confirm_ts if confirm_ts is not None else np.nan,
+        "confirm_candle_close_timestamp_ms": confirm_close_ms,
+        "confirm_candle_time_utc": _fmt_optional_ts(confirm_ts),
+        "confirm_candle_close_time_utc": _fmt_optional_ts(confirm_close_ms),
+        "confirm_open": _float(confirm_candle.get("open")) if confirm_candle else np.nan,
+        "confirm_high": _float(confirm_candle.get("high")) if confirm_candle else np.nan,
+        "confirm_low": _float(confirm_candle.get("low")) if confirm_candle else np.nan,
+        "confirm_close": confirm_close,
+        "confirm_quote_volume": _float(confirm_candle.get("quote_volume")) if confirm_candle else np.nan,
+        "confirm_number_of_trades": _float(confirm_candle.get("number_of_trades")) if confirm_candle else np.nan,
+        "confirm_taker_buy_share": _candle_taker_buy_share(pd.Series(confirm_candle)) if confirm_candle else np.nan,
+        "confirm_bearish_body": bool(confirm_candle and _float(confirm_candle.get("close")) < _float(confirm_candle.get("open"))),
+        "confirm_close_location": _candle_close_location(confirm_candle) if confirm_candle else np.nan,
+        "confirm_breaks_structural_low": bool(math.isfinite(confirm_close) and math.isfinite(structural_low) and confirm_close <= structural_low * (1.0 - float(SHORT_CONFIRM_CLOSE_BELOW_STRUCTURAL_LOW_BUFFER_PCT))),
+        "structural_low": structural_low,
+        "structural_low_timestamp_ms": _finite_int_or_none(selected.get("structural_low_timestamp_ms")) or np.nan,
+        "structural_high": structural_high,
+        "structural_high_timestamp_ms": _finite_int_or_none(selected.get("structural_high_timestamp_ms")) or np.nan,
+        "pump_high": _float(selected.get("pump_high")),
+        "pump_high_timestamp_ms": _finite_int_or_none(selected.get("pump_high_timestamp_ms")) or np.nan,
+        "entry_timestamp_ms": entry_ts,
+        "entry_time_utc": _fmt_optional_ts(entry_ts),
+        "entry_raw_next_1m_open": entry_raw_next_open,
+        "entry_price_after_slippage": entry_price,
+        "entry_adverse_slippage_bps": float(SHORT_ENTRY_ADVERSE_SLIPPAGE_BPS),
+        "stop_price": stop_price,
+        "stop_buffer_pct": float(SHORT_STOP_BUFFER_PCT),
+        "entry_to_stop_risk_pct": risk_pct,
+        "oi_available_at_confirm": _to_bool(oi_context.get("oi_available")),
+        "oi_regime_at_confirm": str(oi_context.get("oi_regime", "")),
+        "oi_confirm_asof_timestamp_ms": oi_context.get("oi_asof_timestamp_ms", np.nan),
+        "oi_current_timestamp_ms": oi_context.get("oi_current_timestamp_ms", np.nan),
+        "oi_current_available_timestamp_ms": oi_context.get("oi_current_available_timestamp_ms", np.nan),
+        "oi_change_5m_pct_at_confirm": oi_context.get("oi_change_5m_pct", np.nan),
+        "oi_change_10m_pct_at_confirm": oi_context.get("oi_change_10m_pct", np.nan),
+        "oi_change_15m_pct_at_confirm": oi_context.get("oi_change_15m_pct", np.nan),
+        "accepted_mechanism_required": True,
+        "accepted_mechanism_verdict": SHORT_ALLOWED_VERDICT,
+        "short_mapping_model": SHORT_MAPPING_MODEL,
+        "short_confirm_model": SHORT_CONFIRM_MODEL,
+        "entry_model": SHORT_ENTRY_MODEL,
+        "stop_model": SHORT_STOP_MODEL,
+        "oi_model": SHORT_OI_MODEL,
+        "data_access_model": DATA_ACCESS_MODEL,
+        "future_label_available_at_entry": False,
+        "short_confirm_closed_before_entry": bool(confirm_ts is not None and entry_ts == int(confirm_ts) + MINUTE_MS),
+        "mapping_uses_oos_outcome_columns": False,
+        "uses_pnl": False,
+        "uses_future_exit": False,
+        "uses_final_holdout_tuning": False,
+    }
+
+
+def _short_trade_candidate_columns() -> list[str]:
+    return [
+        "research_id", "short_candidate_id", "selection_key", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord",
+        "train_end_day_ord", "selected_rank", "basin_id", "center_rule_id", "basin_status_at_selection", "event_rank", "event_id",
+        "symbol", "session_bucket", "mechanism_family", "mechanism_id", "acceptance_regime", "oi_regime_at_feature_cutoff",
+        "flow_regime", "price_progress_regime", "structure_regime", "late_buyer_regime", "feature_cutoff_ms", "feature_cutoff_time_utc",
+        "confirm_search_window_minutes", "short_mapping_status", "short_mapping_rejection_reason", "allowed_for_exit_grid", "signal_family",
+        "confirm_candle_timestamp_ms", "confirm_candle_close_timestamp_ms", "confirm_candle_time_utc", "confirm_candle_close_time_utc",
+        "confirm_open", "confirm_high", "confirm_low", "confirm_close", "confirm_quote_volume", "confirm_number_of_trades",
+        "confirm_taker_buy_share", "confirm_bearish_body", "confirm_close_location", "confirm_breaks_structural_low", "structural_low",
+        "structural_low_timestamp_ms", "structural_high", "structural_high_timestamp_ms", "pump_high", "pump_high_timestamp_ms", "entry_timestamp_ms",
+        "entry_time_utc", "entry_raw_next_1m_open", "entry_price_after_slippage", "entry_adverse_slippage_bps", "stop_price",
+        "stop_buffer_pct", "entry_to_stop_risk_pct", "oi_available_at_confirm", "oi_regime_at_confirm", "oi_confirm_asof_timestamp_ms",
+        "oi_current_timestamp_ms", "oi_current_available_timestamp_ms", "oi_change_5m_pct_at_confirm", "oi_change_10m_pct_at_confirm",
+        "oi_change_15m_pct_at_confirm", "accepted_mechanism_required", "accepted_mechanism_verdict", "short_mapping_model", "short_confirm_model",
+        "entry_model", "stop_model", "oi_model", "data_access_model", "future_label_available_at_entry", "short_confirm_closed_before_entry",
+        "mapping_uses_oos_outcome_columns", "uses_pnl", "uses_future_exit", "uses_final_holdout_tuning",
+    ]
+
 def _oos_top_removal_lookup(top_removal: pd.DataFrame) -> dict[tuple[str, str], tuple[float, bool]]:
     if top_removal is None or top_removal.empty:
         return {}
@@ -3565,6 +3982,7 @@ def _run_config_frame(
     oos_top_removal: pd.DataFrame,
     oos_selection_summary: pd.DataFrame,
     oos_verdict: pd.DataFrame,
+    short_trade_candidates: pd.DataFrame,
 ) -> pd.DataFrame:
     total_5m_rows = int(pd.to_numeric(quality.get("5m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
     total_1m_rows = int(pd.to_numeric(quality.get("1m_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not quality.empty else 0
@@ -3590,6 +4008,8 @@ def _run_config_frame(
     oos_selection_summary_rows = int(len(oos_selection_summary)) if oos_selection_summary is not None else 0
     oos_verdict_rows = int(len(oos_verdict)) if oos_verdict is not None else 0
     oos_verdict_pass_rows = int((oos_verdict.get("oos_verdict", pd.Series(dtype=str)).astype(str) == "accepted_mechanism").sum()) if oos_verdict is not None and not oos_verdict.empty else 0
+    short_trade_candidate_rows = int(len(short_trade_candidates)) if short_trade_candidates is not None else 0
+    short_trade_confirmed_rows = int((short_trade_candidates.get("short_mapping_status", pd.Series(dtype=str)).astype(str) == "confirmed_short_candidate").sum()) if short_trade_candidates is not None and not short_trade_candidates.empty else 0
     row = {
         **asdict(config),
         "research_id": RESEARCH_ID,
@@ -3668,6 +4088,18 @@ def _run_config_frame(
         "oos_verdict_rows": oos_verdict_rows,
         "oos_verdict_pass_rows": oos_verdict_pass_rows,
         "oos_verdict_model": OOS_VERDICT_MODEL,
+        "short_trade_candidate_rows": short_trade_candidate_rows,
+        "short_trade_confirmed_rows": short_trade_confirmed_rows,
+        "short_mapping_model": SHORT_MAPPING_MODEL,
+        "short_confirm_model": SHORT_CONFIRM_MODEL,
+        "short_entry_model": SHORT_ENTRY_MODEL,
+        "short_stop_model": SHORT_STOP_MODEL,
+        "short_oi_model": SHORT_OI_MODEL,
+        "short_confirm_window_minutes": int(SHORT_CONFIRM_WINDOW_MINUTES),
+        "short_entry_adverse_slippage_bps": float(SHORT_ENTRY_ADVERSE_SLIPPAGE_BPS),
+        "short_mapping_uses_only_accepted_mechanisms": True,
+        "short_mapping_uses_pnl": False,
+        "short_mapping_uses_future_exit": False,
         "oos_verdict_min_active_days": int(OOS_VERDICT_MIN_ACTIVE_DAYS),
         "oos_verdict_min_events": int(OOS_VERDICT_MIN_EVENTS),
         "oos_verdict_min_symbols": int(OOS_VERDICT_MIN_SYMBOLS),
@@ -3738,6 +4170,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_oos_top_removal.csv", "written", "selected-event top-removal stress by event and symbol"),
         ("pump_mechanism_oos_selection_summary.csv", "written", "selection-key OOS aggregation and breadth diagnostics"),
         ("pump_mechanism_oos_verdict.csv", "written", "explicit OOS mechanism acceptance verdict and fail reasons"),
+        ("pump_mechanism_short_trade_candidates.csv", "written", "honest short confirm/entry candidates for accepted mechanisms only; no exit/PnL"),
     ]
     rows = []
     for artifact_name, status, description in planned:
