@@ -331,6 +331,34 @@ class _ProgressLine:
             print("", flush=True)
 
 
+class _EtaProgress:
+    def __init__(self, label: str, total: int, *, verb: str = "progress") -> None:
+        self.label = label
+        self.total = max(0, int(total))
+        self.verb = verb
+        self.started_at = time.monotonic()
+        self.last_emit_at = 0.0
+
+    def update(self, *, index: int, item: str = "", force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self.last_emit_at < 2.0 and index < self.total:
+            return
+        self.last_emit_at = now
+        pct = (index / self.total * 100.0) if self.total else 100.0
+        elapsed = max(0.001, now - self.started_at)
+        eta = (elapsed / max(index, 1)) * max(self.total - index, 0) if self.total else 0.0
+        suffix = f" {item}" if item else ""
+        print(
+            f"{self.label}: {self.verb} {index}/{self.total} ({pct:5.1f}%){suffix} "
+            f"elapsed={_format_duration(elapsed)} eta={_format_duration(eta)}",
+            flush=True,
+        )
+
+    def finish(self) -> None:
+        if self.total:
+            self.update(index=self.total, force=True)
+
+
 def run_pump_mechanism_stability_research(
     config: PumpMechanismStabilityConfig,
     *,
@@ -476,7 +504,7 @@ def run_pump_mechanism_stability_research(
     response_surfaces = _build_response_surfaces(taxonomy=taxonomy, outcomes=outcomes)
 
     _print_stage(progress_label, "generating train-only mechanism rule universe", started_at)
-    rule_universe = _build_train_only_rule_universe(taxonomy=taxonomy, events=events)
+    rule_universe = _build_train_only_rule_universe(taxonomy=taxonomy, events=events, progress_label=progress_label)
 
     _print_stage(progress_label, "building full negative-space rule neighborhoods", started_at)
     negative_space = _build_negative_space_neighborhoods(rule_universe=rule_universe, taxonomy=taxonomy, events=events)
@@ -1530,14 +1558,19 @@ def _dependency_metrics(frame: pd.DataFrame) -> dict[str, float]:
 
 
 
-def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+def _build_train_only_rule_universe(
+    *,
+    taxonomy: pd.DataFrame,
+    events: pd.DataFrame,
+    progress_label: str | None = None,
+) -> pd.DataFrame:
     """Generate candidate mechanism rule specs with train-window-only thresholds.
 
-    This function creates the grammar layer for later negative-space plateau
-    accounting.  It uses only entry-known taxonomy/event columns; it deliberately
-    does not join outcomes, PnL, short entries, or final-holdout artifacts.
-    Threshold values are recomputed independently inside each train window for
-    each test day, so the same 365d cache can be replayed chronologically.
+    The first implementation used repeated DataFrame copies for every
+    day/window/scope/threshold combination.  On a 365d broad-pump universe this
+    can become dominated by pandas allocation rather than research work.  This
+    version keeps the exact train-only contract, but evaluates scopes and
+    thresholds with precomputed numpy arrays and row positions.
     """
 
     columns = _rule_universe_columns()
@@ -1548,24 +1581,55 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
     if rule_input.empty:
         return pd.DataFrame(columns=columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+    rule_input = _sort_frame(rule_input, ["day_ord", "symbol", "event_id"]).reset_index(drop=True)
+
+    day_values = rule_input["day_ord"].to_numpy(dtype="int64", copy=False)
+    unique_test_days = np.asarray(sorted(pd.unique(day_values)), dtype="int64")
+    if unique_test_days.size == 0:
+        return pd.DataFrame(columns=columns)
+
+    axis_arrays = _normalized_axis_arrays(rule_input)
+    numeric_arrays = _numeric_feature_arrays(rule_input)
+    symbol_codes = _factor_codes(rule_input.get("symbol", pd.Series("", index=rule_input.index)))
+    date_codes = _factor_codes(rule_input.get("date", pd.Series("", index=rule_input.index)))
+
     rows: list[dict[str, object]] = []
-    for test_day_ord in sorted(rule_input["day_ord"].dropna().astype("int64").unique()):
+    total_windows = int(len(unique_test_days) * len(ROLLING_WINDOWS_DAYS))
+    progress = (
+        _EtaProgress(f"{progress_label}: rule universe", total_windows, verb="windows")
+        if progress_label and total_windows
+        else None
+    )
+    progress_index = 0
+
+    for test_day_ord in unique_test_days:
         test_day_ord_int = int(test_day_ord)
         test_date = _date_from_day_ord(test_day_ord_int)
         for train_window_days in ROLLING_WINDOWS_DAYS:
+            progress_index += 1
             train_start_day_ord = test_day_ord_int - int(train_window_days)
             train_end_day_ord = test_day_ord_int - 1
-            train = rule_input.loc[
-                (rule_input["day_ord"] >= train_start_day_ord) & (rule_input["day_ord"] <= train_end_day_ord)
-            ].copy()
-            if train.empty:
+            train_start_pos = int(np.searchsorted(day_values, train_start_day_ord, side="left"))
+            train_end_pos = int(np.searchsorted(day_values, train_end_day_ord, side="right"))
+            if train_end_pos <= train_start_pos:
+                if progress:
+                    progress.update(
+                        index=progress_index,
+                        item=f"day={test_date} window={train_window_days}d rows={len(rows)} train_events=0",
+                    )
                 continue
-            for scope in _train_rule_scopes(train):
-                scoped = _apply_rule_scope(train, scope["conditions"])
-                if len(scoped) < MIN_TRAIN_SCOPE_EVENTS:
+            train_pos = np.arange(train_start_pos, train_end_pos, dtype=np.int64)
+            for scope in _train_rule_scopes_from_arrays(train_pos=train_pos, axis_arrays=axis_arrays):
+                scope_pos = _apply_scope_to_positions(train_pos=train_pos, axis_arrays=axis_arrays, conditions=scope["conditions"])
+                if int(scope_pos.size) < MIN_TRAIN_SCOPE_EVENTS:
                     continue
+                train_events, train_symbols, train_active_days = _position_sample_stats(
+                    row_pos=scope_pos,
+                    symbol_codes=symbol_codes,
+                    date_codes=date_codes,
+                )
                 rows.append(
-                    _rule_universe_row(
+                    _rule_universe_row_from_stats(
                         test_day_ord=test_day_ord_int,
                         test_date=test_date,
                         train_window_days=int(train_window_days),
@@ -1576,28 +1640,43 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
                         threshold_side="none",
                         threshold_quantile=np.nan,
                         threshold_value=np.nan,
-                        filtered=scoped,
+                        train_events=train_events,
+                        train_symbols=train_symbols,
+                        train_active_days=train_active_days,
                         threshold_source_events=0,
                         threshold_valid_values=0,
                         threshold_uses_abs_value=False,
                     )
                 )
                 for feature, side, quantiles in RULE_THRESHOLD_FEATURES:
-                    if feature not in scoped.columns:
+                    values = numeric_arrays.get(feature)
+                    if values is None:
                         continue
-                    source_values = pd.to_numeric(scoped[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-                    threshold_uses_abs_value = side == "abs_ge"
-                    fit_values = source_values.abs() if threshold_uses_abs_value else source_values
-                    fit_values = fit_values.dropna()
-                    if fit_values.empty:
+                    source_values = values[scope_pos]
+                    finite_mask = np.isfinite(source_values)
+                    if not bool(finite_mask.any()):
+                        continue
+                    fit_values = np.abs(source_values[finite_mask]) if side == "abs_ge" else source_values[finite_mask]
+                    if fit_values.size == 0:
                         continue
                     for quantile in quantiles:
-                        threshold_value = _safe_quantile(fit_values, float(quantile))
+                        threshold_value = _safe_quantile_np(fit_values, float(quantile))
                         if not math.isfinite(threshold_value):
                             continue
-                        filtered = _apply_threshold(scoped, feature=feature, side=side, threshold_value=threshold_value)
+                        threshold_pos = _threshold_positions(
+                            scope_pos=scope_pos,
+                            source_values=source_values,
+                            finite_mask=finite_mask,
+                            side=side,
+                            threshold_value=float(threshold_value),
+                        )
+                        train_events, train_symbols, train_active_days = _position_sample_stats(
+                            row_pos=threshold_pos,
+                            symbol_codes=symbol_codes,
+                            date_codes=date_codes,
+                        )
                         rows.append(
-                            _rule_universe_row(
+                            _rule_universe_row_from_stats(
                                 test_day_ord=test_day_ord_int,
                                 test_date=test_date,
                                 train_window_days=int(train_window_days),
@@ -1608,15 +1687,235 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
                                 threshold_side=side,
                                 threshold_quantile=float(quantile),
                                 threshold_value=float(threshold_value),
-                                filtered=filtered,
-                                threshold_source_events=int(len(scoped)),
-                                threshold_valid_values=int(len(fit_values)),
-                                threshold_uses_abs_value=threshold_uses_abs_value,
+                                train_events=train_events,
+                                train_symbols=train_symbols,
+                                train_active_days=train_active_days,
+                                threshold_source_events=int(scope_pos.size),
+                                threshold_valid_values=int(fit_values.size),
+                                threshold_uses_abs_value=side == "abs_ge",
                             )
                         )
+            if progress:
+                progress.update(
+                    index=progress_index,
+                    item=(
+                        f"day={test_date} window={train_window_days}d rows={len(rows)} "
+                        f"train_events={train_end_pos - train_start_pos}"
+                    ),
+                )
+    if progress:
+        progress.finish()
     result = _ensure_columns(pd.DataFrame(rows), columns)
     return _sort_frame(result, ["test_day_ord", "train_window_days", "scope_name", "threshold_feature", "threshold_quantile", "rule_id"])
 
+
+
+def _normalized_axis_arrays(frame: pd.DataFrame) -> dict[str, np.ndarray]:
+    arrays: dict[str, np.ndarray] = {}
+    for axis in set(RULE_SCOPE_AXES) | {axis for pair in RULE_PAIR_SCOPES for axis in pair}:
+        if axis in frame.columns:
+            arrays[axis] = frame[axis].fillna("missing").astype(str).to_numpy(dtype=object, copy=False)
+    return arrays
+
+
+def _numeric_feature_arrays(frame: pd.DataFrame) -> dict[str, np.ndarray]:
+    arrays: dict[str, np.ndarray] = {}
+    for feature, _side, _quantiles in RULE_THRESHOLD_FEATURES:
+        if feature in frame.columns:
+            arrays[feature] = pd.to_numeric(frame[feature], errors="coerce").to_numpy(dtype="float64", copy=False)
+    return arrays
+
+
+def _factor_codes(values: pd.Series) -> np.ndarray:
+    series = values.fillna("missing").astype(str)
+    codes, _uniques = pd.factorize(series, sort=False)
+    return codes.astype("int64", copy=False)
+
+
+def _train_rule_scopes_from_arrays(*, train_pos: np.ndarray, axis_arrays: dict[str, np.ndarray]) -> list[dict[str, object]]:
+    scopes: list[dict[str, object]] = [
+        {"scope_name": "all", "conditions": {}, "scope_depth": 0},
+    ]
+    for axis in RULE_SCOPE_AXES:
+        values = axis_arrays.get(axis)
+        if values is None:
+            continue
+        counts = pd.Series(values[train_pos], copy=False).value_counts(dropna=False)
+        for value, count in counts.items():
+            if int(count) >= MIN_TRAIN_SCOPE_EVENTS:
+                scopes.append({"scope_name": axis, "conditions": {axis: str(value)}, "scope_depth": 1})
+    for left, right in RULE_PAIR_SCOPES:
+        left_values = axis_arrays.get(left)
+        right_values = axis_arrays.get(right)
+        if left_values is None or right_values is None:
+            continue
+        pair_frame = pd.DataFrame({left: left_values[train_pos], right: right_values[train_pos]})
+        counts = pair_frame.value_counts(sort=False, dropna=False)
+        for pair_values, count in counts.items():
+            if int(count) < MIN_TRAIN_SCOPE_EVENTS:
+                continue
+            if not isinstance(pair_values, tuple):
+                continue
+            left_value, right_value = pair_values
+            scopes.append(
+                {
+                    "scope_name": f"{left}+{right}",
+                    "conditions": {left: str(left_value), right: str(right_value)},
+                    "scope_depth": 2,
+                }
+            )
+    unique: dict[str, dict[str, object]] = {}
+    for scope in scopes:
+        key = f"{scope['scope_name']}|{_scope_key(scope['conditions'])}"
+        unique.setdefault(key, scope)
+    return list(unique.values())
+
+
+def _apply_scope_to_positions(
+    *,
+    train_pos: np.ndarray,
+    axis_arrays: dict[str, np.ndarray],
+    conditions: object,
+) -> np.ndarray:
+    if not isinstance(conditions, dict) or not conditions:
+        return train_pos
+    mask = np.ones(train_pos.size, dtype=bool)
+    for axis, expected in conditions.items():
+        values = axis_arrays.get(str(axis))
+        if values is None:
+            return train_pos[:0]
+        mask &= values[train_pos] == str(expected)
+        if not bool(mask.any()):
+            return train_pos[:0]
+    return train_pos[mask]
+
+
+def _position_sample_stats(
+    *,
+    row_pos: np.ndarray,
+    symbol_codes: np.ndarray,
+    date_codes: np.ndarray,
+) -> tuple[int, int, int]:
+    if row_pos.size == 0:
+        return 0, 0, 0
+    train_events = int(row_pos.size)
+    train_symbols = int(np.unique(symbol_codes[row_pos]).size)
+    train_active_days = int(np.unique(date_codes[row_pos]).size)
+    return train_events, train_symbols, train_active_days
+
+
+def _safe_quantile_np(values: np.ndarray, quantile: float) -> float:
+    if values.size == 0:
+        return float("nan")
+    try:
+        return float(np.quantile(values, float(quantile)))
+    except (TypeError, ValueError, FloatingPointError):
+        return float("nan")
+
+
+def _threshold_positions(
+    *,
+    scope_pos: np.ndarray,
+    source_values: np.ndarray,
+    finite_mask: np.ndarray,
+    side: str,
+    threshold_value: float,
+) -> np.ndarray:
+    if side == "le":
+        pass_mask = finite_mask & (source_values <= float(threshold_value))
+    elif side == "ge":
+        pass_mask = finite_mask & (source_values >= float(threshold_value))
+    elif side == "abs_ge":
+        pass_mask = finite_mask & (np.abs(source_values) >= float(threshold_value))
+    else:
+        raise ValueError(f"unsupported threshold side: {side}")
+    return scope_pos[pass_mask]
+
+
+def _rule_universe_row_from_stats(
+    *,
+    test_day_ord: int,
+    test_date: str,
+    train_window_days: int,
+    train_start_day_ord: int,
+    train_end_day_ord: int,
+    scope: dict[str, object],
+    threshold_feature: str,
+    threshold_side: str,
+    threshold_quantile: float,
+    threshold_value: float,
+    train_events: int,
+    train_symbols: int,
+    train_active_days: int,
+    threshold_source_events: int,
+    threshold_valid_values: int,
+    threshold_uses_abs_value: bool,
+) -> dict[str, object]:
+    conditions = scope.get("conditions") if isinstance(scope.get("conditions"), dict) else {}
+    assert isinstance(conditions, dict)
+    scope_key = _scope_key(conditions)
+    scope_name = str(scope.get("scope_name", ""))
+    threshold_family = "axis_only" if not threshold_feature else f"{threshold_feature}_{threshold_side}_q{_quantile_label(threshold_quantile)}"
+    rule_key = "|".join(
+        (
+            str(test_day_ord),
+            str(train_window_days),
+            scope_name,
+            scope_key,
+            threshold_family,
+            _format_float_for_id(threshold_value),
+        )
+    )
+    return {
+        "research_id": RESEARCH_ID,
+        "rule_id": "pmr_" + hashlib.sha1(rule_key.encode("utf-8")).hexdigest()[:16],
+        "rule_key": rule_key,
+        "test_day_ord": int(test_day_ord),
+        "test_date": test_date,
+        "train_window_days": int(train_window_days),
+        "train_start_day_ord": int(train_start_day_ord),
+        "train_end_day_ord": int(train_end_day_ord),
+        "train_start_date": _date_from_day_ord(train_start_day_ord),
+        "train_end_date": _date_from_day_ord(train_end_day_ord),
+        "scope_name": scope_name,
+        "scope_depth": int(scope.get("scope_depth", 0) or 0),
+        "scope_conditions": scope_key,
+        "mechanism_family": _condition_value(conditions, "mechanism_family"),
+        "acceptance_regime": _condition_value(conditions, "acceptance_regime"),
+        "oi_regime": _condition_value(conditions, "oi_regime"),
+        "flow_regime": _condition_value(conditions, "flow_regime"),
+        "structure_regime": _condition_value(conditions, "structure_regime"),
+        "late_buyer_regime": _condition_value(conditions, "late_buyer_regime"),
+        "session_bucket": _condition_value(conditions, "session_bucket"),
+        "threshold_family": threshold_family,
+        "threshold_feature": threshold_feature,
+        "threshold_side": threshold_side,
+        "threshold_quantile": threshold_quantile,
+        "threshold_value": threshold_value,
+        "threshold_source_events": int(threshold_source_events),
+        "threshold_valid_values": int(threshold_valid_values),
+        "threshold_uses_abs_value": bool(threshold_uses_abs_value),
+        "train_events": int(train_events),
+        "train_symbols": int(train_symbols),
+        "train_active_days": int(train_active_days),
+        "rule_passes_min_sample": bool(
+            int(train_events) >= MIN_RULE_EVENTS
+            and int(train_symbols) >= MIN_RULE_SYMBOLS
+            and int(train_active_days) >= MIN_RULE_ACTIVE_DAYS
+        ),
+        "min_rule_events": int(MIN_RULE_EVENTS),
+        "min_rule_symbols": int(MIN_RULE_SYMBOLS),
+        "min_rule_active_days": int(MIN_RULE_ACTIVE_DAYS),
+        "rule_generation_model": "train_only_entry_known_mechanism_rule_grammar_v2_vectorized",
+        "threshold_fit_model": "quantiles_fit_inside_train_window_only",
+        "train_uses_only_days_before_test": True,
+        "uses_outcome_columns": False,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
 
 def _rule_input_frame(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     if taxonomy.empty:
