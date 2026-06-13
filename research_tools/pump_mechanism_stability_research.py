@@ -257,6 +257,47 @@ class _ProgressLine:
             print("", flush=True)
 
 
+class _StageProgress:
+    """Low-noise ETA logger for heavy dataframe stages.
+
+    The mechanism research stages can spend most of their time inside nested
+    day/window/rule/neighbor loops.  A stage-level log is not enough: emit
+    bounded progress from inside those loops so slow runs expose the exact
+    phase that is consuming time.
+    """
+
+    def __init__(self, label: str, total: int, *, emit_interval_seconds: float = 1.0) -> None:
+        self.label = label
+        self.total = max(0, int(total))
+        self.emit_interval_seconds = max(0.1, float(emit_interval_seconds))
+        self.started_at = time.monotonic()
+        self.last_emit_at = 0.0
+
+    def phase(self, name: str, **fields: object) -> None:
+        self._emit(index=None, phase=name, force=True, **fields)
+
+    def update(self, index: int, *, phase: str, force: bool = False, **fields: object) -> None:
+        self._emit(index=max(0, int(index)), phase=phase, force=force, **fields)
+
+    def _emit(self, *, index: int | None, phase: str, force: bool, **fields: object) -> None:
+        now = time.monotonic()
+        if not force and index is not None and index < self.total and now - self.last_emit_at < self.emit_interval_seconds:
+            return
+        self.last_emit_at = now
+        elapsed = max(0.001, now - self.started_at)
+        parts = [f"{self.label}: phase={phase}"]
+        if index is not None:
+            pct = (index / self.total * 100.0) if self.total else 100.0
+            eta = (elapsed / max(index, 1)) * max(self.total - index, 0) if self.total else 0.0
+            parts.append(f"progress={index}/{self.total} ({pct:5.1f}%)")
+            parts.append(f"eta={_format_duration(eta)}")
+        parts.append(f"elapsed={_format_duration(elapsed)}")
+        for key in sorted(fields):
+            value = fields[key]
+            parts.append(f"{key}={_safe_console_text(value)}")
+        print(" ".join(parts), flush=True)
+
+
 def run_pump_mechanism_stability_research(
     config: PumpMechanismStabilityConfig,
     *,
@@ -1350,27 +1391,58 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
     each test day, so the same 365d cache can be replayed chronologically.
     """
 
+    stage = _StageProgress("pump mechanism stability research: rule universe", 0)
     columns = _rule_universe_columns()
+    stage.phase("build_rule_input_start", taxonomy_rows=len(taxonomy), event_rows=len(events))
     rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
     if rule_input.empty:
+        stage.phase("empty_rule_input")
         return pd.DataFrame(columns=columns)
+    stage.phase("filter_sort_start", rows=len(rule_input))
     rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
     if rule_input.empty:
+        stage.phase("empty_after_day_filter")
         return pd.DataFrame(columns=columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+    rule_input = rule_input.sort_values("day_ord").reset_index(drop=True)
+    day_values = rule_input["day_ord"].to_numpy(dtype=np.int64)
+    test_days = sorted(int(value) for value in pd.unique(rule_input["day_ord"]))
+    total_windows = len(test_days) * len(ROLLING_WINDOWS_DAYS)
+    progress = _StageProgress("pump mechanism stability research: rule universe windows", total_windows)
+    progress.phase("iterate_windows_start", input_rows=len(rule_input), test_days=len(test_days), windows=len(ROLLING_WINDOWS_DAYS))
+
     rows: list[dict[str, object]] = []
-    for test_day_ord in sorted(rule_input["day_ord"].dropna().astype("int64").unique()):
-        test_day_ord_int = int(test_day_ord)
+    window_index = 0
+    for test_day_ord_int in test_days:
         test_date = _date_from_day_ord(test_day_ord_int)
         for train_window_days in ROLLING_WINDOWS_DAYS:
+            window_index += 1
             train_start_day_ord = test_day_ord_int - int(train_window_days)
             train_end_day_ord = test_day_ord_int - 1
-            train = rule_input.loc[
-                (rule_input["day_ord"] >= train_start_day_ord) & (rule_input["day_ord"] <= train_end_day_ord)
-            ].copy()
-            if train.empty:
+            left = int(np.searchsorted(day_values, train_start_day_ord, side="left"))
+            right = int(np.searchsorted(day_values, train_end_day_ord, side="right"))
+            if right <= left:
+                progress.update(
+                    window_index,
+                    phase="window_empty",
+                    test_day_ord=test_day_ord_int,
+                    train_window_days=train_window_days,
+                    rows=len(rows),
+                )
                 continue
-            for scope in _train_rule_scopes(train):
+            train = rule_input.iloc[left:right]
+            scopes = _train_rule_scopes(train)
+            progress.update(
+                window_index,
+                phase="window_start",
+                test_day_ord=test_day_ord_int,
+                train_window_days=train_window_days,
+                train_events=len(train),
+                scopes=len(scopes),
+                rows=len(rows),
+            )
+            emitted_before = len(rows)
+            for scope_index, scope in enumerate(scopes, start=1):
                 scoped = _apply_rule_scope(train, scope["conditions"])
                 if len(scoped) < MIN_TRAIN_SCOPE_EVENTS:
                     continue
@@ -1424,8 +1496,32 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
                                 threshold_uses_abs_value=threshold_uses_abs_value,
                             )
                         )
+                if scope_index % 25 == 0:
+                    progress.update(
+                        window_index,
+                        phase="scopes_in_window",
+                        test_day_ord=test_day_ord_int,
+                        train_window_days=train_window_days,
+                        scope=f"{scope_index}/{len(scopes)}",
+                        rows=len(rows),
+                    )
+            progress.update(
+                window_index,
+                phase="window_done",
+                force=True,
+                test_day_ord=test_day_ord_int,
+                train_window_days=train_window_days,
+                train_events=len(train),
+                scopes=len(scopes),
+                emitted=len(rows) - emitted_before,
+                rows=len(rows),
+            )
+    stage.phase("assemble_dataframe_start", rows=len(rows))
     result = _ensure_columns(pd.DataFrame(rows), columns)
-    return _sort_frame(result, ["test_day_ord", "train_window_days", "scope_name", "threshold_feature", "threshold_quantile", "rule_id"])
+    stage.phase("sort_output_start", rows=len(result))
+    result = _sort_frame(result, ["test_day_ord", "train_window_days", "scope_name", "threshold_feature", "threshold_quantile", "rule_id"])
+    stage.phase("done", rows=len(result))
+    return result
 
 
 def _rule_input_frame(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
@@ -1494,13 +1590,13 @@ def _train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
 
 def _apply_rule_scope(frame: pd.DataFrame, conditions: object) -> pd.DataFrame:
     if not isinstance(conditions, dict) or not conditions:
-        return frame.copy()
+        return frame
     mask = pd.Series(True, index=frame.index)
     for column, expected in conditions.items():
         if column not in frame.columns:
-            return frame.iloc[0:0].copy()
+            return frame.iloc[0:0]
         mask &= frame[column].fillna("missing").astype(str).eq(str(expected))
-    return frame.loc[mask].copy()
+    return frame.loc[mask]
 
 
 def _apply_threshold(frame: pd.DataFrame, *, feature: str, side: str, threshold_value: float) -> pd.DataFrame:
@@ -1513,7 +1609,7 @@ def _apply_threshold(frame: pd.DataFrame, *, feature: str, side: str, threshold_
         mask = values.abs() >= float(threshold_value)
     else:
         raise ValueError(f"unsupported threshold side: {side}")
-    return frame.loc[mask.fillna(False)].copy()
+    return frame.loc[mask.fillna(False)]
 
 
 def _rule_universe_row(
@@ -1658,36 +1754,74 @@ def _build_negative_space_neighborhoods(
     zones instead of only promoted/surviving rules.
     """
 
+    stage = _StageProgress("pump mechanism stability research: negative space", 0)
     columns = _negative_space_columns()
     if rule_universe.empty:
+        stage.phase("empty_rule_universe")
         return pd.DataFrame(columns=columns)
+    stage.phase("build_rule_input_start", rule_rows=len(rule_universe), taxonomy_rows=len(taxonomy), event_rows=len(events))
     rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
     if rule_input.empty:
+        stage.phase("empty_rule_input")
         return pd.DataFrame(columns=columns)
     rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
     if rule_input.empty:
+        stage.phase("empty_after_day_filter")
         return pd.DataFrame(columns=columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+    rule_input = rule_input.sort_values("day_ord").reset_index(drop=True)
+    day_values = rule_input["day_ord"].to_numpy(dtype=np.int64)
 
     center_rules = rule_universe.loc[rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)].copy()
     if center_rules.empty:
+        stage.phase("no_sample_valid_centers")
         return pd.DataFrame(columns=columns)
+    center_records = center_rules.to_dict("records")
+    center_progress = _StageProgress("pump mechanism stability research: negative space centers", len(center_records))
+    stage.phase("select_center_rules_done", centers=len(center_records), rule_rows=len(rule_universe))
 
     rows: list[dict[str, object]] = []
-    for center in center_rules.to_dict("records"):
+    train_cache: dict[tuple[int, int], pd.DataFrame] = {}
+    eligible_scope_cache: dict[tuple[int, int], dict[str, list[str]]] = {}
+    for center_index, center in enumerate(center_records, start=1):
         test_day_ord = _finite_int_or_none(center.get("test_day_ord"))
         train_start_day_ord = _finite_int_or_none(center.get("train_start_day_ord"))
         train_end_day_ord = _finite_int_or_none(center.get("train_end_day_ord"))
         train_window_days = _finite_int_or_none(center.get("train_window_days"))
         if test_day_ord is None or train_start_day_ord is None or train_end_day_ord is None or train_window_days is None:
             continue
-        train = rule_input.loc[
-            (rule_input["day_ord"] >= int(train_start_day_ord)) & (rule_input["day_ord"] <= int(train_end_day_ord))
-        ].copy()
+        window_key = (int(train_start_day_ord), int(train_end_day_ord))
+        train = train_cache.get(window_key)
+        if train is None:
+            left = int(np.searchsorted(day_values, int(train_start_day_ord), side="left"))
+            right = int(np.searchsorted(day_values, int(train_end_day_ord), side="right"))
+            train = rule_input.iloc[left:right]
+            train_cache[window_key] = train
+            eligible_scope_cache[window_key] = {
+                axis: _eligible_scope_values(train, axis)
+                for axis in RULE_SCOPE_AXES
+                if axis in train.columns
+            }
+            center_progress.update(
+                center_index,
+                phase="window_slice",
+                force=True,
+                test_day_ord=test_day_ord,
+                train_window_days=train_window_days,
+                train_events=len(train),
+                cached_windows=len(train_cache),
+                rows=len(rows),
+            )
         if train.empty:
             continue
         basin_id = _basin_id_for_center(center)
-        for neighbor in _iter_negative_space_neighbor_specs(center=center, train=train):
+        neighbor_specs = _iter_negative_space_neighbor_specs(
+            center=center,
+            train=train,
+            eligible_scope_values=eligible_scope_cache.get(window_key, {}),
+        )
+        emitted_before = len(rows)
+        for neighbor in neighbor_specs:
             rows.append(
                 _negative_space_row(
                     center=center,
@@ -1700,12 +1834,31 @@ def _build_negative_space_neighborhoods(
                     train_end_day_ord=int(train_end_day_ord),
                 )
             )
+        center_progress.update(
+            center_index,
+            phase="center_done",
+            test_day_ord=test_day_ord,
+            train_window_days=train_window_days,
+            specs=len(neighbor_specs),
+            emitted=len(rows) - emitted_before,
+            rows=len(rows),
+        )
+    stage.phase("assemble_dataframe_start", rows=len(rows), cached_windows=len(train_cache))
     result = _ensure_columns(pd.DataFrame(rows), columns)
-    return _sort_frame(result, ["test_day_ord", "train_window_days", "basin_id", "neighbor_distance", "neighbor_kind", "neighbor_rule_id"])
+    stage.phase("sort_output_start", rows=len(result))
+    result = _sort_frame(result, ["test_day_ord", "train_window_days", "basin_id", "neighbor_distance", "neighbor_kind", "neighbor_rule_id"])
+    stage.phase("done", rows=len(result), cached_windows=len(train_cache))
+    return result
 
 
-def _iter_negative_space_neighbor_specs(*, center: dict[str, object], train: pd.DataFrame) -> list[dict[str, object]]:
+def _iter_negative_space_neighbor_specs(
+    *,
+    center: dict[str, object],
+    train: pd.DataFrame,
+    eligible_scope_values: dict[str, list[str]] | None = None,
+) -> list[dict[str, object]]:
     conditions = _parse_scope_conditions(center.get("scope_conditions"))
+    eligible_scope_values = eligible_scope_values or {}
     threshold_feature = str(center.get("threshold_feature") or "")
     threshold_side = str(center.get("threshold_side") or "none")
     threshold_quantile = _float(center.get("threshold_quantile"))
@@ -1768,7 +1921,7 @@ def _iter_negative_space_neighbor_specs(*, center: dict[str, object], train: pd.
             next_conditions=relaxed,
             next_quantile=threshold_quantile,
         )
-        for value in _eligible_scope_values(train, axis):
+        for value in eligible_scope_values.get(axis, _eligible_scope_values(train, axis)):
             if value == str(conditions.get(axis)):
                 continue
             replaced = dict(conditions)
@@ -1783,7 +1936,7 @@ def _iter_negative_space_neighbor_specs(*, center: dict[str, object], train: pd.
 
     if not conditions:
         for axis in RULE_SCOPE_AXES:
-            for value in _eligible_scope_values(train, axis):
+            for value in eligible_scope_values.get(axis, _eligible_scope_values(train, axis)):
                 add_spec(
                     kind="scope_tighten_axis_value",
                     distance=1,
@@ -2029,11 +2182,15 @@ def _build_plateau_basins(
     PnL, short entries, or final-holdout artifacts.
     """
 
+    stage = _StageProgress("pump mechanism stability research: plateau basins", 0)
     columns = _plateau_basin_columns()
     if negative_space.empty or outcomes.empty:
+        stage.phase("empty_input", negative_rows=len(negative_space), outcome_rows=len(outcomes))
         return pd.DataFrame(columns=columns)
+    stage.phase("build_rule_input_start", negative_rows=len(negative_space), outcome_rows=len(outcomes))
     rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
     if rule_input.empty or "event_id" not in rule_input.columns:
+        stage.phase("empty_rule_input")
         return pd.DataFrame(columns=columns)
     outcome_columns = [
         "event_id", "outcome_status", "future_ret_30m", "future_ret_60m", "future_min_ret_30m",
@@ -2043,18 +2200,27 @@ def _build_plateau_basins(
     ]
     available_outcome_columns = [column for column in outcome_columns if column in outcomes.columns]
     if available_outcome_columns:
+        stage.phase("join_outcomes_start", columns=len(available_outcome_columns))
         joined_outcomes = outcomes[available_outcome_columns].drop_duplicates("event_id", keep="last")
         rule_input = rule_input.merge(joined_outcomes, on="event_id", how="left", suffixes=("", "_outcome"))
     else:
+        stage.phase("missing_outcome_columns")
         return pd.DataFrame(columns=columns)
     rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
     if rule_input.empty:
+        stage.phase("empty_after_day_filter")
         return pd.DataFrame(columns=columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+    rule_input = rule_input.sort_values("day_ord").reset_index(drop=True)
+    day_values = rule_input["day_ord"].to_numpy(dtype=np.int64)
+
+    grouped_items = list(negative_space.groupby("basin_id", dropna=False, sort=True))
+    basin_progress = _StageProgress("pump mechanism stability research: plateau basins", len(grouped_items))
+    stage.phase("group_negative_space_done", basins=len(grouped_items), negative_rows=len(negative_space))
 
     rows: list[dict[str, object]] = []
-    grouped = negative_space.groupby("basin_id", dropna=False, sort=True)
-    for basin_id, basin_neighbors in grouped:
+    train_cache: dict[tuple[int, int], pd.DataFrame] = {}
+    for basin_index, (basin_id, basin_neighbors) in enumerate(grouped_items, start=1):
         first = basin_neighbors.iloc[0]
         train_start_day_ord = _finite_int_or_none(first.get("train_start_day_ord"))
         train_end_day_ord = _finite_int_or_none(first.get("train_end_day_ord"))
@@ -2062,9 +2228,23 @@ def _build_plateau_basins(
         train_window_days = _finite_int_or_none(first.get("train_window_days"))
         if train_start_day_ord is None or train_end_day_ord is None or test_day_ord is None or train_window_days is None:
             continue
-        train = rule_input.loc[
-            (rule_input["day_ord"] >= int(train_start_day_ord)) & (rule_input["day_ord"] <= int(train_end_day_ord))
-        ].copy()
+        window_key = (int(train_start_day_ord), int(train_end_day_ord))
+        train = train_cache.get(window_key)
+        if train is None:
+            left = int(np.searchsorted(day_values, int(train_start_day_ord), side="left"))
+            right = int(np.searchsorted(day_values, int(train_end_day_ord), side="right"))
+            train = rule_input.iloc[left:right]
+            train_cache[window_key] = train
+            basin_progress.update(
+                basin_index,
+                phase="window_slice",
+                force=True,
+                test_day_ord=test_day_ord,
+                train_window_days=train_window_days,
+                train_events=len(train),
+                cached_windows=len(train_cache),
+                rows=len(rows),
+            )
         if train.empty:
             continue
         scored_neighbors = [_score_negative_space_neighbor(row=neighbor, train=train) for neighbor in basin_neighbors.to_dict("records")]
@@ -2079,8 +2259,20 @@ def _build_plateau_basins(
                 train_end_day_ord=int(train_end_day_ord),
             )
         )
+        basin_progress.update(
+            basin_index,
+            phase="basin_done",
+            test_day_ord=test_day_ord,
+            train_window_days=train_window_days,
+            neighbors=len(basin_neighbors),
+            rows=len(rows),
+        )
+    stage.phase("assemble_dataframe_start", rows=len(rows), cached_windows=len(train_cache))
     result = _ensure_columns(pd.DataFrame(rows), columns)
-    return _sort_frame(result, ["test_day_ord", "train_window_days", "basin_status", "basin_score", "basin_id"])
+    stage.phase("sort_output_start", rows=len(result))
+    result = _sort_frame(result, ["test_day_ord", "train_window_days", "basin_status", "basin_score", "basin_id"])
+    stage.phase("done", rows=len(result), cached_windows=len(train_cache))
+    return result
 
 
 def _score_negative_space_neighbor(*, row: dict[str, object], train: pd.DataFrame) -> dict[str, object]:
