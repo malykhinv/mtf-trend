@@ -507,7 +507,12 @@ def run_pump_mechanism_stability_research(
     rule_universe = _build_train_only_rule_universe(taxonomy=taxonomy, events=events, progress_label=progress_label)
 
     _print_stage(progress_label, "building full negative-space rule neighborhoods", started_at)
-    negative_space = _build_negative_space_neighborhoods(rule_universe=rule_universe, taxonomy=taxonomy, events=events)
+    negative_space = _build_negative_space_neighborhoods(
+        rule_universe=rule_universe,
+        taxonomy=taxonomy,
+        events=events,
+        progress_label=progress_label,
+    )
 
     _print_stage(progress_label, "scoring train-only plateau basins", started_at)
     plateau_basins = _build_plateau_basins(
@@ -516,6 +521,7 @@ def run_pump_mechanism_stability_research(
         taxonomy=taxonomy,
         events=events,
         outcomes=outcomes,
+        progress_label=progress_label,
     )
 
     _print_stage(progress_label, "evaluating daily prequential OOS selected basins", started_at)
@@ -525,6 +531,7 @@ def run_pump_mechanism_stability_research(
         taxonomy=taxonomy,
         events=events,
         outcomes=outcomes,
+        progress_label=progress_label,
     )
 
     _print_stage(progress_label, "building OOS event ledger and stability diagnostics", started_at)
@@ -2138,13 +2145,15 @@ def _build_negative_space_neighborhoods(
     rule_universe: pd.DataFrame,
     taxonomy: pd.DataFrame,
     events: pd.DataFrame,
+    progress_label: str | None = None,
 ) -> pd.DataFrame:
     """Generate full train-only neighbor space around each mechanism rule.
 
-    This is negative-space accounting, not plateau scoring.  It starts from
-    train-window sample-valid centers only, then deliberately emits neighbors
-    that fail low-sample gates so later plateau scoring can see cliffs and dead
-    zones instead of only promoted/surviving rules.
+    The original negative-space pass re-sliced and copied the same train
+    dataframe for every center rule and every neighbor.  That is the next
+    large bottleneck after rule-universe generation.  This implementation keeps
+    the same research contract, but evaluates scopes, threshold perturbations,
+    sample counts, and failed neighbors with precomputed row-position arrays.
     """
 
     columns = _negative_space_columns()
@@ -2157,43 +2166,106 @@ def _build_negative_space_neighborhoods(
     if rule_input.empty:
         return pd.DataFrame(columns=columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+    rule_input = _sort_frame(rule_input, ["day_ord", "symbol", "event_id"]).reset_index(drop=True)
 
-    center_rules = rule_universe.loc[rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)].copy()
+    pass_mask = rule_universe.get("rule_passes_min_sample", pd.Series(False, index=rule_universe.index)).map(_to_bool)
+    center_rules = rule_universe.loc[pass_mask].copy()
     if center_rules.empty:
         return pd.DataFrame(columns=columns)
 
+    day_values = rule_input["day_ord"].to_numpy(dtype="int64", copy=False)
+    axis_arrays = _normalized_axis_arrays(rule_input)
+    numeric_arrays = _numeric_feature_arrays(rule_input)
+    symbol_codes = _factor_codes(rule_input.get("symbol", pd.Series("", index=rule_input.index)))
+    date_codes = _factor_codes(rule_input.get("date", pd.Series("", index=rule_input.index)))
+
     rows: list[dict[str, object]] = []
-    for center in center_rules.to_dict("records"):
+    center_records = center_rules.to_dict("records")
+    progress = (
+        _EtaProgress(f"{progress_label}: negative space", len(center_records), verb="centers")
+        if progress_label and center_records
+        else None
+    )
+    processed = 0
+
+    grouped: dict[tuple[int, int, int, int], list[dict[str, object]]] = {}
+    for center in center_records:
         test_day_ord = _finite_int_or_none(center.get("test_day_ord"))
         train_start_day_ord = _finite_int_or_none(center.get("train_start_day_ord"))
         train_end_day_ord = _finite_int_or_none(center.get("train_end_day_ord"))
         train_window_days = _finite_int_or_none(center.get("train_window_days"))
         if test_day_ord is None or train_start_day_ord is None or train_end_day_ord is None or train_window_days is None:
             continue
-        train = rule_input.loc[
-            (rule_input["day_ord"] >= int(train_start_day_ord)) & (rule_input["day_ord"] <= int(train_end_day_ord))
-        ].copy()
-        if train.empty:
-            continue
-        basin_id = _basin_id_for_center(center)
-        for neighbor in _iter_negative_space_neighbor_specs(center=center, train=train):
-            rows.append(
-                _negative_space_row(
-                    center=center,
-                    neighbor=neighbor,
-                    train=train,
-                    basin_id=basin_id,
-                    test_day_ord=int(test_day_ord),
-                    train_window_days=int(train_window_days),
-                    train_start_day_ord=int(train_start_day_ord),
-                    train_end_day_ord=int(train_end_day_ord),
+        grouped.setdefault(
+            (int(test_day_ord), int(train_window_days), int(train_start_day_ord), int(train_end_day_ord)), []
+        ).append(center)
+
+    for (test_day_ord, train_window_days, train_start_day_ord, train_end_day_ord), centers in sorted(grouped.items()):
+        train_start_pos = int(np.searchsorted(day_values, train_start_day_ord, side="left"))
+        train_end_pos = int(np.searchsorted(day_values, train_end_day_ord, side="right"))
+        if train_end_pos <= train_start_pos:
+            processed += len(centers)
+            if progress:
+                progress.update(
+                    index=processed,
+                    item=f"day={_date_from_day_ord(test_day_ord)} window={train_window_days}d rows={len(rows)} train_events=0",
                 )
-            )
+            continue
+        train_pos = np.arange(train_start_pos, train_end_pos, dtype=np.int64)
+        eligible_values_by_axis = {
+            axis: _eligible_scope_values_from_arrays(train_pos=train_pos, axis_arrays=axis_arrays, axis=axis)
+            for axis in RULE_SCOPE_AXES
+        }
+        for center in centers:
+            basin_id = _basin_id_for_center(center)
+            for neighbor in _iter_negative_space_neighbor_specs_from_values(
+                center=center,
+                eligible_values_by_axis=eligible_values_by_axis,
+            ):
+                rows.append(
+                    _negative_space_row_from_positions(
+                        center=center,
+                        neighbor=neighbor,
+                        train_pos=train_pos,
+                        axis_arrays=axis_arrays,
+                        numeric_arrays=numeric_arrays,
+                        symbol_codes=symbol_codes,
+                        date_codes=date_codes,
+                        basin_id=basin_id,
+                        test_day_ord=int(test_day_ord),
+                        train_window_days=int(train_window_days),
+                        train_start_day_ord=int(train_start_day_ord),
+                        train_end_day_ord=int(train_end_day_ord),
+                    )
+                )
+            processed += 1
+            if progress and (processed == len(center_records) or processed % 500 == 0):
+                progress.update(
+                    index=processed,
+                    item=(
+                        f"day={_date_from_day_ord(test_day_ord)} window={train_window_days}d "
+                        f"rows={len(rows)} centers={processed}/{len(center_records)}"
+                    ),
+                )
+    if progress:
+        progress.finish()
     result = _ensure_columns(pd.DataFrame(rows), columns)
     return _sort_frame(result, ["test_day_ord", "train_window_days", "basin_id", "neighbor_distance", "neighbor_kind", "neighbor_rule_id"])
 
 
 def _iter_negative_space_neighbor_specs(*, center: dict[str, object], train: pd.DataFrame) -> list[dict[str, object]]:
+    # Compatibility wrapper for tests or older call sites.  Production code uses
+    # _iter_negative_space_neighbor_specs_from_values() so eligible axis values
+    # are counted once per train window instead of once per center rule.
+    eligible_values_by_axis = {axis: _eligible_scope_values(train, axis) for axis in RULE_SCOPE_AXES}
+    return _iter_negative_space_neighbor_specs_from_values(center=center, eligible_values_by_axis=eligible_values_by_axis)
+
+
+def _iter_negative_space_neighbor_specs_from_values(
+    *,
+    center: dict[str, object],
+    eligible_values_by_axis: dict[str, list[str]],
+) -> list[dict[str, object]]:
     conditions = _parse_scope_conditions(center.get("scope_conditions"))
     threshold_feature = str(center.get("threshold_feature") or "")
     threshold_side = str(center.get("threshold_side") or "none")
@@ -2257,7 +2329,7 @@ def _iter_negative_space_neighbor_specs(*, center: dict[str, object], train: pd.
             next_conditions=relaxed,
             next_quantile=threshold_quantile,
         )
-        for value in _eligible_scope_values(train, axis):
+        for value in eligible_values_by_axis.get(axis, []):
             if value == str(conditions.get(axis)):
                 continue
             replaced = dict(conditions)
@@ -2272,7 +2344,7 @@ def _iter_negative_space_neighbor_specs(*, center: dict[str, object], train: pd.
 
     if not conditions:
         for axis in RULE_SCOPE_AXES:
-            for value in _eligible_scope_values(train, axis):
+            for value in eligible_values_by_axis.get(axis, []):
                 add_spec(
                     kind="scope_tighten_axis_value",
                     distance=1,
@@ -2295,9 +2367,48 @@ def _negative_space_row(
     train_start_day_ord: int,
     train_end_day_ord: int,
 ) -> dict[str, object]:
+    # Compatibility wrapper for tests or older call sites.  Production code uses
+    # _negative_space_row_from_positions() to avoid pandas copies per neighbor.
+    train = train.reset_index(drop=True)
+    axis_arrays = _normalized_axis_arrays(train)
+    numeric_arrays = _numeric_feature_arrays(train)
+    symbol_codes = _factor_codes(train.get("symbol", pd.Series("", index=train.index)))
+    date_codes = _factor_codes(train.get("date", pd.Series("", index=train.index)))
+    train_pos = np.arange(len(train), dtype=np.int64)
+    return _negative_space_row_from_positions(
+        center=center,
+        neighbor=neighbor,
+        train_pos=train_pos,
+        axis_arrays=axis_arrays,
+        numeric_arrays=numeric_arrays,
+        symbol_codes=symbol_codes,
+        date_codes=date_codes,
+        basin_id=basin_id,
+        test_day_ord=test_day_ord,
+        train_window_days=train_window_days,
+        train_start_day_ord=train_start_day_ord,
+        train_end_day_ord=train_end_day_ord,
+    )
+
+
+def _negative_space_row_from_positions(
+    *,
+    center: dict[str, object],
+    neighbor: dict[str, object],
+    train_pos: np.ndarray,
+    axis_arrays: dict[str, np.ndarray],
+    numeric_arrays: dict[str, np.ndarray],
+    symbol_codes: np.ndarray,
+    date_codes: np.ndarray,
+    basin_id: str,
+    test_day_ord: int,
+    train_window_days: int,
+    train_start_day_ord: int,
+    train_end_day_ord: int,
+) -> dict[str, object]:
     conditions = neighbor.get("conditions") if isinstance(neighbor.get("conditions"), dict) else {}
     assert isinstance(conditions, dict)
-    scoped = _apply_rule_scope(train, conditions)
+    scoped_pos = _apply_scope_to_positions(train_pos=train_pos, axis_arrays=axis_arrays, conditions=conditions)
     threshold_feature = str(neighbor.get("threshold_feature") or "")
     threshold_side = str(neighbor.get("threshold_side") or "none")
     threshold_quantile = _float(neighbor.get("threshold_quantile"))
@@ -2305,29 +2416,42 @@ def _negative_space_row(
     threshold_value = float("nan")
     threshold_valid_values = 0
     if threshold_feature and threshold_side != "none":
-        source_values = pd.to_numeric(scoped.get(threshold_feature, pd.Series(np.nan, index=scoped.index)), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-        fit_values = source_values.abs() if threshold_uses_abs_value else source_values
-        fit_values = fit_values.dropna()
-        threshold_valid_values = int(len(fit_values))
-        if math.isfinite(threshold_quantile) and threshold_valid_values > 0:
-            threshold_value = _safe_quantile(fit_values, float(threshold_quantile))
-        if math.isfinite(threshold_value):
-            filtered = _apply_threshold(scoped, feature=threshold_feature, side=threshold_side, threshold_value=threshold_value)
+        values = numeric_arrays.get(threshold_feature)
+        if values is not None and scoped_pos.size:
+            source_values = values[scoped_pos]
+            finite_mask = np.isfinite(source_values)
+            fit_values = np.abs(source_values[finite_mask]) if threshold_uses_abs_value else source_values[finite_mask]
+            threshold_valid_values = int(fit_values.size)
+            if math.isfinite(threshold_quantile) and threshold_valid_values > 0:
+                threshold_value = _safe_quantile_np(fit_values, float(threshold_quantile))
+            filtered_pos = (
+                _threshold_positions(
+                    scope_pos=scoped_pos,
+                    source_values=source_values,
+                    finite_mask=finite_mask,
+                    side=threshold_side,
+                    threshold_value=float(threshold_value),
+                )
+                if math.isfinite(threshold_value)
+                else scoped_pos[:0]
+            )
         else:
-            filtered = scoped.iloc[0:0].copy()
+            filtered_pos = scoped_pos[:0]
     else:
-        filtered = scoped.copy()
+        filtered_pos = scoped_pos
 
-    neighbor_events = int(len(filtered))
-    neighbor_symbols = int(filtered["symbol"].nunique()) if "symbol" in filtered.columns and not filtered.empty else 0
-    neighbor_active_days = int(filtered["date"].nunique()) if "date" in filtered.columns and not filtered.empty else 0
+    neighbor_events, neighbor_symbols, neighbor_active_days = _position_sample_stats(
+        row_pos=filtered_pos,
+        symbol_codes=symbol_codes,
+        date_codes=date_codes,
+    )
     passes_min_sample = bool(
         neighbor_events >= MIN_RULE_EVENTS
         and neighbor_symbols >= MIN_RULE_SYMBOLS
         and neighbor_active_days >= MIN_RULE_ACTIVE_DAYS
     )
     fail_reason = _negative_space_fail_reason(
-        scoped_events=int(len(scoped)),
+        scoped_events=int(scoped_pos.size),
         threshold_feature=threshold_feature,
         threshold_valid_values=threshold_valid_values,
         neighbor_events=neighbor_events,
@@ -2380,7 +2504,7 @@ def _negative_space_row(
         "neighbor_threshold_side": threshold_side,
         "neighbor_threshold_quantile": threshold_quantile,
         "neighbor_threshold_value": threshold_value,
-        "neighbor_threshold_source_events": int(len(scoped)),
+        "neighbor_threshold_source_events": int(scoped_pos.size),
         "neighbor_threshold_valid_values": int(threshold_valid_values),
         "neighbor_threshold_uses_abs_value": bool(threshold_uses_abs_value),
         "neighbor_events": neighbor_events,
@@ -2474,6 +2598,20 @@ def _eligible_scope_values(train: pd.DataFrame, axis: str) -> list[str]:
     return sorted(values[:MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS])
 
 
+def _eligible_scope_values_from_arrays(
+    *,
+    train_pos: np.ndarray,
+    axis_arrays: dict[str, np.ndarray],
+    axis: str,
+) -> list[str]:
+    values = axis_arrays.get(axis)
+    if values is None or train_pos.size == 0:
+        return []
+    counts = pd.Series(values[train_pos], copy=False).value_counts(dropna=False)
+    eligible = [str(value) for value, count in counts.items() if int(count) >= MIN_TRAIN_SCOPE_EVENTS]
+    return sorted(eligible[:MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS])
+
+
 def _negative_neighbor_key(
     *,
     kind: str,
@@ -2507,15 +2645,16 @@ def _build_plateau_basins(
     taxonomy: pd.DataFrame,
     events: pd.DataFrame,
     outcomes: pd.DataFrame,
+    progress_label: str | None = None,
 ) -> pd.DataFrame:
     """Score train-only plateau basins from the full generated neighbor space.
 
-    This is still pre-trade mechanism research.  It joins future-response
-    outcomes only after the entry-known event/taxonomy rule masks have been
-    constructed, and it scores every generated neighbor, including low-sample
-    and rejected neighbors.  The output is a basin-level diagnostic for later
-    daily prequential selection; it is not a trading system and it does not use
-    PnL, short entries, or final-holdout artifacts.
+    The expensive part is applying each neighbor rule back to its train window.
+    The first implementation did that with pandas dataframe copies for every
+    basin/neighbor.  This version precomputes entry-known arrays and outcome
+    arrays once, then applies scopes/thresholds through row positions.  Outcome
+    columns still enter only in this response-scoring phase, never in rule masks
+    or train-only selection.
     """
 
     columns = _plateau_basin_columns()
@@ -2531,19 +2670,31 @@ def _build_plateau_basins(
         "time_to_reclaim_pump_high_minutes", "time_to_structural_low_break_minutes",
     ]
     available_outcome_columns = [column for column in outcome_columns if column in outcomes.columns]
-    if available_outcome_columns:
-        joined_outcomes = outcomes[available_outcome_columns].drop_duplicates("event_id", keep="last")
-        rule_input = rule_input.merge(joined_outcomes, on="event_id", how="left", suffixes=("", "_outcome"))
-    else:
+    if not available_outcome_columns:
         return pd.DataFrame(columns=columns)
+    joined_outcomes = outcomes[available_outcome_columns].drop_duplicates("event_id", keep="last")
+    rule_input = rule_input.merge(joined_outcomes, on="event_id", how="left", suffixes=("", "_outcome"))
     rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
     if rule_input.empty:
         return pd.DataFrame(columns=columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
+    rule_input = _sort_frame(rule_input, ["day_ord", "symbol", "event_id"]).reset_index(drop=True)
+
+    day_values = rule_input["day_ord"].to_numpy(dtype="int64", copy=False)
+    axis_arrays = _normalized_axis_arrays(rule_input)
+    numeric_arrays = _numeric_feature_arrays(rule_input)
+    symbol_codes = _factor_codes(rule_input.get("symbol", pd.Series("", index=rule_input.index)))
+    date_codes = _factor_codes(rule_input.get("date", pd.Series("", index=rule_input.index)))
+    outcome_arrays = _plateau_outcome_arrays(rule_input)
 
     rows: list[dict[str, object]] = []
-    grouped = negative_space.groupby("basin_id", dropna=False, sort=True)
-    for basin_id, basin_neighbors in grouped:
+    grouped = list(negative_space.groupby("basin_id", dropna=False, sort=True))
+    progress = (
+        _EtaProgress(f"{progress_label}: plateau basins", len(grouped), verb="basins")
+        if progress_label and grouped
+        else None
+    )
+    for index, (basin_id, basin_neighbors) in enumerate(grouped, start=1):
         first = basin_neighbors.iloc[0]
         train_start_day_ord = _finite_int_or_none(first.get("train_start_day_ord"))
         train_end_day_ord = _finite_int_or_none(first.get("train_end_day_ord"))
@@ -2551,12 +2702,23 @@ def _build_plateau_basins(
         train_window_days = _finite_int_or_none(first.get("train_window_days"))
         if train_start_day_ord is None or train_end_day_ord is None or test_day_ord is None or train_window_days is None:
             continue
-        train = rule_input.loc[
-            (rule_input["day_ord"] >= int(train_start_day_ord)) & (rule_input["day_ord"] <= int(train_end_day_ord))
-        ].copy()
-        if train.empty:
+        train_start_pos = int(np.searchsorted(day_values, int(train_start_day_ord), side="left"))
+        train_end_pos = int(np.searchsorted(day_values, int(train_end_day_ord), side="right"))
+        if train_end_pos <= train_start_pos:
             continue
-        scored_neighbors = [_score_negative_space_neighbor(row=neighbor, train=train) for neighbor in basin_neighbors.to_dict("records")]
+        train_pos = np.arange(train_start_pos, train_end_pos, dtype=np.int64)
+        scored_neighbors = [
+            _score_negative_space_neighbor_positions(
+                row=neighbor,
+                train_pos=train_pos,
+                axis_arrays=axis_arrays,
+                numeric_arrays=numeric_arrays,
+                symbol_codes=symbol_codes,
+                date_codes=date_codes,
+                outcome_arrays=outcome_arrays,
+            )
+            for neighbor in basin_neighbors.to_dict("records")
+        ]
         rows.append(
             _plateau_basin_row(
                 basin_id=str(basin_id),
@@ -2568,23 +2730,80 @@ def _build_plateau_basins(
                 train_end_day_ord=int(train_end_day_ord),
             )
         )
+        if progress and (index == len(grouped) or index % 500 == 0):
+            progress.update(
+                index=index,
+                item=(
+                    f"day={_date_from_day_ord(int(test_day_ord))} window={int(train_window_days)}d "
+                    f"rows={len(rows)} basins={index}/{len(grouped)}"
+                ),
+            )
+    if progress:
+        progress.finish()
     result = _ensure_columns(pd.DataFrame(rows), columns)
     return _sort_frame(result, ["test_day_ord", "train_window_days", "basin_status", "basin_score", "basin_id"])
 
 
 def _score_negative_space_neighbor(*, row: dict[str, object], train: pd.DataFrame) -> dict[str, object]:
+    # Compatibility wrapper for tests or older call sites.  Production plateau
+    # scoring uses _score_negative_space_neighbor_positions().
+    train = train.reset_index(drop=True)
+    axis_arrays = _normalized_axis_arrays(train)
+    numeric_arrays = _numeric_feature_arrays(train)
+    symbol_codes = _factor_codes(train.get("symbol", pd.Series("", index=train.index)))
+    date_codes = _factor_codes(train.get("date", pd.Series("", index=train.index)))
+    outcome_arrays = _plateau_outcome_arrays(train)
+    train_pos = np.arange(len(train), dtype=np.int64)
+    return _score_negative_space_neighbor_positions(
+        row=row,
+        train_pos=train_pos,
+        axis_arrays=axis_arrays,
+        numeric_arrays=numeric_arrays,
+        symbol_codes=symbol_codes,
+        date_codes=date_codes,
+        outcome_arrays=outcome_arrays,
+    )
+
+
+def _score_negative_space_neighbor_positions(
+    *,
+    row: dict[str, object],
+    train_pos: np.ndarray,
+    axis_arrays: dict[str, np.ndarray],
+    numeric_arrays: dict[str, np.ndarray],
+    symbol_codes: np.ndarray,
+    date_codes: np.ndarray,
+    outcome_arrays: dict[str, np.ndarray],
+) -> dict[str, object]:
     conditions = _parse_scope_conditions(row.get("neighbor_scope_conditions"))
-    scoped = _apply_rule_scope(train, conditions)
+    scoped_pos = _apply_scope_to_positions(train_pos=train_pos, axis_arrays=axis_arrays, conditions=conditions)
     threshold_feature = str(row.get("neighbor_threshold_feature") or "")
     threshold_side = str(row.get("neighbor_threshold_side") or "none")
     threshold_value = _float(row.get("neighbor_threshold_value"))
     if threshold_feature and threshold_side != "none" and math.isfinite(threshold_value):
-        filtered = _apply_threshold(scoped, feature=threshold_feature, side=threshold_side, threshold_value=threshold_value)
+        values = numeric_arrays.get(threshold_feature)
+        if values is None or scoped_pos.size == 0:
+            filtered_pos = scoped_pos[:0]
+        else:
+            source_values = values[scoped_pos]
+            finite_mask = np.isfinite(source_values)
+            filtered_pos = _threshold_positions(
+                scope_pos=scoped_pos,
+                source_values=source_values,
+                finite_mask=finite_mask,
+                side=threshold_side,
+                threshold_value=threshold_value,
+            )
     elif threshold_feature and threshold_side != "none":
-        filtered = scoped.iloc[0:0].copy()
+        filtered_pos = scoped_pos[:0]
     else:
-        filtered = scoped.copy()
-    metrics = _plateau_response_metrics(filtered)
+        filtered_pos = scoped_pos
+    metrics = _plateau_response_metrics_from_positions(
+        row_pos=filtered_pos,
+        symbol_codes=symbol_codes,
+        date_codes=date_codes,
+        outcome_arrays=outcome_arrays,
+    )
     min_sample_pass = _to_bool(row.get("neighbor_passes_min_sample"))
     score = _plateau_neighbor_score(metrics)
     expected_downside = _plateau_expected_downside(metrics)
@@ -2602,67 +2821,133 @@ def _score_negative_space_neighbor(*, row: dict[str, object], train: pd.DataFram
     }
 
 
+def _plateau_outcome_arrays(frame: pd.DataFrame) -> dict[str, np.ndarray]:
+    arrays: dict[str, np.ndarray] = {}
+    numeric_columns = (
+        "future_ret_30m", "future_ret_60m", "future_min_ret_30m", "future_min_ret_60m",
+        "future_max_ret_30m", "future_max_ret_60m", "down_mfe_30m", "down_mfe_60m",
+        "up_mae_30m", "up_mae_60m", "time_to_reclaim_pump_high_minutes",
+        "time_to_structural_low_break_minutes",
+    )
+    for column in numeric_columns:
+        if column in frame.columns:
+            arrays[column] = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype="float64", copy=False)
+        else:
+            arrays[column] = np.full(len(frame), np.nan, dtype="float64")
+    bool_columns = ("reclaimed_pump_high_60m", "broke_structural_low_60m")
+    for column in bool_columns:
+        if column in frame.columns:
+            arrays[column] = frame[column].map(_to_bool).to_numpy(dtype=bool, copy=False)
+        else:
+            arrays[column] = np.zeros(len(frame), dtype=bool)
+    return arrays
+
+
 def _plateau_response_metrics(frame: pd.DataFrame) -> dict[str, object]:
-    events = int(len(frame))
-    symbols = int(frame["symbol"].nunique()) if "symbol" in frame.columns and not frame.empty else 0
-    active_days = int(frame["date"].nunique()) if "date" in frame.columns and not frame.empty else 0
-    dependency = _dependency_metrics(frame)
-    future_min_30 = pd.to_numeric(frame.get("future_min_ret_30m", pd.Series(dtype=float)), errors="coerce")
-    future_min_60 = pd.to_numeric(frame.get("future_min_ret_60m", pd.Series(dtype=float)), errors="coerce")
-    reclaimed = _as_bool_series(frame.get("reclaimed_pump_high_60m", pd.Series(dtype=bool))) if not frame.empty else pd.Series(dtype=bool)
-    broke = _as_bool_series(frame.get("broke_structural_low_60m", pd.Series(dtype=bool))) if not frame.empty else pd.Series(dtype=bool)
+    # Compatibility wrapper.  Hot paths use _plateau_response_metrics_from_positions().
+    frame = frame.reset_index(drop=True)
+    symbol_codes = _factor_codes(frame.get("symbol", pd.Series("", index=frame.index)))
+    date_codes = _factor_codes(frame.get("date", pd.Series("", index=frame.index)))
+    outcome_arrays = _plateau_outcome_arrays(frame)
+    row_pos = np.arange(len(frame), dtype=np.int64)
+    return _plateau_response_metrics_from_positions(
+        row_pos=row_pos,
+        symbol_codes=symbol_codes,
+        date_codes=date_codes,
+        outcome_arrays=outcome_arrays,
+    )
+
+
+def _plateau_response_metrics_from_positions(
+    *,
+    row_pos: np.ndarray,
+    symbol_codes: np.ndarray,
+    date_codes: np.ndarray,
+    outcome_arrays: dict[str, np.ndarray],
+) -> dict[str, object]:
+    events = int(row_pos.size)
+    symbols = int(np.unique(symbol_codes[row_pos]).size) if events else 0
+    active_days = int(np.unique(date_codes[row_pos]).size) if events else 0
+    dependency = _dependency_metrics_from_codes(row_pos=row_pos, symbol_codes=symbol_codes, date_codes=date_codes)
+    future_min_30 = _array_take(outcome_arrays, "future_min_ret_30m", row_pos)
+    future_min_60 = _array_take(outcome_arrays, "future_min_ret_60m", row_pos)
+    reclaimed = _array_take_bool(outcome_arrays, "reclaimed_pump_high_60m", row_pos)
+    broke = _array_take_bool(outcome_arrays, "broke_structural_low_60m", row_pos)
     return {
         "events": events,
         "symbols": symbols,
         "active_days": active_days,
-        "median_future_ret_30m": _safe_median(frame.get("future_ret_30m", pd.Series(dtype=float))),
-        "median_future_ret_60m": _safe_median(frame.get("future_ret_60m", pd.Series(dtype=float))),
-        "median_future_min_ret_30m": _safe_median(future_min_30),
-        "median_future_min_ret_60m": _safe_median(future_min_60),
-        "median_future_max_ret_30m": _safe_median(frame.get("future_max_ret_30m", pd.Series(dtype=float))),
-        "median_future_max_ret_60m": _safe_median(frame.get("future_max_ret_60m", pd.Series(dtype=float))),
-        "median_down_mfe_30m": _safe_median(frame.get("down_mfe_30m", pd.Series(dtype=float))),
-        "median_down_mfe_60m": _safe_median(frame.get("down_mfe_60m", pd.Series(dtype=float))),
-        "median_up_mae_30m": _safe_median(frame.get("up_mae_30m", pd.Series(dtype=float))),
-        "median_up_mae_60m": _safe_median(frame.get("up_mae_60m", pd.Series(dtype=float))),
-        "downside_hit_rate_30m": _rate(future_min_30 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
-        "downside_hit_rate_60m": _rate(future_min_60 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
-        "reclaim_rate_60m": _rate(reclaimed) if not reclaimed.empty else float("nan"),
-        "structural_low_break_rate_60m": _rate(broke) if not broke.empty else float("nan"),
-        "median_time_to_reclaim_pump_high_minutes": _safe_median(frame.get("time_to_reclaim_pump_high_minutes", pd.Series(dtype=float))),
-        "median_time_to_structural_low_break_minutes": _safe_median(frame.get("time_to_structural_low_break_minutes", pd.Series(dtype=float))),
+        "median_future_ret_30m": _array_median(_array_take(outcome_arrays, "future_ret_30m", row_pos)),
+        "median_future_ret_60m": _array_median(_array_take(outcome_arrays, "future_ret_60m", row_pos)),
+        "median_future_min_ret_30m": _array_median(future_min_30),
+        "median_future_min_ret_60m": _array_median(future_min_60),
+        "median_future_max_ret_30m": _array_median(_array_take(outcome_arrays, "future_max_ret_30m", row_pos)),
+        "median_future_max_ret_60m": _array_median(_array_take(outcome_arrays, "future_max_ret_60m", row_pos)),
+        "median_down_mfe_30m": _array_median(_array_take(outcome_arrays, "down_mfe_30m", row_pos)),
+        "median_down_mfe_60m": _array_median(_array_take(outcome_arrays, "down_mfe_60m", row_pos)),
+        "median_up_mae_30m": _array_median(_array_take(outcome_arrays, "up_mae_30m", row_pos)),
+        "median_up_mae_60m": _array_median(_array_take(outcome_arrays, "up_mae_60m", row_pos)),
+        "downside_hit_rate_30m": _array_rate(future_min_30 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
+        "downside_hit_rate_60m": _array_rate(future_min_60 <= PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
+        "reclaim_rate_60m": _array_rate(reclaimed),
+        "structural_low_break_rate_60m": _array_rate(broke),
+        "median_time_to_reclaim_pump_high_minutes": _array_median(_array_take(outcome_arrays, "time_to_reclaim_pump_high_minutes", row_pos)),
+        "median_time_to_structural_low_break_minutes": _array_median(_array_take(outcome_arrays, "time_to_structural_low_break_minutes", row_pos)),
         **dependency,
     }
 
 
-def _plateau_neighbor_score(metrics: dict[str, object]) -> float:
-    # A positive score means the train-window response surface points down after
-    # the feature cutoff.  The score is intentionally pre-trade: it uses outcome
-    # distributions, not entries/exits/R-multiples.
-    components = [
-        -_float(metrics.get("median_future_ret_30m")),
-        -_float(metrics.get("median_future_ret_60m")),
-        -_float(metrics.get("median_future_min_ret_30m")),
-        -_float(metrics.get("median_future_min_ret_60m")),
-        0.02 * (_float(metrics.get("downside_hit_rate_30m")) - 0.50),
-        0.02 * (_float(metrics.get("downside_hit_rate_60m")) - 0.50),
-        0.02 * (_float(metrics.get("structural_low_break_rate_60m")) - 0.30),
-        0.02 * (0.50 - _float(metrics.get("reclaim_rate_60m"))),
-    ]
-    finite = [float(value) for value in components if math.isfinite(float(value))]
-    return float(np.mean(finite)) if finite else float("nan")
+def _array_take(arrays: dict[str, np.ndarray], key: str, row_pos: np.ndarray) -> np.ndarray:
+    values = arrays.get(key)
+    if values is None or row_pos.size == 0:
+        return np.asarray([], dtype="float64")
+    return np.asarray(values[row_pos], dtype="float64")
 
 
-def _plateau_expected_downside(metrics: dict[str, object]) -> bool:
-    median_min_30 = _float(metrics.get("median_future_min_ret_30m"))
-    median_min_60 = _float(metrics.get("median_future_min_ret_60m"))
-    downside_30 = _float(metrics.get("downside_hit_rate_30m"))
-    downside_60 = _float(metrics.get("downside_hit_rate_60m"))
-    median_ret_60 = _float(metrics.get("median_future_ret_60m"))
-    has_negative_path = (math.isfinite(median_min_30) and median_min_30 < 0.0) or (math.isfinite(median_min_60) and median_min_60 < 0.0)
-    has_downside_frequency = (math.isfinite(downside_30) and downside_30 >= 0.45) or (math.isfinite(downside_60) and downside_60 >= 0.45)
-    no_strong_positive_drift = not math.isfinite(median_ret_60) or median_ret_60 <= 0.005
-    return bool(has_negative_path and has_downside_frequency and no_strong_positive_drift)
+def _array_take_bool(arrays: dict[str, np.ndarray], key: str, row_pos: np.ndarray) -> np.ndarray:
+    values = arrays.get(key)
+    if values is None or row_pos.size == 0:
+        return np.asarray([], dtype=bool)
+    return np.asarray(values[row_pos], dtype=bool)
+
+
+def _array_median(values: np.ndarray) -> float:
+    if values.size == 0:
+        return float("nan")
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return float("nan")
+    return float(np.median(finite))
+
+
+def _array_rate(mask: np.ndarray) -> float:
+    if mask.size == 0:
+        return float("nan")
+    return float(np.mean(mask.astype(float)))
+
+
+def _dependency_metrics_from_codes(
+    *,
+    row_pos: np.ndarray,
+    symbol_codes: np.ndarray,
+    date_codes: np.ndarray,
+) -> dict[str, float]:
+    event_count = max(int(row_pos.size), 1)
+    largest_symbol_share = 0.0
+    largest_day_share = 0.0
+    if row_pos.size:
+        symbol_counts = np.bincount(symbol_codes[row_pos][symbol_codes[row_pos] >= 0])
+        date_counts = np.bincount(date_codes[row_pos][date_codes[row_pos] >= 0])
+        if symbol_counts.size:
+            largest_symbol_share = float(symbol_counts.max()) / event_count
+        if date_counts.size:
+            largest_day_share = float(date_counts.max()) / event_count
+    return {
+        "top_event_dependency_pct": 1.0 / event_count,
+        "top_symbol_dependency_pct": largest_symbol_share,
+        "largest_symbol_event_share": largest_symbol_share,
+        "largest_day_event_share": largest_day_share,
+    }
 
 
 def _plateau_basin_row(
@@ -2901,6 +3186,7 @@ def _build_daily_prequential_oos(
     taxonomy: pd.DataFrame,
     events: pd.DataFrame,
     outcomes: pd.DataFrame,
+    progress_label: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Evaluate selected train-only basins on their held-out test day.
 
@@ -2935,15 +3221,28 @@ def _build_daily_prequential_oos(
     rule_lookup = rule_universe.drop_duplicates("rule_id", keep="last").set_index("rule_id", drop=False) if "rule_id" in rule_universe.columns else pd.DataFrame()
     oos_input = _joined_rule_outcome_input(taxonomy=taxonomy, events=events, outcomes=outcomes)
     rows: list[dict[str, object]] = []
-    for selection_row in daily_selection.to_dict("records"):
+    selection_records = daily_selection.to_dict("records")
+    progress = (
+        _EtaProgress(f"{progress_label}: daily OOS", len(selection_records), verb="selected basins")
+        if progress_label and selection_records
+        else None
+    )
+    for index, selection_row in enumerate(selection_records, start=1):
         center_rule_id = str(selection_row.get("center_rule_id", ""))
         if rule_lookup.empty or center_rule_id not in rule_lookup.index:
             rows.append(_daily_oos_missing_rule_row(selection_row, reason="center_rule_missing_from_rule_universe"))
-            continue
-        rule = rule_lookup.loc[center_rule_id]
-        if isinstance(rule, pd.DataFrame):
-            rule = rule.iloc[-1]
-        rows.append(_evaluate_selected_basin_on_test_day(selection=selection_row, rule=rule.to_dict(), oos_input=oos_input))
+        else:
+            rule = rule_lookup.loc[center_rule_id]
+            if isinstance(rule, pd.DataFrame):
+                rule = rule.iloc[-1]
+            rows.append(_evaluate_selected_basin_on_test_day(selection=selection_row, rule=rule.to_dict(), oos_input=oos_input))
+        if progress and (index == len(selection_records) or index % 500 == 0):
+            progress.update(
+                index=index,
+                item=f"day={selection_row.get('test_date', '')} rows={len(rows)}",
+            )
+    if progress:
+        progress.finish()
 
     daily_oos = _ensure_columns(pd.DataFrame(rows), oos_columns)
     daily_oos = _sort_frame(daily_oos, ["test_day_ord", "train_window_days", "oos_response_score", "selected_rank", "basin_id"])
