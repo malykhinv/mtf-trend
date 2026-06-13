@@ -359,6 +359,32 @@ class _EtaProgress:
             self.update(index=self.total, force=True)
 
 
+class _StageTimer:
+    def __init__(self, label: str | None) -> None:
+        self.label = label
+        self.started_at = time.monotonic()
+        self.last_emit_at = 0.0
+
+    def emit(self, message: str, *, force: bool = False, min_interval_seconds: float = 2.0) -> None:
+        if not self.label:
+            return
+        now = time.monotonic()
+        if not force and now - self.last_emit_at < float(min_interval_seconds):
+            return
+        self.last_emit_at = now
+        elapsed = max(0.001, now - self.started_at)
+        print(f"{self.label}: {message} elapsed={_format_duration(elapsed)}", flush=True)
+
+
+def _eta_message(*, index: int, total: int, started_at: float) -> str:
+    total_int = max(0, int(total))
+    index_int = max(0, int(index))
+    pct = (index_int / total_int * 100.0) if total_int else 100.0
+    elapsed = max(0.001, time.monotonic() - float(started_at))
+    eta = (elapsed / max(index_int, 1)) * max(total_int - index_int, 0) if total_int else 0.0
+    return f"{index_int}/{total_int} ({pct:5.1f}%) elapsed={_format_duration(elapsed)} eta={_format_duration(eta)}"
+
+
 def run_pump_mechanism_stability_research(
     config: PumpMechanismStabilityConfig,
     *,
@@ -1577,15 +1603,23 @@ def _build_train_only_rule_universe(
     day/window/scope/threshold combination.  On a 365d broad-pump universe this
     can become dominated by pandas allocation rather than research work.  This
     version keeps the exact train-only contract, but evaluates scopes and
-    thresholds with precomputed numpy arrays and row positions.
+    thresholds with precomputed numpy arrays and row positions.  It also emits
+    nested ETA/progress messages so long rule-universe runs are not opaque.
     """
 
     columns = _rule_universe_columns()
+    trace = _StageTimer(f"{progress_label}: rule universe" if progress_label else None)
+    trace.emit("phase=build_rule_input start", force=True)
     rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
     if rule_input.empty:
+        trace.emit("phase=build_rule_input empty", force=True)
         return pd.DataFrame(columns=columns)
+    trace.emit(f"phase=build_rule_input done rows={len(rule_input):,}", force=True)
+
+    trace.emit("phase=filter_sort start", force=True)
     rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
     if rule_input.empty:
+        trace.emit("phase=filter_sort empty_after_day_ord_filter", force=True)
         return pd.DataFrame(columns=columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
     rule_input = _sort_frame(rule_input, ["day_ord", "symbol", "event_id"]).reset_index(drop=True)
@@ -1593,12 +1627,23 @@ def _build_train_only_rule_universe(
     day_values = rule_input["day_ord"].to_numpy(dtype="int64", copy=False)
     unique_test_days = np.asarray(sorted(pd.unique(day_values)), dtype="int64")
     if unique_test_days.size == 0:
+        trace.emit("phase=filter_sort no_test_days", force=True)
         return pd.DataFrame(columns=columns)
+    trace.emit(
+        f"phase=filter_sort done rows={len(rule_input):,} test_days={unique_test_days.size:,} "
+        f"windows={len(ROLLING_WINDOWS_DAYS)}",
+        force=True,
+    )
 
+    trace.emit("phase=precompute_arrays start", force=True)
     axis_arrays = _normalized_axis_arrays(rule_input)
     numeric_arrays = _numeric_feature_arrays(rule_input)
     symbol_codes = _factor_codes(rule_input.get("symbol", pd.Series("", index=rule_input.index)))
     date_codes = _factor_codes(rule_input.get("date", pd.Series("", index=rule_input.index)))
+    trace.emit(
+        f"phase=precompute_arrays done axes={len(axis_arrays)} numeric_features={len(numeric_arrays)}",
+        force=True,
+    )
 
     rows: list[dict[str, object]] = []
     total_windows = int(len(unique_test_days) * len(ROLLING_WINDOWS_DAYS))
@@ -1607,28 +1652,71 @@ def _build_train_only_rule_universe(
         if progress_label and total_windows
         else None
     )
+    if progress:
+        progress.update(index=0, item="phase=iterate_windows start rows=0", force=True)
     progress_index = 0
+    scope_windows = 0
+    total_scopes_seen = 0
+    total_rules_emitted = 0
+    total_threshold_rules_emitted = 0
 
     for test_day_ord in unique_test_days:
         test_day_ord_int = int(test_day_ord)
         test_date = _date_from_day_ord(test_day_ord_int)
         for train_window_days in ROLLING_WINDOWS_DAYS:
             progress_index += 1
+            window_started_at = time.monotonic()
             train_start_day_ord = test_day_ord_int - int(train_window_days)
             train_end_day_ord = test_day_ord_int - 1
             train_start_pos = int(np.searchsorted(day_values, train_start_day_ord, side="left"))
             train_end_pos = int(np.searchsorted(day_values, train_end_day_ord, side="right"))
+            train_event_count = train_end_pos - train_start_pos
+            if progress:
+                progress.update(
+                    index=progress_index - 1,
+                    item=(
+                        f"phase=window_start day={test_date} window={train_window_days}d "
+                        f"train_events={train_event_count:,} rows={len(rows):,}"
+                    ),
+                )
             if train_end_pos <= train_start_pos:
                 if progress:
                     progress.update(
                         index=progress_index,
-                        item=f"day={test_date} window={train_window_days}d rows={len(rows)} train_events=0",
+                        item=f"phase=window_done day={test_date} window={train_window_days}d rows={len(rows):,} train_events=0",
+                        force=True,
                     )
                 continue
+
             train_pos = np.arange(train_start_pos, train_end_pos, dtype=np.int64)
-            for scope in _train_rule_scopes_from_arrays(train_pos=train_pos, axis_arrays=axis_arrays):
+            scopes_started_at = time.monotonic()
+            scopes = _train_rule_scopes_from_arrays(train_pos=train_pos, axis_arrays=axis_arrays)
+            scope_windows += 1
+            total_scopes_seen += len(scopes)
+            if progress_label:
+                trace.emit(
+                    f"phase=scopes_built day={test_date} window={train_window_days}d "
+                    f"train_events={train_event_count:,} scopes={len(scopes):,} "
+                    f"scope_build_elapsed={_format_duration(time.monotonic() - scopes_started_at)} rows={len(rows):,}",
+                    force=True,
+                )
+
+            scope_count = max(len(scopes), 1)
+            last_scope_emit_at = time.monotonic()
+            window_rules_before = len(rows)
+            for scope_index, scope in enumerate(scopes, start=1):
+                scope_started_at = time.monotonic()
                 scope_pos = _apply_scope_to_positions(train_pos=train_pos, axis_arrays=axis_arrays, conditions=scope["conditions"])
                 if int(scope_pos.size) < MIN_TRAIN_SCOPE_EVENTS:
+                    if progress_label and time.monotonic() - last_scope_emit_at >= 2.0:
+                        last_scope_emit_at = time.monotonic()
+                        print(
+                            f"{progress_label}: rule universe scopes "
+                            f"{_eta_message(index=scope_index, total=scope_count, started_at=window_started_at)} "
+                            f"day={test_date} window={train_window_days}d scope={scope.get('scope_name')} "
+                            f"scope_events={scope_pos.size:,} skipped=low_scope_sample rows={len(rows):,}",
+                            flush=True,
+                        )
                     continue
                 train_events, train_symbols, train_active_days = _position_sample_stats(
                     row_pos=scope_pos,
@@ -1655,7 +1743,10 @@ def _build_train_only_rule_universe(
                         threshold_uses_abs_value=False,
                     )
                 )
-                for feature, side, quantiles in RULE_THRESHOLD_FEATURES:
+                total_rules_emitted += 1
+
+                feature_count = len(RULE_THRESHOLD_FEATURES)
+                for feature_index, (feature, side, quantiles) in enumerate(RULE_THRESHOLD_FEATURES, start=1):
                     values = numeric_arrays.get(feature)
                     if values is None:
                         continue
@@ -1702,19 +1793,52 @@ def _build_train_only_rule_universe(
                                 threshold_uses_abs_value=side == "abs_ge",
                             )
                         )
+                        total_rules_emitted += 1
+                        total_threshold_rules_emitted += 1
+                    if progress_label and time.monotonic() - last_scope_emit_at >= 2.0:
+                        last_scope_emit_at = time.monotonic()
+                        print(
+                            f"{progress_label}: rule universe thresholds "
+                            f"{_eta_message(index=feature_index, total=feature_count, started_at=scope_started_at)} "
+                            f"day={test_date} window={train_window_days}d "
+                            f"scope={scope.get('scope_name')} scope={scope_index}/{scope_count} "
+                            f"feature={feature} side={side} rows={len(rows):,}",
+                            flush=True,
+                        )
+                if progress_label and time.monotonic() - last_scope_emit_at >= 2.0:
+                    last_scope_emit_at = time.monotonic()
+                    print(
+                        f"{progress_label}: rule universe scopes "
+                        f"{_eta_message(index=scope_index, total=scope_count, started_at=window_started_at)} "
+                        f"day={test_date} window={train_window_days}d scope={scope.get('scope_name')} "
+                        f"scope_events={scope_pos.size:,} rows={len(rows):,}",
+                        flush=True,
+                    )
+
             if progress:
                 progress.update(
                     index=progress_index,
                     item=(
-                        f"day={test_date} window={train_window_days}d rows={len(rows)} "
-                        f"train_events={train_end_pos - train_start_pos}"
+                        f"phase=window_done day={test_date} window={train_window_days}d "
+                        f"rows={len(rows):,} window_rules={len(rows) - window_rules_before:,} "
+                        f"train_events={train_event_count:,} scopes={len(scopes):,}"
                     ),
+                    force=True,
                 )
     if progress:
         progress.finish()
+    trace.emit(
+        f"phase=assemble_dataframe start rows={len(rows):,} windows={progress_index:,} "
+        f"non_empty_windows={scope_windows:,} scopes_seen={total_scopes_seen:,} "
+        f"rules_emitted={total_rules_emitted:,} threshold_rules={total_threshold_rules_emitted:,}",
+        force=True,
+    )
     result = _ensure_columns(pd.DataFrame(rows), columns)
-    return _sort_frame(result, ["test_day_ord", "train_window_days", "scope_name", "threshold_feature", "threshold_quantile", "rule_id"])
-
+    trace.emit(f"phase=assemble_dataframe done rows={len(result):,}", force=True)
+    trace.emit("phase=sort_output start", force=True)
+    result = _sort_frame(result, ["test_day_ord", "train_window_days", "scope_name", "threshold_feature", "threshold_quantile", "rule_id"])
+    trace.emit(f"phase=sort_output done rows={len(result):,}", force=True)
+    return result
 
 
 def _normalized_axis_arrays(frame: pd.DataFrame) -> dict[str, np.ndarray]:
