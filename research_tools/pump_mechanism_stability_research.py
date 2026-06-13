@@ -121,9 +121,18 @@ RULE_PAIR_SCOPES: tuple[tuple[str, str], ...] = (
     ("oi_regime", "acceptance_regime"),
     ("mechanism_family", "oi_regime"),
 )
-NEGATIVE_SPACE_MODEL = "train_only_full_generated_neighbor_space_including_rejected_v1"
+NEGATIVE_SPACE_MODEL = "train_only_budgeted_full_neighbor_space_including_rejected_v2"
+NEGATIVE_SPACE_CENTER_BUDGET_MODEL = "diversified_sample_valid_centers_per_test_window_v1"
 NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS = 2
 MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS = 12
+# Negative-space is a plateau audit, not a place to re-score every redundant
+# rule emitted by the grammar.  A 30d/365d run can easily produce hundreds of
+# thousands of sample-valid rules that describe nearly identical basins.  Keep
+# a diversified center set per (test day, train window) and still generate the
+# full local neighborhood, including failed/rejected neighbors, around those
+# centers.
+NEGATIVE_SPACE_MAX_CENTERS_PER_TEST_WINDOW = 48
+NEGATIVE_SPACE_MIN_BASELINE_CENTERS_PER_TEST_WINDOW = 4
 
 PLATEAU_BASIN_MODEL = "train_only_basin_score_from_full_negative_space_v1"
 PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD = -0.0075
@@ -1772,13 +1781,27 @@ def _build_negative_space_neighborhoods(
     rule_input = rule_input.sort_values("day_ord").reset_index(drop=True)
     day_values = rule_input["day_ord"].to_numpy(dtype=np.int64)
 
-    center_rules = rule_universe.loc[rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)].copy()
-    if center_rules.empty:
+    raw_center_rules = rule_universe.loc[rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)].copy()
+    if raw_center_rules.empty:
         stage.phase("no_sample_valid_centers")
+        return pd.DataFrame(columns=columns)
+    center_rules, budget_stats = _select_negative_space_center_rules(raw_center_rules)
+    if center_rules.empty:
+        stage.phase("no_centers_after_budget", raw_centers=len(raw_center_rules), rule_rows=len(rule_universe))
         return pd.DataFrame(columns=columns)
     center_records = center_rules.to_dict("records")
     center_progress = _StageProgress("pump mechanism stability research: negative space centers", len(center_records))
-    stage.phase("select_center_rules_done", centers=len(center_records), rule_rows=len(rule_universe))
+    stage.phase(
+        "select_center_rules_done",
+        raw_centers=len(raw_center_rules),
+        centers=len(center_records),
+        dropped=len(raw_center_rules) - len(center_records),
+        max_centers_per_test_window=NEGATIVE_SPACE_MAX_CENTERS_PER_TEST_WINDOW,
+        max_raw_window_centers=budget_stats.get("max_raw_window_centers", 0),
+        max_selected_window_centers=budget_stats.get("max_selected_window_centers", 0),
+        windows=budget_stats.get("windows", 0),
+        rule_rows=len(rule_universe),
+    )
 
     rows: list[dict[str, object]] = []
     train_cache: dict[tuple[int, int], pd.DataFrame] = {}
@@ -1850,6 +1873,127 @@ def _build_negative_space_neighborhoods(
     stage.phase("done", rows=len(result), cached_windows=len(train_cache))
     return result
 
+
+
+def _select_negative_space_center_rules(center_rules: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Keep a diversified center set per test day/window before neighborhood expansion.
+
+    The rule grammar intentionally emits many near-duplicate sample-valid rules
+    across scopes, features and quantiles.  Expanding every one of them into a
+    full negative-space neighborhood is computationally wasteful and does not
+    improve the plateau question.  This selector keeps broad coverage by
+    round-robining over rule families inside each (test_day_ord,
+    train_window_days) group, while ranking each family by sample breadth and
+    interaction depth.  It does not look at outcomes, PnL, OOS results or short
+    entries.
+    """
+
+    if center_rules.empty:
+        return center_rules.copy(), {"windows": 0, "max_raw_window_centers": 0, "max_selected_window_centers": 0}
+
+    work = center_rules.copy()
+    for column in ("test_day_ord", "train_window_days", "train_events", "train_symbols", "train_active_days", "scope_depth"):
+        if column not in work.columns:
+            work[column] = 0
+        work[column] = pd.to_numeric(work[column], errors="coerce").fillna(0)
+    if "threshold_feature" not in work.columns:
+        work["threshold_feature"] = ""
+    if "threshold_side" not in work.columns:
+        work["threshold_side"] = "none"
+    if "scope_conditions" not in work.columns:
+        work["scope_conditions"] = "*"
+    if "rule_id" not in work.columns:
+        work["rule_id"] = ""
+
+    feature_priority = {
+        "close15_to_high15_ratio": 0,
+        "wick_ret_15m": 1,
+        "oi_change_5m_pct": 2,
+        "pre60_range_pct": 3,
+        "early_quote_ratio_60m_scaled": 4,
+        "early_trade_ratio_60m_scaled": 5,
+        "m1_last2_quote_share": 6,
+        "m1_quote_accel_last2_vs_first2": 7,
+        "seed_high_return_pct": 8,
+        "early_taker_buy_quote_share": 9,
+        "": 10,
+    }
+    work["_budget_family"] = (
+        work["scope_conditions"].fillna("*").astype(str)
+        + "|"
+        + work["threshold_feature"].fillna("").astype(str)
+        + "|"
+        + work["threshold_side"].fillna("none").astype(str)
+    )
+    work["_feature_priority"] = work["threshold_feature"].fillna("").astype(str).map(feature_priority).fillna(99).astype(int)
+    # Higher score is better.  Sample breadth dominates; scope_depth keeps
+    # interaction effects visible without letting tiny brittle scopes through
+    # because raw sample gates have already been applied before this function.
+    work["_budget_score"] = (
+        work["train_active_days"].astype(float) * 10000.0
+        + work["train_symbols"].astype(float) * 100.0
+        + work["train_events"].astype(float)
+        + work["scope_depth"].astype(float) * 250.0
+        - work["_feature_priority"].astype(float) * 0.01
+    )
+
+    selected_parts: list[pd.DataFrame] = []
+    raw_window_sizes: list[int] = []
+    selected_window_sizes: list[int] = []
+    group_columns = ["test_day_ord", "train_window_days"]
+    for _window_key, window in work.groupby(group_columns, dropna=False, sort=True):
+        raw_window_sizes.append(int(len(window)))
+        window = window.sort_values(
+            ["_budget_family", "_budget_score", "_feature_priority", "rule_id"],
+            ascending=[True, False, True, True],
+            kind="mergesort",
+        )
+        picks: list[pd.Series] = []
+
+        # Preserve a few no-threshold baselines for calibration.
+        baseline = window.loc[window["threshold_feature"].fillna("").astype(str).eq("")]
+        if not baseline.empty:
+            baseline = baseline.sort_values(["_budget_score", "rule_id"], ascending=[False, True], kind="mergesort")
+            for _, row in baseline.head(NEGATIVE_SPACE_MIN_BASELINE_CENTERS_PER_TEST_WINDOW).iterrows():
+                picks.append(row)
+
+        remaining_budget = max(0, int(NEGATIVE_SPACE_MAX_CENTERS_PER_TEST_WINDOW) - len(picks))
+        if remaining_budget > 0:
+            thresholded = window.loc[~window.index.isin([row.name for row in picks])]
+            ranked = thresholded.copy()
+            ranked["_family_rank"] = ranked.groupby("_budget_family")["_budget_score"].rank(method="first", ascending=False)
+            ranked = ranked.sort_values(
+                ["_family_rank", "_feature_priority", "scope_depth", "_budget_score", "rule_id"],
+                ascending=[True, True, False, False, True],
+                kind="mergesort",
+            )
+            for _, row in ranked.head(remaining_budget).iterrows():
+                picks.append(row)
+
+        if picks:
+            selected = pd.DataFrame(picks).drop(columns=["_budget_family", "_feature_priority", "_budget_score"], errors="ignore")
+            selected_parts.append(selected)
+            selected_window_sizes.append(int(len(selected)))
+        else:
+            selected_window_sizes.append(0)
+
+    if not selected_parts:
+        return center_rules.iloc[0:0].copy(), {
+            "windows": int(len(raw_window_sizes)),
+            "max_raw_window_centers": max(raw_window_sizes) if raw_window_sizes else 0,
+            "max_selected_window_centers": 0,
+        }
+
+    selected_all = pd.concat(selected_parts, ignore_index=True)
+    selected_all = selected_all.drop(columns=["_family_rank"], errors="ignore")
+    sort_columns = [column for column in ["test_day_ord", "train_window_days", "scope_conditions", "threshold_feature", "threshold_side", "threshold_quantile", "rule_id"] if column in selected_all.columns]
+    if sort_columns:
+        selected_all = selected_all.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
+    return selected_all, {
+        "windows": int(len(raw_window_sizes)),
+        "max_raw_window_centers": max(raw_window_sizes) if raw_window_sizes else 0,
+        "max_selected_window_centers": max(selected_window_sizes) if selected_window_sizes else 0,
+    }
 
 def _iter_negative_space_neighbor_specs(
     *,
