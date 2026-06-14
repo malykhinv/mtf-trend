@@ -147,6 +147,12 @@ PLATEAU_P25_SCORE_MIN = 0.0
 
 DAILY_PREQUENTIAL_OOS_MODEL = "daily_prequential_oos_selected_basins_v1"
 DAILY_SELECTION_MODEL = "select_train_only_plateau_basins_for_test_day_v1"
+NO_OI_REGIME = "missing_closed_5m_oi"
+NO_OI_DISCOVERY_MODEL = "missing_closed_5m_oi_is_audit_only_for_oi_scoped_main_discovery_v1"
+MECHANISM_VERDICT_MODEL = "fade_vs_runner_mechanism_verdict_from_response_and_oos_v1"
+FADE_QUALITY_MIN_FOR_VERDICT = 0.12
+RUNNER_QUALITY_MIN_FOR_VERDICT = 0.50
+
 WINDOW_HEALTH_MODEL = "daily_window_health_from_train_only_basins_and_oos_v1"
 SELECTION_DRIFT_MODEL = "selected_basin_key_drift_over_prequential_days_v1"
 PROTOCOL_AUDIT_MODEL = "pump_mechanism_no_lookahead_negative_space_daily_replay_audit_v1"
@@ -476,6 +482,13 @@ def run_pump_mechanism_stability_research(
         selection_drift=selection_drift,
     )
 
+    _print_stage(progress_label, "building focused mechanism verdict", started_at)
+    mechanism_verdict = _build_mechanism_verdict(
+        response_surfaces=response_surfaces,
+        plateau_basins=plateau_basins,
+        daily_oos=daily_oos,
+    )
+
     _print_stage(progress_label, "writing event/outcome/taxonomy/response-surface/rule/negative-space/basin/OOS/audit artifacts", started_at)
     _write_parquet(config.output_dir / "pump_mechanism_events.parquet", events)
     _write_parquet(config.output_dir / "pump_mechanism_outcomes.parquet", outcomes)
@@ -491,6 +504,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_window_health.csv", window_health)
     _write_csv(config.output_dir / "pump_mechanism_selection_drift.csv", selection_drift)
     _write_csv(config.output_dir / "pump_mechanism_protocol_audit.csv", protocol_audit)
+    _write_csv(config.output_dir / "pump_mechanism_verdict.csv", mechanism_verdict)
 
     run_config = _run_config_frame(
         config=config,
@@ -521,6 +535,7 @@ def run_pump_mechanism_stability_research(
         f"rule_universe={len(rule_universe):,} negative_space={len(negative_space):,} "
         f"plateau_basins={len(plateau_basins):,} daily_selection={len(daily_selection):,} "
         f"daily_oos={len(daily_oos):,} protocol_audit={len(protocol_audit):,} "
+        f"mechanism_verdict={len(mechanism_verdict):,} "
         f"elapsed={_format_duration(time.monotonic() - started_at)} output_dir={config.output_dir}",
         flush=True,
     )
@@ -1308,7 +1323,9 @@ def _response_surface_row(*, surface_name: str, group_columns: tuple[str, ...], 
     row["median_time_to_reclaim_pump_high_minutes"] = _safe_median(_numeric_series(frame, "time_to_reclaim_pump_high_minutes"))
     row["median_time_to_structural_low_break_minutes"] = _safe_median(_numeric_series(frame, "time_to_structural_low_break_minutes"))
     row["downside_monotonicity_score"] = _downside_monotonicity_score(row)
-    row["directional_response_score"] = _directional_response_score(row)
+    row["fade_quality_score"] = _fade_quality_score(row)
+    row["runner_quality_score"] = _runner_quality_score(row)
+    row["directional_response_score"] = row["fade_quality_score"]
     row.update(_dependency_metrics(frame))
     return row
 
@@ -1332,7 +1349,8 @@ def _response_surface_columns() -> list[str]:
     columns.extend(
         [
             "reclaim_rate_60m", "structural_low_break_rate_60m", "median_time_to_reclaim_pump_high_minutes",
-            "median_time_to_structural_low_break_minutes", "downside_monotonicity_score", "directional_response_score",
+            "median_time_to_structural_low_break_minutes", "downside_monotonicity_score", "fade_quality_score",
+            "runner_quality_score", "directional_response_score",
             "top_event_dependency_pct", "top_symbol_dependency_pct", "largest_symbol_event_share", "largest_day_event_share",
         ]
     )
@@ -1355,23 +1373,56 @@ def _downside_monotonicity_score(row: dict[str, object]) -> float:
     return non_increasing / comparisons if comparisons else float("nan")
 
 
-def _directional_response_score(row: dict[str, object]) -> float:
-    median_ret_30 = _float(row.get("median_future_ret_30m"))
-    median_ret_60 = _float(row.get("median_future_ret_60m"))
+def _fade_quality_score(row: dict[str, object]) -> float:
+    """Pre-trade fade-quality score, not PnL.
+
+    Raw downside excursion after a pump is common and can make accepted/runner
+    pumps look shortable.  This score rewards downside only when it comes with
+    low reclaim and structural break evidence.
+    """
+
+    downside_30 = _float(row.get("downside_hit_rate_minus_1p00pct_30m", row.get("downside_hit_rate_30m")))
+    downside_60 = _float(row.get("downside_hit_rate_minus_2p00pct_60m", row.get("downside_hit_rate_60m")))
     median_min_30 = _float(row.get("median_future_min_ret_30m"))
     median_min_60 = _float(row.get("median_future_min_ret_60m"))
+    median_ret_60 = _float(row.get("median_future_ret_60m"))
+    positive_rate_60 = _float(row.get("future_ret_positive_rate_60m"))
     break_rate = _float(row.get("structural_low_break_rate_60m"))
     reclaim_rate = _float(row.get("reclaim_rate_60m"))
+
     components = [
-        -median_ret_30 if math.isfinite(median_ret_30) else np.nan,
-        -median_ret_60 if math.isfinite(median_ret_60) else np.nan,
-        -median_min_30 if math.isfinite(median_min_30) else np.nan,
-        -median_min_60 if math.isfinite(median_min_60) else np.nan,
-        break_rate if math.isfinite(break_rate) else np.nan,
-        1.0 - reclaim_rate if math.isfinite(reclaim_rate) else np.nan,
+        0.35 * (downside_30 - 0.35) if math.isfinite(downside_30) else np.nan,
+        0.45 * (downside_60 - 0.25) if math.isfinite(downside_60) else np.nan,
+        10.0 * (-median_min_30) if math.isfinite(median_min_30) else np.nan,
+        8.0 * (-median_min_60) if math.isfinite(median_min_60) else np.nan,
+        0.55 * (break_rate - 0.30) if math.isfinite(break_rate) else np.nan,
+        0.65 * (0.55 - reclaim_rate) if math.isfinite(reclaim_rate) else np.nan,
+        0.35 * (0.55 - positive_rate_60) if math.isfinite(positive_rate_60) else np.nan,
+        -6.0 * max(0.0, median_ret_60) if math.isfinite(median_ret_60) else np.nan,
     ]
     finite = [float(value) for value in components if math.isfinite(float(value))]
-    return float(np.mean(finite)) if finite else float("nan")
+    return float(np.sum(finite)) if finite else float("nan")
+
+
+def _runner_quality_score(row: dict[str, object]) -> float:
+    median_ret_60 = _float(row.get("median_future_ret_60m"))
+    positive_rate_60 = _float(row.get("future_ret_positive_rate_60m"))
+    reclaim_rate = _float(row.get("reclaim_rate_60m"))
+    break_rate = _float(row.get("structural_low_break_rate_60m"))
+    median_min_60 = _float(row.get("median_future_min_ret_60m"))
+    components = [
+        8.0 * median_ret_60 if math.isfinite(median_ret_60) else np.nan,
+        0.50 * (positive_rate_60 - 0.50) if math.isfinite(positive_rate_60) else np.nan,
+        0.65 * (reclaim_rate - 0.50) if math.isfinite(reclaim_rate) else np.nan,
+        0.45 * (0.35 - break_rate) if math.isfinite(break_rate) else np.nan,
+        -4.0 * max(0.0, -median_min_60) if math.isfinite(median_min_60) else np.nan,
+    ]
+    finite = [float(value) for value in components if math.isfinite(float(value))]
+    return float(np.sum(finite)) if finite else float("nan")
+
+
+def _directional_response_score(row: dict[str, object]) -> float:
+    return _fade_quality_score(row)
 
 
 def _dependency_metrics(frame: pd.DataFrame) -> dict[str, float]:
@@ -1575,18 +1626,25 @@ def _train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
             continue
         counts = train[axis].fillna("missing").astype(str).value_counts(dropna=False)
         for value, count in counts.items():
+            value_str = str(value)
+            if axis == "oi_regime" and value_str == NO_OI_REGIME:
+                continue
             if int(count) >= MIN_TRAIN_SCOPE_EVENTS:
-                scopes.append({"scope_name": axis, "conditions": {axis: str(value)}, "scope_depth": 1})
+                scopes.append({"scope_name": axis, "conditions": {axis: value_str}, "scope_depth": 1})
     for left, right in RULE_PAIR_SCOPES:
         if left not in train.columns or right not in train.columns:
             continue
         grouped = train.assign(**{left: train[left].fillna("missing").astype(str), right: train[right].fillna("missing").astype(str)}).groupby([left, right], dropna=False)
         for (left_value, right_value), frame in grouped:
+            left_value_str = str(left_value)
+            right_value_str = str(right_value)
+            if (left == "oi_regime" and left_value_str == NO_OI_REGIME) or (right == "oi_regime" and right_value_str == NO_OI_REGIME):
+                continue
             if len(frame) >= MIN_TRAIN_SCOPE_EVENTS:
                 scopes.append(
                     {
                         "scope_name": f"{left}+{right}",
-                        "conditions": {left: str(left_value), right: str(right_value)},
+                        "conditions": {left: left_value_str, right: right_value_str},
                         "scope_depth": 2,
                     }
                 )
@@ -2554,7 +2612,8 @@ def _plateau_response_metrics(frame: pd.DataFrame) -> dict[str, object]:
     future_min_60 = pd.to_numeric(frame.get("future_min_ret_60m", pd.Series(dtype=float)), errors="coerce")
     reclaimed = _as_bool_series(frame.get("reclaimed_pump_high_60m", pd.Series(dtype=bool))) if not frame.empty else pd.Series(dtype=bool)
     broke = _as_bool_series(frame.get("broke_structural_low_60m", pd.Series(dtype=bool))) if not frame.empty else pd.Series(dtype=bool)
-    return {
+    positive_60 = _numeric_condition_rate(pd.to_numeric(frame.get("future_ret_60m", pd.Series(dtype=float)), errors="coerce"), threshold=0.0, side="gt")
+    metrics = {
         "events": events,
         "symbols": symbols,
         "active_days": active_days,
@@ -2574,38 +2633,50 @@ def _plateau_response_metrics(frame: pd.DataFrame) -> dict[str, object]:
         "structural_low_break_rate_60m": _rate(broke) if not broke.empty else float("nan"),
         "median_time_to_reclaim_pump_high_minutes": _safe_median(frame.get("time_to_reclaim_pump_high_minutes", pd.Series(dtype=float))),
         "median_time_to_structural_low_break_minutes": _safe_median(frame.get("time_to_structural_low_break_minutes", pd.Series(dtype=float))),
+        "future_ret_positive_rate_60m": positive_60,
         **dependency,
     }
+    metrics["fade_quality_score"] = _fade_quality_score(metrics)
+    metrics["runner_quality_score"] = _runner_quality_score(metrics)
+    return metrics
 
 
 def _plateau_neighbor_score(metrics: dict[str, object]) -> float:
-    # A positive score means the train-window response surface points down after
-    # the feature cutoff.  The score is intentionally pre-trade: it uses outcome
-    # distributions, not entries/exits/R-multiples.
-    components = [
-        -_float(metrics.get("median_future_ret_30m")),
-        -_float(metrics.get("median_future_ret_60m")),
-        -_float(metrics.get("median_future_min_ret_30m")),
-        -_float(metrics.get("median_future_min_ret_60m")),
-        0.02 * (_float(metrics.get("downside_hit_rate_30m")) - 0.50),
-        0.02 * (_float(metrics.get("downside_hit_rate_60m")) - 0.50),
-        0.02 * (_float(metrics.get("structural_low_break_rate_60m")) - 0.30),
-        0.02 * (0.50 - _float(metrics.get("reclaim_rate_60m"))),
-    ]
-    finite = [float(value) for value in components if math.isfinite(float(value))]
-    return float(np.mean(finite)) if finite else float("nan")
+    # Positive means fade-like response, not merely path volatility.  Reclaims
+    # and positive 60m drift are explicit penalties so accepted runners stop
+    # being promoted just because they had an intrapath pullback.
+    return _float(metrics.get("fade_quality_score"))
 
 
 def _plateau_expected_downside(metrics: dict[str, object]) -> bool:
+    fade_quality = _float(metrics.get("fade_quality_score"))
+    runner_quality = _float(metrics.get("runner_quality_score"))
     median_min_30 = _float(metrics.get("median_future_min_ret_30m"))
     median_min_60 = _float(metrics.get("median_future_min_ret_60m"))
     downside_30 = _float(metrics.get("downside_hit_rate_30m"))
     downside_60 = _float(metrics.get("downside_hit_rate_60m"))
     median_ret_60 = _float(metrics.get("median_future_ret_60m"))
-    has_negative_path = (math.isfinite(median_min_30) and median_min_30 < 0.0) or (math.isfinite(median_min_60) and median_min_60 < 0.0)
-    has_downside_frequency = (math.isfinite(downside_30) and downside_30 >= 0.45) or (math.isfinite(downside_60) and downside_60 >= 0.45)
-    no_strong_positive_drift = not math.isfinite(median_ret_60) or median_ret_60 <= 0.005
-    return bool(has_negative_path and has_downside_frequency and no_strong_positive_drift)
+    reclaim_rate = _float(metrics.get("reclaim_rate_60m"))
+    break_rate = _float(metrics.get("structural_low_break_rate_60m"))
+    positive_rate_60 = _float(metrics.get("future_ret_positive_rate_60m"))
+    has_negative_path = (math.isfinite(median_min_30) and median_min_30 <= -0.0025) or (math.isfinite(median_min_60) and median_min_60 <= -0.0050)
+    has_downside_frequency = (math.isfinite(downside_30) and downside_30 >= 0.40) or (math.isfinite(downside_60) and downside_60 >= 0.32)
+    has_failure_evidence = (math.isfinite(break_rate) and break_rate >= 0.30) or (math.isfinite(reclaim_rate) and reclaim_rate <= 0.55)
+    no_runner_like_acceptance = not (math.isfinite(reclaim_rate) and reclaim_rate >= 0.70)
+    no_strong_positive_drift = not math.isfinite(median_ret_60) or median_ret_60 <= 0.003
+    no_positive_close_majority = not math.isfinite(positive_rate_60) or positive_rate_60 <= 0.58
+    not_runner_quality = not math.isfinite(runner_quality) or runner_quality < RUNNER_QUALITY_MIN_FOR_VERDICT
+    return bool(
+        math.isfinite(fade_quality)
+        and fade_quality > 0.0
+        and has_negative_path
+        and has_downside_frequency
+        and has_failure_evidence
+        and no_runner_like_acceptance
+        and no_strong_positive_drift
+        and no_positive_close_majority
+        and not_runner_quality
+    )
 
 
 def _plateau_basin_row(
@@ -2631,6 +2702,7 @@ def _plateau_basin_row(
     score_pass_count = int(sum(score_pass_flags))
     min_sample_pass_count = int(sum(min_sample_flags))
     expected_downside_count = int(sum(expected_downside_flags))
+    failed_or_rejected_neighbor_count = int(neighbor_count - score_pass_count)
     neighbor_survival_rate = score_pass_count / neighbor_count if neighbor_count else float("nan")
     min_sample_survival_rate = min_sample_pass_count / neighbor_count if neighbor_count else float("nan")
     sign_consistency = expected_downside_count / neighbor_count if neighbor_count else float("nan")
@@ -2663,7 +2735,11 @@ def _plateau_basin_row(
         basin_score=basin_score,
         cliff_penalty=cliff_penalty,
     )
-    passes_gate = status in {"challenger", "tactical", "strong_candidate"}
+    has_negative_space_rejection = failed_or_rejected_neighbor_count > 0
+    passes_gate = status in {"challenger", "tactical", "strong_candidate"} and has_negative_space_rejection
+    if status in {"challenger", "tactical", "strong_candidate"} and not has_negative_space_rejection:
+        status = "rejected"
+        passes_gate = False
     return {
         "research_id": RESEARCH_ID,
         "basin_id": basin_id,
@@ -2692,11 +2768,18 @@ def _plateau_basin_row(
         "center_median_future_min_ret_60m": _float(center.get("median_future_min_ret_60m")),
         "center_downside_hit_rate_30m": _float(center.get("downside_hit_rate_30m")),
         "center_downside_hit_rate_60m": _float(center.get("downside_hit_rate_60m")),
+        "center_reclaim_rate_60m": _float(center.get("reclaim_rate_60m")),
+        "center_structural_low_break_rate_60m": _float(center.get("structural_low_break_rate_60m")),
+        "center_future_ret_positive_rate_60m": _float(center.get("future_ret_positive_rate_60m")),
+        "center_fade_quality_score": _float(center.get("fade_quality_score")),
+        "center_runner_quality_score": _float(center.get("runner_quality_score")),
         "neighbor_count": neighbor_count,
         "neighbor_scoreable_count": scoreable_count,
         "neighbor_min_sample_pass_count": min_sample_pass_count,
         "neighbor_score_pass_count": score_pass_count,
         "neighbor_expected_downside_count": expected_downside_count,
+        "failed_or_rejected_neighbor_count": failed_or_rejected_neighbor_count,
+        "has_negative_space_rejection": bool(has_negative_space_rejection),
         "neighbor_survival_rate": neighbor_survival_rate,
         "min_sample_survival_rate": min_sample_survival_rate,
         "sign_consistency": sign_consistency,
@@ -2827,8 +2910,11 @@ def _plateau_basin_columns() -> list[str]:
         "center_threshold_quantile", "center_train_events", "center_train_symbols", "center_train_active_days",
         "center_response_score", "center_expected_downside", "center_median_future_ret_30m",
         "center_median_future_ret_60m", "center_median_future_min_ret_30m", "center_median_future_min_ret_60m",
-        "center_downside_hit_rate_30m", "center_downside_hit_rate_60m", "neighbor_count", "neighbor_scoreable_count",
+        "center_downside_hit_rate_30m", "center_downside_hit_rate_60m", "center_reclaim_rate_60m",
+        "center_structural_low_break_rate_60m", "center_future_ret_positive_rate_60m", "center_fade_quality_score",
+        "center_runner_quality_score", "neighbor_count", "neighbor_scoreable_count",
         "neighbor_min_sample_pass_count", "neighbor_score_pass_count", "neighbor_expected_downside_count",
+        "failed_or_rejected_neighbor_count", "has_negative_space_rejection",
         "neighbor_survival_rate", "min_sample_survival_rate", "sign_consistency", "median_neighbor_score",
         "p25_neighbor_score", "worst_neighbor_score", "best_neighbor_score", "score_degradation_pct", "cliff_penalty",
         "dependency_penalty", "max_neighbor_top_symbol_dependency_pct", "max_neighbor_largest_day_event_share", "basin_score",
@@ -3236,6 +3322,85 @@ def _to_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _build_mechanism_verdict(
+    *,
+    response_surfaces: pd.DataFrame,
+    plateau_basins: pd.DataFrame,
+    daily_oos: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = _mechanism_verdict_columns()
+    rows: list[dict[str, object]] = []
+    if not response_surfaces.empty:
+        surface_filter = response_surfaces.get("surface_name", pd.Series(dtype=str)).astype(str).isin(
+            {"mechanism_family", "mechanism_id", "family_session", "oi_acceptance", "acceptance_session"}
+        )
+        for _idx, surface in response_surfaces.loc[surface_filter].iterrows():
+            fade_quality = _float(surface.get("fade_quality_score"))
+            runner_quality = _float(surface.get("runner_quality_score"))
+            events = int(surface.get("events", 0) or 0)
+            symbols = int(surface.get("symbols", 0) or 0)
+            active_days = int(surface.get("active_days", 0) or 0)
+            reclaim_rate = _float(surface.get("reclaim_rate_60m"))
+            break_rate = _float(surface.get("structural_low_break_rate_60m"))
+            group_value = str(surface.get("group_value", ""))
+            has_missing_oi = NO_OI_REGIME in group_value
+            if has_missing_oi and str(surface.get("surface_name", "")) in {"oi_acceptance"}:
+                verdict = "no_oi_audit_only"
+            elif math.isfinite(fade_quality) and fade_quality >= FADE_QUALITY_MIN_FOR_VERDICT and active_days >= 10 and symbols >= 8:
+                verdict = "fade_mechanism_candidate"
+            elif math.isfinite(runner_quality) and runner_quality >= RUNNER_QUALITY_MIN_FOR_VERDICT:
+                verdict = "runner_or_no_short_candidate"
+            else:
+                verdict = "unproven_or_mixed"
+            rows.append(
+                {
+                    "research_id": RESEARCH_ID,
+                    "surface_name": str(surface.get("surface_name", "")),
+                    "group_columns": str(surface.get("group_columns", "")),
+                    "group_value": group_value,
+                    "mechanism_key": f"{surface.get('surface_name', '')}|{group_value}",
+                    "events": events,
+                    "symbols": symbols,
+                    "active_days": active_days,
+                    "fade_quality_score": fade_quality,
+                    "runner_quality_score": runner_quality,
+                    "median_future_ret_30m": _float(surface.get("median_future_ret_30m")),
+                    "median_future_ret_60m": _float(surface.get("median_future_ret_60m")),
+                    "median_future_min_ret_30m": _float(surface.get("median_future_min_ret_30m")),
+                    "median_future_min_ret_60m": _float(surface.get("median_future_min_ret_60m")),
+                    "downside_hit_rate_30m": _float(surface.get("downside_hit_rate_minus_1p00pct_30m", surface.get("downside_hit_rate_30m"))),
+                    "downside_hit_rate_60m": _float(surface.get("downside_hit_rate_minus_2p00pct_60m", surface.get("downside_hit_rate_60m"))),
+                    "reclaim_rate_60m": reclaim_rate,
+                    "structural_low_break_rate_60m": break_rate,
+                    "future_ret_positive_rate_60m": _float(surface.get("future_ret_positive_rate_60m")),
+                    "has_missing_closed_5m_oi": bool(has_missing_oi),
+                    "verdict": verdict,
+                    "allowed_for_short_research": bool(verdict == "fade_mechanism_candidate" and not has_missing_oi),
+                    "no_oi_discovery_model": NO_OI_DISCOVERY_MODEL,
+                    "mechanism_verdict_model": MECHANISM_VERDICT_MODEL,
+                    "uses_pnl": False,
+                    "uses_short_entry": False,
+                    "uses_final_holdout_tuning": False,
+                    "data_access_model": DATA_ACCESS_MODEL,
+                }
+            )
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    if result.empty:
+        return result
+    return _sort_frame(result, ["verdict", "fade_quality_score", "events", "mechanism_key"])
+
+
+def _mechanism_verdict_columns() -> list[str]:
+    return [
+        "research_id", "surface_name", "group_columns", "group_value", "mechanism_key", "events", "symbols",
+        "active_days", "fade_quality_score", "runner_quality_score", "median_future_ret_30m", "median_future_ret_60m",
+        "median_future_min_ret_30m", "median_future_min_ret_60m", "downside_hit_rate_30m", "downside_hit_rate_60m",
+        "reclaim_rate_60m", "structural_low_break_rate_60m", "future_ret_positive_rate_60m",
+        "has_missing_closed_5m_oi", "verdict", "allowed_for_short_research", "no_oi_discovery_model",
+        "mechanism_verdict_model", "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning", "data_access_model",
+    ]
+
+
 def _build_protocol_audit(
     *,
     events: pd.DataFrame,
@@ -3343,7 +3508,13 @@ def _build_protocol_audit(
 
     # 4. Event/outcome stores must be separate and explicitly non-entry labels.
     event_outcome_columns = [column for column in _outcome_columns() if column in set(events.columns)]
-    event_forbidden = [column for column in event_outcome_columns if column != "event_id"]
+    allowed_event_contract_columns = {
+        "event_id",
+        "outcome_model",
+        "future_label_available_at_entry",
+        "outcomes_available_in_feature_store",
+    }
+    event_forbidden = [column for column in event_outcome_columns if column not in allowed_event_contract_columns]
     outcome_contract_bad = _rows_with_truthy_flags(
         outcomes,
         {
@@ -3667,6 +3838,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_window_health.csv", "written", "15/30/60d train-window health plus selected-basin OOS summary"),
         ("pump_mechanism_selection_drift.csv", "written", "selected mechanism-key drift over time"),
         ("pump_mechanism_protocol_audit.csv", "written", "no-lookahead, train-only, negative-space, and daily replay guardrail audit"),
+        ("pump_mechanism_verdict.csv", "written", "focused fade-vs-runner mechanism verdict; no PnL or short execution"),
     ]
     rows = []
     for artifact_name, status, description in planned:
