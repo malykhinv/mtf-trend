@@ -131,10 +131,12 @@ MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS = 12
 # a diversified center set per (test day, train window) and still generate the
 # full local neighborhood, including failed/rejected neighbors, around those
 # centers.
-NEGATIVE_SPACE_MAX_CENTERS_PER_TEST_WINDOW = 48
-NEGATIVE_SPACE_MIN_BASELINE_CENTERS_PER_TEST_WINDOW = 4
+NEGATIVE_SPACE_MAX_CENTERS_PER_TEST_WINDOW = 8
+NEGATIVE_SPACE_MIN_BASELINE_CENTERS_PER_TEST_WINDOW = 2
 
 PLATEAU_BASIN_MODEL = "train_only_basin_score_from_full_negative_space_v1"
+PLATEAU_BASIN_BUDGET_MODEL = "diversified_basin_scoring_budget_per_test_window_v1"
+PLATEAU_MAX_BASINS_PER_TEST_WINDOW = 8
 PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD = -0.0075
 PLATEAU_MIN_NEIGHBORS = 3
 PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE = 0.55
@@ -2307,6 +2309,89 @@ def _basin_id_for_center(center: dict[str, object]) -> str:
     return "pmb_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
+def _select_plateau_basin_groups(
+    grouped_items: list[tuple[object, pd.DataFrame]],
+) -> tuple[list[tuple[object, pd.DataFrame]], dict[str, int]]:
+    """Budget expensive plateau scoring without using outcomes.
+
+    Negative-space already keeps a diversified set of center rules, but the
+    local neighborhoods still become expensive to score because every basin
+    applies entry-known masks to train+outcome rows.  This selector is a cheap
+    pre-score gate: it ranks only by train-window sample breadth and neighbor
+    sample health from the negative-space artifact.  It deliberately does not
+    read outcomes, PnL, short entries, or final holdout artifacts.
+    """
+
+    if not grouped_items:
+        return [], {"raw_basins": 0, "selected_basins": 0, "windows": 0, "max_raw_window_basins": 0, "max_selected_window_basins": 0}
+
+    window_groups: dict[tuple[int, int], list[tuple[object, pd.DataFrame, float, str]]] = {}
+    raw_window_sizes: list[int] = []
+    for basin_id, basin_neighbors in grouped_items:
+        if basin_neighbors.empty:
+            continue
+        first = basin_neighbors.iloc[0]
+        test_day_ord = _finite_int_or_none(first.get("test_day_ord"))
+        train_window_days = _finite_int_or_none(first.get("train_window_days"))
+        if test_day_ord is None or train_window_days is None:
+            continue
+        key = (int(test_day_ord), int(train_window_days))
+        center_events = _finite_int_or_none(first.get("center_train_events")) or 0
+        center_symbols = _finite_int_or_none(first.get("center_train_symbols")) or 0
+        center_days = _finite_int_or_none(first.get("center_train_active_days")) or 0
+        scope_depth = len(_parse_scope_conditions(first.get("center_scope_conditions")))
+        pass_rate = _rate(_as_bool_series(basin_neighbors.get("neighbor_passes_min_sample", pd.Series(dtype=bool))))
+        threshold_feature = str(first.get("center_threshold_feature") or "")
+        threshold_side = str(first.get("center_threshold_side") or "none")
+        family_key = "|".join((
+            str(first.get("center_scope_conditions") or "*"),
+            threshold_feature,
+            threshold_side,
+        ))
+        # Breadth first, then local sample survival, then interaction depth.
+        # No future response is used here.
+        score = (
+            float(center_days) * 10000.0
+            + float(center_symbols) * 100.0
+            + float(center_events)
+            + (float(pass_rate) if math.isfinite(float(pass_rate)) else 0.0) * 250.0
+            + float(scope_depth) * 50.0
+        )
+        window_groups.setdefault(key, []).append((basin_id, basin_neighbors, score, family_key))
+
+    selected: list[tuple[object, pd.DataFrame]] = []
+    selected_window_sizes: list[int] = []
+    for _key, items in sorted(window_groups.items(), key=lambda kv: kv[0]):
+        raw_window_sizes.append(int(len(items)))
+        # First pick the best basin per family to prevent one threshold family
+        # from monopolizing the budget, then fill remaining slots by score.
+        by_family: dict[str, tuple[object, pd.DataFrame, float, str]] = {}
+        for item in sorted(items, key=lambda item: (-item[2], str(item[0]))):
+            by_family.setdefault(item[3], item)
+        family_first = list(by_family.values())
+        family_first.sort(key=lambda item: (-item[2], str(item[0])))
+        picks = family_first[:PLATEAU_MAX_BASINS_PER_TEST_WINDOW]
+        if len(picks) < PLATEAU_MAX_BASINS_PER_TEST_WINDOW:
+            picked_ids = {str(item[0]) for item in picks}
+            for item in sorted(items, key=lambda item: (-item[2], str(item[0]))):
+                if str(item[0]) in picked_ids:
+                    continue
+                picks.append(item)
+                picked_ids.add(str(item[0]))
+                if len(picks) >= PLATEAU_MAX_BASINS_PER_TEST_WINDOW:
+                    break
+        selected_window_sizes.append(int(len(picks)))
+        selected.extend((basin_id, frame) for basin_id, frame, _score, _family in picks)
+
+    return selected, {
+        "raw_basins": int(len(grouped_items)),
+        "selected_basins": int(len(selected)),
+        "windows": int(len(window_groups)),
+        "max_raw_window_basins": max(raw_window_sizes) if raw_window_sizes else 0,
+        "max_selected_window_basins": max(selected_window_sizes) if selected_window_sizes else 0,
+    }
+
+
 
 def _build_plateau_basins(
     *,
@@ -2358,9 +2443,20 @@ def _build_plateau_basins(
     rule_input = rule_input.sort_values("day_ord").reset_index(drop=True)
     day_values = rule_input["day_ord"].to_numpy(dtype=np.int64)
 
-    grouped_items = list(negative_space.groupby("basin_id", dropna=False, sort=True))
+    raw_grouped_items = list(negative_space.groupby("basin_id", dropna=False, sort=True))
+    grouped_items, basin_budget_stats = _select_plateau_basin_groups(raw_grouped_items)
     basin_progress = _StageProgress("pump mechanism stability research: plateau basins", len(grouped_items))
-    stage.phase("group_negative_space_done", basins=len(grouped_items), negative_rows=len(negative_space))
+    stage.phase(
+        "group_negative_space_done",
+        raw_basins=basin_budget_stats.get("raw_basins", len(raw_grouped_items)),
+        basins=len(grouped_items),
+        dropped=basin_budget_stats.get("raw_basins", len(raw_grouped_items)) - len(grouped_items),
+        max_basins_per_test_window=PLATEAU_MAX_BASINS_PER_TEST_WINDOW,
+        max_raw_window_basins=basin_budget_stats.get("max_raw_window_basins", 0),
+        max_selected_window_basins=basin_budget_stats.get("max_selected_window_basins", 0),
+        windows=basin_budget_stats.get("windows", 0),
+        negative_rows=len(negative_space),
+    )
 
     rows: list[dict[str, object]] = []
     train_cache: dict[tuple[int, int], pd.DataFrame] = {}
