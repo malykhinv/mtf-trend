@@ -137,6 +137,11 @@ NEGATIVE_SPACE_MIN_BASELINE_CENTERS_PER_TEST_WINDOW = 2
 PLATEAU_BASIN_MODEL = "train_only_basin_score_from_full_negative_space_v1"
 PLATEAU_BASIN_BUDGET_MODEL = "diversified_basin_scoring_budget_per_test_window_v1"
 PLATEAU_MAX_BASINS_PER_TEST_WINDOW = 8
+# Safety guard for overnight 365d runs.  The selectors above should enforce
+# per-window budgets exactly; this hard multiplier is only a fail-fast tripwire
+# for patch drift or future edits that accidentally re-open the combinatorial
+# explosion.
+DISCOVERY_BUDGET_HARD_LIMIT_MULTIPLIER = 1.10
 PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD = -0.0075
 PLATEAU_MIN_NEIGHBORS = 3
 PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE = 0.55
@@ -1862,6 +1867,12 @@ def _build_negative_space_neighborhoods(
         windows=budget_stats.get("windows", 0),
         rule_rows=len(rule_universe),
     )
+    _enforce_discovery_budget_guard(
+        stage_name="negative_space",
+        selected=len(center_records),
+        windows=int(budget_stats.get("windows", 0) or 0),
+        per_window_budget=NEGATIVE_SPACE_MAX_CENTERS_PER_TEST_WINDOW,
+    )
 
     rows: list[dict[str, object]] = []
     train_cache: dict[tuple[int, int], pd.DataFrame] = {}
@@ -1933,6 +1944,28 @@ def _build_negative_space_neighborhoods(
     stage.phase("done", rows=len(result), cached_windows=len(train_cache))
     return result
 
+
+
+def _enforce_discovery_budget_guard(*, stage_name: str, selected: int, windows: int, per_window_budget: int) -> None:
+    """Fail fast when discovery expansion escaped its intended budget.
+
+    This guard does not choose research candidates and does not look at
+    outcomes.  It only prevents an overnight run from silently spending hours
+    on a broken combinatorial expansion after the budget selector was expected
+    to cap the work.
+    """
+
+    safe_windows = max(0, int(windows))
+    safe_budget = max(0, int(per_window_budget))
+    hard_limit = int(math.ceil(float(safe_windows * safe_budget) * float(DISCOVERY_BUDGET_HARD_LIMIT_MULTIPLIER)))
+    if hard_limit <= 0:
+        return
+    if int(selected) > hard_limit:
+        raise RuntimeError(
+            f"{stage_name} discovery budget escaped: selected={int(selected):,} "
+            f"hard_limit={hard_limit:,} windows={safe_windows:,} "
+            f"per_window_budget={safe_budget:,}. Stop the run and fix the selector before 365d."
+        )
 
 
 def _select_negative_space_center_rules(center_rules: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
@@ -2514,6 +2547,12 @@ def _build_plateau_basins(
         max_selected_window_basins=basin_budget_stats.get("max_selected_window_basins", 0),
         windows=basin_budget_stats.get("windows", 0),
         negative_rows=len(negative_space),
+    )
+    _enforce_discovery_budget_guard(
+        stage_name="plateau_basins",
+        selected=len(grouped_items),
+        windows=int(basin_budget_stats.get("windows", 0) or 0),
+        per_window_budget=PLATEAU_MAX_BASINS_PER_TEST_WINDOW,
     )
 
     rows: list[dict[str, object]] = []
@@ -3769,9 +3808,15 @@ def _run_config_frame(
         "negative_space_rows": negative_space_rows,
         "negative_space_pass_rows": negative_space_pass_rows,
         "negative_space_model": NEGATIVE_SPACE_MODEL,
+        "negative_space_center_budget_model": NEGATIVE_SPACE_CENTER_BUDGET_MODEL,
+        "negative_space_max_centers_per_test_window": int(NEGATIVE_SPACE_MAX_CENTERS_PER_TEST_WINDOW),
+        "negative_space_min_baseline_centers_per_test_window": int(NEGATIVE_SPACE_MIN_BASELINE_CENTERS_PER_TEST_WINDOW),
+        "discovery_budget_hard_limit_multiplier": float(DISCOVERY_BUDGET_HARD_LIMIT_MULTIPLIER),
         "plateau_basin_rows": plateau_basin_rows,
         "plateau_basin_pass_rows": plateau_basin_pass_rows,
         "plateau_basin_model": PLATEAU_BASIN_MODEL,
+        "plateau_basin_budget_model": PLATEAU_BASIN_BUDGET_MODEL,
+        "plateau_max_basins_per_test_window": int(PLATEAU_MAX_BASINS_PER_TEST_WINDOW),
         "plateau_expected_downside_ret_threshold": float(PLATEAU_EXPECTED_DOWNSIDE_RET_THRESHOLD),
         "plateau_min_neighbors": int(PLATEAU_MIN_NEIGHBORS),
         "plateau_min_neighbor_survival_rate": float(PLATEAU_MIN_NEIGHBOR_SURVIVAL_RATE),
