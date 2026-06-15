@@ -121,6 +121,24 @@ RULE_PAIR_SCOPES: tuple[tuple[str, str], ...] = (
     ("oi_regime", "acceptance_regime"),
     ("mechanism_family", "oi_regime"),
 )
+RULE_GENERATION_MODEL = "train_only_mechanism_intent_budgeted_rule_grammar_v2"
+RULE_BUDGET_MODEL = "train_only_mechanism_intent_cell_budget_v1"
+RULE_MAX_CELLS_PER_TEST_WINDOW = 32
+RULE_MAX_RULES_PER_CELL = 16
+RULE_CONTROL_CELLS_PER_TEST_WINDOW = 6
+RULE_DIVERSE_AUDIT_CELLS_PER_TEST_WINDOW = 4
+RULE_PRIORITY_THRESHOLD_FEATURES = (
+    "close15_to_high15_ratio",
+    "wick_ret_15m",
+    "oi_change_5m_pct",
+    "pre60_range_pct",
+    "early_quote_ratio_60m_scaled",
+    "early_trade_ratio_60m_scaled",
+    "m1_last2_quote_share",
+    "m1_quote_accel_last2_vs_first2",
+    "seed_high_return_pct",
+    "early_taker_buy_quote_share",
+)
 NEGATIVE_SPACE_MODEL = "train_only_budgeted_full_neighbor_space_including_rejected_v2"
 NEGATIVE_SPACE_CENTER_BUDGET_MODEL = "diversified_sample_valid_centers_per_test_window_v1"
 NEGATIVE_SPACE_THRESHOLD_RADIUS_STEPS = 2
@@ -501,8 +519,8 @@ def run_pump_mechanism_stability_research(
     _print_stage(progress_label, "building pre-trade mechanism response surfaces", started_at)
     response_surfaces = _build_response_surfaces(taxonomy=taxonomy, outcomes=outcomes)
 
-    _print_stage(progress_label, "generating train-only mechanism rule universe", started_at)
-    rule_universe = _build_train_only_rule_universe(taxonomy=taxonomy, events=events)
+    _print_stage(progress_label, "generating budgeted train-only mechanism rule universe", started_at)
+    rule_universe, rule_budget = _build_train_only_rule_universe(taxonomy=taxonomy, events=events)
 
     _print_stage(progress_label, "building full negative-space rule neighborhoods", started_at)
     negative_space = _build_negative_space_neighborhoods(rule_universe=rule_universe, taxonomy=taxonomy, events=events)
@@ -554,6 +572,7 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_taxonomy_by_axis.csv", taxonomy_by_axis)
     _write_csv(config.output_dir / "pump_mechanism_response_surfaces.csv", response_surfaces)
     _write_csv(config.output_dir / "pump_mechanism_rule_universe.csv", rule_universe)
+    _write_csv(config.output_dir / "pump_mechanism_rule_budget.csv", rule_budget)
     _write_csv(config.output_dir / "pump_mechanism_negative_space.csv", negative_space)
     _write_csv(config.output_dir / "pump_mechanism_plateau_basins.csv", plateau_basins)
     _write_csv(config.output_dir / "pump_mechanism_daily_selection.csv", daily_selection)
@@ -576,6 +595,7 @@ def run_pump_mechanism_stability_research(
         taxonomy=taxonomy,
         response_surfaces=response_surfaces,
         rule_universe=rule_universe,
+        rule_budget=rule_budget,
         negative_space=negative_space,
         plateau_basins=plateau_basins,
         daily_selection=daily_selection,
@@ -1532,37 +1552,49 @@ def _dependency_metrics(frame: pd.DataFrame) -> dict[str, float]:
 
 
 
-def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
-    """Generate candidate mechanism rule specs with train-window-only thresholds.
+def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Generate budgeted mechanism-intent rule specs with train-window-only thresholds.
 
-    This function creates the grammar layer for later negative-space plateau
-    accounting.  It uses only entry-known taxonomy/event columns; it deliberately
-    does not join outcomes, PnL, short entries, or final-holdout artifacts.
-    Threshold values are recomputed independently inside each train window for
-    each test day, so the same 365d cache can be replayed chronologically.
+    The rule universe is now intentionally small.  Earlier versions emitted the
+    full grammar across all broad/control scopes and left later stages to budget
+    the explosion.  That was correct from a leakage perspective, but wasteful:
+    most rows were not aligned with the failed-pump mechanism question.  This
+    builder first creates train-only mechanism-intent cells, keeps a diversified
+    budget per (test day, train window), and only then fits per-cell threshold
+    rules.  It still does not join outcomes, PnL, short entries, OOS results, or
+    final-holdout artifacts.
     """
 
     stage = _StageProgress("pump mechanism stability research: rule universe", 0)
     columns = _rule_universe_columns()
+    budget_columns = _rule_budget_columns()
     stage.phase("build_rule_input_start", taxonomy_rows=len(taxonomy), event_rows=len(events))
     rule_input = _rule_input_frame(taxonomy=taxonomy, events=events)
     if rule_input.empty:
         stage.phase("empty_rule_input")
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=columns), pd.DataFrame(columns=budget_columns)
     stage.phase("filter_sort_start", rows=len(rule_input))
     rule_input = rule_input.loc[pd.to_numeric(rule_input.get("day_ord"), errors="coerce").notna()].copy()
     if rule_input.empty:
         stage.phase("empty_after_day_filter")
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=columns), pd.DataFrame(columns=budget_columns)
     rule_input["day_ord"] = pd.to_numeric(rule_input["day_ord"], errors="coerce").astype("int64")
     rule_input = rule_input.sort_values("day_ord").reset_index(drop=True)
     day_values = rule_input["day_ord"].to_numpy(dtype=np.int64)
     test_days = sorted(int(value) for value in pd.unique(rule_input["day_ord"]))
     total_windows = len(test_days) * len(ROLLING_WINDOWS_DAYS)
     progress = _StageProgress("pump mechanism stability research: rule universe windows", total_windows)
-    progress.phase("iterate_windows_start", input_rows=len(rule_input), test_days=len(test_days), windows=len(ROLLING_WINDOWS_DAYS))
+    progress.phase(
+        "iterate_windows_start",
+        input_rows=len(rule_input),
+        test_days=len(test_days),
+        windows=len(ROLLING_WINDOWS_DAYS),
+        max_cells_per_window=int(RULE_MAX_CELLS_PER_TEST_WINDOW),
+        max_rules_per_cell=int(RULE_MAX_RULES_PER_CELL),
+    )
 
     rows: list[dict[str, object]] = []
+    budget_rows: list[dict[str, object]] = []
     window_index = 0
     for test_day_ord_int in test_days:
         test_date = _date_from_day_ord(test_day_ord_int)
@@ -1573,6 +1605,20 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
             left = int(np.searchsorted(day_values, train_start_day_ord, side="left"))
             right = int(np.searchsorted(day_values, train_end_day_ord, side="right"))
             if right <= left:
+                budget_rows.append(
+                    _rule_budget_row(
+                        test_day_ord=test_day_ord_int,
+                        test_date=test_date,
+                        train_window_days=int(train_window_days),
+                        train_start_day_ord=train_start_day_ord,
+                        train_end_day_ord=train_end_day_ord,
+                        train_events=0,
+                        raw_cells=0,
+                        selected_cells=0,
+                        emitted_rules=0,
+                        selected_roles={},
+                    )
+                )
                 progress.update(
                     window_index,
                     phase="window_empty",
@@ -1582,21 +1628,27 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
                 )
                 continue
             train = rule_input.iloc[left:right]
-            scopes = _train_rule_scopes(train)
+            raw_scopes = _raw_train_rule_scopes(train)
+            scopes = _select_mechanism_intent_rule_cells(raw_scopes)
             progress.update(
                 window_index,
                 phase="window_start",
                 test_day_ord=test_day_ord_int,
                 train_window_days=train_window_days,
                 train_events=len(train),
-                scopes=len(scopes),
+                raw_cells=len(raw_scopes),
+                selected_cells=len(scopes),
                 rows=len(rows),
             )
             emitted_before = len(rows)
+            selected_roles: dict[str, int] = {}
             for scope_index, scope in enumerate(scopes, start=1):
                 scoped = _apply_rule_scope(train, scope["conditions"])
                 if len(scoped) < MIN_TRAIN_SCOPE_EVENTS:
                     continue
+                role = str(scope.get("selection_role", AUDIT_ONLY_SELECTION_ROLE))
+                selected_roles[role] = selected_roles.get(role, 0) + 1
+                emitted_for_cell = 0
                 rows.append(
                     _rule_universe_row(
                         test_day_ord=test_day_ord_int,
@@ -1615,47 +1667,55 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
                         threshold_uses_abs_value=False,
                     )
                 )
-                for feature, side, quantiles in RULE_THRESHOLD_FEATURES:
-                    if feature not in scoped.columns:
-                        continue
-                    source_values = pd.to_numeric(scoped[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-                    threshold_uses_abs_value = side == "abs_ge"
-                    fit_values = source_values.abs() if threshold_uses_abs_value else source_values
-                    fit_values = fit_values.dropna()
-                    if fit_values.empty:
-                        continue
-                    for quantile in quantiles:
-                        threshold_value = _safe_quantile(fit_values, float(quantile))
-                        if not math.isfinite(threshold_value):
-                            continue
-                        filtered = _apply_threshold(scoped, feature=feature, side=side, threshold_value=threshold_value)
-                        rows.append(
-                            _rule_universe_row(
-                                test_day_ord=test_day_ord_int,
-                                test_date=test_date,
-                                train_window_days=int(train_window_days),
-                                train_start_day_ord=train_start_day_ord,
-                                train_end_day_ord=train_end_day_ord,
-                                scope=scope,
-                                threshold_feature=feature,
-                                threshold_side=side,
-                                threshold_quantile=float(quantile),
-                                threshold_value=float(threshold_value),
-                                filtered=filtered,
-                                threshold_source_events=int(len(scoped)),
-                                threshold_valid_values=int(len(fit_values)),
-                                threshold_uses_abs_value=threshold_uses_abs_value,
-                            )
+                emitted_for_cell += 1
+                threshold_specs = _budgeted_threshold_specs(scoped)
+                for feature, side, quantile, threshold_value, threshold_valid_values, threshold_uses_abs_value in threshold_specs:
+                    filtered = _apply_threshold(scoped, feature=feature, side=side, threshold_value=threshold_value)
+                    rows.append(
+                        _rule_universe_row(
+                            test_day_ord=test_day_ord_int,
+                            test_date=test_date,
+                            train_window_days=int(train_window_days),
+                            train_start_day_ord=train_start_day_ord,
+                            train_end_day_ord=train_end_day_ord,
+                            scope=scope,
+                            threshold_feature=feature,
+                            threshold_side=side,
+                            threshold_quantile=float(quantile),
+                            threshold_value=float(threshold_value),
+                            filtered=filtered,
+                            threshold_source_events=int(len(scoped)),
+                            threshold_valid_values=int(threshold_valid_values),
+                            threshold_uses_abs_value=threshold_uses_abs_value,
                         )
-                if scope_index % 25 == 0:
+                    )
+                    emitted_for_cell += 1
+                    if emitted_for_cell >= int(RULE_MAX_RULES_PER_CELL):
+                        break
+                if scope_index % 16 == 0:
                     progress.update(
                         window_index,
-                        phase="scopes_in_window",
+                        phase="cells_in_window",
                         test_day_ord=test_day_ord_int,
                         train_window_days=train_window_days,
-                        scope=f"{scope_index}/{len(scopes)}",
+                        cell=f"{scope_index}/{len(scopes)}",
                         rows=len(rows),
                     )
+            emitted = len(rows) - emitted_before
+            budget_rows.append(
+                _rule_budget_row(
+                    test_day_ord=test_day_ord_int,
+                    test_date=test_date,
+                    train_window_days=int(train_window_days),
+                    train_start_day_ord=train_start_day_ord,
+                    train_end_day_ord=train_end_day_ord,
+                    train_events=int(len(train)),
+                    raw_cells=int(len(raw_scopes)),
+                    selected_cells=int(len(scopes)),
+                    emitted_rules=int(emitted),
+                    selected_roles=selected_roles,
+                )
+            )
             progress.update(
                 window_index,
                 phase="window_done",
@@ -1663,16 +1723,21 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
                 test_day_ord=test_day_ord_int,
                 train_window_days=train_window_days,
                 train_events=len(train),
-                scopes=len(scopes),
-                emitted=len(rows) - emitted_before,
+                raw_cells=len(raw_scopes),
+                selected_cells=len(scopes),
+                emitted=emitted,
                 rows=len(rows),
             )
-    stage.phase("assemble_dataframe_start", rows=len(rows))
+    stage.phase("assemble_dataframe_start", rows=len(rows), budget_rows=len(budget_rows))
     result = _ensure_columns(pd.DataFrame(rows), columns)
-    stage.phase("sort_output_start", rows=len(result))
+    budget = _ensure_columns(pd.DataFrame(budget_rows), budget_columns)
+    _assert_rule_budget(result)
+    stage.phase("sort_output_start", rows=len(result), budget_rows=len(budget))
     result = _sort_frame(result, ["test_day_ord", "train_window_days", "scope_name", "threshold_feature", "threshold_quantile", "rule_id"])
-    stage.phase("done", rows=len(result))
-    return result
+    budget = _sort_frame(budget, ["test_day_ord", "train_window_days"])
+    stage.phase("done", rows=len(result), budget_rows=len(budget))
+    return result, budget
+
 
 
 def _rule_input_frame(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
@@ -1706,7 +1771,7 @@ def _rule_input_frame(*, taxonomy: pd.DataFrame, events: pd.DataFrame) -> pd.Dat
     return work
 
 
-def _train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
+def _raw_train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
     scopes: list[dict[str, object]] = [
         {"scope_name": "all", "conditions": {}, "scope_depth": 0},
     ]
@@ -1744,6 +1809,192 @@ def _train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
         key = _scope_key(scope["conditions"])
         unique.setdefault(f"{scope['scope_name']}|{key}", scope)
     return list(unique.values())
+
+
+def _select_mechanism_intent_rule_cells(scopes: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Keep only train-known cells that map to explicit mechanism intent.
+
+    Primary fade cells get first claim on the budget, runner controls get a
+    small fixed sleeve, and broad/audit cells are retained only as a tiny
+    diversity audit.  The ranking uses scope text/depth only; it never reads
+    response surfaces, outcomes, PnL, OOS rows, or final-holdout results.
+    """
+
+    if not scopes:
+        return []
+    enriched: list[dict[str, object]] = []
+    for index, scope in enumerate(scopes):
+        conditions = scope.get("conditions") if isinstance(scope.get("conditions"), dict) else {}
+        assert isinstance(conditions, dict)
+        role, reason = _selection_role_and_reason(
+            {
+                "scope_name": scope.get("scope_name", ""),
+                "scope_conditions": _scope_key(conditions),
+                **conditions,
+            }
+        )
+        enriched_scope = dict(scope)
+        enriched_scope["selection_role"] = role
+        enriched_scope["selection_role_reason"] = reason
+        enriched_scope["_raw_order"] = int(index)
+        enriched.append(enriched_scope)
+
+    primary = [scope for scope in enriched if str(scope.get("selection_role")) == PRIMARY_FADE_SELECTION_ROLE]
+    control = [scope for scope in enriched if str(scope.get("selection_role")) == CONTROL_RUNNER_SELECTION_ROLE]
+    audit = [scope for scope in enriched if str(scope.get("selection_role")) == AUDIT_ONLY_SELECTION_ROLE]
+
+    selected: list[dict[str, object]] = []
+    selected_keys: set[str] = set()
+
+    def add_many(candidates: list[dict[str, object]], limit: int) -> None:
+        nonlocal selected, selected_keys
+        if limit <= 0:
+            return
+        for scope in _rank_rule_cells(candidates):
+            if len(selected) >= int(RULE_MAX_CELLS_PER_TEST_WINDOW):
+                return
+            key = _scope_key(scope.get("conditions", {}))
+            unique_key = f"{scope.get('scope_name', '')}|{key}"
+            if unique_key in selected_keys:
+                continue
+            selected.append(scope)
+            selected_keys.add(unique_key)
+            limit -= 1
+            if limit <= 0:
+                return
+
+    control_limit = min(int(RULE_CONTROL_CELLS_PER_TEST_WINDOW), int(RULE_MAX_CELLS_PER_TEST_WINDOW))
+    audit_limit = min(int(RULE_DIVERSE_AUDIT_CELLS_PER_TEST_WINDOW), max(0, int(RULE_MAX_CELLS_PER_TEST_WINDOW) - control_limit))
+    primary_limit = max(0, int(RULE_MAX_CELLS_PER_TEST_WINDOW) - control_limit - audit_limit)
+
+    add_many(primary, primary_limit)
+    add_many(control, control_limit)
+    add_many(audit, audit_limit)
+
+    if len(selected) < int(RULE_MAX_CELLS_PER_TEST_WINDOW):
+        remaining = [scope for scope in enriched if f"{scope.get('scope_name', '')}|{_scope_key(scope.get('conditions', {}))}" not in selected_keys]
+        add_many(remaining, int(RULE_MAX_CELLS_PER_TEST_WINDOW) - len(selected))
+
+    cleaned: list[dict[str, object]] = []
+    for scope in selected[: int(RULE_MAX_CELLS_PER_TEST_WINDOW)]:
+        row = dict(scope)
+        row.pop("_raw_order", None)
+        cleaned.append(row)
+    return cleaned
+
+
+def _rank_rule_cells(scopes: list[dict[str, object]]) -> list[dict[str, object]]:
+    def key(scope: dict[str, object]) -> tuple[int, int, int, str, int]:
+        conditions = scope.get("conditions") if isinstance(scope.get("conditions"), dict) else {}
+        assert isinstance(conditions, dict)
+        scope_depth = int(scope.get("scope_depth", 0) or 0)
+        has_mechanism_family = 0 if "mechanism_family" in conditions else 1
+        has_session = 0 if "session_bucket" in conditions else 1
+        return (
+            has_mechanism_family,
+            has_session,
+            -scope_depth,
+            _scope_key(conditions),
+            int(scope.get("_raw_order", 0) or 0),
+        )
+
+    return sorted(scopes, key=key)
+
+
+def _budgeted_threshold_specs(scoped: pd.DataFrame) -> list[tuple[str, str, float, float, int, bool]]:
+    specs: list[tuple[str, str, float, float, int, bool]] = []
+    feature_priority = {feature: index for index, feature in enumerate(RULE_PRIORITY_THRESHOLD_FEATURES)}
+    ordered_features = sorted(
+        RULE_THRESHOLD_FEATURES,
+        key=lambda item: (feature_priority.get(item[0], 999), item[0], item[1]),
+    )
+    for feature, side, quantiles in ordered_features:
+        if feature not in scoped.columns:
+            continue
+        source_values = pd.to_numeric(scoped[feature], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        threshold_uses_abs_value = side == "abs_ge"
+        fit_values = source_values.abs() if threshold_uses_abs_value else source_values
+        fit_values = fit_values.dropna()
+        if fit_values.empty:
+            continue
+        for quantile in quantiles:
+            threshold_value = _safe_quantile(fit_values, float(quantile))
+            if not math.isfinite(threshold_value):
+                continue
+            specs.append((feature, side, float(quantile), float(threshold_value), int(len(fit_values)), bool(threshold_uses_abs_value)))
+            if len(specs) >= max(0, int(RULE_MAX_RULES_PER_CELL) - 1):
+                return specs
+    return specs
+
+
+def _rule_budget_row(
+    *,
+    test_day_ord: int,
+    test_date: str,
+    train_window_days: int,
+    train_start_day_ord: int,
+    train_end_day_ord: int,
+    train_events: int,
+    raw_cells: int,
+    selected_cells: int,
+    emitted_rules: int,
+    selected_roles: dict[str, int],
+) -> dict[str, object]:
+    return {
+        "research_id": RESEARCH_ID,
+        "test_day_ord": int(test_day_ord),
+        "test_date": test_date,
+        "train_window_days": int(train_window_days),
+        "train_start_day_ord": int(train_start_day_ord),
+        "train_end_day_ord": int(train_end_day_ord),
+        "train_start_date": _date_from_day_ord(train_start_day_ord),
+        "train_end_date": _date_from_day_ord(train_end_day_ord),
+        "train_events": int(train_events),
+        "raw_rule_cells": int(raw_cells),
+        "selected_rule_cells": int(selected_cells),
+        "max_rule_cells_per_test_window": int(RULE_MAX_CELLS_PER_TEST_WINDOW),
+        "max_rules_per_cell": int(RULE_MAX_RULES_PER_CELL),
+        "emitted_rule_rows": int(emitted_rules),
+        "primary_fade_rule_cells": int(selected_roles.get(PRIMARY_FADE_SELECTION_ROLE, 0)),
+        "control_runner_rule_cells": int(selected_roles.get(CONTROL_RUNNER_SELECTION_ROLE, 0)),
+        "audit_only_rule_cells": int(selected_roles.get(AUDIT_ONLY_SELECTION_ROLE, 0)),
+        "rule_budget_model": RULE_BUDGET_MODEL,
+        "rule_generation_model": RULE_GENERATION_MODEL,
+        "train_uses_only_days_before_test": True,
+        "uses_outcome_columns": False,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+
+
+def _rule_budget_columns() -> list[str]:
+    return [
+        "research_id", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
+        "train_start_date", "train_end_date", "train_events", "raw_rule_cells", "selected_rule_cells",
+        "max_rule_cells_per_test_window", "max_rules_per_cell", "emitted_rule_rows", "primary_fade_rule_cells",
+        "control_runner_rule_cells", "audit_only_rule_cells", "rule_budget_model", "rule_generation_model",
+        "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl", "uses_short_entry",
+        "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+    ]
+
+
+def _assert_rule_budget(rule_universe: pd.DataFrame) -> None:
+    if rule_universe.empty:
+        return
+    group_columns = ["test_day_ord", "train_window_days"]
+    if any(column not in rule_universe.columns for column in group_columns):
+        return
+    windows = int(rule_universe.groupby(group_columns, dropna=False).ngroups)
+    hard_limit = int(math.ceil(max(1, windows) * int(RULE_MAX_CELLS_PER_TEST_WINDOW) * int(RULE_MAX_RULES_PER_CELL) * DISCOVERY_BUDGET_HARD_LIMIT_MULTIPLIER))
+    if len(rule_universe) > hard_limit:
+        raise RuntimeError(
+            f"rule universe budget escaped: rows={len(rule_universe):,} hard_limit={hard_limit:,} "
+            f"windows={windows:,} max_cells={int(RULE_MAX_CELLS_PER_TEST_WINDOW):,} "
+            f"max_rules_per_cell={int(RULE_MAX_RULES_PER_CELL):,}. Stop the run and fix rule-cell selection before 365d."
+        )
 
 
 def _apply_rule_scope(frame: pd.DataFrame, conditions: object) -> pd.DataFrame:
@@ -1819,6 +2070,9 @@ def _rule_universe_row(
         "scope_name": scope_name,
         "scope_depth": int(scope.get("scope_depth", 0) or 0),
         "scope_conditions": scope_key,
+        "selection_role": str(scope.get("selection_role", _selection_role_and_reason({"scope_name": scope_name, "scope_conditions": scope_key, **conditions})[0])),
+        "selection_role_reason": str(scope.get("selection_role_reason", _selection_role_and_reason({"scope_name": scope_name, "scope_conditions": scope_key, **conditions})[1])),
+        "selection_role_model": SELECTION_ROLE_MODEL,
         "mechanism_family": _condition_value(conditions, "mechanism_family"),
         "acceptance_regime": _condition_value(conditions, "acceptance_regime"),
         "oi_regime": _condition_value(conditions, "oi_regime"),
@@ -1841,7 +2095,8 @@ def _rule_universe_row(
         "min_rule_events": int(MIN_RULE_EVENTS),
         "min_rule_symbols": int(MIN_RULE_SYMBOLS),
         "min_rule_active_days": int(MIN_RULE_ACTIVE_DAYS),
-        "rule_generation_model": "train_only_entry_known_mechanism_rule_grammar_v1",
+        "rule_generation_model": RULE_GENERATION_MODEL,
+        "rule_budget_model": RULE_BUDGET_MODEL,
         "threshold_fit_model": "quantiles_fit_inside_train_window_only",
         "train_uses_only_days_before_test": True,
         "uses_outcome_columns": False,
@@ -1860,11 +2115,12 @@ def _rule_universe_columns() -> list[str]:
     return [
         "research_id", "rule_id", "rule_key", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord",
         "train_end_day_ord", "train_start_date", "train_end_date", "scope_name", "scope_depth", "scope_conditions",
+        "selection_role", "selection_role_reason", "selection_role_model",
         "mechanism_family", "acceptance_regime", "oi_regime", "flow_regime", "structure_regime", "late_buyer_regime",
         "session_bucket", "threshold_family", "threshold_feature", "threshold_side", "threshold_quantile", "threshold_value",
         "threshold_source_events", "threshold_valid_values", "threshold_uses_abs_value", "train_events", "train_symbols",
         "train_active_days", "rule_passes_min_sample", "min_rule_events", "min_rule_symbols", "min_rule_active_days",
-        "rule_generation_model", "threshold_fit_model", "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl",
+        "rule_generation_model", "rule_budget_model", "threshold_fit_model", "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl",
         "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
         "oi_discovery_role", "no_oi_audit_only", "no_oi_discovery_model",
     ]
@@ -4133,6 +4389,7 @@ def _run_config_frame(
     taxonomy: pd.DataFrame,
     response_surfaces: pd.DataFrame,
     rule_universe: pd.DataFrame,
+    rule_budget: pd.DataFrame,
     negative_space: pd.DataFrame,
     plateau_basins: pd.DataFrame,
     daily_selection: pd.DataFrame,
@@ -4149,6 +4406,9 @@ def _run_config_frame(
     response_surface_rows = int(len(response_surfaces)) if response_surfaces is not None else 0
     rule_universe_rows = int(len(rule_universe)) if rule_universe is not None else 0
     sampled_train_rule_rows = int((rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if rule_universe is not None and not rule_universe.empty else 0
+    rule_budget_rows = int(len(rule_budget)) if rule_budget is not None else 0
+    max_selected_rule_cells = int(pd.to_numeric(rule_budget.get("selected_rule_cells", pd.Series(dtype=float)), errors="coerce").fillna(0).max()) if rule_budget is not None and not rule_budget.empty else 0
+    max_emitted_rule_rows_per_window = int(pd.to_numeric(rule_budget.get("emitted_rule_rows", pd.Series(dtype=float)), errors="coerce").fillna(0).max()) if rule_budget is not None and not rule_budget.empty else 0
     negative_space_rows = int(len(negative_space)) if negative_space is not None else 0
     negative_space_pass_rows = int((negative_space.get("neighbor_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if negative_space is not None and not negative_space.empty else 0
     plateau_basin_rows = int(len(plateau_basins)) if plateau_basins is not None else 0
@@ -4209,6 +4469,12 @@ def _run_config_frame(
         "response_surface_rows": response_surface_rows,
         "rule_universe_rows": rule_universe_rows,
         "sampled_train_rule_rows": sampled_train_rule_rows,
+        "rule_budget_rows": rule_budget_rows,
+        "rule_budget_model": RULE_BUDGET_MODEL,
+        "rule_max_cells_per_test_window": int(RULE_MAX_CELLS_PER_TEST_WINDOW),
+        "rule_max_rules_per_cell": int(RULE_MAX_RULES_PER_CELL),
+        "rule_max_selected_cells_observed": max_selected_rule_cells,
+        "rule_max_emitted_rows_per_window_observed": max_emitted_rule_rows_per_window,
         "negative_space_rows": negative_space_rows,
         "negative_space_pass_rows": negative_space_pass_rows,
         "negative_space_model": NEGATIVE_SPACE_MODEL,
@@ -4249,7 +4515,8 @@ def _run_config_frame(
         "negative_space_max_scope_replacement_values_per_axis": int(MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS),
         "negative_space_uses_outcomes": False,
         "negative_space_uses_pnl": False,
-        "rule_generation_model": "train_only_entry_known_mechanism_rule_grammar_v1",
+        "rule_generation_model": RULE_GENERATION_MODEL,
+        "rule_budget_model": RULE_BUDGET_MODEL,
         "rule_threshold_fit_model": "quantiles_fit_inside_train_window_only",
         "rule_universe_uses_outcomes": False,
         "rule_universe_uses_pnl": False,
@@ -4279,7 +4546,8 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_taxonomy.csv", "written", "entry-known mechanism axes per event"),
         ("pump_mechanism_taxonomy_by_axis.csv", "written", "axis-level taxonomy counts and breadth diagnostics"),
         ("pump_mechanism_response_surfaces.csv", "written", "mechanism response diagnostics before PnL"),
-        ("pump_mechanism_rule_universe.csv", "written", "train-only entry-known mechanism rule specs"),
+        ("pump_mechanism_rule_universe.csv", "written", "budgeted train-only entry-known mechanism rule specs"),
+        ("pump_mechanism_rule_budget.csv", "written", "per-window rule-cell budget audit for mechanism-intent generation"),
         ("pump_mechanism_negative_space.csv", "written", "all generated train-only neighbors including failed/rejected rules"),
         ("pump_mechanism_plateau_basins.csv", "written", "train-only basin-level plateau scores from full negative space"),
         ("pump_mechanism_daily_selection.csv", "written", "train-only basin selection per test day"),
