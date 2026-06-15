@@ -4578,25 +4578,32 @@ def _build_protocol_audit(
         observed="forbidden_event_columns=" + ",".join(event_forbidden),
     )
 
-    # 5. Negative-space accounting must exist for selected basins and must keep rejected/failed neighbors.
+    # 5. Negative-space accounting must exist for selected basins, and the
+    #    scored plateau rows must prove at least one generated neighbor failed
+    #    the basin score/min-sample gate.  Raw negative_space rows only prove
+    #    neighbor generation happened; score failures are computed later while
+    #    building plateau_basins and are the source of truth for plateau gating.
     selected_basin_ids = set(daily_selection.get("basin_id", pd.Series(dtype=str)).dropna().astype(str)) if not daily_selection.empty and "basin_id" in daily_selection.columns else set()
     neg_basin_ids = set(negative_space.get("basin_id", pd.Series(dtype=str)).dropna().astype(str)) if not negative_space.empty and "basin_id" in negative_space.columns else set()
+    plateau_basin_ids = set(plateau_basins.get("basin_id", pd.Series(dtype=str)).dropna().astype(str)) if not plateau_basins.empty and "basin_id" in plateau_basins.columns else set()
     missing_negative_space = sorted(selected_basin_ids - neg_basin_ids)
-    failed_neighbor_count = _failed_negative_space_neighbor_count(negative_space, selected_basin_ids)
-    selected_with_failed_neighbors = _selected_basin_ids_with_failed_neighbors(negative_space, selected_basin_ids)
+    missing_plateau_rows = sorted(selected_basin_ids - plateau_basin_ids)
+    failed_neighbor_count = _failed_plateau_neighbor_count(plateau_basins, selected_basin_ids)
+    selected_with_failed_neighbors = _selected_basin_ids_with_failed_plateau_neighbors(plateau_basins, selected_basin_ids)
     missing_failed_neighbors = sorted(selected_basin_ids - selected_with_failed_neighbors)
     add(
         "selected_basins_have_full_negative_space_rows_including_rejected_neighbors",
-        not missing_negative_space and not missing_failed_neighbors,
-        observed_rows=int(len(negative_space)),
-        failing_rows=len(missing_negative_space) + len(missing_failed_neighbors),
-        expected="each selected basin_id has generated neighbor rows and at least one rejected/min-sample-failed neighbor",
+        not missing_negative_space and not missing_plateau_rows and not missing_failed_neighbors,
+        observed_rows=int(len(negative_space)) + int(len(plateau_basins)),
+        failing_rows=len(missing_negative_space) + len(missing_plateau_rows) + len(missing_failed_neighbors),
+        expected="each selected basin_id has generated neighbor rows and a scored plateau row with at least one failed/rejected neighbor",
         observed=(
             f"selected_basins={len(selected_basin_ids)};negative_space_basins={len(neg_basin_ids)};"
-            f"failed_neighbor_rows={failed_neighbor_count}"
+            f"plateau_basins={len(plateau_basin_ids)};failed_or_rejected_neighbor_count={failed_neighbor_count}"
         ),
         details=(
             "missing_negative_space=" + ",".join(missing_negative_space[:20])
+            + ";missing_plateau_rows=" + ",".join(missing_plateau_rows[:20])
             + ";missing_failed_neighbors=" + ",".join(missing_failed_neighbors[:20])
         ),
     )
@@ -4681,32 +4688,31 @@ def _rows_with_truthy_flags(frame: pd.DataFrame, expected_flags: dict[str, bool]
     return int(bad.sum())
 
 
-def _failed_negative_space_neighbor_count(negative_space: pd.DataFrame, selected_basin_ids: set[str]) -> int:
-    if negative_space is None or negative_space.empty or "basin_id" not in negative_space.columns:
+def _failed_plateau_neighbor_count(plateau_basins: pd.DataFrame, selected_basin_ids: set[str]) -> int:
+    if plateau_basins is None or plateau_basins.empty or "basin_id" not in plateau_basins.columns:
         return 0
-    frame = negative_space.loc[negative_space["basin_id"].astype(str).isin(selected_basin_ids)].copy()
-    if frame.empty:
+    frame = plateau_basins.loc[plateau_basins["basin_id"].astype(str).isin(selected_basin_ids)].copy()
+    if frame.empty or "failed_or_rejected_neighbor_count" not in frame.columns:
         return 0
-    if "neighbor_passes_min_sample" in frame.columns:
-        return int((~frame["neighbor_passes_min_sample"].map(_to_bool)).sum())
-    if "neighbor_fail_reason" in frame.columns:
-        return int((frame["neighbor_fail_reason"].astype(str) != "pass").sum())
-    return 0
+    counts = pd.to_numeric(frame["failed_or_rejected_neighbor_count"], errors="coerce").fillna(0)
+    return int(counts.clip(lower=0).sum())
 
 
-def _selected_basin_ids_with_failed_neighbors(negative_space: pd.DataFrame, selected_basin_ids: set[str]) -> set[str]:
-    if not selected_basin_ids or negative_space is None or negative_space.empty or "basin_id" not in negative_space.columns:
+def _selected_basin_ids_with_failed_plateau_neighbors(plateau_basins: pd.DataFrame, selected_basin_ids: set[str]) -> set[str]:
+    if not selected_basin_ids or plateau_basins is None or plateau_basins.empty or "basin_id" not in plateau_basins.columns:
         return set()
-    frame = negative_space.loc[negative_space["basin_id"].astype(str).isin(selected_basin_ids)].copy()
+    frame = plateau_basins.loc[plateau_basins["basin_id"].astype(str).isin(selected_basin_ids)].copy()
     if frame.empty:
         return set()
-    if "neighbor_passes_min_sample" in frame.columns:
-        failed = frame.loc[~frame["neighbor_passes_min_sample"].map(_to_bool)]
-    elif "neighbor_fail_reason" in frame.columns:
-        failed = frame.loc[frame["neighbor_fail_reason"].astype(str) != "pass"]
-    else:
+    if "failed_or_rejected_neighbor_count" not in frame.columns:
         return set()
-    return set(failed.get("basin_id", pd.Series(dtype=str)).dropna().astype(str))
+    failed_counts = pd.to_numeric(frame["failed_or_rejected_neighbor_count"], errors="coerce").fillna(0)
+    has_failed_neighbors = failed_counts > 0
+    if "has_negative_space_rejection" in frame.columns:
+        has_failed_neighbors &= frame["has_negative_space_rejection"].map(_to_bool)
+    if "negative_space_gate_pass" in frame.columns:
+        has_failed_neighbors &= frame["negative_space_gate_pass"].map(_to_bool)
+    return set(frame.loc[has_failed_neighbors, "basin_id"].dropna().astype(str))
 
 
 def _rows_without_expected_data_access_model(frame: pd.DataFrame) -> int:

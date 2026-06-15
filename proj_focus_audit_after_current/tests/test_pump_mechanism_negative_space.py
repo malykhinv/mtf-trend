@@ -23,6 +23,15 @@ class PumpMechanismNegativeSpaceAuditTests(unittest.TestCase):
                 "data_access_model": pm.DATA_ACCESS_MODEL,
             }
         ])
+        plateau_basins = pd.DataFrame([
+            {
+                "basin_id": "basin_a",
+                "failed_or_rejected_neighbor_count": 0,
+                "has_negative_space_rejection": False,
+                "negative_space_gate_pass": False,
+                "data_access_model": pm.DATA_ACCESS_MODEL,
+            }
+        ])
 
         audit = pm._build_protocol_audit(
             events=pd.DataFrame(),
@@ -30,7 +39,7 @@ class PumpMechanismNegativeSpaceAuditTests(unittest.TestCase):
             taxonomy=pd.DataFrame(),
             rule_universe=pd.DataFrame(),
             negative_space=negative_space,
-            plateau_basins=pd.DataFrame(),
+            plateau_basins=plateau_basins,
             daily_selection=daily_selection,
             daily_oos=pd.DataFrame(),
             window_health=pd.DataFrame(),
@@ -43,7 +52,7 @@ class PumpMechanismNegativeSpaceAuditTests(unittest.TestCase):
         self.assertEqual(row["audit_status"], "fail")
         self.assertEqual(int(row["failing_rows"]), 1)
 
-    def test_protocol_audit_accepts_rejected_neighbor_rows(self) -> None:
+    def test_protocol_audit_accepts_scored_plateau_failed_neighbors(self) -> None:
         daily_selection = pd.DataFrame([
             {
                 "basin_id": "basin_a",
@@ -61,10 +70,19 @@ class PumpMechanismNegativeSpaceAuditTests(unittest.TestCase):
             },
             {
                 "basin_id": "basin_a",
-                "neighbor_passes_min_sample": False,
-                "neighbor_fail_reason": "low_events",
+                "neighbor_passes_min_sample": True,
+                "neighbor_fail_reason": "pass",
                 "data_access_model": pm.DATA_ACCESS_MODEL,
             },
+        ])
+        plateau_basins = pd.DataFrame([
+            {
+                "basin_id": "basin_a",
+                "failed_or_rejected_neighbor_count": 1,
+                "has_negative_space_rejection": True,
+                "negative_space_gate_pass": True,
+                "data_access_model": pm.DATA_ACCESS_MODEL,
+            }
         ])
 
         audit = pm._build_protocol_audit(
@@ -73,7 +91,7 @@ class PumpMechanismNegativeSpaceAuditTests(unittest.TestCase):
             taxonomy=pd.DataFrame(),
             rule_universe=pd.DataFrame(),
             negative_space=negative_space,
-            plateau_basins=pd.DataFrame(),
+            plateau_basins=plateau_basins,
             daily_selection=daily_selection,
             daily_oos=pd.DataFrame(),
             window_health=pd.DataFrame(),
