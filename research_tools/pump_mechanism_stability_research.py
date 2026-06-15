@@ -43,7 +43,7 @@ RESEARCH_ID = "pump_mechanism_stability_research_v1"
 DATA_ACCESS_MODEL = "cache_only_no_exchange_fetch"
 CACHE_READ_MODE = "read_only"
 CACHE_WRITE_MODEL = "no_cache_writes_outputs_only_to_results_dir"
-IMPLEMENTATION_STAGE = "mechanism_daily_prequential_oos_with_audits"
+IMPLEMENTATION_STAGE = "mechanism_daily_prequential_oos_with_audits_and_response_diagnostics"
 
 # The daily replay contract is fixed here so it is visible before the heavier
 # taxonomy/plateau implementation lands.  Do not expose these as CLI optimization
@@ -417,7 +417,10 @@ def run_pump_mechanism_stability_research(
             cache_coverage={},
             taxonomy=pd.DataFrame(),
             response_surfaces=pd.DataFrame(),
+            mechanism_monotonicity_ladders=pd.DataFrame(),
+            mechanism_response_cube=pd.DataFrame(),
             rule_universe=pd.DataFrame(),
+            rule_budget=pd.DataFrame(),
             negative_space=pd.DataFrame(),
             plateau_basins=pd.DataFrame(),
             daily_selection=pd.DataFrame(),
@@ -519,6 +522,10 @@ def run_pump_mechanism_stability_research(
     _print_stage(progress_label, "building pre-trade mechanism response surfaces", started_at)
     response_surfaces = _build_response_surfaces(taxonomy=taxonomy, outcomes=outcomes)
 
+    _print_stage(progress_label, "building diagnostic monotonicity ladders and response cube", started_at)
+    mechanism_monotonicity_ladders = _build_mechanism_monotonicity_ladders(taxonomy=taxonomy, outcomes=outcomes)
+    mechanism_response_cube = _build_mechanism_response_cube(taxonomy=taxonomy, outcomes=outcomes)
+
     _print_stage(progress_label, "generating budgeted train-only mechanism rule universe", started_at)
     rule_universe, rule_budget = _build_train_only_rule_universe(taxonomy=taxonomy, events=events)
 
@@ -571,6 +578,8 @@ def run_pump_mechanism_stability_research(
     _write_csv(config.output_dir / "pump_mechanism_taxonomy.csv", taxonomy)
     _write_csv(config.output_dir / "pump_mechanism_taxonomy_by_axis.csv", taxonomy_by_axis)
     _write_csv(config.output_dir / "pump_mechanism_response_surfaces.csv", response_surfaces)
+    _write_csv(config.output_dir / "pump_mechanism_monotonicity_ladders.csv", mechanism_monotonicity_ladders)
+    _write_csv(config.output_dir / "pump_mechanism_response_cube.csv", mechanism_response_cube)
     _write_csv(config.output_dir / "pump_mechanism_rule_universe.csv", rule_universe)
     _write_csv(config.output_dir / "pump_mechanism_rule_budget.csv", rule_budget)
     _write_csv(config.output_dir / "pump_mechanism_negative_space.csv", negative_space)
@@ -594,6 +603,8 @@ def run_pump_mechanism_stability_research(
         cache_coverage=cache_coverage,
         taxonomy=taxonomy,
         response_surfaces=response_surfaces,
+        mechanism_monotonicity_ladders=mechanism_monotonicity_ladders,
+        mechanism_response_cube=mechanism_response_cube,
         rule_universe=rule_universe,
         rule_budget=rule_budget,
         negative_space=negative_space,
@@ -609,6 +620,7 @@ def run_pump_mechanism_stability_research(
     print(
         f"{progress_label}: artifacts written events={len(events):,} outcomes={len(outcomes):,} "
         f"taxonomy={len(taxonomy):,} response_surfaces={len(response_surfaces):,} "
+        f"monotonicity_ladders={len(mechanism_monotonicity_ladders):,} response_cube={len(mechanism_response_cube):,} "
         f"rule_universe={len(rule_universe):,} negative_space={len(negative_space):,} "
         f"plateau_basins={len(plateau_basins):,} daily_selection={len(daily_selection):,} "
         f"daily_oos={len(daily_oos):,} protocol_audit={len(protocol_audit):,} "
@@ -1308,6 +1320,25 @@ DOWNSIDE_HIT_THRESHOLDS: tuple[tuple[str, float], ...] = (
     ("minus_2p00pct", -0.020),
 )
 
+MECHANISM_MONOTONICITY_LADDER_MODEL = "entry_known_feature_ladder_response_diagnostic_v1"
+MECHANISM_RESPONSE_CUBE_MODEL = "entry_known_mechanism_response_cube_diagnostic_v1"
+MECHANISM_MONOTONICITY_LADDER_BINS = 5
+MECHANISM_MONOTONICITY_LADDER_FEATURES: tuple[str, ...] = (
+    "close15_to_high15_ratio",
+    "wick_ret_15m",
+    "early_taker_buy_quote_share",
+    "m1_quote_accel_last2_vs_first2",
+    "oi_change_5m_pct",
+)
+MECHANISM_RESPONSE_CUBE_AXES: tuple[str, ...] = (
+    "acceptance_regime",
+    "oi_regime",
+    "session_bucket",
+    "flow_regime",
+    "structure_regime",
+    "price_progress_regime",
+)
+
 
 def _build_response_surfaces(*, taxonomy: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
     """Summarize future response distributions by entry-known mechanism groups.
@@ -1549,6 +1580,323 @@ def _dependency_metrics(frame: pd.DataFrame) -> dict[str, float]:
         "largest_day_event_share": largest_day_share,
     }
 
+
+
+
+def _build_mechanism_monotonicity_ladders(*, taxonomy: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
+    """Build diagnostic-only feature ladders for response monotonicity checks.
+
+    The ladders deliberately do not feed rule generation, plateau selection, or
+    verdict promotion. They expose whether entry-known pump features have a
+    smooth response gradient instead of a one-bin pocket discovered after the
+    fact.
+    """
+
+    columns = _mechanism_monotonicity_ladder_columns()
+    joined = _joined_mechanism_response_diagnostics(taxonomy=taxonomy, outcomes=outcomes)
+    if joined.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    for feature_name in MECHANISM_MONOTONICITY_LADDER_FEATURES:
+        if feature_name not in joined.columns:
+            continue
+        values = pd.to_numeric(joined[feature_name], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        feature_frame = joined.loc[values.notna()].copy()
+        if feature_frame.empty:
+            continue
+        feature_frame["_ladder_feature_value"] = values.loc[feature_frame.index].astype(float)
+        feature_frame["_ladder_bin"] = _quantile_ladder_bins(feature_frame["_ladder_feature_value"], max_bins=MECHANISM_MONOTONICITY_LADDER_BINS)
+        bin_count = int(pd.to_numeric(feature_frame["_ladder_bin"], errors="coerce").nunique())
+        feature_rows: list[dict[str, object]] = []
+        grouped = feature_frame.groupby("_ladder_bin", dropna=False, sort=True)
+        for raw_bin, frame in grouped:
+            ladder_bin = int(raw_bin) if math.isfinite(_float(raw_bin)) else -1
+            feature_rows.append(
+                _mechanism_monotonicity_ladder_row(
+                    feature_name=feature_name,
+                    ladder_bin=ladder_bin,
+                    bin_count=bin_count,
+                    frame=frame,
+                )
+            )
+        trend_scores = _monotonicity_ladder_trend_scores(feature_rows)
+        for row in feature_rows:
+            row.update(trend_scores)
+        rows.extend(feature_rows)
+
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    return _sort_frame(result, ["feature_name", "ladder_bin"])
+
+
+def _build_mechanism_response_cube(*, taxonomy: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
+    """Build a high-dimensional response cube over deterministic mechanism axes.
+
+    This is an audit surface only. It gives the researcher a compact grid for
+    checking whether candidate families are supported by coherent mechanism axes
+    before any short-entry mapping is attempted.
+    """
+
+    columns = _mechanism_response_cube_columns()
+    joined = _joined_mechanism_response_diagnostics(taxonomy=taxonomy, outcomes=outcomes)
+    if joined.empty or not all(column in joined.columns for column in MECHANISM_RESPONSE_CUBE_AXES):
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    grouped = joined.groupby(list(MECHANISM_RESPONSE_CUBE_AXES), dropna=False, sort=True)
+    for raw_key, frame in grouped:
+        key_values = raw_key if isinstance(raw_key, tuple) else (raw_key,)
+        axis_values = dict(zip(MECHANISM_RESPONSE_CUBE_AXES, key_values, strict=False))
+        rows.append(_mechanism_response_cube_row(axis_values=axis_values, frame=frame))
+    result = _ensure_columns(pd.DataFrame(rows), columns)
+    result["_fade_quality_sort"] = -pd.to_numeric(result.get("fade_quality_score", pd.Series(dtype=float)), errors="coerce").fillna(-np.inf)
+    result["_events_sort"] = -pd.to_numeric(result.get("events", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    result = _sort_frame(result, ["selection_role", "_fade_quality_sort", "_events_sort", "response_cube_key"])
+    return result.drop(columns=["_fade_quality_sort", "_events_sort"], errors="ignore")
+
+
+def _joined_mechanism_response_diagnostics(*, taxonomy: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
+    if taxonomy.empty or outcomes.empty or "event_id" not in taxonomy.columns or "event_id" not in outcomes.columns:
+        return pd.DataFrame()
+    taxonomy_columns = [
+        "event_id", "symbol", "feature_cutoff_ms", "feature_cutoff_time_utc", "day_ord", "date", "session_bucket",
+        "pump_tier", "acceptance_regime", "oi_regime", "flow_regime", "price_progress_regime", "structure_regime",
+        "late_buyer_regime", "mechanism_id", "mechanism_family", "close15_to_high15_ratio", "wick_ret_15m",
+        "early_taker_buy_quote_share", "m1_quote_accel_last2_vs_first2", "oi_change_5m_pct",
+    ]
+    outcome_columns = [
+        "event_id", "outcome_status", "future_ret_30m", "future_ret_60m", "future_min_ret_30m", "future_min_ret_60m",
+        "future_max_ret_30m", "future_max_ret_60m", "reclaimed_pump_high_60m", "broke_structural_low_60m",
+        "time_to_reclaim_pump_high_minutes", "time_to_structural_low_break_minutes",
+    ]
+    available_taxonomy = [column for column in taxonomy_columns if column in taxonomy.columns]
+    available_outcomes = [column for column in outcome_columns if column in outcomes.columns]
+    joined = taxonomy[available_taxonomy].merge(outcomes[available_outcomes], on="event_id", how="inner")
+    if joined.empty or "outcome_status" not in joined.columns:
+        return pd.DataFrame()
+    joined = joined.loc[joined["outcome_status"].astype(str) == "ok"].copy()
+    return joined.reset_index(drop=True)
+
+
+def _quantile_ladder_bins(values: pd.Series, *, max_bins: int) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    result = pd.Series(-1, index=values.index, dtype="int64")
+    finite = numeric.dropna()
+    if finite.empty:
+        return result
+    unique_count = int(finite.nunique())
+    bin_count = max(1, min(int(max_bins), unique_count, len(finite)))
+    if bin_count <= 1:
+        result.loc[finite.index] = 0
+        return result
+    try:
+        bins = pd.qcut(finite, q=bin_count, labels=False, duplicates="drop")
+    except ValueError:
+        result.loc[finite.index] = 0
+        return result
+    parsed = pd.to_numeric(bins, errors="coerce").fillna(0).astype("int64")
+    result.loc[parsed.index] = parsed
+    return result
+
+
+def _mechanism_monotonicity_ladder_row(*, feature_name: str, ladder_bin: int, bin_count: int, frame: pd.DataFrame) -> dict[str, object]:
+    feature_values = pd.to_numeric(frame.get("_ladder_feature_value", pd.Series(dtype=float)), errors="coerce")
+    row: dict[str, object] = {
+        "research_id": RESEARCH_ID,
+        "feature_name": feature_name,
+        "ladder_bin": int(ladder_bin),
+        "ladder_bin_count": int(bin_count),
+        "bin_lower_bound": _safe_min(feature_values),
+        "bin_upper_bound": _safe_max(feature_values),
+        "median_feature_value": _safe_median(feature_values),
+        "events": int(len(frame)),
+        "symbols": int(frame["symbol"].nunique()) if "symbol" in frame.columns else 0,
+        "active_days": int(frame["date"].nunique()) if "date" in frame.columns else 0,
+        "sessions": int(frame["session_bucket"].nunique()) if "session_bucket" in frame.columns else 0,
+        "mechanism_monotonicity_ladder_model": MECHANISM_MONOTONICITY_LADDER_MODEL,
+        "taxonomy_source_model": "entry_known_deterministic_mechanism_axes_v1",
+        "outcome_source_model": OUTCOME_MODEL,
+        "diagnostic_only": True,
+        "selection_eligible": False,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+    row.update(_mechanism_response_metric_summary(frame))
+    row["raw_downside_excursion_score"] = _raw_downside_excursion_score(row)
+    row["fade_quality_score"] = _fade_quality_score(row)
+    row["runner_quality_score"] = _runner_quality_score(row)
+    return row
+
+
+def _mechanism_response_cube_row(*, axis_values: dict[str, object], frame: pd.DataFrame) -> dict[str, object]:
+    normalized_axes = {column: str(axis_values.get(column, "")) for column in MECHANISM_RESPONSE_CUBE_AXES}
+    response_cube_key = "|".join(f"{column}={normalized_axes[column]}" for column in MECHANISM_RESPONSE_CUBE_AXES)
+    selection_role, selection_role_reason = _selection_role_and_reason(normalized_axes)
+    oi_discovery_role = _oi_discovery_role(scope_conditions=normalized_axes)
+    row: dict[str, object] = {
+        "research_id": RESEARCH_ID,
+        **normalized_axes,
+        "response_cube_key": response_cube_key,
+        "events": int(len(frame)),
+        "symbols": int(frame["symbol"].nunique()) if "symbol" in frame.columns else 0,
+        "active_days": int(frame["date"].nunique()) if "date" in frame.columns else 0,
+        "mechanism_ids": int(frame["mechanism_id"].nunique()) if "mechanism_id" in frame.columns else 0,
+        "families": int(frame["mechanism_family"].nunique()) if "mechanism_family" in frame.columns else 0,
+        "selection_role": selection_role,
+        "selection_role_reason": selection_role_reason,
+        "selection_role_model": SELECTION_ROLE_MODEL,
+        "oi_discovery_role": oi_discovery_role,
+        "no_oi_audit_only": _is_no_oi_audit_only_role(oi_discovery_role),
+        "mechanism_response_cube_model": MECHANISM_RESPONSE_CUBE_MODEL,
+        "taxonomy_source_model": "entry_known_deterministic_mechanism_axes_v1",
+        "outcome_source_model": OUTCOME_MODEL,
+        "diagnostic_only": True,
+        "selection_eligible": False,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+    row.update(_mechanism_response_metric_summary(frame))
+    row["raw_downside_excursion_score"] = _raw_downside_excursion_score(row)
+    row["fade_quality_score"] = _fade_quality_score(row)
+    row["runner_quality_score"] = _runner_quality_score(row)
+    row.update(_dependency_metrics(frame))
+    return row
+
+
+def _mechanism_response_metric_summary(frame: pd.DataFrame) -> dict[str, object]:
+    row: dict[str, object] = {}
+    for minutes in (30, 60):
+        future_ret = _numeric_series(frame, f"future_ret_{minutes}m")
+        future_min = _numeric_series(frame, f"future_min_ret_{minutes}m")
+        future_max = _numeric_series(frame, f"future_max_ret_{minutes}m")
+        row[f"median_future_ret_{minutes}m"] = _safe_median(future_ret)
+        row[f"avg_future_ret_{minutes}m"] = _safe_mean(future_ret)
+        row[f"p25_future_ret_{minutes}m"] = _safe_quantile(future_ret, 0.25)
+        row[f"p75_future_ret_{minutes}m"] = _safe_quantile(future_ret, 0.75)
+        row[f"median_future_min_ret_{minutes}m"] = _safe_median(future_min)
+        row[f"median_future_max_ret_{minutes}m"] = _safe_median(future_max)
+        row[f"future_ret_positive_rate_{minutes}m"] = _numeric_condition_rate(future_ret, threshold=0.0, side="gt")
+        for label, threshold in DOWNSIDE_HIT_THRESHOLDS:
+            row[f"downside_hit_rate_{label}_{minutes}m"] = _numeric_condition_rate(future_min, threshold=threshold, side="le")
+    row["reclaim_rate_60m"] = _rate(_as_bool_series(frame.get("reclaimed_pump_high_60m", pd.Series(dtype=object))))
+    row["structural_low_break_rate_60m"] = _rate(_as_bool_series(frame.get("broke_structural_low_60m", pd.Series(dtype=object))))
+    row["median_time_to_reclaim_pump_high_minutes"] = _safe_median(_numeric_series(frame, "time_to_reclaim_pump_high_minutes"))
+    row["median_time_to_structural_low_break_minutes"] = _safe_median(_numeric_series(frame, "time_to_structural_low_break_minutes"))
+    return row
+
+
+def _monotonicity_ladder_trend_scores(rows: list[dict[str, object]]) -> dict[str, object]:
+    if len(rows) < 2:
+        return {
+            "downside_deepens_as_feature_rises_score": float("nan"),
+            "downside_deepens_as_feature_falls_score": float("nan"),
+            "fade_quality_rises_with_feature_score": float("nan"),
+            "fade_quality_rises_as_feature_falls_score": float("nan"),
+        }
+    sorted_rows = sorted(rows, key=lambda row: int(row.get("ladder_bin", 0) or 0))
+    median_min_60 = [_float(row.get("median_future_min_ret_60m")) for row in sorted_rows]
+    fade_quality = [_float(row.get("fade_quality_score")) for row in sorted_rows]
+    return {
+        "downside_deepens_as_feature_rises_score": _non_increasing_sequence_score(median_min_60),
+        "downside_deepens_as_feature_falls_score": _non_increasing_sequence_score(list(reversed(median_min_60))),
+        "fade_quality_rises_with_feature_score": _non_decreasing_sequence_score(fade_quality),
+        "fade_quality_rises_as_feature_falls_score": _non_decreasing_sequence_score(list(reversed(fade_quality))),
+    }
+
+
+def _non_increasing_sequence_score(values: Sequence[float]) -> float:
+    finite_values = [float(value) for value in values if math.isfinite(_float(value))]
+    if len(finite_values) < 2:
+        return float("nan")
+    comparisons = 0
+    passing = 0
+    previous = finite_values[0]
+    for value in finite_values[1:]:
+        comparisons += 1
+        if value <= previous + 1e-12:
+            passing += 1
+        previous = value
+    return passing / comparisons if comparisons else float("nan")
+
+
+def _non_decreasing_sequence_score(values: Sequence[float]) -> float:
+    finite_values = [float(value) for value in values if math.isfinite(_float(value))]
+    if len(finite_values) < 2:
+        return float("nan")
+    comparisons = 0
+    passing = 0
+    previous = finite_values[0]
+    for value in finite_values[1:]:
+        comparisons += 1
+        if value >= previous - 1e-12:
+            passing += 1
+        previous = value
+    return passing / comparisons if comparisons else float("nan")
+
+
+def _mechanism_monotonicity_ladder_columns() -> list[str]:
+    columns = [
+        "research_id", "feature_name", "ladder_bin", "ladder_bin_count", "bin_lower_bound", "bin_upper_bound",
+        "median_feature_value", "events", "symbols", "active_days", "sessions",
+    ]
+    columns.extend(_mechanism_response_metric_columns())
+    columns.extend(
+        [
+            "raw_downside_excursion_score", "fade_quality_score", "runner_quality_score",
+            "downside_deepens_as_feature_rises_score", "downside_deepens_as_feature_falls_score",
+            "fade_quality_rises_with_feature_score", "fade_quality_rises_as_feature_falls_score",
+            "mechanism_monotonicity_ladder_model", "taxonomy_source_model", "outcome_source_model",
+            "diagnostic_only", "selection_eligible", "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning",
+            "future_label_available_at_entry", "data_access_model",
+        ]
+    )
+    return columns
+
+
+def _mechanism_response_cube_columns() -> list[str]:
+    columns = [
+        "research_id", *MECHANISM_RESPONSE_CUBE_AXES, "response_cube_key", "events", "symbols", "active_days",
+        "mechanism_ids", "families", "selection_role", "selection_role_reason", "selection_role_model",
+        "oi_discovery_role", "no_oi_audit_only",
+    ]
+    columns.extend(_mechanism_response_metric_columns())
+    columns.extend(
+        [
+            "raw_downside_excursion_score", "fade_quality_score", "runner_quality_score",
+            "top_event_dependency_pct", "top_symbol_dependency_pct", "largest_symbol_event_share", "largest_day_event_share",
+            "mechanism_response_cube_model", "taxonomy_source_model", "outcome_source_model", "diagnostic_only",
+            "selection_eligible", "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning",
+            "future_label_available_at_entry", "data_access_model",
+        ]
+    )
+    return columns
+
+
+def _mechanism_response_metric_columns() -> list[str]:
+    columns: list[str] = []
+    for minutes in (30, 60):
+        columns.extend(
+            [
+                f"median_future_ret_{minutes}m", f"avg_future_ret_{minutes}m", f"p25_future_ret_{minutes}m",
+                f"p75_future_ret_{minutes}m", f"median_future_min_ret_{minutes}m", f"median_future_max_ret_{minutes}m",
+                f"future_ret_positive_rate_{minutes}m",
+            ]
+        )
+        for label, _threshold in DOWNSIDE_HIT_THRESHOLDS:
+            columns.append(f"downside_hit_rate_{label}_{minutes}m")
+    columns.extend(
+        [
+            "reclaim_rate_60m", "structural_low_break_rate_60m", "median_time_to_reclaim_pump_high_minutes",
+            "median_time_to_structural_low_break_minutes",
+        ]
+    )
+    return columns
 
 
 
@@ -4388,6 +4736,8 @@ def _run_config_frame(
     cache_coverage: dict[str, object],
     taxonomy: pd.DataFrame,
     response_surfaces: pd.DataFrame,
+    mechanism_monotonicity_ladders: pd.DataFrame,
+    mechanism_response_cube: pd.DataFrame,
     rule_universe: pd.DataFrame,
     rule_budget: pd.DataFrame,
     negative_space: pd.DataFrame,
@@ -4404,6 +4754,8 @@ def _run_config_frame(
     taxonomy_rows = int(len(taxonomy)) if taxonomy is not None else 0
     unique_mechanism_ids = int(taxonomy["mechanism_id"].nunique()) if taxonomy is not None and not taxonomy.empty and "mechanism_id" in taxonomy.columns else 0
     response_surface_rows = int(len(response_surfaces)) if response_surfaces is not None else 0
+    monotonicity_ladder_rows = int(len(mechanism_monotonicity_ladders)) if mechanism_monotonicity_ladders is not None else 0
+    response_cube_rows = int(len(mechanism_response_cube)) if mechanism_response_cube is not None else 0
     rule_universe_rows = int(len(rule_universe)) if rule_universe is not None else 0
     sampled_train_rule_rows = int((rule_universe.get("rule_passes_min_sample", pd.Series(dtype=bool)).astype(bool)).sum()) if rule_universe is not None and not rule_universe.empty else 0
     rule_budget_rows = int(len(rule_budget)) if rule_budget is not None else 0
@@ -4467,6 +4819,16 @@ def _run_config_frame(
         "taxonomy_rows": taxonomy_rows,
         "unique_mechanism_ids": unique_mechanism_ids,
         "response_surface_rows": response_surface_rows,
+        "monotonicity_ladder_rows": monotonicity_ladder_rows,
+        "response_cube_rows": response_cube_rows,
+        "mechanism_monotonicity_ladder_model": MECHANISM_MONOTONICITY_LADDER_MODEL,
+        "mechanism_response_cube_model": MECHANISM_RESPONSE_CUBE_MODEL,
+        "monotonicity_ladders_use_pnl": False,
+        "monotonicity_ladders_use_short_entry": False,
+        "monotonicity_ladders_selection_eligible": False,
+        "response_cube_use_pnl": False,
+        "response_cube_use_short_entry": False,
+        "response_cube_selection_eligible": False,
         "rule_universe_rows": rule_universe_rows,
         "sampled_train_rule_rows": sampled_train_rule_rows,
         "rule_budget_rows": rule_budget_rows,
@@ -4546,6 +4908,8 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_taxonomy.csv", "written", "entry-known mechanism axes per event"),
         ("pump_mechanism_taxonomy_by_axis.csv", "written", "axis-level taxonomy counts and breadth diagnostics"),
         ("pump_mechanism_response_surfaces.csv", "written", "mechanism response diagnostics before PnL"),
+        ("pump_mechanism_monotonicity_ladders.csv", "written", "diagnostic-only entry-known feature ladders for response monotonicity checks"),
+        ("pump_mechanism_response_cube.csv", "written", "diagnostic-only response cube across mechanism taxonomy axes"),
         ("pump_mechanism_rule_universe.csv", "written", "budgeted train-only entry-known mechanism rule specs"),
         ("pump_mechanism_rule_budget.csv", "written", "per-window rule-cell budget audit for mechanism-intent generation"),
         ("pump_mechanism_negative_space.csv", "written", "all generated train-only neighbors including failed/rejected rules"),
