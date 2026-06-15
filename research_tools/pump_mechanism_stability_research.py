@@ -156,9 +156,21 @@ NO_OI_REGIME = "missing_closed_5m_oi"
 NO_OI_DISCOVERY_MODEL = "missing_closed_5m_oi_is_audit_only_for_oi_scoped_main_discovery_v1"
 MAIN_OI_REGIMES = frozenset({"oi_down_squeeze_unwind", "oi_up_fresh_leverage", "oi_flat_or_below_threshold"})
 MAIN_OI_THRESHOLD_PREFIXES = ("oi_change_",)
-MECHANISM_VERDICT_MODEL = "fade_vs_runner_mechanism_verdict_from_response_and_oos_v1"
-FADE_QUALITY_MIN_FOR_VERDICT = 0.12
+MECHANISM_VERDICT_MODEL = "consolidated_pump_failure_mechanism_verdict_from_plateau_and_daily_oos_v1"
+MECHANISM_VERDICT_GROUP_AXES = (
+    "mechanism_family",
+    "acceptance_regime",
+    "oi_regime",
+    "flow_regime",
+    "structure_regime",
+    "session_bucket",
+)
+FADE_QUALITY_MIN_FOR_VERDICT = 0.0
 RUNNER_QUALITY_MIN_FOR_VERDICT = 0.50
+MECHANISM_VERDICT_MAX_RECLAIM_RATE = 0.45
+MECHANISM_VERDICT_MIN_STRUCTURAL_LOW_BREAK_RATE = 0.40
+MECHANISM_VERDICT_MIN_DAILY_OOS_ACTIVE_DAYS = 10
+MECHANISM_VERDICT_WATCHLIST_MIN_DAILY_OOS_ACTIVE_DAYS = 3
 
 WINDOW_HEALTH_MODEL = "daily_window_health_from_train_only_basins_and_oos_v1"
 SELECTION_DRIFT_MODEL = "selected_basin_key_drift_over_prequential_days_v1"
@@ -3561,81 +3573,250 @@ def _build_mechanism_verdict(
     plateau_basins: pd.DataFrame,
     daily_oos: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Build the final mechanism-level verdict artifact.
+
+    The verdict is intentionally based on train-only plateau basins and their
+    daily prequential OOS ledger.  ``response_surfaces`` remains an upstream
+    diagnostic artifact, but it is not allowed to promote mechanisms here: the
+    verdict must answer whether a mechanism family survived negative-space and
+    day-by-day OOS selection, not whether a full-period response surface looked
+    attractive.
+    """
+
+    del response_surfaces  # response surfaces are diagnostics, not verdict promotion input.
+
     columns = _mechanism_verdict_columns()
+    if plateau_basins.empty:
+        return pd.DataFrame(columns=columns)
+
+    work = _mechanism_verdict_enriched_basins(plateau_basins)
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+
+    oos_summary = _mechanism_verdict_daily_oos_summary(daily_oos=daily_oos, basin_axes=work)
+    oos_by_key = {
+        tuple(row.get(column, "") for column in _mechanism_verdict_group_columns()): row
+        for row in oos_summary.to_dict("records")
+    }
+
     rows: list[dict[str, object]] = []
-    if not response_surfaces.empty:
-        surface_filter = response_surfaces.get("surface_name", pd.Series(dtype=str)).astype(str).isin(
-            {"mechanism_family", "mechanism_id", "family_session", "oi_acceptance", "acceptance_session"}
-        )
-        for _idx, surface in response_surfaces.loc[surface_filter].iterrows():
-            fade_quality = _float(surface.get("fade_quality_score"))
-            runner_quality = _float(surface.get("runner_quality_score"))
-            events = int(surface.get("events", 0) or 0)
-            symbols = int(surface.get("symbols", 0) or 0)
-            active_days = int(surface.get("active_days", 0) or 0)
-            reclaim_rate = _float(surface.get("reclaim_rate_60m"))
-            break_rate = _float(surface.get("structural_low_break_rate_60m"))
-            group_value = str(surface.get("group_value", ""))
-            has_missing_oi = NO_OI_REGIME in group_value
-            oi_discovery_role = str(surface.get("oi_discovery_role") or _oi_discovery_role(surface_name=surface.get("surface_name", ""), group_value=group_value))
-            if _is_no_oi_audit_only_role(oi_discovery_role):
-                verdict = "no_oi_audit_only"
-            elif math.isfinite(fade_quality) and fade_quality >= FADE_QUALITY_MIN_FOR_VERDICT and active_days >= 10 and symbols >= 8:
-                verdict = "fade_mechanism_candidate"
-            elif math.isfinite(runner_quality) and runner_quality >= RUNNER_QUALITY_MIN_FOR_VERDICT:
-                verdict = "runner_or_no_short_candidate"
-            else:
-                verdict = "unproven_or_mixed"
-            rows.append(
-                {
-                    "research_id": RESEARCH_ID,
-                    "surface_name": str(surface.get("surface_name", "")),
-                    "group_columns": str(surface.get("group_columns", "")),
-                    "group_value": group_value,
-                    "mechanism_key": f"{surface.get('surface_name', '')}|{group_value}",
-                    "events": events,
-                    "symbols": symbols,
-                    "active_days": active_days,
-                    "fade_quality_score": fade_quality,
-                    "runner_quality_score": runner_quality,
-                    "median_future_ret_30m": _float(surface.get("median_future_ret_30m")),
-                    "median_future_ret_60m": _float(surface.get("median_future_ret_60m")),
-                    "median_future_min_ret_30m": _float(surface.get("median_future_min_ret_30m")),
-                    "median_future_min_ret_60m": _float(surface.get("median_future_min_ret_60m")),
-                    "downside_hit_rate_30m": _float(surface.get("downside_hit_rate_minus_1p00pct_30m", surface.get("downside_hit_rate_30m"))),
-                    "downside_hit_rate_60m": _float(surface.get("downside_hit_rate_minus_2p00pct_60m", surface.get("downside_hit_rate_60m"))),
-                    "reclaim_rate_60m": reclaim_rate,
-                    "structural_low_break_rate_60m": break_rate,
-                    "future_ret_positive_rate_60m": _float(surface.get("future_ret_positive_rate_60m")),
-                    "has_missing_closed_5m_oi": bool(has_missing_oi),
-                    "oi_discovery_role": oi_discovery_role,
-                    "no_oi_audit_only": _is_no_oi_audit_only_role(oi_discovery_role),
-                    "verdict": verdict,
-                    "allowed_for_short_research": bool(verdict == "fade_mechanism_candidate" and not _is_no_oi_audit_only_role(oi_discovery_role)),
-                    "no_oi_discovery_model": NO_OI_DISCOVERY_MODEL,
-                    "mechanism_verdict_model": MECHANISM_VERDICT_MODEL,
-                    "uses_pnl": False,
-                    "uses_short_entry": False,
-                    "uses_final_holdout_tuning": False,
-                    "data_access_model": DATA_ACCESS_MODEL,
-                }
-            )
+    grouped = work.groupby(_mechanism_verdict_group_columns(), dropna=False, sort=True)
+    for key_values, frame in grouped:
+        key_tuple = key_values if isinstance(key_values, tuple) else (key_values,)
+        group_values = dict(zip(_mechanism_verdict_group_columns(), key_tuple, strict=False))
+        oos = oos_by_key.get(tuple(group_values[column] for column in _mechanism_verdict_group_columns()), {})
+        row = _mechanism_verdict_row(group_values=group_values, frame=frame, oos=oos)
+        row["verdict"] = _mechanism_verdict_label(row)
+        row["allowed_for_short_research"] = bool(row["verdict"] == "accepted_mechanism_candidate")
+        rows.append(row)
+
     result = _ensure_columns(pd.DataFrame(rows), columns)
     if result.empty:
         return result
-    return _sort_frame(result, ["verdict", "fade_quality_score", "events", "mechanism_key"])
+    result["_verdict_rank"] = result["verdict"].astype(str).map(
+        {
+            "accepted_mechanism_candidate": 0,
+            "watchlist_mechanism": 1,
+            "control_not_for_short": 2,
+            "rejected_mechanism": 3,
+        }
+    ).fillna(9)
+    result["_fade_quality_sort"] = pd.to_numeric(result.get("fade_quality_score", pd.Series(dtype=float)), errors="coerce").fillna(-np.inf)
+    result["_daily_oos_score_sort"] = pd.to_numeric(result.get("daily_oos_median_score", pd.Series(dtype=float)), errors="coerce").fillna(-np.inf)
+    result = result.sort_values(
+        ["_verdict_rank", "_daily_oos_score_sort", "_fade_quality_sort", "daily_oos_active_days", "events", "mechanism_key"],
+        ascending=[True, False, False, False, False, True],
+    ).drop(columns=["_verdict_rank", "_fade_quality_sort", "_daily_oos_score_sort"])
+    return result.reset_index(drop=True)
+
+
+def _mechanism_verdict_group_columns() -> list[str]:
+    return ["selection_role", *MECHANISM_VERDICT_GROUP_AXES]
+
+
+def _mechanism_verdict_enriched_basins(plateau_basins: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for row in plateau_basins.to_dict("records"):
+        axes = _mechanism_axis_values(row)
+        role, role_reason = _selection_role_and_reason({**row, **axes})
+        rows.append(
+            {
+                **row,
+                **axes,
+                "selection_role": role,
+                "selection_role_reason": role_reason,
+                "mechanism_key": _mechanism_key({"selection_role": role, **axes}),
+            }
+        )
+    return _ensure_columns(pd.DataFrame(rows), ["basin_id", "selection_role", "selection_role_reason", "mechanism_key", *MECHANISM_VERDICT_GROUP_AXES])
+
+
+def _mechanism_axis_values(row: dict[str, object]) -> dict[str, str]:
+    conditions = _parse_scope_conditions(row.get("center_scope_conditions", row.get("scope_conditions", "")))
+    values: dict[str, str] = {}
+    for axis in MECHANISM_VERDICT_GROUP_AXES:
+        condition_value = str(conditions.get(axis, "")).strip()
+        direct_value = str(row.get(axis, "")).strip()
+        values[axis] = condition_value or direct_value or "*"
+    return values
+
+
+def _mechanism_key(values: dict[str, object]) -> str:
+    return "|".join(f"{column}={values.get(column, '*')}" for column in _mechanism_verdict_group_columns())
+
+
+def _mechanism_verdict_daily_oos_summary(*, daily_oos: pd.DataFrame, basin_axes: pd.DataFrame) -> pd.DataFrame:
+    columns = [*_mechanism_verdict_group_columns(), "daily_oos_active_days", "daily_oos_median_score", "daily_oos_positive_rate"]
+    if daily_oos.empty or basin_axes.empty or "basin_id" not in daily_oos.columns or "basin_id" not in basin_axes.columns:
+        return pd.DataFrame(columns=columns)
+
+    axis_columns = ["basin_id", *_mechanism_verdict_group_columns()]
+    axes = basin_axes[axis_columns].drop_duplicates("basin_id", keep="last")
+    joined = daily_oos.merge(axes, on="basin_id", how="inner")
+    if joined.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    grouped = joined.groupby(_mechanism_verdict_group_columns(), dropna=False, sort=True)
+    for key_values, frame in grouped:
+        key_tuple = key_values if isinstance(key_values, tuple) else (key_values,)
+        row = dict(zip(_mechanism_verdict_group_columns(), key_tuple, strict=False))
+        events = pd.to_numeric(frame.get("oos_events", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        event_frame = frame.loc[events > 0].copy()
+        scores = pd.to_numeric(event_frame.get("oos_response_score", pd.Series(dtype=float)), errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        if "test_date" in event_frame.columns:
+            active_days = int(event_frame["test_date"].nunique())
+        else:
+            active_days = int(event_frame.get("test_day_ord", pd.Series(dtype=object)).nunique())
+        row.update(
+            {
+                "daily_oos_active_days": active_days,
+                "daily_oos_median_score": float(scores.median()) if not scores.empty else float("nan"),
+                "daily_oos_positive_rate": float((scores > 0.0).mean()) if not scores.empty else float("nan"),
+            }
+        )
+        rows.append(row)
+    return _ensure_columns(pd.DataFrame(rows), columns)
+
+
+def _mechanism_verdict_row(*, group_values: dict[str, object], frame: pd.DataFrame, oos: dict[str, object]) -> dict[str, object]:
+    failed_neighbors = int(_safe_sum(pd.to_numeric(frame.get("failed_or_rejected_neighbor_count", pd.Series(dtype=float)), errors="coerce")))
+    no_oi_flags = frame.get("center_no_oi_audit_only", pd.Series(False, index=frame.index)).map(_to_bool)
+    negative_space_flags = frame.get("negative_space_gate_pass", pd.Series(False, index=frame.index)).map(_to_bool)
+    row = {
+        "research_id": RESEARCH_ID,
+        **group_values,
+        "mechanism_key": _mechanism_key(group_values),
+        "selection_role_reason": _dominant_text_value(frame.get("selection_role_reason", pd.Series(dtype=object))),
+        "events": _safe_int_max(frame.get("center_train_events", pd.Series(dtype=float))),
+        "symbols": _safe_int_max(frame.get("center_train_symbols", pd.Series(dtype=float))),
+        "active_days": _safe_int_max(frame.get("center_train_active_days", pd.Series(dtype=float))),
+        "median_future_min_30m": _safe_median(frame.get("center_median_future_min_ret_30m", pd.Series(dtype=float))),
+        "median_future_min_60m": _safe_median(frame.get("center_median_future_min_ret_60m", pd.Series(dtype=float))),
+        "downside_hit_rate_30m": _safe_median(frame.get("center_downside_hit_rate_30m", pd.Series(dtype=float))),
+        "downside_hit_rate_60m": _safe_median(frame.get("center_downside_hit_rate_60m", pd.Series(dtype=float))),
+        "reclaim_rate_60m": _safe_median(frame.get("center_reclaim_rate_60m", pd.Series(dtype=float))),
+        "structural_low_break_rate_60m": _safe_median(frame.get("center_structural_low_break_rate_60m", pd.Series(dtype=float))),
+        "raw_downside_excursion_score": _safe_median(frame.get("center_raw_downside_excursion_score", pd.Series(dtype=float))),
+        "fade_quality_score": _safe_median(frame.get("center_fade_quality_score", pd.Series(dtype=float))),
+        "runner_quality_score": _safe_median(frame.get("center_runner_quality_score", pd.Series(dtype=float))),
+        "neighbor_survival_rate": _safe_median(frame.get("neighbor_survival_rate", pd.Series(dtype=float))),
+        "failed_or_rejected_neighbor_count": failed_neighbors,
+        "negative_space_gate_pass": bool(negative_space_flags.any() and failed_neighbors > 0),
+        "daily_oos_active_days": int(oos.get("daily_oos_active_days", 0) or 0),
+        "daily_oos_median_score": _float(oos.get("daily_oos_median_score")),
+        "daily_oos_positive_rate": _float(oos.get("daily_oos_positive_rate")),
+        "no_oi_share": _rate(no_oi_flags) if not no_oi_flags.empty else float("nan"),
+        "oi_discovery_role": _dominant_oi_discovery_role(frame),
+        "mechanism_verdict_model": MECHANISM_VERDICT_MODEL,
+        "no_oi_discovery_model": NO_OI_DISCOVERY_MODEL,
+        "selection_role_model": SELECTION_ROLE_MODEL,
+        "uses_pnl": False,
+        "uses_short_entry": False,
+        "uses_final_holdout_tuning": False,
+        "future_label_available_at_entry": False,
+        "data_access_model": DATA_ACCESS_MODEL,
+    }
+    return row
+
+
+def _mechanism_verdict_label(row: dict[str, object]) -> str:
+    selection_role = str(row.get("selection_role", ""))
+    fade_quality = _float(row.get("fade_quality_score"))
+    runner_quality = _float(row.get("runner_quality_score"))
+    reclaim_rate = _float(row.get("reclaim_rate_60m"))
+    break_rate = _float(row.get("structural_low_break_rate_60m"))
+    daily_active_days = int(row.get("daily_oos_active_days", 0) or 0)
+    daily_median_score = _float(row.get("daily_oos_median_score"))
+    no_oi_share = _float(row.get("no_oi_share"))
+    no_oi_audit_only = _is_no_oi_audit_only_role(row.get("oi_discovery_role")) or (math.isfinite(no_oi_share) and no_oi_share > 0.0)
+    negative_space_gate_pass = _to_bool(row.get("negative_space_gate_pass"))
+
+    if selection_role == CONTROL_RUNNER_SELECTION_ROLE or (math.isfinite(runner_quality) and runner_quality >= RUNNER_QUALITY_MIN_FOR_VERDICT):
+        return "control_not_for_short"
+    if selection_role != PRIMARY_FADE_SELECTION_ROLE or no_oi_audit_only:
+        return "rejected_mechanism"
+    if (
+        math.isfinite(fade_quality)
+        and fade_quality > FADE_QUALITY_MIN_FOR_VERDICT
+        and math.isfinite(reclaim_rate)
+        and reclaim_rate <= MECHANISM_VERDICT_MAX_RECLAIM_RATE
+        and math.isfinite(break_rate)
+        and break_rate >= MECHANISM_VERDICT_MIN_STRUCTURAL_LOW_BREAK_RATE
+        and negative_space_gate_pass
+        and daily_active_days >= MECHANISM_VERDICT_MIN_DAILY_OOS_ACTIVE_DAYS
+        and math.isfinite(daily_median_score)
+        and daily_median_score > 0.0
+    ):
+        return "accepted_mechanism_candidate"
+    if (
+        math.isfinite(fade_quality)
+        and fade_quality > FADE_QUALITY_MIN_FOR_VERDICT
+        and negative_space_gate_pass
+        and daily_active_days >= MECHANISM_VERDICT_WATCHLIST_MIN_DAILY_OOS_ACTIVE_DAYS
+    ):
+        return "watchlist_mechanism"
+    return "rejected_mechanism"
+
+
+def _dominant_oi_discovery_role(frame: pd.DataFrame) -> str:
+    roles = frame.get("center_oi_discovery_role", pd.Series(dtype=object)).astype(str).replace("", np.nan).dropna()
+    if roles.empty:
+        return "unknown"
+    unique_roles = set(roles.tolist())
+    if len(unique_roles) == 1:
+        return str(next(iter(unique_roles)))
+    if "no_oi_audit_only" in unique_roles:
+        return "mixed_with_no_oi_audit"
+    if any(role.startswith("main_oi") for role in unique_roles):
+        return "mixed_main_oi_roles"
+    return "mixed_price_flow_structure_roles"
+
+
+def _dominant_text_value(series: pd.Series) -> str:
+    values = series.astype(str).replace("", np.nan).dropna()
+    if values.empty:
+        return ""
+    return str(values.value_counts(dropna=False).index[0])
+
+
+def _safe_int_max(series: pd.Series) -> int:
+    value = _safe_max(pd.to_numeric(series, errors="coerce"))
+    return int(value) if math.isfinite(value) else 0
 
 
 def _mechanism_verdict_columns() -> list[str]:
     return [
-        "research_id", "surface_name", "group_columns", "group_value", "mechanism_key", "events", "symbols",
-        "active_days", "raw_downside_excursion_score", "fade_quality_score", "runner_quality_score",
-        "median_future_ret_30m", "median_future_ret_60m",
-        "median_future_min_ret_30m", "median_future_min_ret_60m", "downside_hit_rate_30m", "downside_hit_rate_60m",
-        "reclaim_rate_60m", "structural_low_break_rate_60m", "future_ret_positive_rate_60m",
-        "has_missing_closed_5m_oi", "oi_discovery_role", "no_oi_audit_only",
-        "verdict", "allowed_for_short_research", "no_oi_discovery_model",
-        "mechanism_verdict_model", "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning", "data_access_model",
+        "research_id", "selection_role", "mechanism_family", "acceptance_regime", "oi_regime", "flow_regime",
+        "structure_regime", "session_bucket", "mechanism_key", "selection_role_reason", "events", "symbols",
+        "active_days", "median_future_min_30m", "median_future_min_60m", "downside_hit_rate_30m",
+        "downside_hit_rate_60m", "reclaim_rate_60m", "structural_low_break_rate_60m",
+        "raw_downside_excursion_score", "fade_quality_score", "runner_quality_score", "neighbor_survival_rate",
+        "failed_or_rejected_neighbor_count", "negative_space_gate_pass", "daily_oos_active_days",
+        "daily_oos_median_score", "daily_oos_positive_rate", "no_oi_share", "oi_discovery_role", "verdict",
+        "allowed_for_short_research", "mechanism_verdict_model", "no_oi_discovery_model", "selection_role_model",
+        "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry",
+        "data_access_model",
     ]
 
 
@@ -4106,7 +4287,7 @@ def _artifact_manifest_frame(*, config: PumpMechanismStabilityConfig) -> pd.Data
         ("pump_mechanism_window_health.csv", "written", "15/30/60d train-window health plus selected-basin OOS summary"),
         ("pump_mechanism_selection_drift.csv", "written", "selected mechanism-key drift over time"),
         ("pump_mechanism_protocol_audit.csv", "written", "no-lookahead, train-only, negative-space, and daily replay guardrail audit"),
-        ("pump_mechanism_verdict.csv", "written", "focused fade-vs-runner mechanism verdict; no PnL or short execution"),
+        ("pump_mechanism_verdict.csv", "written", "consolidated mechanism verdict from plateau plus daily OOS; no PnL or short execution"),
     ]
     rows = []
     for artifact_name, status, description in planned:
