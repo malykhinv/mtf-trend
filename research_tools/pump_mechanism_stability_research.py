@@ -166,6 +166,44 @@ PROTOCOL_AUDIT_MODEL = "pump_mechanism_no_lookahead_negative_space_daily_replay_
 MAX_SELECTED_BASINS_PER_DAY_WINDOW = 20
 DAILY_ALLOWED_BASIN_STATUSES = ("strong_candidate", "tactical", "challenger")
 
+PRIMARY_FADE_SELECTION_ROLE = "primary_fade_candidate"
+CONTROL_RUNNER_SELECTION_ROLE = "control_runner_candidate"
+AUDIT_ONLY_SELECTION_ROLE = "audit_only"
+SELECTION_ROLE_MODEL = "failure_mechanism_primary_selection_v1"
+# Selection roles are mechanism-intent gates, not learned thresholds.  They keep
+# the daily OOS selector aligned with the research question: failed pump /
+# rejection / structural break.  Broad continuation/control cells remain visible
+# in artifacts but cannot become primary fade selections.
+PRIMARY_FADE_SELECTION_TOKENS = frozenset(
+    {
+        "stop_run_reversal_candidate",
+        "generic_failed_acceptance_candidate",
+        "squeeze_unwind_failed_acceptance",
+        "fresh_leverage_trap_candidate",
+        "absorption_top_candidate",
+        "late_buyer_exhaustion_candidate",
+        "failed_acceptance",
+        "immediate_rejection",
+        "seller_absorption",
+        "late_buyer_exhaustion",
+        "high_flow_weak_acceptance",
+        "seed_low_break_after_pump",
+        "round_trip_to_seed_open",
+        "deep_retrace_to_seed_body",
+        "upper_half_rejected",
+        "wick_without_acceptance",
+    }
+)
+CONTROL_RUNNER_SELECTION_TOKENS = frozenset({"accepted_ignition_candidate", "accepted_high"})
+AUDIT_ONLY_SELECTION_TOKENS = frozenset(
+    {
+        "all",
+        "baseline",
+        "mixed_or_continuation_candidate",
+        "partial_acceptance",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PumpMechanismStabilityConfig:
@@ -3138,7 +3176,15 @@ def _select_daily_basins(*, plateau_basins: pd.DataFrame) -> pd.DataFrame:
     else:
         negative_space_mask = pd.Series(False, index=work.index)
     no_oi_mask = ~work.get("center_no_oi_audit_only", pd.Series(False, index=work.index)).map(_to_bool)
-    work = work.loc[pass_mask & status_mask & negative_space_mask & no_oi_mask].copy()
+    roles_and_reasons = [_selection_role_and_reason(row) for row in work.to_dict("records")]
+    if roles_and_reasons:
+        work["selection_role"] = [role for role, _reason in roles_and_reasons]
+        work["selection_role_reason"] = [reason for _role, reason in roles_and_reasons]
+    else:
+        work["selection_role"] = pd.Series(dtype=str)
+        work["selection_role_reason"] = pd.Series(dtype=str)
+    role_mask = work["selection_role"].astype(str).eq(PRIMARY_FADE_SELECTION_ROLE)
+    work = work.loc[pass_mask & status_mask & negative_space_mask & no_oi_mask & role_mask].copy()
     if work.empty:
         return pd.DataFrame(columns=_daily_selection_columns())
     work["_status_rank"] = work["basin_status"].astype(str).map({"strong_candidate": 0, "tactical": 1, "challenger": 2}).fillna(99).astype(int)
@@ -3182,6 +3228,9 @@ def _daily_selection_row(*, row: dict[str, object], selected_rank: int) -> dict[
         "center_threshold_quantile": _float(row.get("center_threshold_quantile")),
         "center_oi_discovery_role": str(row.get("center_oi_discovery_role", "")),
         "center_no_oi_audit_only": bool(_to_bool(row.get("center_no_oi_audit_only", False))),
+        "selection_role": str(row.get("selection_role", _selection_role_and_reason(row)[0])),
+        "selection_role_reason": str(row.get("selection_role_reason", _selection_role_and_reason(row)[1])),
+        "selection_role_model": SELECTION_ROLE_MODEL,
         "basin_status": str(row.get("basin_status", "")),
         "basin_score": _float(row.get("basin_score")),
         "center_response_score": _float(row.get("center_response_score")),
@@ -3205,6 +3254,38 @@ def _daily_selection_row(*, row: dict[str, object], selected_rank: int) -> dict[
         "future_label_available_at_entry": False,
         "data_access_model": DATA_ACCESS_MODEL,
     }
+
+
+def _selection_role_and_reason(row: dict[str, object]) -> tuple[str, str]:
+    text = "|".join(
+        str(row.get(column, "")).lower()
+        for column in (
+            "center_scope_name",
+            "center_scope_conditions",
+            "center_rule_key",
+            "scope_name",
+            "scope_conditions",
+            "rule_key",
+            "mechanism_family",
+            "acceptance_regime",
+            "flow_regime",
+            "structure_regime",
+            "price_progress_regime",
+        )
+    )
+    if not text.strip("|"):
+        return AUDIT_ONLY_SELECTION_ROLE, "missing_scope_text"
+
+    for token in AUDIT_ONLY_SELECTION_TOKENS:
+        if token and token in text:
+            return AUDIT_ONLY_SELECTION_ROLE, f"audit_or_broad_token:{token}"
+    for token in CONTROL_RUNNER_SELECTION_TOKENS:
+        if token and token in text:
+            return CONTROL_RUNNER_SELECTION_ROLE, f"control_runner_token:{token}"
+    for token in PRIMARY_FADE_SELECTION_TOKENS:
+        if token and token in text:
+            return PRIMARY_FADE_SELECTION_ROLE, f"failure_token:{token}"
+    return AUDIT_ONLY_SELECTION_ROLE, "no_failure_mechanism_token"
 
 
 def _joined_rule_outcome_input(*, taxonomy: pd.DataFrame, events: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
@@ -3417,6 +3498,7 @@ def _daily_selection_columns() -> list[str]:
         "train_start_date", "train_end_date", "selected_rank", "basin_id", "center_rule_id", "center_rule_key",
         "selection_key", "center_scope_name", "center_scope_conditions", "center_threshold_feature",
         "center_threshold_side", "center_threshold_quantile", "center_oi_discovery_role", "center_no_oi_audit_only",
+        "selection_role", "selection_role_reason", "selection_role_model",
         "basin_status", "basin_score", "center_response_score",
         "median_neighbor_score", "p25_neighbor_score", "neighbor_survival_rate", "min_sample_survival_rate",
         "sign_consistency", "cliff_penalty", "dependency_penalty", "failed_or_rejected_neighbor_count",
