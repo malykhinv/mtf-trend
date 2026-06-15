@@ -2819,6 +2819,8 @@ def _plateau_basin_row(
         "neighbor_expected_downside_count": expected_downside_count,
         "failed_or_rejected_neighbor_count": failed_or_rejected_neighbor_count,
         "has_negative_space_rejection": bool(has_negative_space_rejection),
+        "negative_space_gate_pass": bool(has_negative_space_rejection),
+        "negative_space_gate_reason": "pass" if has_negative_space_rejection else "missing_failed_or_rejected_neighbor",
         "neighbor_survival_rate": neighbor_survival_rate,
         "min_sample_survival_rate": min_sample_survival_rate,
         "sign_consistency": sign_consistency,
@@ -2953,8 +2955,8 @@ def _plateau_basin_columns() -> list[str]:
         "center_structural_low_break_rate_60m", "center_future_ret_positive_rate_60m", "center_fade_quality_score",
         "center_runner_quality_score", "neighbor_count", "neighbor_scoreable_count",
         "neighbor_min_sample_pass_count", "neighbor_score_pass_count", "neighbor_expected_downside_count",
-        "failed_or_rejected_neighbor_count", "has_negative_space_rejection",
-        "neighbor_survival_rate", "min_sample_survival_rate", "sign_consistency", "median_neighbor_score",
+        "failed_or_rejected_neighbor_count", "has_negative_space_rejection", "negative_space_gate_pass",
+        "negative_space_gate_reason", "neighbor_survival_rate", "min_sample_survival_rate", "sign_consistency", "median_neighbor_score",
         "p25_neighbor_score", "worst_neighbor_score", "best_neighbor_score", "score_degradation_pct", "cliff_penalty",
         "dependency_penalty", "max_neighbor_top_symbol_dependency_pct", "max_neighbor_largest_day_event_share", "basin_score",
         "basin_status", "basin_passes_plateau_gate", "plateau_basin_model", "outcome_usage_model",
@@ -3034,7 +3036,13 @@ def _select_daily_basins(*, plateau_basins: pd.DataFrame) -> pd.DataFrame:
     else:
         pass_mask = work.get("basin_status", pd.Series(dtype=str)).astype(str).isin(DAILY_ALLOWED_BASIN_STATUSES)
     status_mask = work.get("basin_status", pd.Series(dtype=str)).astype(str).isin(DAILY_ALLOWED_BASIN_STATUSES)
-    work = work.loc[pass_mask & status_mask].copy()
+    if "negative_space_gate_pass" in work.columns:
+        negative_space_mask = work["negative_space_gate_pass"].map(_to_bool)
+    elif "has_negative_space_rejection" in work.columns:
+        negative_space_mask = work["has_negative_space_rejection"].map(_to_bool)
+    else:
+        negative_space_mask = pd.Series(False, index=work.index)
+    work = work.loc[pass_mask & status_mask & negative_space_mask].copy()
     if work.empty:
         return pd.DataFrame(columns=_daily_selection_columns())
     work["_status_rank"] = work["basin_status"].astype(str).map({"strong_candidate": 0, "tactical": 1, "challenger": 2}).fillna(99).astype(int)
@@ -3086,6 +3094,10 @@ def _daily_selection_row(*, row: dict[str, object], selected_rank: int) -> dict[
         "sign_consistency": _float(row.get("sign_consistency")),
         "cliff_penalty": _float(row.get("cliff_penalty")),
         "dependency_penalty": _float(row.get("dependency_penalty")),
+        "failed_or_rejected_neighbor_count": int(row.get("failed_or_rejected_neighbor_count", 0) or 0),
+        "has_negative_space_rejection": bool(_to_bool(row.get("has_negative_space_rejection", False))),
+        "negative_space_gate_pass": bool(_to_bool(row.get("negative_space_gate_pass", row.get("has_negative_space_rejection", False)))),
+        "negative_space_gate_reason": str(row.get("negative_space_gate_reason", "")),
         "daily_selection_model": DAILY_SELECTION_MODEL,
         "train_uses_only_days_before_test": True,
         "selection_uses_test_day_outcomes": False,
@@ -3308,7 +3320,8 @@ def _daily_selection_columns() -> list[str]:
         "selection_key", "center_scope_name", "center_scope_conditions", "center_threshold_feature",
         "center_threshold_side", "center_threshold_quantile", "basin_status", "basin_score", "center_response_score",
         "median_neighbor_score", "p25_neighbor_score", "neighbor_survival_rate", "min_sample_survival_rate",
-        "sign_consistency", "cliff_penalty", "dependency_penalty", "daily_selection_model",
+        "sign_consistency", "cliff_penalty", "dependency_penalty", "failed_or_rejected_neighbor_count",
+        "has_negative_space_rejection", "negative_space_gate_pass", "negative_space_gate_reason", "daily_selection_model",
         "train_uses_only_days_before_test", "selection_uses_test_day_outcomes", "uses_pnl", "uses_short_entry",
         "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
     ]
@@ -3440,6 +3453,37 @@ def _mechanism_verdict_columns() -> list[str]:
     ]
 
 
+def _future_outcome_leakage_columns() -> list[str]:
+    """Columns that are true future/outcome leakage if they appear in the event store.
+
+    _outcome_columns() intentionally includes join/contract columns such as
+    research_id, symbol, date, session_bucket and feature_cutoff_ms. Those are
+    not leakage when present in pump_mechanism_events. This audit helper only
+    lists columns that encode post-feature-cutoff path information or future
+    labels.
+    """
+    columns: list[str] = [
+        "outcome_status",
+        "outcome_start_timestamp_ms",
+        "outcome_start_time_utc",
+        "max_outcome_minutes",
+        "future_1m_rows",
+        "time_to_reclaim_pump_high_minutes",
+        "time_to_structural_low_break_minutes",
+        "reclaimed_pump_high_60m",
+        "broke_structural_low_60m",
+    ]
+    for minutes in OUTCOME_HORIZONS_MINUTES:
+        columns.extend([
+            f"future_ret_{minutes}m",
+            f"future_min_ret_{minutes}m",
+            f"future_max_ret_{minutes}m",
+            f"down_mfe_{minutes}m",
+            f"up_mae_{minutes}m",
+        ])
+    return columns
+
+
 def _build_protocol_audit(
     *,
     events: pd.DataFrame,
@@ -3546,14 +3590,7 @@ def _build_protocol_audit(
     )
 
     # 4. Event/outcome stores must be separate and explicitly non-entry labels.
-    event_outcome_columns = [column for column in _outcome_columns() if column in set(events.columns)]
-    allowed_event_contract_columns = {
-        "event_id",
-        "outcome_model",
-        "future_label_available_at_entry",
-        "outcomes_available_in_feature_store",
-    }
-    event_forbidden = [column for column in event_outcome_columns if column not in allowed_event_contract_columns]
+    event_forbidden = [column for column in _future_outcome_leakage_columns() if column in set(events.columns)]
     outcome_contract_bad = _rows_with_truthy_flags(
         outcomes,
         {
@@ -3566,7 +3603,7 @@ def _build_protocol_audit(
         not event_forbidden and outcome_contract_bad == 0,
         observed_rows=int(len(events)) + int(len(outcomes)),
         failing_rows=int(bool(event_forbidden)) + outcome_contract_bad,
-        expected="events contain no future outcome label columns; outcomes are not available at entry",
+        expected="events contain no future/path outcome columns; outcomes are not available at entry",
         observed="forbidden_event_columns=" + ",".join(event_forbidden),
     )
 
