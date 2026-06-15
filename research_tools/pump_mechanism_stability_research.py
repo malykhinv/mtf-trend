@@ -154,6 +154,8 @@ DAILY_PREQUENTIAL_OOS_MODEL = "daily_prequential_oos_selected_basins_v1"
 DAILY_SELECTION_MODEL = "select_train_only_plateau_basins_for_test_day_v1"
 NO_OI_REGIME = "missing_closed_5m_oi"
 NO_OI_DISCOVERY_MODEL = "missing_closed_5m_oi_is_audit_only_for_oi_scoped_main_discovery_v1"
+MAIN_OI_REGIMES = frozenset({"oi_down_squeeze_unwind", "oi_up_fresh_leverage", "oi_flat_or_below_threshold"})
+MAIN_OI_THRESHOLD_PREFIXES = ("oi_change_",)
 MECHANISM_VERDICT_MODEL = "fade_vs_runner_mechanism_verdict_from_response_and_oos_v1"
 FADE_QUALITY_MIN_FOR_VERDICT = 0.12
 RUNNER_QUALITY_MIN_FOR_VERDICT = 0.50
@@ -1310,6 +1312,8 @@ def _response_surface_row(*, surface_name: str, group_columns: tuple[str, ...], 
         "future_label_available_at_entry": False,
         "data_access_model": DATA_ACCESS_MODEL,
     }
+    row["oi_discovery_role"] = _oi_discovery_role(surface_name=surface_name, group_value=group_value)
+    row["no_oi_audit_only"] = _is_no_oi_audit_only_role(row["oi_discovery_role"])
     for minutes in OUTCOME_HORIZONS_MINUTES:
         future_ret = _numeric_series(frame, f"future_ret_{minutes}m")
         future_min = _numeric_series(frame, f"future_min_ret_{minutes}m")
@@ -1341,6 +1345,7 @@ def _response_surface_columns() -> list[str]:
         "research_id", "surface_name", "group_columns", "group_value", "events", "symbols", "active_days", "sessions",
         "mechanism_ids", "families", "response_surface_model", "taxonomy_source_model", "outcome_source_model",
         "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+        "oi_discovery_role", "no_oi_audit_only",
     ]
     for minutes in OUTCOME_HORIZONS_MINUTES:
         columns.extend(
@@ -1795,6 +1800,9 @@ def _rule_universe_row(
         "uses_final_holdout_tuning": False,
         "future_label_available_at_entry": False,
         "data_access_model": DATA_ACCESS_MODEL,
+        "oi_discovery_role": _oi_discovery_role(scope_conditions=conditions, threshold_feature=threshold_feature),
+        "no_oi_audit_only": _is_no_oi_audit_only_role(_oi_discovery_role(scope_conditions=conditions, threshold_feature=threshold_feature)),
+        "no_oi_discovery_model": NO_OI_DISCOVERY_MODEL,
     }
 
 
@@ -1808,6 +1816,7 @@ def _rule_universe_columns() -> list[str]:
         "train_active_days", "rule_passes_min_sample", "min_rule_events", "min_rule_symbols", "min_rule_active_days",
         "rule_generation_model", "threshold_fit_model", "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl",
         "uses_short_entry", "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
+        "oi_discovery_role", "no_oi_audit_only", "no_oi_discovery_model",
     ]
 
 
@@ -1823,6 +1832,44 @@ def _scope_key(conditions: object) -> str:
 
 def _condition_value(conditions: dict[str, object], key: str) -> str:
     return str(conditions.get(key, "*"))
+
+
+def _is_oi_threshold_feature(feature: object) -> bool:
+    text = str(feature or "")
+    return any(text.startswith(prefix) for prefix in MAIN_OI_THRESHOLD_PREFIXES)
+
+
+def _oi_discovery_role(*, scope_conditions: object = None, threshold_feature: object = "", surface_name: object = "", group_value: object = "") -> str:
+    """Classify whether a row uses OI as a real regime or only has missing-OI data.
+
+    Missing OI is a data availability condition, not a market mechanism.  It may
+    remain visible in audit/control surfaces, but it must not become the main OI
+    edge selected by the mechanism discovery pipeline.
+    """
+
+    conditions = _parse_scope_conditions(scope_conditions) if not isinstance(scope_conditions, dict) else {str(k): str(v) for k, v in scope_conditions.items()}
+    oi_value = str(conditions.get("oi_regime", "")).strip()
+    threshold_text = str(threshold_feature or "")
+    surface_text = str(surface_name or "")
+    group_text = str(group_value or "")
+
+    if oi_value == NO_OI_REGIME:
+        return "no_oi_audit_only"
+    if oi_value in MAIN_OI_REGIMES:
+        return "main_oi_regime_scope"
+    if _is_oi_threshold_feature(threshold_text):
+        return "main_oi_threshold"
+    if surface_text in {"oi", "oi_acceptance"}:
+        if NO_OI_REGIME in group_text:
+            return "no_oi_audit_only"
+        return "main_oi_surface"
+    if NO_OI_REGIME in group_text and "oi" in surface_text:
+        return "no_oi_audit_only"
+    return "price_flow_structure_no_oi_scope"
+
+
+def _is_no_oi_audit_only_role(role: object) -> bool:
+    return str(role or "") == "no_oi_audit_only"
 
 
 def _quantile_label(value: float) -> str:
@@ -2014,6 +2061,10 @@ def _select_negative_space_center_rules(center_rules: pd.DataFrame) -> tuple[pd.
         return center_rules.copy(), {"windows": 0, "max_raw_window_centers": 0, "max_selected_window_centers": 0}
 
     work = center_rules.copy()
+    if "no_oi_audit_only" in work.columns:
+        work = work.loc[~work["no_oi_audit_only"].map(_to_bool)].copy()
+    if work.empty:
+        return center_rules.iloc[0:0].copy(), {"windows": 0, "max_raw_window_centers": 0, "max_selected_window_centers": 0}
     for column in ("test_day_ord", "train_window_days", "train_events", "train_symbols", "train_active_days", "scope_depth"):
         if column not in work.columns:
             work[column] = 0
@@ -2278,6 +2329,8 @@ def _negative_space_row(
             _format_float_for_id(threshold_value),
         )
     )
+    center_oi_role = str(center.get("oi_discovery_role") or _oi_discovery_role(scope_conditions=center.get("scope_conditions"), threshold_feature=center.get("threshold_feature")))
+    neighbor_oi_role = _oi_discovery_role(scope_conditions=conditions, threshold_feature=threshold_feature)
     return {
         "research_id": RESEARCH_ID,
         "basin_id": basin_id,
@@ -2301,6 +2354,8 @@ def _negative_space_row(
         "center_train_symbols": _finite_int_or_none(center.get("train_symbols")) or 0,
         "center_train_active_days": _finite_int_or_none(center.get("train_active_days")) or 0,
         "center_passes_min_sample": _to_bool(center.get("rule_passes_min_sample")),
+        "center_oi_discovery_role": center_oi_role,
+        "center_no_oi_audit_only": _is_no_oi_audit_only_role(center_oi_role),
         "neighbor_kind": str(neighbor.get("neighbor_kind", "")),
         "neighbor_distance": int(neighbor.get("neighbor_distance", 0) or 0),
         "neighbor_axis_changed": str(neighbor.get("neighbor_axis_changed", "")),
@@ -2318,6 +2373,8 @@ def _negative_space_row(
         "neighbor_active_days": neighbor_active_days,
         "neighbor_passes_min_sample": passes_min_sample,
         "neighbor_fail_reason": fail_reason,
+        "neighbor_oi_discovery_role": neighbor_oi_role,
+        "neighbor_no_oi_audit_only": _is_no_oi_audit_only_role(neighbor_oi_role),
         "min_rule_events": int(MIN_RULE_EVENTS),
         "min_rule_symbols": int(MIN_RULE_SYMBOLS),
         "min_rule_active_days": int(MIN_RULE_ACTIVE_DAYS),
@@ -2363,11 +2420,13 @@ def _negative_space_columns() -> list[str]:
         "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
         "train_start_date", "train_end_date", "center_scope_name", "center_scope_conditions", "center_threshold_feature",
         "center_threshold_side", "center_threshold_quantile", "center_train_events", "center_train_symbols",
-        "center_train_active_days", "center_passes_min_sample", "neighbor_kind", "neighbor_distance", "neighbor_axis_changed",
+        "center_train_active_days", "center_passes_min_sample", "center_oi_discovery_role", "center_no_oi_audit_only",
+        "neighbor_kind", "neighbor_distance", "neighbor_axis_changed",
         "neighbor_scope_conditions", "neighbor_scope_depth", "neighbor_threshold_feature", "neighbor_threshold_side",
         "neighbor_threshold_quantile", "neighbor_threshold_value", "neighbor_threshold_source_events", "neighbor_threshold_valid_values",
         "neighbor_threshold_uses_abs_value", "neighbor_events", "neighbor_symbols", "neighbor_active_days",
-        "neighbor_passes_min_sample", "neighbor_fail_reason", "min_rule_events", "min_rule_symbols", "min_rule_active_days",
+        "neighbor_passes_min_sample", "neighbor_fail_reason", "neighbor_oi_discovery_role", "neighbor_no_oi_audit_only",
+        "min_rule_events", "min_rule_symbols", "min_rule_active_days",
         "negative_space_model", "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl", "uses_short_entry",
         "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
     ]
@@ -2401,6 +2460,8 @@ def _eligible_scope_values(train: pd.DataFrame, axis: str) -> list[str]:
         return []
     counts = train[axis].fillna("missing").astype(str).value_counts(dropna=False)
     values = [str(value) for value, count in counts.items() if int(count) >= MIN_TRAIN_SCOPE_EVENTS]
+    if axis == "oi_regime":
+        values = [value for value in values if value != NO_OI_REGIME]
     return sorted(values[:MAX_SCOPE_REPLACEMENT_VALUES_PER_AXIS])
 
 
@@ -2829,6 +2890,8 @@ def _plateau_basin_row(
         "center_train_events": int(first.get("center_train_events", 0) or 0),
         "center_train_symbols": int(first.get("center_train_symbols", 0) or 0),
         "center_train_active_days": int(first.get("center_train_active_days", 0) or 0),
+        "center_oi_discovery_role": str(first.get("center_oi_discovery_role", "")),
+        "center_no_oi_audit_only": bool(_to_bool(first.get("center_no_oi_audit_only", False))),
         "center_response_score": center_score,
         "center_expected_downside": bool(center.get("neighbor_expected_downside", False)),
         "center_median_future_ret_30m": _float(center.get("median_future_ret_30m")),
@@ -2980,6 +3043,7 @@ def _plateau_basin_columns() -> list[str]:
         "train_window_days", "train_start_day_ord", "train_end_day_ord", "train_start_date", "train_end_date",
         "center_scope_name", "center_scope_conditions", "center_threshold_feature", "center_threshold_side",
         "center_threshold_quantile", "center_train_events", "center_train_symbols", "center_train_active_days",
+        "center_oi_discovery_role", "center_no_oi_audit_only",
         "center_response_score", "center_expected_downside", "center_median_future_ret_30m",
         "center_median_future_ret_60m", "center_median_future_min_ret_30m", "center_median_future_min_ret_60m",
         "center_downside_hit_rate_30m", "center_downside_hit_rate_60m", "center_reclaim_rate_60m",
@@ -3073,7 +3137,8 @@ def _select_daily_basins(*, plateau_basins: pd.DataFrame) -> pd.DataFrame:
         negative_space_mask = work["has_negative_space_rejection"].map(_to_bool)
     else:
         negative_space_mask = pd.Series(False, index=work.index)
-    work = work.loc[pass_mask & status_mask & negative_space_mask].copy()
+    no_oi_mask = ~work.get("center_no_oi_audit_only", pd.Series(False, index=work.index)).map(_to_bool)
+    work = work.loc[pass_mask & status_mask & negative_space_mask & no_oi_mask].copy()
     if work.empty:
         return pd.DataFrame(columns=_daily_selection_columns())
     work["_status_rank"] = work["basin_status"].astype(str).map({"strong_candidate": 0, "tactical": 1, "challenger": 2}).fillna(99).astype(int)
@@ -3115,6 +3180,8 @@ def _daily_selection_row(*, row: dict[str, object], selected_rank: int) -> dict[
         "center_threshold_feature": str(row.get("center_threshold_feature", "")),
         "center_threshold_side": str(row.get("center_threshold_side", "")),
         "center_threshold_quantile": _float(row.get("center_threshold_quantile")),
+        "center_oi_discovery_role": str(row.get("center_oi_discovery_role", "")),
+        "center_no_oi_audit_only": bool(_to_bool(row.get("center_no_oi_audit_only", False))),
         "basin_status": str(row.get("basin_status", "")),
         "basin_score": _float(row.get("basin_score")),
         "center_response_score": _float(row.get("center_response_score")),
@@ -3349,7 +3416,8 @@ def _daily_selection_columns() -> list[str]:
         "research_id", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
         "train_start_date", "train_end_date", "selected_rank", "basin_id", "center_rule_id", "center_rule_key",
         "selection_key", "center_scope_name", "center_scope_conditions", "center_threshold_feature",
-        "center_threshold_side", "center_threshold_quantile", "basin_status", "basin_score", "center_response_score",
+        "center_threshold_side", "center_threshold_quantile", "center_oi_discovery_role", "center_no_oi_audit_only",
+        "basin_status", "basin_score", "center_response_score",
         "median_neighbor_score", "p25_neighbor_score", "neighbor_survival_rate", "min_sample_survival_rate",
         "sign_consistency", "cliff_penalty", "dependency_penalty", "failed_or_rejected_neighbor_count",
         "has_negative_space_rejection", "negative_space_gate_pass", "negative_space_gate_reason", "daily_selection_model",
@@ -3427,7 +3495,8 @@ def _build_mechanism_verdict(
             break_rate = _float(surface.get("structural_low_break_rate_60m"))
             group_value = str(surface.get("group_value", ""))
             has_missing_oi = NO_OI_REGIME in group_value
-            if has_missing_oi and str(surface.get("surface_name", "")) in {"oi_acceptance"}:
+            oi_discovery_role = str(surface.get("oi_discovery_role") or _oi_discovery_role(surface_name=surface.get("surface_name", ""), group_value=group_value))
+            if _is_no_oi_audit_only_role(oi_discovery_role):
                 verdict = "no_oi_audit_only"
             elif math.isfinite(fade_quality) and fade_quality >= FADE_QUALITY_MIN_FOR_VERDICT and active_days >= 10 and symbols >= 8:
                 verdict = "fade_mechanism_candidate"
@@ -3457,8 +3526,10 @@ def _build_mechanism_verdict(
                     "structural_low_break_rate_60m": break_rate,
                     "future_ret_positive_rate_60m": _float(surface.get("future_ret_positive_rate_60m")),
                     "has_missing_closed_5m_oi": bool(has_missing_oi),
+                    "oi_discovery_role": oi_discovery_role,
+                    "no_oi_audit_only": _is_no_oi_audit_only_role(oi_discovery_role),
                     "verdict": verdict,
-                    "allowed_for_short_research": bool(verdict == "fade_mechanism_candidate" and not has_missing_oi),
+                    "allowed_for_short_research": bool(verdict == "fade_mechanism_candidate" and not _is_no_oi_audit_only_role(oi_discovery_role)),
                     "no_oi_discovery_model": NO_OI_DISCOVERY_MODEL,
                     "mechanism_verdict_model": MECHANISM_VERDICT_MODEL,
                     "uses_pnl": False,
@@ -3480,7 +3551,8 @@ def _mechanism_verdict_columns() -> list[str]:
         "median_future_ret_30m", "median_future_ret_60m",
         "median_future_min_ret_30m", "median_future_min_ret_60m", "downside_hit_rate_30m", "downside_hit_rate_60m",
         "reclaim_rate_60m", "structural_low_break_rate_60m", "future_ret_positive_rate_60m",
-        "has_missing_closed_5m_oi", "verdict", "allowed_for_short_research", "no_oi_discovery_model",
+        "has_missing_closed_5m_oi", "oi_discovery_role", "no_oi_audit_only",
+        "verdict", "allowed_for_short_research", "no_oi_discovery_model",
         "mechanism_verdict_model", "uses_pnl", "uses_short_entry", "uses_final_holdout_tuning", "data_access_model",
     ]
 
