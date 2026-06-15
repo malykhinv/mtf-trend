@@ -1328,6 +1328,7 @@ def _response_surface_row(*, surface_name: str, group_columns: tuple[str, ...], 
     row["median_time_to_reclaim_pump_high_minutes"] = _safe_median(_numeric_series(frame, "time_to_reclaim_pump_high_minutes"))
     row["median_time_to_structural_low_break_minutes"] = _safe_median(_numeric_series(frame, "time_to_structural_low_break_minutes"))
     row["downside_monotonicity_score"] = _downside_monotonicity_score(row)
+    row["raw_downside_excursion_score"] = _raw_downside_excursion_score(row)
     row["fade_quality_score"] = _fade_quality_score(row)
     row["runner_quality_score"] = _runner_quality_score(row)
     row["directional_response_score"] = row["fade_quality_score"]
@@ -1354,7 +1355,8 @@ def _response_surface_columns() -> list[str]:
     columns.extend(
         [
             "reclaim_rate_60m", "structural_low_break_rate_60m", "median_time_to_reclaim_pump_high_minutes",
-            "median_time_to_structural_low_break_minutes", "downside_monotonicity_score", "fade_quality_score",
+            "median_time_to_structural_low_break_minutes", "downside_monotonicity_score",
+            "raw_downside_excursion_score", "fade_quality_score",
             "runner_quality_score", "directional_response_score",
             "top_event_dependency_pct", "top_symbol_dependency_pct", "largest_symbol_event_share", "largest_day_event_share",
         ]
@@ -1378,12 +1380,36 @@ def _downside_monotonicity_score(row: dict[str, object]) -> float:
     return non_increasing / comparisons if comparisons else float("nan")
 
 
+def _raw_downside_excursion_score(row: dict[str, object]) -> float:
+    """Diagnostic only: raw post-pump downside excursion.
+
+    This intentionally does not decide fade validity. Accepted/runner pumps can
+    also have intrapath pullbacks, so this value is kept as an audit column
+    instead of being used as the primary directional score.
+    """
+
+    downside_30 = _float(row.get("downside_hit_rate_minus_1p00pct_30m", row.get("downside_hit_rate_30m")))
+    downside_60 = _float(row.get("downside_hit_rate_minus_2p00pct_60m", row.get("downside_hit_rate_60m")))
+    median_min_30 = _float(row.get("median_future_min_ret_30m"))
+    median_min_60 = _float(row.get("median_future_min_ret_60m"))
+    components = [
+        0.50 * (downside_30 - 0.35) if math.isfinite(downside_30) else np.nan,
+        0.60 * (downside_60 - 0.25) if math.isfinite(downside_60) else np.nan,
+        5.0 * (-median_min_30) if math.isfinite(median_min_30) else np.nan,
+        4.0 * (-median_min_60) if math.isfinite(median_min_60) else np.nan,
+    ]
+    finite = [float(value) for value in components if math.isfinite(float(value))]
+    return float(np.sum(finite)) if finite else float("nan")
+
+
 def _fade_quality_score(row: dict[str, object]) -> float:
     """Pre-trade fade-quality score, not PnL.
 
     Raw downside excursion after a pump is common and can make accepted/runner
-    pumps look shortable.  This score rewards downside only when it comes with
-    low reclaim and structural break evidence.
+    pumps look shortable. This score only treats downside as useful when it is
+    accompanied by failure evidence: low reclaim, structural break, and weak
+    60m close behavior. The raw downside-only value remains available as
+    ``raw_downside_excursion_score`` for diagnostics.
     """
 
     downside_30 = _float(row.get("downside_hit_rate_minus_1p00pct_30m", row.get("downside_hit_rate_30m")))
@@ -1395,15 +1421,18 @@ def _fade_quality_score(row: dict[str, object]) -> float:
     break_rate = _float(row.get("structural_low_break_rate_60m"))
     reclaim_rate = _float(row.get("reclaim_rate_60m"))
 
+    # Downside path still matters, but with deliberately smaller weights than
+    # reclaim/structure. Otherwise accepted runners with normal pullbacks are
+    # promoted as fake fades.
     components = [
-        0.35 * (downside_30 - 0.35) if math.isfinite(downside_30) else np.nan,
-        0.45 * (downside_60 - 0.25) if math.isfinite(downside_60) else np.nan,
-        10.0 * (-median_min_30) if math.isfinite(median_min_30) else np.nan,
-        8.0 * (-median_min_60) if math.isfinite(median_min_60) else np.nan,
-        0.55 * (break_rate - 0.30) if math.isfinite(break_rate) else np.nan,
-        0.65 * (0.55 - reclaim_rate) if math.isfinite(reclaim_rate) else np.nan,
-        0.35 * (0.55 - positive_rate_60) if math.isfinite(positive_rate_60) else np.nan,
-        -6.0 * max(0.0, median_ret_60) if math.isfinite(median_ret_60) else np.nan,
+        0.20 * (downside_30 - 0.40) if math.isfinite(downside_30) else np.nan,
+        0.25 * (downside_60 - 0.30) if math.isfinite(downside_60) else np.nan,
+        2.5 * (-median_min_30) if math.isfinite(median_min_30) else np.nan,
+        2.0 * (-median_min_60) if math.isfinite(median_min_60) else np.nan,
+        0.90 * (break_rate - 0.40) if math.isfinite(break_rate) else np.nan,
+        0.90 * (0.45 - reclaim_rate) if math.isfinite(reclaim_rate) else np.nan,
+        0.55 * (0.50 - positive_rate_60) if math.isfinite(positive_rate_60) else np.nan,
+        -8.0 * max(0.0, median_ret_60) if math.isfinite(median_ret_60) else np.nan,
     ]
     finite = [float(value) for value in components if math.isfinite(float(value))]
     return float(np.sum(finite)) if finite else float("nan")
@@ -2675,6 +2704,7 @@ def _plateau_response_metrics(frame: pd.DataFrame) -> dict[str, object]:
         "future_ret_positive_rate_60m": positive_60,
         **dependency,
     }
+    metrics["raw_downside_excursion_score"] = _raw_downside_excursion_score(metrics)
     metrics["fade_quality_score"] = _fade_quality_score(metrics)
     metrics["runner_quality_score"] = _runner_quality_score(metrics)
     return metrics
@@ -2810,6 +2840,7 @@ def _plateau_basin_row(
         "center_reclaim_rate_60m": _float(center.get("reclaim_rate_60m")),
         "center_structural_low_break_rate_60m": _float(center.get("structural_low_break_rate_60m")),
         "center_future_ret_positive_rate_60m": _float(center.get("future_ret_positive_rate_60m")),
+        "center_raw_downside_excursion_score": _float(center.get("raw_downside_excursion_score")),
         "center_fade_quality_score": _float(center.get("fade_quality_score")),
         "center_runner_quality_score": _float(center.get("runner_quality_score")),
         "neighbor_count": neighbor_count,
@@ -3445,7 +3476,8 @@ def _build_mechanism_verdict(
 def _mechanism_verdict_columns() -> list[str]:
     return [
         "research_id", "surface_name", "group_columns", "group_value", "mechanism_key", "events", "symbols",
-        "active_days", "fade_quality_score", "runner_quality_score", "median_future_ret_30m", "median_future_ret_60m",
+        "active_days", "raw_downside_excursion_score", "fade_quality_score", "runner_quality_score",
+        "median_future_ret_30m", "median_future_ret_60m",
         "median_future_min_ret_30m", "median_future_min_ret_60m", "downside_hit_rate_30m", "downside_hit_rate_60m",
         "reclaim_rate_60m", "structural_low_break_rate_60m", "future_ret_positive_rate_60m",
         "has_missing_closed_5m_oi", "verdict", "allowed_for_short_research", "no_oi_discovery_model",
