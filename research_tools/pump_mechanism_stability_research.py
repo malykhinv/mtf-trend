@@ -440,6 +440,7 @@ def run_pump_mechanism_stability_research(
             plateau_basins=pd.DataFrame(),
             daily_selection=pd.DataFrame(),
             daily_oos=pd.DataFrame(),
+            daily_oos_by_axis=pd.DataFrame(),
             window_health=pd.DataFrame(),
             selection_drift=pd.DataFrame(),
         )
@@ -630,6 +631,7 @@ def run_pump_mechanism_stability_research(
         plateau_basins=plateau_basins,
         daily_selection=daily_selection,
         daily_oos=daily_oos,
+        daily_oos_by_axis=daily_oos_by_axis,
         window_health=window_health,
         selection_drift=selection_drift,
     )
