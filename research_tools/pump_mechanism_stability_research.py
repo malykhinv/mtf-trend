@@ -112,6 +112,7 @@ RULE_SCOPE_AXES: tuple[str, ...] = (
     "oi_regime",
     "flow_regime",
     "structure_regime",
+    "price_progress_regime",
     "late_buyer_regime",
     "session_bucket",
 )
@@ -121,12 +122,25 @@ RULE_PAIR_SCOPES: tuple[tuple[str, str], ...] = (
     ("oi_regime", "acceptance_regime"),
     ("mechanism_family", "oi_regime"),
 )
-RULE_GENERATION_MODEL = "train_only_mechanism_intent_budgeted_rule_grammar_v2"
-RULE_BUDGET_MODEL = "train_only_mechanism_intent_cell_budget_v1"
+RULE_GENERATION_MODEL = "train_only_mechanism_intent_budgeted_rule_grammar_v3_structural_failure_cube"
+RULE_BUDGET_MODEL = "train_only_mechanism_intent_cell_budget_v2_structural_failure_cube"
 RULE_MAX_CELLS_PER_TEST_WINDOW = 32
 RULE_MAX_RULES_PER_CELL = 16
 RULE_CONTROL_CELLS_PER_TEST_WINDOW = 6
 RULE_DIVERSE_AUDIT_CELLS_PER_TEST_WINDOW = 4
+RULE_STRUCTURAL_FAILURE_CUBE_CELLS_PER_TEST_WINDOW = 12
+STRUCTURAL_FAILURE_CUBE_SCOPE_NAMES = frozenset(
+    {
+        "structural_failure_cube",
+        "structural_failure_cube_session",
+        "structural_failure_cube_oi_session",
+        "structural_failure_cube_flow_session",
+    }
+)
+STRUCTURAL_FAILURE_ACCEPTANCE_REGIMES = frozenset({"immediate_rejection", "failed_acceptance"})
+STRUCTURAL_FAILURE_STRUCTURE_REGIMES = frozenset({"seed_low_break_after_pump", "upper_half_rejected"})
+STRUCTURAL_FAILURE_PRICE_PROGRESS_REGIMES = frozenset({"wick_without_acceptance", "pullback_after_spike"})
+STRUCTURAL_FAILURE_OI_REGIMES = frozenset({"oi_down_squeeze_unwind", "oi_up_fresh_leverage", "oi_flat_or_below_threshold"})
 RULE_PRIORITY_THRESHOLD_FEATURES = (
     "close15_to_high15_ratio",
     "wick_ret_15m",
@@ -1996,6 +2010,8 @@ def _build_train_only_rule_universe(*, taxonomy: pd.DataFrame, events: pd.DataFr
                     continue
                 role = str(scope.get("selection_role", AUDIT_ONLY_SELECTION_ROLE))
                 selected_roles[role] = selected_roles.get(role, 0) + 1
+                if str(scope.get("scope_name", "")) in STRUCTURAL_FAILURE_CUBE_SCOPE_NAMES:
+                    selected_roles["structural_failure_cube"] = selected_roles.get("structural_failure_cube", 0) + 1
                 emitted_for_cell = 0
                 rows.append(
                     _rule_universe_row(
@@ -2150,6 +2166,8 @@ def _raw_train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
                         "scope_depth": 2,
                     }
                 )
+    scopes.extend(_structural_failure_cube_scopes(train))
+
     # Deterministic order and de-duplication: the same condition set can be
     # reached through a named pair after missing-value normalization.
     unique: dict[str, dict[str, object]] = {}
@@ -2157,6 +2175,62 @@ def _raw_train_rule_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
         key = _scope_key(scope["conditions"])
         unique.setdefault(f"{scope['scope_name']}|{key}", scope)
     return list(unique.values())
+
+
+def _structural_failure_cube_scopes(train: pd.DataFrame) -> list[dict[str, object]]:
+    """Emit train-only structural failure cells from entry-known taxonomy axes.
+
+    The response cube made these pockets visible as diagnostics; this helper
+    makes the same deterministic axes available to the rolling selector without
+    reading outcomes.  Missing-OI cells are deliberately excluded from OI-scoped
+    discovery so data availability cannot become the main edge.
+    """
+
+    required = ("acceptance_regime", "structure_regime", "price_progress_regime", "session_bucket")
+    if train.empty or any(column not in train.columns for column in required):
+        return []
+
+    work = train.copy()
+    for column in set(required) | {"oi_regime", "flow_regime"}:
+        if column in work.columns:
+            work[column] = work[column].fillna("missing").astype(str)
+
+    work = work.loc[
+        work["acceptance_regime"].isin(STRUCTURAL_FAILURE_ACCEPTANCE_REGIMES)
+        & work["structure_regime"].isin(STRUCTURAL_FAILURE_STRUCTURE_REGIMES)
+        & work["price_progress_regime"].isin(STRUCTURAL_FAILURE_PRICE_PROGRESS_REGIMES)
+    ].copy()
+    if work.empty:
+        return []
+
+    scope_defs: list[tuple[str, tuple[str, ...]]] = [
+        ("structural_failure_cube", ("acceptance_regime", "structure_regime", "price_progress_regime")),
+        ("structural_failure_cube_session", ("acceptance_regime", "structure_regime", "price_progress_regime", "session_bucket")),
+    ]
+    if "oi_regime" in work.columns:
+        scope_defs.append(("structural_failure_cube_oi_session", ("acceptance_regime", "structure_regime", "price_progress_regime", "oi_regime", "session_bucket")))
+    if "flow_regime" in work.columns:
+        scope_defs.append(("structural_failure_cube_flow_session", ("acceptance_regime", "structure_regime", "price_progress_regime", "flow_regime", "session_bucket")))
+
+    scopes: list[dict[str, object]] = []
+    for scope_name, axes in scope_defs:
+        grouped = work.groupby(list(axes), dropna=False, sort=True)
+        for raw_key, frame in grouped:
+            key_values = raw_key if isinstance(raw_key, tuple) else (raw_key,)
+            conditions = {axis: str(value) for axis, value in zip(axes, key_values, strict=False)}
+            if conditions.get("oi_regime") == NO_OI_REGIME:
+                continue
+            if len(frame) < MIN_TRAIN_SCOPE_EVENTS:
+                continue
+            scopes.append(
+                {
+                    "scope_name": scope_name,
+                    "conditions": conditions,
+                    "scope_depth": len(conditions),
+                    "mechanism_intent_source": "entry_known_structural_failure_cube",
+                }
+            )
+    return scopes
 
 
 def _select_mechanism_intent_rule_cells(scopes: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -2187,7 +2261,18 @@ def _select_mechanism_intent_rule_cells(scopes: list[dict[str, object]]) -> list
         enriched_scope["_raw_order"] = int(index)
         enriched.append(enriched_scope)
 
-    primary = [scope for scope in enriched if str(scope.get("selection_role")) == PRIMARY_FADE_SELECTION_ROLE]
+    structural = [
+        scope
+        for scope in enriched
+        if str(scope.get("scope_name")) in STRUCTURAL_FAILURE_CUBE_SCOPE_NAMES
+        and str(scope.get("selection_role")) == PRIMARY_FADE_SELECTION_ROLE
+    ]
+    primary = [
+        scope
+        for scope in enriched
+        if str(scope.get("selection_role")) == PRIMARY_FADE_SELECTION_ROLE
+        and str(scope.get("scope_name")) not in STRUCTURAL_FAILURE_CUBE_SCOPE_NAMES
+    ]
     control = [scope for scope in enriched if str(scope.get("selection_role")) == CONTROL_RUNNER_SELECTION_ROLE]
     audit = [scope for scope in enriched if str(scope.get("selection_role")) == AUDIT_ONLY_SELECTION_ROLE]
 
@@ -2213,9 +2298,16 @@ def _select_mechanism_intent_rule_cells(scopes: list[dict[str, object]]) -> list
 
     control_limit = min(int(RULE_CONTROL_CELLS_PER_TEST_WINDOW), int(RULE_MAX_CELLS_PER_TEST_WINDOW))
     audit_limit = min(int(RULE_DIVERSE_AUDIT_CELLS_PER_TEST_WINDOW), max(0, int(RULE_MAX_CELLS_PER_TEST_WINDOW) - control_limit))
-    primary_limit = max(0, int(RULE_MAX_CELLS_PER_TEST_WINDOW) - control_limit - audit_limit)
+    structural_limit = min(
+        int(RULE_STRUCTURAL_FAILURE_CUBE_CELLS_PER_TEST_WINDOW),
+        max(0, int(RULE_MAX_CELLS_PER_TEST_WINDOW) - control_limit - audit_limit),
+    )
+    primary_limit = max(0, int(RULE_MAX_CELLS_PER_TEST_WINDOW) - control_limit - audit_limit - structural_limit)
 
+    add_many(structural, structural_limit)
     add_many(primary, primary_limit)
+    if len(selected) < structural_limit + primary_limit:
+        add_many(structural + primary, structural_limit + primary_limit - len(selected))
     add_many(control, control_limit)
     add_many(audit, audit_limit)
 
@@ -2236,9 +2328,14 @@ def _rank_rule_cells(scopes: list[dict[str, object]]) -> list[dict[str, object]]
         conditions = scope.get("conditions") if isinstance(scope.get("conditions"), dict) else {}
         assert isinstance(conditions, dict)
         scope_depth = int(scope.get("scope_depth", 0) or 0)
+        scope_name = str(scope.get("scope_name", ""))
+        is_structural_cube = 0 if scope_name in STRUCTURAL_FAILURE_CUBE_SCOPE_NAMES else 1
+        has_full_structural_axes = 0 if {"acceptance_regime", "structure_regime", "price_progress_regime"}.issubset(set(conditions)) else 1
         has_mechanism_family = 0 if "mechanism_family" in conditions else 1
         has_session = 0 if "session_bucket" in conditions else 1
         return (
+            is_structural_cube,
+            has_full_structural_axes,
             has_mechanism_family,
             has_session,
             -scope_depth,
@@ -2306,6 +2403,8 @@ def _rule_budget_row(
         "primary_fade_rule_cells": int(selected_roles.get(PRIMARY_FADE_SELECTION_ROLE, 0)),
         "control_runner_rule_cells": int(selected_roles.get(CONTROL_RUNNER_SELECTION_ROLE, 0)),
         "audit_only_rule_cells": int(selected_roles.get(AUDIT_ONLY_SELECTION_ROLE, 0)),
+        "structural_failure_cube_rule_cells": int(selected_roles.get("structural_failure_cube", 0)),
+        "max_structural_failure_cube_cells_per_test_window": int(RULE_STRUCTURAL_FAILURE_CUBE_CELLS_PER_TEST_WINDOW),
         "rule_budget_model": RULE_BUDGET_MODEL,
         "rule_generation_model": RULE_GENERATION_MODEL,
         "train_uses_only_days_before_test": True,
@@ -2323,7 +2422,8 @@ def _rule_budget_columns() -> list[str]:
         "research_id", "test_day_ord", "test_date", "train_window_days", "train_start_day_ord", "train_end_day_ord",
         "train_start_date", "train_end_date", "train_events", "raw_rule_cells", "selected_rule_cells",
         "max_rule_cells_per_test_window", "max_rules_per_cell", "emitted_rule_rows", "primary_fade_rule_cells",
-        "control_runner_rule_cells", "audit_only_rule_cells", "rule_budget_model", "rule_generation_model",
+        "control_runner_rule_cells", "audit_only_rule_cells", "structural_failure_cube_rule_cells",
+        "max_structural_failure_cube_cells_per_test_window", "rule_budget_model", "rule_generation_model",
         "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl", "uses_short_entry",
         "uses_final_holdout_tuning", "future_label_available_at_entry", "data_access_model",
     ]
@@ -2426,6 +2526,7 @@ def _rule_universe_row(
         "oi_regime": _condition_value(conditions, "oi_regime"),
         "flow_regime": _condition_value(conditions, "flow_regime"),
         "structure_regime": _condition_value(conditions, "structure_regime"),
+        "price_progress_regime": _condition_value(conditions, "price_progress_regime"),
         "late_buyer_regime": _condition_value(conditions, "late_buyer_regime"),
         "session_bucket": _condition_value(conditions, "session_bucket"),
         "threshold_family": threshold_family,
@@ -2465,7 +2566,7 @@ def _rule_universe_columns() -> list[str]:
         "train_end_day_ord", "train_start_date", "train_end_date", "scope_name", "scope_depth", "scope_conditions",
         "selection_role", "selection_role_reason", "selection_role_model",
         "mechanism_family", "acceptance_regime", "oi_regime", "flow_regime", "structure_regime", "late_buyer_regime",
-        "session_bucket", "threshold_family", "threshold_feature", "threshold_side", "threshold_quantile", "threshold_value",
+        "price_progress_regime", "session_bucket", "threshold_family", "threshold_feature", "threshold_side", "threshold_quantile", "threshold_value",
         "threshold_source_events", "threshold_valid_values", "threshold_uses_abs_value", "train_events", "train_symbols",
         "train_active_days", "rule_passes_min_sample", "min_rule_events", "min_rule_symbols", "min_rule_active_days",
         "rule_generation_model", "rule_budget_model", "threshold_fit_model", "train_uses_only_days_before_test", "uses_outcome_columns", "uses_pnl",
@@ -4841,6 +4942,8 @@ def _run_config_frame(
         "rule_budget_model": RULE_BUDGET_MODEL,
         "rule_max_cells_per_test_window": int(RULE_MAX_CELLS_PER_TEST_WINDOW),
         "rule_max_rules_per_cell": int(RULE_MAX_RULES_PER_CELL),
+        "rule_structural_failure_cube_cells_per_test_window": int(RULE_STRUCTURAL_FAILURE_CUBE_CELLS_PER_TEST_WINDOW),
+        "rule_structural_failure_cube_scope_names": ",".join(sorted(STRUCTURAL_FAILURE_CUBE_SCOPE_NAMES)),
         "rule_max_selected_cells_observed": max_selected_rule_cells,
         "rule_max_emitted_rows_per_window_observed": max_emitted_rule_rows_per_window,
         "negative_space_rows": negative_space_rows,
