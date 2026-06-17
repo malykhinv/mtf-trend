@@ -54,6 +54,32 @@ MVP1 placebo/control checks:
 python main.py run-mvp1-controls --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_controls
 ```
 
+
+Binance Vision USD-M Futures cache build:
+
+```bash
+python main.py build-binance-vision-cache --days 380 --out data/processed
+```
+
+Smoke test on a small subset:
+
+```bash
+python main.py build-binance-vision-cache --symbols BTCUSDT,ETHUSDT --days 7 --out data/processed --overwrite
+```
+
+
+Binance Vision USD-M Futures cache build:
+
+```bash
+python main.py build-binance-vision-cache --days 380
+```
+
+Smoke test on a small subset:
+
+```bash
+python main.py build-binance-vision-cache --symbols BTCUSDT,ETHUSDT --days 7 --overwrite
+```
+
 Compile check:
 
 ```bash
