@@ -12,3 +12,5 @@ __pycache__/
 */__pycache__/
 *.py[cod]
 *.log
+.patches/*.patch
+!.patches/README.md
