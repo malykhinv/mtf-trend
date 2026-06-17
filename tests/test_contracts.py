@@ -4,6 +4,7 @@ import pytest
 
 from anomaly_science.audit import TemporalAuditInput, audit_temporal_contract
 from anomaly_science.contracts import (
+    AnomalyFeatureMatrixRow,
     AnomalyState1mRow,
     AuditStatus,
     Candle1m,
@@ -255,6 +256,76 @@ def test_feature_catalog_rejects_future_and_raw_model_features() -> None:
             missing_policy=FeatureMissingPolicy.NOT_NULL,
             dtype="float",
             description="invalid raw model feature",
+        )
+
+
+def test_feature_matrix_row_enforces_asof_and_registered_buckets() -> None:
+    AnomalyFeatureMatrixRow(
+        feature_schema_version="feature_schema_test",
+        feature_matrix_version="matrix_v1",
+        event_id="e1",
+        symbol="AAAUSDT",
+        snapshot_time_ms=120_000,
+        feature_cutoff_time_ms=120_000,
+        minutes_since_trigger=2,
+        ATR_1d_asof_t=1.0,
+        ATR_1d_pct_asof_t=0.01,
+        current_return_from_start=0.02,
+        range_since_start_atr=3.0,
+        distance_to_running_high_atr=0.5,
+        distance_to_running_low_atr=2.5,
+        retracement_from_high_atr=0.5,
+        price_speed_atr=1.2,
+        clock_maturity=0.0,
+        event_age_ratio=0.1,
+        alpha_decay_bucket="0-2m",
+        feature_source_status="ok",
+    )
+
+    with pytest.raises(TemporalContractError):
+        AnomalyFeatureMatrixRow(
+            feature_schema_version="feature_schema_test",
+            feature_matrix_version="matrix_v1",
+            event_id="e1",
+            symbol="AAAUSDT",
+            snapshot_time_ms=120_000,
+            feature_cutoff_time_ms=180_000,
+            minutes_since_trigger=2,
+            ATR_1d_asof_t=1.0,
+            ATR_1d_pct_asof_t=0.01,
+            current_return_from_start=0.02,
+            range_since_start_atr=3.0,
+            distance_to_running_high_atr=0.5,
+            distance_to_running_low_atr=2.5,
+            retracement_from_high_atr=0.5,
+            price_speed_atr=1.2,
+            clock_maturity=0.0,
+            event_age_ratio=0.1,
+            alpha_decay_bucket="0-2m",
+            feature_source_status="ok",
+        )
+
+    with pytest.raises(MarketDataContractError):
+        AnomalyFeatureMatrixRow(
+            feature_schema_version="feature_schema_test",
+            feature_matrix_version="matrix_v1",
+            event_id="e1",
+            symbol="AAAUSDT",
+            snapshot_time_ms=120_000,
+            feature_cutoff_time_ms=120_000,
+            minutes_since_trigger=2,
+            ATR_1d_asof_t=1.0,
+            ATR_1d_pct_asof_t=0.01,
+            current_return_from_start=0.02,
+            range_since_start_atr=3.0,
+            distance_to_running_high_atr=0.5,
+            distance_to_running_low_atr=2.5,
+            retracement_from_high_atr=0.5,
+            price_speed_atr=1.2,
+            clock_maturity=0.0,
+            event_age_ratio=0.1,
+            alpha_decay_bucket="late-ish",
+            feature_source_status="ok",
         )
 
 

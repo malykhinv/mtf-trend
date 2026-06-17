@@ -20,6 +20,7 @@ REQUIRED_MVP1 = {
     "anomaly_placebo_tests.csv",
     "anomaly_baseline_comparison.csv",
     "anomaly_feature_catalog.csv",
+    "anomaly_feature_matrix.csv",
     "anomaly_nature_atlas.csv",
     "anomaly_context_splits.csv",
     "anomaly_response_surfaces.csv",

@@ -157,6 +157,16 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             description="Distance from current close to running low divided by ATR_1d_asof_t.",
         ),
         _row(
+            name="retracement_from_high_atr",
+            family=FeatureFamily.PRICE_PATH,
+            source="anomaly_feature_matrix.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.ATR_NORMALIZED,
+            model=True,
+            missing=FeatureMissingPolicy.NULL_IF_INSUFFICIENT_HISTORY,
+            description="Current retracement from running high divided by ATR_1d_asof_t.",
+        ),
+        _row(
             name="price_speed_atr",
             family=FeatureFamily.PRICE_PATH,
             source="anomaly_feature_matrix.csv",
@@ -186,6 +196,15 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             model=True,
             missing=FeatureMissingPolicy.NULL_IF_INSUFFICIENT_HISTORY,
             description="time_since_running_high divided by max(time_to_running_high, 1m).",
+        ),
+        _row(
+            name="event_age_ratio",
+            family=FeatureFamily.SPEED_TIME,
+            source="anomaly_feature_matrix.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
+            model=True,
+            description="minutes_since_trigger divided by frozen expected_event_lifetime_minutes.",
         ),
         _row(
             name="alpha_decay_bucket",

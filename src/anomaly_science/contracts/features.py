@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
+
+from .market import MarketDataContractError
+from .time import enforce_snapshot_contract, validate_timestamp_ms
 
 
 class FeatureFamily(str, Enum):
@@ -76,3 +80,77 @@ class FeatureCatalogRow:
             raise ValueError("raw absolute values may be audit fields only, not model features")
         if self.missing_policy == FeatureMissingPolicy.AUDIT_ONLY_NULLABLE and self.is_model_feature:
             raise ValueError("audit-only missing policy is not valid for model features")
+
+
+@dataclass(frozen=True, slots=True)
+class AnomalyFeatureMatrixRow:
+    feature_schema_version: str
+    feature_matrix_version: str
+    event_id: str
+    symbol: str
+    snapshot_time_ms: int
+    feature_cutoff_time_ms: int
+    minutes_since_trigger: int
+    ATR_1d_asof_t: float | None
+    ATR_1d_pct_asof_t: float | None
+    current_return_from_start: float
+    range_since_start_atr: float | None
+    distance_to_running_high_atr: float | None
+    distance_to_running_low_atr: float | None
+    retracement_from_high_atr: float | None
+    price_speed_atr: float | None
+    clock_maturity: float
+    event_age_ratio: float
+    alpha_decay_bucket: str
+    feature_source_status: str
+
+    def __post_init__(self) -> None:
+        if not self.feature_schema_version:
+            raise MarketDataContractError("feature_schema_version is required")
+        if not self.feature_matrix_version:
+            raise MarketDataContractError("feature_matrix_version is required")
+        if not self.event_id:
+            raise MarketDataContractError("event_id is required")
+        if not self.symbol:
+            raise MarketDataContractError("symbol is required")
+        validate_timestamp_ms(self.snapshot_time_ms, field_name="snapshot_time_ms")
+        validate_timestamp_ms(self.feature_cutoff_time_ms, field_name="feature_cutoff_time_ms")
+        enforce_snapshot_contract(
+            snapshot_time_ms=self.snapshot_time_ms,
+            feature_cutoff_time_ms=self.feature_cutoff_time_ms,
+        )
+        if self.minutes_since_trigger < 0:
+            raise MarketDataContractError("minutes_since_trigger must be non-negative")
+        for field_name in (
+            "ATR_1d_asof_t",
+            "ATR_1d_pct_asof_t",
+            "range_since_start_atr",
+            "distance_to_running_high_atr",
+            "distance_to_running_low_atr",
+            "retracement_from_high_atr",
+            "price_speed_atr",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not math.isfinite(value):
+                raise MarketDataContractError(f"{field_name} must be finite when present")
+        if self.ATR_1d_asof_t is not None and self.ATR_1d_asof_t <= 0:
+            raise MarketDataContractError("ATR_1d_asof_t must be positive when present")
+        if self.ATR_1d_pct_asof_t is not None and self.ATR_1d_pct_asof_t <= 0:
+            raise MarketDataContractError("ATR_1d_pct_asof_t must be positive when present")
+        for field_name in (
+            "range_since_start_atr",
+            "distance_to_running_high_atr",
+            "distance_to_running_low_atr",
+            "retracement_from_high_atr",
+            "clock_maturity",
+            "event_age_ratio",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and value < 0:
+                raise MarketDataContractError(f"{field_name} must be non-negative")
+        if not self.alpha_decay_bucket:
+            raise MarketDataContractError("alpha_decay_bucket is required")
+        if self.alpha_decay_bucket not in {"0-2m", "3-5m", "6-10m", "11-20m", "21-40m", ">40m"}:
+            raise MarketDataContractError("alpha_decay_bucket must be a pre-registered bucket")
+        if not self.feature_source_status:
+            raise MarketDataContractError("feature_source_status is required")

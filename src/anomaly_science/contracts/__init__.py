@@ -4,7 +4,7 @@ from .artifacts import ArtifactSchema, MVP1_ARTIFACT_SCHEMAS, get_artifact_schem
 from .atlas import AtlasContextSplitRow, AtlasMarketShockGroupRow, AtlasNatureRow, AtlasResponseSurfaceRow
 from .audit import AuditStatus, DataQualityRow, ProtocolAuditRow, RunConfigRow
 from .events import AnomalyEvent
-from .features import FeatureCatalogRow, FeatureFamily, FeatureMissingPolicy, FeatureNormalization
+from .features import AnomalyFeatureMatrixRow, FeatureCatalogRow, FeatureFamily, FeatureMissingPolicy, FeatureNormalization
 from .future import FuturePathRow
 from .labels import AnomalyOutcomeLabelRow
 from .market import Candle1m, Candle5m, LiquidationEvent, OpenInterest5m, SymbolDayUniverseRow
@@ -13,6 +13,7 @@ from .time import SnapshotTiming, TemporalContractError, datetime_to_utc_ms, utc
 
 __all__ = [
     "AnomalyEvent",
+    "AnomalyFeatureMatrixRow",
     "AnomalyOutcomeLabelRow",
     "AnomalyState1mRow",
     "ArtifactSchema",
