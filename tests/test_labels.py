@@ -106,6 +106,10 @@ def _future_row(
     future_min_atr_120m: float | None = -0.1,
     reclaimed_running_high_30m: bool | None = True,
     reclaimed_running_high_60m: bool | None = True,
+    intracandle_double_barrier_hit_30m: bool | None = None,
+    barrier_resolution_30m: str | None = None,
+    double_barrier_k_continuation: float | None = None,
+    double_barrier_k_fade: float | None = None,
 ) -> FuturePathRow:
     snapshot_time_ms = BASE_TS + snapshot_offset_minutes * 60_000
     return FuturePathRow(
@@ -117,6 +121,8 @@ def _future_row(
         atr_window_minutes=1440,
         ATR_1d_asof_t=2.0,
         ATR_1d_pct_asof_t=0.02,
+        double_barrier_k_continuation=double_barrier_k_continuation,
+        double_barrier_k_fade=double_barrier_k_fade,
         future_return_5m=0.005,
         future_return_15m=future_return_15m,
         future_return_30m=future_return_30m,
@@ -147,6 +153,8 @@ def _future_row(
         future_min_atr_30m=future_min_atr_30m,
         future_min_atr_60m=future_min_atr_60m,
         future_min_atr_120m=future_min_atr_120m,
+        intracandle_double_barrier_hit_30m=intracandle_double_barrier_hit_30m,
+        barrier_resolution_30m=barrier_resolution_30m,
         reclaimed_running_high_30m=reclaimed_running_high_30m,
         reclaimed_running_high_60m=reclaimed_running_high_60m,
         broke_structural_low_30m=None,
@@ -203,6 +211,24 @@ def test_future_nature_scenarios_are_descriptive_not_trade_labels() -> None:
         == "unclear"
     )
     assert assign_future_nature_scenario(future=_future_row(future_return_atr_30m=None), horizon_minutes=30) == "missing_future"
+
+
+
+def test_double_barrier_stop_first_prevents_profit_label() -> None:
+    scenario = assign_future_nature_scenario(
+        future=_future_row(
+            future_return_atr_30m=1.2,
+            future_max_atr_30m=1.5,
+            future_min_atr_30m=-1.5,
+            intracandle_double_barrier_hit_30m=True,
+            barrier_resolution_30m="stop_loss_first",
+            double_barrier_k_continuation=1.0,
+            double_barrier_k_fade=1.0,
+        ),
+        horizon_minutes=30,
+    )
+
+    assert scenario == "unclear"
 
 
 def test_outcome_labels_use_state_only_for_join_and_temporal_audit() -> None:

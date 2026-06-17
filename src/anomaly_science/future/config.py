@@ -23,6 +23,8 @@ class FuturePathBuilderConfig:
     future_return_horizons_minutes: tuple[int, ...] = FUTURE_RETURN_HORIZONS_MINUTES
     future_reclaim_horizons_minutes: tuple[int, ...] = FUTURE_RECLAIM_HORIZONS_MINUTES
     atr_window_minutes: int = ATR_1D_WINDOW_MINUTES
+    double_barrier_k_continuation: float = 1.0
+    double_barrier_k_fade: float = 1.0
     future_path_builder_version: str = FUTURE_PATH_BUILDER_VERSION
 
     def __post_init__(self) -> None:
@@ -38,5 +40,9 @@ class FuturePathBuilderConfig:
             )
         if self.atr_window_minutes <= 0:
             raise ValueError("atr_window_minutes must be positive")
+        if self.double_barrier_k_continuation <= 0:
+            raise ValueError("double_barrier_k_continuation must be positive")
+        if self.double_barrier_k_fade <= 0:
+            raise ValueError("double_barrier_k_fade must be positive")
         if not self.future_path_builder_version:
             raise ValueError("future_path_builder_version is required")

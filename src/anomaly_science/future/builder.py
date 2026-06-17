@@ -8,7 +8,11 @@ from typing import Iterable, Mapping, Sequence
 import pandas as pd
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
-from anomaly_science.contracts.future import FuturePathRow
+from anomaly_science.contracts.future import (
+    BARRIER_RESOLUTION_NONE,
+    BARRIER_RESOLUTION_STOP_LOSS_FIRST,
+    FuturePathRow,
+)
 from anomaly_science.contracts.market import Candle1m, MarketDataContractError, ONE_MINUTE_MS
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.data.normalized import normalize_candles_1m
@@ -104,6 +108,8 @@ def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]
                     atr_window_minutes=_required_int(row, "atr_window_minutes"),
                     ATR_1d_asof_t=_optional_float(row, "ATR_1d_asof_t"),
                     ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
+                    double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
+                    double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
                     future_return_5m=_optional_float(row, "future_return_5m"),
                     future_return_15m=_optional_float(row, "future_return_15m"),
                     future_return_30m=_optional_float(row, "future_return_30m"),
@@ -134,6 +140,16 @@ def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]
                     future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
                     future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
                     future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
+                    intracandle_double_barrier_hit_5m=_optional_bool(row, "intracandle_double_barrier_hit_5m"),
+                    intracandle_double_barrier_hit_15m=_optional_bool(row, "intracandle_double_barrier_hit_15m"),
+                    intracandle_double_barrier_hit_30m=_optional_bool(row, "intracandle_double_barrier_hit_30m"),
+                    intracandle_double_barrier_hit_60m=_optional_bool(row, "intracandle_double_barrier_hit_60m"),
+                    intracandle_double_barrier_hit_120m=_optional_bool(row, "intracandle_double_barrier_hit_120m"),
+                    barrier_resolution_5m=_optional_str(row, "barrier_resolution_5m"),
+                    barrier_resolution_15m=_optional_str(row, "barrier_resolution_15m"),
+                    barrier_resolution_30m=_optional_str(row, "barrier_resolution_30m"),
+                    barrier_resolution_60m=_optional_str(row, "barrier_resolution_60m"),
+                    barrier_resolution_120m=_optional_str(row, "barrier_resolution_120m"),
                     reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
                     reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
                     broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
@@ -178,6 +194,8 @@ def build_anomaly_future_paths(
                 candles=symbol_candles,
                 max_horizon=max_horizon,
                 atr_window_minutes=cfg.atr_window_minutes,
+                double_barrier_k_continuation=cfg.double_barrier_k_continuation,
+                double_barrier_k_fade=cfg.double_barrier_k_fade,
             )
         )
     return tuple(rows)
@@ -215,6 +233,8 @@ def _build_state_future_path(
     candles: Sequence[Candle1m],
     max_horizon: int,
     atr_window_minutes: int,
+    double_barrier_k_continuation: float,
+    double_barrier_k_fade: float,
 ) -> FuturePathRow:
     if state.feature_cutoff_time_ms > state.snapshot_time_ms:
         raise MarketDataContractError("state feature_cutoff_time_ms must be <= snapshot_time_ms")
@@ -234,6 +254,46 @@ def _build_state_future_path(
         atr_window_minutes=atr_window_minutes,
     )
     atr_value = atr_result.atr_1d_asof_t if atr_result is not None else None
+    barrier_5m = _intracandle_double_barrier(
+        state=state,
+        candles=future_candles,
+        horizon_minutes=5,
+        atr_value=atr_value,
+        k_continuation=double_barrier_k_continuation,
+        k_fade=double_barrier_k_fade,
+    )
+    barrier_15m = _intracandle_double_barrier(
+        state=state,
+        candles=future_candles,
+        horizon_minutes=15,
+        atr_value=atr_value,
+        k_continuation=double_barrier_k_continuation,
+        k_fade=double_barrier_k_fade,
+    )
+    barrier_30m = _intracandle_double_barrier(
+        state=state,
+        candles=future_candles,
+        horizon_minutes=30,
+        atr_value=atr_value,
+        k_continuation=double_barrier_k_continuation,
+        k_fade=double_barrier_k_fade,
+    )
+    barrier_60m = _intracandle_double_barrier(
+        state=state,
+        candles=future_candles,
+        horizon_minutes=60,
+        atr_value=atr_value,
+        k_continuation=double_barrier_k_continuation,
+        k_fade=double_barrier_k_fade,
+    )
+    barrier_120m = _intracandle_double_barrier(
+        state=state,
+        candles=future_candles,
+        horizon_minutes=120,
+        atr_value=atr_value,
+        k_continuation=double_barrier_k_continuation,
+        k_fade=double_barrier_k_fade,
+    )
 
     return FuturePathRow(
         event_id=state.event_id,
@@ -244,6 +304,8 @@ def _build_state_future_path(
         atr_window_minutes=atr_window_minutes,
         ATR_1d_asof_t=atr_value,
         ATR_1d_pct_asof_t=atr_result.atr_1d_pct_asof_t if atr_result is not None else None,
+        double_barrier_k_continuation=double_barrier_k_continuation if atr_value is not None else None,
+        double_barrier_k_fade=double_barrier_k_fade if atr_value is not None else None,
         future_return_5m=_future_return(state=state, candles=future_candles, horizon_minutes=5),
         future_return_15m=_future_return(state=state, candles=future_candles, horizon_minutes=15),
         future_return_30m=_future_return(state=state, candles=future_candles, horizon_minutes=30),
@@ -274,6 +336,16 @@ def _build_state_future_path(
         future_min_atr_30m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
         future_min_atr_60m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
         future_min_atr_120m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
+        intracandle_double_barrier_hit_5m=barrier_5m,
+        intracandle_double_barrier_hit_15m=barrier_15m,
+        intracandle_double_barrier_hit_30m=barrier_30m,
+        intracandle_double_barrier_hit_60m=barrier_60m,
+        intracandle_double_barrier_hit_120m=barrier_120m,
+        barrier_resolution_5m=_barrier_resolution(barrier_5m),
+        barrier_resolution_15m=_barrier_resolution(barrier_15m),
+        barrier_resolution_30m=_barrier_resolution(barrier_30m),
+        barrier_resolution_60m=_barrier_resolution(barrier_60m),
+        barrier_resolution_120m=_barrier_resolution(barrier_120m),
         reclaimed_running_high_30m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=30),
         reclaimed_running_high_60m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=60),
         broke_structural_low_30m=None,
@@ -381,6 +453,33 @@ def _future_min_atr(
     return (min(candle.low for candle in window) - state.current_close) / atr_value
 
 
+
+def _intracandle_double_barrier(
+    *,
+    state: AnomalyState1mRow,
+    candles: Sequence[Candle1m],
+    horizon_minutes: int,
+    atr_value: float | None,
+    k_continuation: float,
+    k_fade: float,
+) -> bool | None:
+    if atr_value is None:
+        return None
+    window = _window(state, candles, horizon_minutes)
+    if not window:
+        return None
+    upper_barrier = state.current_close + k_continuation * atr_value
+    lower_barrier = state.current_close - k_fade * atr_value
+    return any(candle.high >= upper_barrier and candle.low <= lower_barrier for candle in window)
+
+
+def _barrier_resolution(hit: bool | None) -> str | None:
+    if hit is None:
+        return None
+    if hit:
+        return BARRIER_RESOLUTION_STOP_LOSS_FIRST
+    return BARRIER_RESOLUTION_NONE
+
 def _compute_atr_when_history_available(
     *,
     state: AnomalyState1mRow,
@@ -451,6 +550,16 @@ def _required_float(row: Mapping[str, object], name: str) -> float:
     result = float(value)
     if not math.isfinite(result):
         raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _optional_str(row: Mapping[str, object], name: str) -> str | None:
+    value = row[name]
+    if _is_missing(value):
+        return None
+    result = str(value)
+    if not result:
+        return None
     return result
 
 

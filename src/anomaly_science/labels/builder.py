@@ -9,6 +9,7 @@ import pandas as pd
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.future import FuturePathRow
+from anomaly_science.contracts.future import BARRIER_RESOLUTION_STOP_LOSS_FIRST
 from anomaly_science.contracts.labels import (
     ATR_LABEL_SOURCE,
     MISSING_FUTURE_SCENARIO,
@@ -155,6 +156,10 @@ def assign_future_nature_scenario(
     future_min_atr = _future_value(future=future, base_name="future_min_atr", horizon_minutes=horizon_minutes)
     if future.ATR_1d_asof_t is None or future_return_atr is None or future_max_atr is None or future_min_atr is None:
         return MISSING_FUTURE_SCENARIO
+    _enforce_double_barrier_threshold_schema(future=future, config=cfg, horizon_minutes=horizon_minutes)
+
+    if _double_barrier_resolved_stop_first(future=future, horizon_minutes=horizon_minutes):
+        return "unclear"
 
     upside_extension = future_max_atr >= cfg.k_continuation
     downside_extension = future_min_atr <= -cfg.k_fade
@@ -224,6 +229,33 @@ def outcome_label_rows_to_artifact(rows: Sequence[AnomalyOutcomeLabelRow]) -> li
         payload = asdict(row)
         result.append({key: _csv_value(value) for key, value in payload.items()})
     return result
+
+
+def _double_barrier_resolved_stop_first(*, future: FuturePathRow, horizon_minutes: int) -> bool:
+    hit = getattr(future, f"intracandle_double_barrier_hit_{horizon_minutes}m")
+    resolution = getattr(future, f"barrier_resolution_{horizon_minutes}m")
+    return bool(hit is True and resolution == BARRIER_RESOLUTION_STOP_LOSS_FIRST)
+
+
+def _enforce_double_barrier_threshold_schema(
+    *,
+    future: FuturePathRow,
+    config: OutcomeLabelConfig,
+    horizon_minutes: int,
+) -> None:
+    hit = getattr(future, f"intracandle_double_barrier_hit_{horizon_minutes}m")
+    if hit is None:
+        return
+    if future.double_barrier_k_continuation != config.k_continuation:
+        raise MarketDataContractError(
+            "future double_barrier_k_continuation must match label k_continuation "
+            f"for horizon {horizon_minutes}m"
+        )
+    if future.double_barrier_k_fade != config.k_fade:
+        raise MarketDataContractError(
+            "future double_barrier_k_fade must match label k_fade "
+            f"for horizon {horizon_minutes}m"
+        )
 
 
 def _future_value(*, future: FuturePathRow, base_name: str, horizon_minutes: int) -> float | None:
