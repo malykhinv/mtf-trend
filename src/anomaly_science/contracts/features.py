@@ -136,6 +136,16 @@ class AnomalyFeatureMatrixRow:
     range_expansion_market_percentile: float | None = None
     cross_section_available: bool = False
     cross_section_symbol_count: int = 0
+    corr_with_btc_15m: float | None = None
+    corr_with_btc_30m: float | None = None
+    corr_with_btc_60m: float | None = None
+    symbol_return_minus_btc_return_5m: float | None = None
+    symbol_return_minus_btc_return_15m: float | None = None
+    idiosyncratic_momentum_score: float | None = None
+    simultaneous_anomalies_count_1m: int = 0
+    simultaneous_anomalies_share_1m: float | None = None
+    systemic_cluster_regime: str = "unknown"
+    market_shock_id: str = "unknown"
 
     def __post_init__(self) -> None:
         if not self.feature_schema_version:
@@ -188,6 +198,13 @@ class AnomalyFeatureMatrixRow:
             "oi_growth_market_percentile",
             "liq_intensity_market_percentile",
             "range_expansion_market_percentile",
+            "corr_with_btc_15m",
+            "corr_with_btc_30m",
+            "corr_with_btc_60m",
+            "symbol_return_minus_btc_return_5m",
+            "symbol_return_minus_btc_return_15m",
+            "idiosyncratic_momentum_score",
+            "simultaneous_anomalies_share_1m",
         ):
             value = getattr(self, field_name)
             if value is not None and not math.isfinite(value):
@@ -228,10 +245,23 @@ class AnomalyFeatureMatrixRow:
             "oi_growth_market_percentile",
             "liq_intensity_market_percentile",
             "range_expansion_market_percentile",
+            "simultaneous_anomalies_share_1m",
         ):
             value = getattr(self, field_name)
             if value is not None and not 0.0 <= value <= 1.0:
                 raise MarketDataContractError(f"{field_name} must be inside [0, 1]")
+        for field_name in ("corr_with_btc_15m", "corr_with_btc_30m", "corr_with_btc_60m"):
+            value = getattr(self, field_name)
+            if value is not None and not -1.0 <= value <= 1.0:
+                raise MarketDataContractError(f"{field_name} must be inside [-1, 1]")
+        if self.idiosyncratic_momentum_score is not None and self.idiosyncratic_momentum_score < 0:
+            raise MarketDataContractError("idiosyncratic_momentum_score must be non-negative")
+        if self.simultaneous_anomalies_count_1m < 0:
+            raise MarketDataContractError("simultaneous_anomalies_count_1m must be non-negative")
+        if self.systemic_cluster_regime not in {"unknown", "idiosyncratic", "moderate_cluster", "systemic_beta_shock"}:
+            raise MarketDataContractError("systemic_cluster_regime must be a pre-registered bucket")
+        if not self.market_shock_id:
+            raise MarketDataContractError("market_shock_id is required")
         if self.cross_section_symbol_count < 0:
             raise MarketDataContractError("cross_section_symbol_count must be non-negative")
         if not self.cross_section_available:

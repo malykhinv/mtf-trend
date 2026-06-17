@@ -255,6 +255,19 @@ def _build_state_feature_row(
         states_at_snapshot=states_at_snapshot,
         min_cross_section_symbols=config.min_cross_section_symbols,
     )
+    market_context_features = _market_context_features(
+        state=state,
+        symbol_candles=candles,
+        btc_candles=candles_by_symbol.get(config.btc_symbol, ()),
+        states_at_snapshot=states_at_snapshot,
+        cross_section_symbol_count=cross_section_features.cross_section_symbol_count,
+        volume_market_percentile=cross_section_features.volume_market_percentile,
+        ATR_1d_pct_asof_t=atr_pct_value,
+        corr_windows_minutes=config.btc_corr_window_minutes,
+        return_windows_minutes=config.btc_relative_return_windows_minutes,
+        moderate_cluster_min_count=config.moderate_cluster_min_count,
+        systemic_cluster_min_count=config.systemic_cluster_min_count,
+    )
 
     time_to_running_high = max(state.minutes_since_event_start - state.time_since_running_high_minutes, 0)
     clock_maturity = state.time_since_running_high_minutes / max(time_to_running_high, 1)
@@ -313,6 +326,16 @@ def _build_state_feature_row(
         range_expansion_market_percentile=cross_section_features.range_expansion_market_percentile,
         cross_section_available=cross_section_features.cross_section_available,
         cross_section_symbol_count=cross_section_features.cross_section_symbol_count,
+        corr_with_btc_15m=market_context_features.corr_with_btc_by_window.get(15),
+        corr_with_btc_30m=market_context_features.corr_with_btc_by_window.get(30),
+        corr_with_btc_60m=market_context_features.corr_with_btc_by_window.get(60),
+        symbol_return_minus_btc_return_5m=market_context_features.symbol_return_minus_btc_by_window.get(5),
+        symbol_return_minus_btc_return_15m=market_context_features.symbol_return_minus_btc_by_window.get(15),
+        idiosyncratic_momentum_score=market_context_features.idiosyncratic_momentum_score,
+        simultaneous_anomalies_count_1m=market_context_features.simultaneous_anomalies_count_1m,
+        simultaneous_anomalies_share_1m=market_context_features.simultaneous_anomalies_share_1m,
+        systemic_cluster_regime=market_context_features.systemic_cluster_regime,
+        market_shock_id=market_context_features.market_shock_id,
     )
 
 
@@ -844,12 +867,230 @@ def _rank_percentile(values_by_symbol: Mapping[str, float], symbol: str) -> floa
     return min(max(percentile, 0.0), 1.0)
 
 
+
+class _MarketContextFeatures:
+    def __init__(
+        self,
+        *,
+        corr_with_btc_by_window: dict[int, float | None],
+        symbol_return_minus_btc_by_window: dict[int, float | None],
+        idiosyncratic_momentum_score: float | None,
+        simultaneous_anomalies_count_1m: int,
+        simultaneous_anomalies_share_1m: float | None,
+        systemic_cluster_regime: str,
+        market_shock_id: str,
+    ) -> None:
+        self.corr_with_btc_by_window = corr_with_btc_by_window
+        self.symbol_return_minus_btc_by_window = symbol_return_minus_btc_by_window
+        self.idiosyncratic_momentum_score = idiosyncratic_momentum_score
+        self.simultaneous_anomalies_count_1m = simultaneous_anomalies_count_1m
+        self.simultaneous_anomalies_share_1m = simultaneous_anomalies_share_1m
+        self.systemic_cluster_regime = systemic_cluster_regime
+        self.market_shock_id = market_shock_id
+
+
+def _market_context_features(
+    *,
+    state: AnomalyState1mRow,
+    symbol_candles: Sequence[Candle1m],
+    btc_candles: Sequence[Candle1m],
+    states_at_snapshot: Sequence[AnomalyState1mRow],
+    cross_section_symbol_count: int,
+    volume_market_percentile: float | None,
+    ATR_1d_pct_asof_t: float | None,
+    corr_windows_minutes: tuple[int, ...],
+    return_windows_minutes: tuple[int, ...],
+    moderate_cluster_min_count: int,
+    systemic_cluster_min_count: int,
+) -> _MarketContextFeatures:
+    corr_by_window = {
+        window: _rolling_return_correlation_with_btc(
+            symbol_candles=symbol_candles,
+            btc_candles=btc_candles,
+            snapshot_time_ms=state.snapshot_time_ms,
+            window_minutes=window,
+        )
+        for window in corr_windows_minutes
+    }
+    return_minus_btc_by_window = {
+        window: _symbol_return_minus_btc_return(
+            symbol_candles=symbol_candles,
+            btc_candles=btc_candles,
+            snapshot_time_ms=state.snapshot_time_ms,
+            window_minutes=window,
+        )
+        for window in return_windows_minutes
+    }
+    simultaneous_count = len({row.symbol for row in states_at_snapshot if row.event_alive})
+    simultaneous_share = None
+    if cross_section_symbol_count > 0:
+        simultaneous_share = min(simultaneous_count / cross_section_symbol_count, 1.0)
+
+    regime = _systemic_cluster_regime(
+        simultaneous_count=simultaneous_count,
+        cross_section_symbol_count=cross_section_symbol_count,
+        moderate_cluster_min_count=moderate_cluster_min_count,
+        systemic_cluster_min_count=systemic_cluster_min_count,
+    )
+    market_shock_id = _market_shock_id(
+        snapshot_time_ms=state.snapshot_time_ms,
+        regime=regime,
+        symbol=state.symbol,
+    )
+
+    return_15m = return_minus_btc_by_window.get(15)
+    corr_30m = corr_by_window.get(30)
+    idiosyncratic_score = _idiosyncratic_momentum_score(
+        volume_market_percentile=volume_market_percentile,
+        symbol_return_minus_btc_return_15m=return_15m,
+        corr_with_btc_30m=corr_30m,
+        ATR_1d_pct_asof_t=ATR_1d_pct_asof_t,
+    )
+
+    return _MarketContextFeatures(
+        corr_with_btc_by_window=corr_by_window,
+        symbol_return_minus_btc_by_window=return_minus_btc_by_window,
+        idiosyncratic_momentum_score=idiosyncratic_score,
+        simultaneous_anomalies_count_1m=simultaneous_count,
+        simultaneous_anomalies_share_1m=simultaneous_share,
+        systemic_cluster_regime=regime,
+        market_shock_id=market_shock_id,
+    )
+
+
+def _systemic_cluster_regime(
+    *,
+    simultaneous_count: int,
+    cross_section_symbol_count: int,
+    moderate_cluster_min_count: int,
+    systemic_cluster_min_count: int,
+) -> str:
+    if cross_section_symbol_count <= 0:
+        return "unknown"
+    if simultaneous_count >= systemic_cluster_min_count:
+        return "systemic_beta_shock"
+    if simultaneous_count >= moderate_cluster_min_count:
+        return "moderate_cluster"
+    return "idiosyncratic"
+
+
+def _market_shock_id(*, snapshot_time_ms: int, regime: str, symbol: str) -> str:
+    if regime in {"moderate_cluster", "systemic_beta_shock"}:
+        return f"market_shock:{snapshot_time_ms}"
+    if regime == "idiosyncratic":
+        return f"idiosyncratic:{symbol}:{snapshot_time_ms}"
+    return f"unknown:{snapshot_time_ms}"
+
+
+def _idiosyncratic_momentum_score(
+    *,
+    volume_market_percentile: float | None,
+    symbol_return_minus_btc_return_15m: float | None,
+    corr_with_btc_30m: float | None,
+    ATR_1d_pct_asof_t: float | None,
+) -> float | None:
+    if volume_market_percentile is None:
+        return None
+    if symbol_return_minus_btc_return_15m is None:
+        return None
+    if corr_with_btc_30m is None:
+        return None
+    if ATR_1d_pct_asof_t is None or ATR_1d_pct_asof_t <= 0:
+        return None
+    btc_relative_return_atr = symbol_return_minus_btc_return_15m / max(ATR_1d_pct_asof_t, EPS)
+    return volume_market_percentile * max(btc_relative_return_atr, 0.0) * max(1.0 - corr_with_btc_30m, 0.0)
+
+
+def _symbol_return_minus_btc_return(
+    *,
+    symbol_candles: Sequence[Candle1m],
+    btc_candles: Sequence[Candle1m],
+    snapshot_time_ms: int,
+    window_minutes: int,
+) -> float | None:
+    symbol_return = _window_return(candles=symbol_candles, snapshot_time_ms=snapshot_time_ms, window_minutes=window_minutes)
+    btc_return = _window_return(candles=btc_candles, snapshot_time_ms=snapshot_time_ms, window_minutes=window_minutes)
+    if symbol_return is None or btc_return is None:
+        return None
+    return symbol_return - btc_return
+
+
+def _window_return(*, candles: Sequence[Candle1m], snapshot_time_ms: int, window_minutes: int) -> float | None:
+    window_candles = _window_candles(candles=candles, snapshot_time_ms=snapshot_time_ms, window_minutes=window_minutes)
+    if len(window_candles) < window_minutes:
+        return None
+    first = window_candles[0]
+    last = window_candles[-1]
+    if last.available_time_ms != snapshot_time_ms or first.open <= 0:
+        return None
+    return last.close / first.open - 1.0
+
+
+def _rolling_return_correlation_with_btc(
+    *,
+    symbol_candles: Sequence[Candle1m],
+    btc_candles: Sequence[Candle1m],
+    snapshot_time_ms: int,
+    window_minutes: int,
+) -> float | None:
+    symbol_returns = _one_minute_returns_by_available_time(
+        candles=symbol_candles,
+        snapshot_time_ms=snapshot_time_ms,
+        window_minutes=window_minutes,
+    )
+    btc_returns = _one_minute_returns_by_available_time(
+        candles=btc_candles,
+        snapshot_time_ms=snapshot_time_ms,
+        window_minutes=window_minutes,
+    )
+    common_times = sorted(set(symbol_returns) & set(btc_returns))
+    if len(common_times) < window_minutes:
+        return None
+    symbol_values = [symbol_returns[item] for item in common_times[-window_minutes:]]
+    btc_values = [btc_returns[item] for item in common_times[-window_minutes:]]
+    return _correlation(symbol_values, btc_values)
+
+
+def _one_minute_returns_by_available_time(
+    *,
+    candles: Sequence[Candle1m],
+    snapshot_time_ms: int,
+    window_minutes: int,
+) -> dict[int, float]:
+    asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+    if len(asof_rows) < window_minutes + 1:
+        return {}
+    rows = asof_rows[-(window_minutes + 1) :]
+    if rows[-1].available_time_ms != snapshot_time_ms:
+        return {}
+    result: dict[int, float] = {}
+    for previous, current in zip(rows, rows[1:]):
+        if previous.close <= 0:
+            continue
+        result[current.available_time_ms] = current.close / previous.close - 1.0
+    return result
+
+
+def _correlation(left: Sequence[float], right: Sequence[float]) -> float | None:
+    if len(left) != len(right) or len(left) < 2:
+        return None
+    left_mean = statistics.fmean(left)
+    right_mean = statistics.fmean(right)
+    left_centered = [value - left_mean for value in left]
+    right_centered = [value - right_mean for value in right]
+    left_var = sum(value * value for value in left_centered)
+    right_var = sum(value * value for value in right_centered)
+    if left_var <= 0 or right_var <= 0:
+        return None
+    corr = sum(lval * rval for lval, rval in zip(left_centered, right_centered)) / math.sqrt(left_var * right_var)
+    return min(max(corr, -1.0), 1.0)
+
 def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_feature_matrix_scope",
             status=AuditStatus.PASS,
-            message="price/time/alpha-decay plus volume/OI/liquidation/CVD and point-in-time cross-sectional feature matrix only; no BTC/systemic cluster/ML/decision/trade simulation",
+            message="price/time/alpha-decay plus volume/OI/liquidation/CVD, point-in-time cross-sectional, BTC-relative, and systemic cluster feature matrix only; no ML/decision/trade simulation",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -901,6 +1142,18 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
             message="feature matrix computes ATR_1d_asof_t from closed 1m candles available <= snapshot_time_ms and leaves ATR features null when history is insufficient",
             artifact="anomaly_feature_matrix.csv",
         ),
+        ProtocolAuditRow(
+            check_name="market_shock_id_assigned",
+            status=AuditStatus.PASS,
+            message="feature matrix assigns a point-in-time market_shock_id for every row; clustered rows share the snapshot-level market shock id",
+            artifact="anomaly_feature_matrix.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="simultaneous_anomalies_count_1m_point_in_time",
+            status=AuditStatus.PASS,
+            message="simultaneous anomaly counts are computed from anomaly_state_1m rows at the same snapshot_time_ms and normalized by the point-in-time cross-section when available",
+            artifact="anomaly_feature_matrix.csv",
+        ),
     ]
     return base_rows + build_methodology_v2_audit_rows(
         stage="mvp1_feature_matrix",
@@ -946,6 +1199,19 @@ def _run_config_rows(
         ),
         RunConfigRow(key="cvd_windows_minutes", value=",".join(str(item) for item in config.cvd_windows_minutes), source="runtime"),
         RunConfigRow(key="min_cross_section_symbols", value=str(config.min_cross_section_symbols), source="runtime"),
+        RunConfigRow(key="btc_symbol", value=config.btc_symbol, source="runtime"),
+        RunConfigRow(
+            key="btc_corr_window_minutes",
+            value=",".join(str(item) for item in config.btc_corr_window_minutes),
+            source="runtime",
+        ),
+        RunConfigRow(
+            key="btc_relative_return_windows_minutes",
+            value=",".join(str(item) for item in config.btc_relative_return_windows_minutes),
+            source="runtime",
+        ),
+        RunConfigRow(key="moderate_cluster_min_count", value=str(config.moderate_cluster_min_count), source="runtime"),
+        RunConfigRow(key="systemic_cluster_min_count", value=str(config.systemic_cluster_min_count), source="runtime"),
     ]
 
 

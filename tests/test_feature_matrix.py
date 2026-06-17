@@ -256,6 +256,83 @@ def test_feature_matrix_leaves_cross_section_null_when_universe_is_missing() -> 
     assert row.return_from_event_market_percentile is None
 
 
+
+def test_feature_matrix_materializes_btc_relative_and_systemic_cluster_features() -> None:
+    aaa = list(_candles_for_symbol(symbol="AAAUSDT", count=1446, base_price=100.0, volume_base=20.0))
+    bbb = list(_candles_for_symbol(symbol="BBBUSDT", count=1446, base_price=80.0, volume_base=10.0))
+    ccc = list(_candles_for_symbol(symbol="CCCUSDT", count=1446, base_price=60.0, volume_base=30.0))
+    btc = list(_candles_for_symbol(symbol="BTCUSDT", count=1446, base_price=50_000.0, volume_base=100.0))
+    snapshot_time_ms = aaa[-1].available_time_ms
+    trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
+    states = [
+        _state(snapshot_time_ms=snapshot_time_ms, current_close=aaa[-1].close),
+        _state_for_symbol(
+            event_id="e2",
+            symbol="BBBUSDT",
+            snapshot_time_ms=snapshot_time_ms,
+            current_close=bbb[-1].close,
+            current_return_from_start=0.01,
+        ),
+        _state_for_symbol(
+            event_id="e3",
+            symbol="CCCUSDT",
+            snapshot_time_ms=snapshot_time_ms,
+            current_close=ccc[-1].close,
+            current_return_from_start=0.09,
+        ),
+    ]
+    universe = [
+        _universe_row(trade_date=trade_date, symbol="AAAUSDT"),
+        _universe_row(trade_date=trade_date, symbol="BBBUSDT"),
+        _universe_row(trade_date=trade_date, symbol="CCCUSDT"),
+        _universe_row(trade_date=trade_date, symbol="BTCUSDT"),
+    ]
+
+    rows = build_price_time_feature_matrix(
+        candles_1m=[*aaa, *bbb, *ccc, *btc],
+        state_rows=states,
+        symbol_universe_by_day=universe,
+        config=FeatureMatrixConfig(volume_baseline_window_minutes=10, min_cross_section_symbols=3),
+    )
+    row = next(item for item in rows if item.symbol == "AAAUSDT")
+
+    assert row.corr_with_btc_15m is not None
+    assert row.corr_with_btc_30m is not None
+    assert row.corr_with_btc_60m is not None
+    assert row.symbol_return_minus_btc_return_5m is not None
+    assert row.symbol_return_minus_btc_return_15m is not None
+    assert row.idiosyncratic_momentum_score is not None
+    assert row.idiosyncratic_momentum_score >= 0.0
+    assert row.simultaneous_anomalies_count_1m == 3
+    assert row.simultaneous_anomalies_share_1m == 3 / 4
+    assert row.systemic_cluster_regime == "moderate_cluster"
+    assert row.market_shock_id == f"market_shock:{snapshot_time_ms}"
+
+
+def test_feature_matrix_leaves_btc_relative_null_without_btc_source_but_keeps_shock_id() -> None:
+    aaa = list(_candles_for_symbol(symbol="AAAUSDT", count=1446, base_price=100.0, volume_base=20.0))
+    snapshot_time_ms = aaa[-1].available_time_ms
+    trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
+    state = _state(snapshot_time_ms=snapshot_time_ms, current_close=aaa[-1].close)
+
+    row = build_price_time_feature_matrix(
+        candles_1m=aaa,
+        state_rows=[state],
+        symbol_universe_by_day=[_universe_row(trade_date=trade_date, symbol="AAAUSDT")],
+        config=FeatureMatrixConfig(volume_baseline_window_minutes=10, min_cross_section_symbols=3),
+    )[0]
+
+    assert row.corr_with_btc_15m is None
+    assert row.corr_with_btc_30m is None
+    assert row.corr_with_btc_60m is None
+    assert row.symbol_return_minus_btc_return_5m is None
+    assert row.symbol_return_minus_btc_return_15m is None
+    assert row.idiosyncratic_momentum_score is None
+    assert row.simultaneous_anomalies_count_1m == 1
+    assert row.simultaneous_anomalies_share_1m == 1.0
+    assert row.systemic_cluster_regime == "idiosyncratic"
+    assert row.market_shock_id == f"idiosyncratic:AAAUSDT:{snapshot_time_ms}"
+
 def test_feature_matrix_artifact_schema_roundtrip() -> None:
     candles = list(_candles(count=1442))
     state = _state(snapshot_time_ms=candles[-1].available_time_ms, current_close=candles[-1].close)
@@ -311,6 +388,8 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
         audit_rows = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_rows["relative_over_absolute_feature_contract_enforced"]["status"] == AuditStatus.PASS.value
     assert audit_rows["ATR_1d_asof_t_computed_from_closed_past_candles"]["status"] == AuditStatus.PASS.value
+    assert audit_rows["market_shock_id_assigned"]["status"] == AuditStatus.PASS.value
+    assert audit_rows["simultaneous_anomalies_count_1m_point_in_time"]["status"] == AuditStatus.PASS.value
 
 
 def _candles(*, count: int, with_taker: bool = False, varying_volume: bool = False) -> tuple[Candle1m, ...]:

@@ -10,16 +10,22 @@ class FeatureMatrixConfig:
     """Configuration for MVP feature matrix materialization.
 
     This stage materializes as-of price/time/alpha-decay plus the first market
-    physics families: volume self-history, closed 5m OI, liquidation flow, and
-    CVD divergence. BTC-relative and systemic cluster features are added later.
+    physics families: volume self-history, closed 5m OI, liquidation flow, CVD
+    divergence, point-in-time cross-section, BTC-relative context, and systemic
+    cluster context. It still does not train ML or make decisions.
     """
 
-    feature_matrix_version: str = "feature_matrix_v3_cross_sectional"
+    feature_matrix_version: str = "feature_matrix_v4_btc_systemic"
     atr_window_minutes: int = ATR_1D_WINDOW_MINUTES
     expected_event_lifetime_minutes: int = 60
     volume_baseline_window_minutes: int = 1440
     cvd_windows_minutes: tuple[int, ...] = (3, 5, 10)
     min_cross_section_symbols: int = 3
+    btc_symbol: str = "BTCUSDT"
+    btc_corr_window_minutes: tuple[int, ...] = (15, 30, 60)
+    btc_relative_return_windows_minutes: tuple[int, ...] = (5, 15)
+    moderate_cluster_min_count: int = 3
+    systemic_cluster_min_count: int = 21
 
     def __post_init__(self) -> None:
         if not self.feature_matrix_version:
@@ -38,3 +44,21 @@ class FeatureMatrixConfig:
             raise ValueError("cvd_windows_minutes must be sorted unique values")
         if self.min_cross_section_symbols <= 1:
             raise ValueError("min_cross_section_symbols must be greater than 1")
+        if not self.btc_symbol:
+            raise ValueError("btc_symbol is required")
+        if not self.btc_corr_window_minutes:
+            raise ValueError("btc_corr_window_minutes must not be empty")
+        if any(window <= 1 for window in self.btc_corr_window_minutes):
+            raise ValueError("btc_corr_window_minutes must contain windows greater than 1")
+        if tuple(sorted(set(self.btc_corr_window_minutes))) != self.btc_corr_window_minutes:
+            raise ValueError("btc_corr_window_minutes must be sorted unique values")
+        if tuple(self.btc_corr_window_minutes) != (15, 30, 60):
+            raise ValueError("btc_corr_window_minutes must remain frozen at (15, 30, 60)")
+        if tuple(sorted(set(self.btc_relative_return_windows_minutes))) != self.btc_relative_return_windows_minutes:
+            raise ValueError("btc_relative_return_windows_minutes must be sorted unique values")
+        if tuple(self.btc_relative_return_windows_minutes) != (5, 15):
+            raise ValueError("btc_relative_return_windows_minutes must remain frozen at (5, 15)")
+        if self.moderate_cluster_min_count <= 2:
+            raise ValueError("moderate_cluster_min_count must be greater than 2")
+        if self.systemic_cluster_min_count <= self.moderate_cluster_min_count:
+            raise ValueError("systemic_cluster_min_count must be greater than moderate_cluster_min_count")
