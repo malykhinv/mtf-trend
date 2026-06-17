@@ -109,7 +109,6 @@ def build_parser() -> argparse.ArgumentParser:
         "build-binance-vision-cache",
         help="Build per-symbol 1m Parquet cache from Binance Vision USD-M Futures archives.",
     )
-    cache.add_argument("--out", default="data/processed", help="Output directory for {symbol}.parquet files.")
     cache.add_argument("--days", type=int, default=380, help="Inclusive lookback window in calendar days. Default: 380.")
     cache.add_argument(
         "--end-date",
@@ -198,58 +197,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=config,
         )
         print(f"mvp1 placebo/control artifacts written: {output_dir}")
-        return 0
-
-    if args.command == "build-binance-vision-cache":
-        from anomaly_science.binance_vision_cache import CacheConfig, build_binance_vision_cache, parse_optional_date, read_symbols_arg
-
-        config = CacheConfig(
-            out_dir=Path(args.out),
-            days=args.days,
-            end_date=parse_optional_date(args.end_date),
-            symbols=tuple(read_symbols_arg(args.symbols, args.symbols_file)),
-            max_symbols=args.max_symbols,
-            download_workers=args.download_workers,
-            timeout_seconds=args.timeout,
-            connect_timeout_seconds=args.connect_timeout,
-            retries=args.retries,
-            overwrite=args.overwrite,
-            oi_join_strategy=args.oi_join_strategy,
-            request_sleep_seconds=args.request_sleep,
-        )
-        stats = build_binance_vision_cache(config)
-        written = sum(1 for item in stats if item.rows_written > 0)
-        skipped_existing = sum(1 for item in stats if item.rows_written == -1)
-        print(f"binance vision cache done: written={written}, skipped_existing={skipped_existing}, out={config.out_dir}")
-        return 0
-
-    if args.command == "build-binance-vision-cache":
-        from anomaly_science.binance_vision_cache import (
-            DEFAULT_MARKET_CACHE_DIR,
-            CacheConfig,
-            build_binance_vision_cache,
-            parse_optional_date,
-            read_symbols_arg,
-        )
-
-        config = CacheConfig(
-            out_dir=DEFAULT_MARKET_CACHE_DIR,
-            days=args.days,
-            end_date=parse_optional_date(args.end_date),
-            symbols=tuple(read_symbols_arg(args.symbols, args.symbols_file)),
-            max_symbols=args.max_symbols,
-            download_workers=args.download_workers,
-            timeout_seconds=args.timeout,
-            connect_timeout_seconds=args.connect_timeout,
-            retries=args.retries,
-            overwrite=args.overwrite,
-            oi_join_strategy=args.oi_join_strategy,
-            request_sleep_seconds=args.request_sleep,
-        )
-        stats = build_binance_vision_cache(config)
-        written = sum(1 for item in stats if item.rows_written > 0)
-        skipped_existing = sum(1 for item in stats if item.rows_written == -1)
-        print(f"binance vision cache done: written={written}, skipped_existing={skipped_existing}, out={config.out_dir}")
         return 0
 
     if args.command == "build-binance-vision-cache":

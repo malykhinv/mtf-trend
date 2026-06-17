@@ -5,6 +5,7 @@ import csv
 import json
 import io
 import os
+import shutil
 import re
 import sys
 import time
@@ -182,6 +183,28 @@ class SymbolStats:
     output_path: Path | None
 
 
+@dataclass(frozen=True, slots=True)
+class BlockLedgerRecord:
+    symbol: str
+    timeframe: str
+    block_type: str
+    block_label: str
+    start_date: str
+    end_date: str
+    klines_status: str
+    metrics_status: str
+    liquidations_status: str
+    rows_written: int
+    part_path: str
+    last_open_interest: float | None
+    error: str
+    completed_at: str
+
+
+LedgerKey = tuple[str, str, str, str]
+TIMEFRAME_NAME = "enriched_1m"
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="build-binance-vision-cache",
@@ -274,8 +297,11 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
         raise RuntimeError("No symbols to process. Discovery returned empty set and no --symbols were provided.")
 
     config.out_dir.mkdir(parents=True, exist_ok=True)
+    cache_parts_dir(config.out_dir).mkdir(parents=True, exist_ok=True)
     metadata_dir = cache_metadata_dir(config.out_dir)
     metadata_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = metadata_dir / "block_ledger.csv"
+    ledger = read_block_ledger(ledger_path)
     stats: list[SymbolStats] = []
 
     started_at = time.monotonic()
@@ -323,6 +349,8 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
             config=config,
             start_date=start,
             end_date=end,
+            ledger=ledger,
+            ledger_path=ledger_path,
             progress_callback=on_block_progress,
         )
         stats.append(symbol_stats)
@@ -338,13 +366,22 @@ def build_symbol_cache(
     config: CacheConfig,
     start_date: date,
     end_date: date,
+    ledger: dict[LedgerKey, BlockLedgerRecord],
+    ledger_path: Path,
     progress_callback: ProgressCallback | None = None,
 ) -> SymbolStats:
-    import pyarrow.parquet as pq
-
     final_path = config.out_dir / f"{symbol}.parquet"
-    tmp_path = config.out_dir / f".{symbol}.parquet.tmp"
-    if final_path.exists() and not config.overwrite:
+    symbol_parts_dir = cache_parts_dir(config.out_dir) / symbol
+
+    if config.overwrite:
+        if final_path.exists():
+            final_path.unlink()
+        if symbol_parts_dir.exists():
+            shutil.rmtree(symbol_parts_dir)
+        remove_symbol_from_ledger(ledger, symbol)
+        write_block_ledger(ledger_path, ledger)
+    elif final_path.exists() and not symbol_has_ledger_rows(ledger, symbol):
+        # Backward-compatible path for old monolithic cache files built before block-level resume existed.
         return SymbolStats(
             symbol=symbol,
             rows_written=-1,
@@ -354,10 +391,7 @@ def build_symbol_cache(
             missing_liquidation_blocks=0,
             output_path=final_path,
         )
-    if tmp_path.exists():
-        tmp_path.unlink()
 
-    writer: pq.ParquetWriter | None = None
     rows_written = 0
     blocks_written = 0
     missing_kline_blocks = 0
@@ -366,6 +400,8 @@ def build_symbol_cache(
     last_oi: float | None = None
     symbol_blocks_done = 0
     symbol_blocks_total = max(1, len(blocks))
+    new_or_changed_parts = False
+    completed_part_paths: list[Path] = []
 
     def notify_block(label: str) -> None:
         nonlocal symbol_blocks_done, symbol_blocks_total
@@ -374,77 +410,199 @@ def build_symbol_cache(
         if progress_callback is not None:
             progress_callback(symbol, label, symbol_blocks_done, symbol_blocks_total, rows_written)
 
-    try:
-        for block in blocks:
-            files = download_block_files(symbol=symbol, block=block, config=config)
-            if files.missing_required_klines and block.is_monthly:
-                notify_block(f"{block.period}:{block.label}:missing-monthly")
-                fallback_days = daily_blocks(block.start_date, min(block.end_date, end_date))
-                symbol_blocks_total += len(fallback_days)
-                for daily_block in fallback_days:
-                    daily_files = download_block_files(symbol=symbol, block=daily_block, config=config)
-                    if daily_files.missing_required_klines:
-                        missing_kline_blocks += 1
-                        notify_block(f"{daily_block.period}:{daily_block.label}:missing")
-                        continue
-                    frame, last_oi = process_block(
-                        files=daily_files,
-                        start_date=max(daily_block.start_date, start_date),
-                        end_date=min(daily_block.end_date, end_date),
-                        last_oi=last_oi,
-                        oi_join_strategy=config.oi_join_strategy,
-                    )
-                    if daily_files.metrics_zip is None:
-                        missing_metric_blocks += 1
-                    if daily_files.liquidations_zip is None:
-                        missing_liquidation_blocks += 1
-                    writer = append_parquet_frame(writer=writer, path=tmp_path, frame=frame, compression=config.compression)
-                    rows_written += frame.height
-                    blocks_written += int(frame.height > 0)
-                    notify_block(f"{daily_block.period}:{daily_block.label}")
-                    maybe_sleep(config.request_sleep_seconds)
-                continue
+    def write_ledger_record(
+        *,
+        block: VisionBlock,
+        actual_start: date,
+        actual_end: date,
+        klines_status: str,
+        metrics_status: str,
+        liquidations_status: str,
+        rows: int,
+        part_path: Path | None,
+        block_last_oi: float | None,
+        error: str = "",
+    ) -> None:
+        ledger[ledger_key(symbol, block)] = BlockLedgerRecord(
+            symbol=symbol,
+            timeframe=TIMEFRAME_NAME,
+            block_type=block.period,
+            block_label=block.label,
+            start_date=actual_start.isoformat(),
+            end_date=actual_end.isoformat(),
+            klines_status=klines_status,
+            metrics_status=metrics_status,
+            liquidations_status=liquidations_status,
+            rows_written=rows,
+            part_path=str(part_path) if part_path is not None else "",
+            last_open_interest=block_last_oi,
+            error=error,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        write_block_ledger(ledger_path, ledger)
 
-            if files.missing_required_klines:
+    def reuse_completed_block(block: VisionBlock, actual_start: date, actual_end: date) -> bool:
+        nonlocal rows_written, blocks_written, missing_kline_blocks, missing_metric_blocks, missing_liquidation_blocks, last_oi
+        record = ledger.get(ledger_key(symbol, block))
+        if record is None or not ledger_record_matches_range(record, actual_start, actual_end):
+            return False
+
+        if record.klines_status in {"missing", "empty"}:
+            if record.klines_status == "missing":
                 missing_kline_blocks += 1
-                notify_block(f"{block.period}:{block.label}:missing")
-                maybe_sleep(config.request_sleep_seconds)
-                continue
+            notify_block(f"{block.period}:{block.label}:{record.klines_status}:cached")
+            return True
 
-            frame, last_oi = process_block(
-                files=files,
-                start_date=max(block.start_date, start_date),
-                end_date=min(block.end_date, end_date),
-                last_oi=last_oi,
-                oi_join_strategy=config.oi_join_strategy,
+        if record.klines_status != "ok":
+            return False
+        part_path = Path(record.part_path) if record.part_path else block_part_path(config.out_dir, symbol, block)
+        if not part_path.exists():
+            return False
+
+        block_rows = max(0, int(record.rows_written))
+        rows_written += block_rows
+        blocks_written += int(block_rows > 0)
+        if record.metrics_status == "missing":
+            missing_metric_blocks += 1
+        if record.liquidations_status == "missing":
+            missing_liquidation_blocks += 1
+        last_oi = record.last_open_interest
+        if last_oi is None:
+            last_oi = read_last_open_interest(part_path)
+        completed_part_paths.append(part_path)
+        notify_block(f"{block.period}:{block.label}:cached")
+        return True
+
+    def process_data_block(block: VisionBlock) -> None:
+        nonlocal rows_written, blocks_written, missing_kline_blocks, missing_metric_blocks, missing_liquidation_blocks
+        nonlocal last_oi, symbol_blocks_total, new_or_changed_parts
+
+        actual_start = max(block.start_date, start_date)
+        actual_end = min(block.end_date, end_date)
+        if reuse_completed_block(block, actual_start, actual_end):
+            return
+
+        files = download_block_files(symbol=symbol, block=block, config=config)
+        if files.missing_required_klines and block.is_monthly:
+            write_ledger_record(
+                block=block,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                klines_status="missing",
+                metrics_status="missing" if files.metrics_zip is None else "ok",
+                liquidations_status="missing" if files.liquidations_zip is None else "ok",
+                rows=0,
+                part_path=None,
+                block_last_oi=last_oi,
             )
-            if files.metrics_zip is None:
-                missing_metric_blocks += 1
-            if files.liquidations_zip is None:
-                missing_liquidation_blocks += 1
-            writer = append_parquet_frame(writer=writer, path=tmp_path, frame=frame, compression=config.compression)
-            rows_written += frame.height
-            blocks_written += int(frame.height > 0)
-            notify_block(f"{block.period}:{block.label}")
-            maybe_sleep(config.request_sleep_seconds)
-    finally:
-        if writer is not None:
-            writer.close()
+            notify_block(f"{block.period}:{block.label}:missing-monthly")
+            fallback_days = daily_blocks(block.start_date, min(block.end_date, end_date))
+            symbol_blocks_total += len(fallback_days)
+            for daily_block in fallback_days:
+                process_data_block(daily_block)
+            return
 
-    if rows_written <= 0:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        if files.missing_required_klines:
+            missing_kline_blocks += 1
+            write_ledger_record(
+                block=block,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                klines_status="missing",
+                metrics_status="missing" if files.metrics_zip is None else "ok",
+                liquidations_status="missing" if files.liquidations_zip is None else "ok",
+                rows=0,
+                part_path=None,
+                block_last_oi=last_oi,
+            )
+            notify_block(f"{block.period}:{block.label}:missing")
+            maybe_sleep(config.request_sleep_seconds)
+            return
+
+        frame, last_oi = process_block(
+            files=files,
+            start_date=actual_start,
+            end_date=actual_end,
+            last_oi=last_oi,
+            oi_join_strategy=config.oi_join_strategy,
+        )
+        metrics_status = "missing" if files.metrics_zip is None else "ok"
+        liquidations_status = "missing" if files.liquidations_zip is None else "ok"
+        if metrics_status == "missing":
+            missing_metric_blocks += 1
+        if liquidations_status == "missing":
+            missing_liquidation_blocks += 1
+
+        if frame.height == 0:
+            write_ledger_record(
+                block=block,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                klines_status="empty",
+                metrics_status=metrics_status,
+                liquidations_status=liquidations_status,
+                rows=0,
+                part_path=None,
+                block_last_oi=last_oi,
+            )
+            notify_block(f"{block.period}:{block.label}:empty")
+            maybe_sleep(config.request_sleep_seconds)
+            return
+
+        part_path = block_part_path(config.out_dir, symbol, block)
+        tmp_part_path = part_path.with_suffix(part_path.suffix + ".tmp")
+        if tmp_part_path.exists():
+            tmp_part_path.unlink()
+        part_path.parent.mkdir(parents=True, exist_ok=True)
+        write_parquet_frame(path=tmp_part_path, frame=frame, compression=config.compression)
+        os.replace(tmp_part_path, part_path)
+
+        rows_written += frame.height
+        blocks_written += 1
+        completed_part_paths.append(part_path)
+        new_or_changed_parts = True
+        write_ledger_record(
+            block=block,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            klines_status="ok",
+            metrics_status=metrics_status,
+            liquidations_status=liquidations_status,
+            rows=frame.height,
+            part_path=part_path,
+            block_last_oi=last_oi,
+        )
+        notify_block(f"{block.period}:{block.label}")
+        maybe_sleep(config.request_sleep_seconds)
+
+    for block in blocks:
+        process_data_block(block)
+
+    unique_part_paths = dedupe_existing_paths(completed_part_paths)
+    if not unique_part_paths:
+        if not final_path.exists():
+            return SymbolStats(
+                symbol=symbol,
+                rows_written=0,
+                blocks_written=0,
+                missing_kline_blocks=missing_kline_blocks,
+                missing_metric_blocks=missing_metric_blocks,
+                missing_liquidation_blocks=missing_liquidation_blocks,
+                output_path=None,
+            )
         return SymbolStats(
             symbol=symbol,
-            rows_written=0,
-            blocks_written=0,
+            rows_written=rows_written,
+            blocks_written=blocks_written,
             missing_kline_blocks=missing_kline_blocks,
             missing_metric_blocks=missing_metric_blocks,
             missing_liquidation_blocks=missing_liquidation_blocks,
-            output_path=None,
+            output_path=final_path,
         )
 
-    os.replace(tmp_path, final_path)
+    if new_or_changed_parts or not final_path.exists() or config.overwrite:
+        compact_symbol_parts(part_paths=unique_part_paths, final_path=final_path, compression=config.compression)
+
     return SymbolStats(
         symbol=symbol,
         rows_written=rows_written,
@@ -472,6 +630,80 @@ def append_parquet_frame(*, writer, path: Path, frame, compression: str):
         )
     writer.write_table(table)
     return writer
+
+
+def write_parquet_frame(*, path: Path, frame, compression: str) -> None:
+    import pyarrow.parquet as pq
+
+    if frame.height == 0:
+        return
+    table = frame.to_arrow()
+    pq.write_table(
+        table,
+        where=path,
+        compression=compression,
+        use_dictionary=True,
+        write_statistics=True,
+    )
+
+
+def compact_symbol_parts(*, part_paths: list[Path], final_path: Path, compression: str) -> None:
+    import pyarrow.parquet as pq
+
+    tmp_path = final_path.with_suffix(final_path.suffix + ".tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+
+    writer: pq.ParquetWriter | None = None
+    try:
+        for part_path in part_paths:
+            table = pq.read_table(part_path)
+            if table.num_rows == 0:
+                continue
+            if writer is None:
+                writer = pq.ParquetWriter(
+                    where=tmp_path,
+                    schema=table.schema,
+                    compression=compression,
+                    use_dictionary=True,
+                    write_statistics=True,
+                )
+            writer.write_table(table)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if writer is None:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        return
+    os.replace(tmp_path, final_path)
+
+
+def read_last_open_interest(path: Path) -> float | None:
+    try:
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(path, columns=["open_interest"])
+        if table.num_rows == 0:
+            return None
+        value = table.column("open_interest")[-1].as_py()
+        return None if value is None else float(value)
+    except Exception:
+        return None
+
+
+def dedupe_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for path in paths:
+        resolved = path
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        result.append(resolved)
+    return result
 
 
 def process_block(
@@ -946,6 +1178,111 @@ def cache_metadata_dir(out_dir: Path) -> Path:
     return out_dir.parent / "metadata"
 
 
+def cache_parts_dir(out_dir: Path) -> Path:
+    return out_dir.parent / f"{out_dir.name}_parts"
+
+
+def block_part_path(out_dir: Path, symbol: str, block: VisionBlock) -> Path:
+    safe_label = block.label.replace("-", "_")
+    return cache_parts_dir(out_dir) / symbol / f"{block.period}_{safe_label}.parquet"
+
+
+def ledger_key(symbol: str, block: VisionBlock) -> LedgerKey:
+    return (symbol, TIMEFRAME_NAME, block.period, block.label)
+
+
+def symbol_has_ledger_rows(ledger: dict[LedgerKey, BlockLedgerRecord], symbol: str) -> bool:
+    return any(key[0] == symbol for key in ledger)
+
+
+def remove_symbol_from_ledger(ledger: dict[LedgerKey, BlockLedgerRecord], symbol: str) -> None:
+    for key in [item for item in ledger if item[0] == symbol]:
+        del ledger[key]
+
+
+def ledger_record_matches_range(record: BlockLedgerRecord, start_date: date, end_date: date) -> bool:
+    return record.start_date == start_date.isoformat() and record.end_date == end_date.isoformat()
+
+
+def read_block_ledger(path: Path) -> dict[LedgerKey, BlockLedgerRecord]:
+    if not path.exists():
+        return {}
+    records: dict[LedgerKey, BlockLedgerRecord] = {}
+    with path.open("r", encoding="utf-8", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        for row in reader:
+            symbol = (row.get("symbol") or "").strip().upper()
+            timeframe = row.get("timeframe") or TIMEFRAME_NAME
+            block_type = row.get("block_type") or ""
+            block_label = row.get("block_label") or ""
+            if not symbol or not block_type or not block_label:
+                continue
+            last_oi_raw = row.get("last_open_interest") or ""
+            last_oi = float(last_oi_raw) if last_oi_raw else None
+            record = BlockLedgerRecord(
+                symbol=symbol,
+                timeframe=timeframe,
+                block_type=block_type,
+                block_label=block_label,
+                start_date=row.get("start_date") or "",
+                end_date=row.get("end_date") or "",
+                klines_status=row.get("klines_status") or "",
+                metrics_status=row.get("metrics_status") or "",
+                liquidations_status=row.get("liquidations_status") or "",
+                rows_written=int(row.get("rows_written") or 0),
+                part_path=row.get("part_path") or "",
+                last_open_interest=last_oi,
+                error=row.get("error") or "",
+                completed_at=row.get("completed_at") or "",
+            )
+            records[(symbol, timeframe, block_type, block_label)] = record
+    return records
+
+
+def write_block_ledger(path: Path, ledger: dict[LedgerKey, BlockLedgerRecord]) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "symbol",
+        "timeframe",
+        "block_type",
+        "block_label",
+        "start_date",
+        "end_date",
+        "klines_status",
+        "metrics_status",
+        "liquidations_status",
+        "rows_written",
+        "part_path",
+        "last_open_interest",
+        "error",
+        "completed_at",
+    ]
+    with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in sorted(ledger.values(), key=lambda item: (item.symbol, item.start_date, item.block_type, item.block_label)):
+            writer.writerow(
+                {
+                    "symbol": record.symbol,
+                    "timeframe": record.timeframe,
+                    "block_type": record.block_type,
+                    "block_label": record.block_label,
+                    "start_date": record.start_date,
+                    "end_date": record.end_date,
+                    "klines_status": record.klines_status,
+                    "metrics_status": record.metrics_status,
+                    "liquidations_status": record.liquidations_status,
+                    "rows_written": record.rows_written,
+                    "part_path": record.part_path,
+                    "last_open_interest": "" if record.last_open_interest is None else record.last_open_interest,
+                    "error": record.error,
+                    "completed_at": record.completed_at,
+                }
+            )
+    os.replace(tmp_path, path)
+
+
 def write_stats(path: Path, stats: list[SymbolStats]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -991,7 +1328,9 @@ def write_manifest(
         "market": "um_futures",
         "dataset": "enriched_1m",
         "data_dir": str(config.out_dir),
+        "parts_dir": str(cache_parts_dir(config.out_dir)),
         "metadata_dir": str(path.parent),
+        "block_ledger": str(path.parent / "block_ledger.csv"),
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "days": config.days,
