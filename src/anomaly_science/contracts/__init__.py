@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .artifacts import ArtifactSchema, MVP1_ARTIFACT_SCHEMAS, get_artifact_schema
+from .atlas import AtlasContextSplitRow, AtlasMarketShockGroupRow, AtlasNatureRow, AtlasResponseSurfaceRow
 from .audit import AuditStatus, DataQualityRow, ProtocolAuditRow, RunConfigRow
 from .events import AnomalyEvent
 from .features import FeatureCatalogRow, FeatureFamily
@@ -13,6 +14,10 @@ __all__ = [
     "AnomalyEvent",
     "AnomalyState1mRow",
     "ArtifactSchema",
+    "AtlasContextSplitRow",
+    "AtlasMarketShockGroupRow",
+    "AtlasNatureRow",
+    "AtlasResponseSurfaceRow",
     "AuditStatus",
     "Candle1m",
     "Candle5m",

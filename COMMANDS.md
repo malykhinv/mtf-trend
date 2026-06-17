@@ -30,6 +30,12 @@ MVP1 raw future paths:
 python main.py run-mvp1-future --input tests/fixtures/minimal_market_data --state tmp/mvp1_state/anomaly_state_1m.csv --out tmp/mvp1_future
 ```
 
+MVP1 descriptive anomaly atlas:
+
+```bash
+python main.py run-mvp1-atlas --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_atlas
+```
+
 Compile check:
 
 ```bash
