@@ -6,8 +6,6 @@
 /.run/
 /.venv/
 /logs/
-/tmp/
-*.zip
 __pycache__/
 */__pycache__/
 *.py[cod]

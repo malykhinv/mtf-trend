@@ -1,26 +1,24 @@
 [project]
-name = "mtf-trend"
+name = "anomaly-science"
 version = "0.1.0"
-description = "CLI-система для загрузки рыночных данных и бектеста торговых стратегий"
+description = "Clean scientific rebuild of anomaly-driven crypto anomaly research"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "pandas>=2.0",
-  "ccxt>=4.0",
-  "requests>=2.31",
-  "aiohttp>=3.9",
-  "vectorbt>=0.26",
   "pyarrow>=14.0",
-  "matplotlib>=3.8",
 ]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
-[tool.ruff.lint.per-file-ignores]
-"cli/commands.py" = ["BLE001"]
-"data/fetchers/market_data_fetcher.py" = ["BLE001"]
-"data/fetchers/ohlcv_fetcher.py" = ["BLE001"]
-"data/fetchers/oi_fetcher.py" = ["BLE001"]
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

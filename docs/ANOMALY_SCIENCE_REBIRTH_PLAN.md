@@ -1,38 +1,33 @@
 # Anomaly Science Rebirth Plan
 
-This document is the project-level execution order for the anomaly-science rebuild.
+This document fixes the project-level execution order for the clean anomaly-science rebuild.
 
-The old repository is treated as legacy reference material only. New code must be
-implemented as isolated, typed, reusable modules. Backtest, shadow live, and live
-must be built from the same domain contracts and decision modules instead of being
-separate strategy implementations.
+The old repository is quarantined as reference material only. New code must be implemented as isolated, typed, reusable modules under `src/anomaly_science`. Backtest, shadow live, and live must share the same domain contracts, state builders, feature builders, prediction interfaces, and decision modules.
 
 ## Non-negotiable rules
 
 1. Work on one stage at a time.
 2. Do not start a later stage until the previous stage has a passing Definition of Done.
-3. Do not import from `legacy_quarantine` in new code.
-4. Do not copy old strategy rules as the basis of the new methodology.
-5. Legacy code may be read only as reference for useful practices.
-6. No silent fallbacks, monkeypatches, post-processing fixes, global suppressors, or string-matching hacks.
-7. Features must use only data available at or before `snapshot_time`.
-8. Labels and future paths must use only data strictly after `snapshot_time`.
-9. Do not optimize for PnL before prediction, calibration, timing, and EV are proven.
-10. Backtest and live must share the same contracts, state builders, feature builders,
-    prediction interfaces, and decision modules.
+3. New code must not import from `legacy_quarantine` or old root packages.
+4. Legacy code may be read only as reference; useful practices must be reimplemented cleanly.
+5. No silent fallbacks, monkeypatches, global suppressors, string-matching hacks, or post-processing fixes.
+6. Features may use only data available at or before `snapshot_time`.
+7. Future paths and labels may use only data strictly after `snapshot_time`.
+8. Do not optimize for PnL before prediction, calibration, decision timing, and EV are proven.
+9. Do not build separate live and backtest strategies; they must use shared core modules.
 
-## Target architecture
+## Target package layout
 
 ```text
 src/anomaly_science/
-  contracts/      # typed domain contracts, schemas, time rules
-  data/           # data ports, adapters, cache readers, quality checks
+  contracts/      # typed domain contracts, schemas, temporal rules
+  data/           # data ports, cache adapters, normalized readers, quality checks
   universe/       # point-in-time symbol universe
   events/         # broad anomaly detector
   state/          # online 1m state builder
   future/         # raw future paths and scenario labels
   features/       # feature catalog and feature builders
-  atlas/          # discovery surfaces and context splits
+  atlas/          # nature atlas, response surfaces, context splits
   validation/     # walk-forward, purging, calibration, placebo
   decision/       # timing, RR feasibility, expected utility
   simulation/     # simplified pessimistic trade simulation
@@ -41,239 +36,283 @@ src/anomaly_science/
   audit/          # protocol, data, temporal, and parity audits
 ```
 
-The core direction is:
+## Execution order
 
 ```text
-historical/live data
+legacy quarantine
+  -> contracts and artifact schemas
+  -> data ports and cache adapters
   -> data quality gates
   -> point-in-time universe
   -> broad anomaly detector
   -> online 1m state builder
   -> future path builder
+  -> protocol audit
   -> nature atlas
   -> walk-forward calibrated prediction
   -> decision timing / RR feasibility
   -> expected utility
-  -> simplified trade simulation
+  -> simplified pessimistic trade simulation
   -> shadow live
   -> production live
+  -> legacy deletion
 ```
 
 ---
 
-# Stage 0 — Legacy quarantine
+## Stage 0 — Legacy quarantine
 
-## Goal
+Goal: move the mixed old repository into `legacy_quarantine/old_repo/` and start from a clean source root.
 
-Move the current mixed repository into a quarantine area and start the new system
-from a clean source root.
-
-## Required actions
-
-- Move old project files into `legacy_quarantine/old_repo/`.
-- Create `legacy_quarantine/README.md` with reference-only rules.
-- Create clean roots: `src/anomaly_science/`, `tests/`, `docs/`, `research/`.
-- Create a minimal new `main.py` that routes only into `anomaly_science.cli`.
-- Add a `doctor` command that proves the new bootstrap works.
-- Add a test that forbids imports from `legacy_quarantine` and old top-level packages.
-
-## Forbidden
-
-- Do not fix old strategy logic.
-- Do not preserve old root imports as shared code.
-- Do not make new modules depend on old `research_tools`, `strategy`, `data`, or `cli`.
-
-## Definition of Done
+Definition of Done:
 
 - `python main.py doctor` passes.
 - `python -m compileall main.py src tests` passes.
 - New code has no imports from legacy paths.
-- One commit contains quarantine only, no methodology implementation.
+- One commit contains quarantine/bootstrap only, no methodology implementation.
 
----
+Forbidden:
 
-# Stage 1 — Project contracts and artifact schemas
+- Do not fix old strategy logic.
+- Do not preserve old root packages as shared runtime code.
+- Do not make new modules depend on old `research_tools`, `strategy`, `data`, `cli`, or similar root packages.
 
-## Goal
+## Stage 1 — Contracts and artifact schemas
 
-Define the stable domain contracts before implementing logic.
+Goal: define stable typed contracts before implementing logic.
 
-## Required modules
+Required outputs:
 
-```text
-src/anomaly_science/contracts/time.py
-src/anomaly_science/contracts/market.py
-src/anomaly_science/contracts/events.py
-src/anomaly_science/contracts/state.py
-src/anomaly_science/contracts/future.py
-src/anomaly_science/contracts/features.py
-src/anomaly_science/contracts/artifacts.py
-```
+- canonical timestamp/timezone policy;
+- candle contracts for 1m and 5m OHLCV;
+- closed 5m open-interest contract;
+- liquidation-flow contract;
+- symbol metadata and point-in-time universe contract;
+- anomaly event contract;
+- online state contract;
+- future path contract;
+- feature catalog contract;
+- run manifest contract.
 
-## Required decisions
+Definition of Done:
 
-- Canonical timestamp type and timezone policy.
-- Candle schema for 1m and 5m OHLCV.
-- Closed 5m open-interest schema.
-- Liquidation-flow schema.
-- Symbol metadata and point-in-time universe schema.
-- Event schema.
-- Online state schema.
-- Future path schema.
-- Feature catalog schema.
-- Run manifest schema.
+- Required MVP 1 artifact names and columns are fixed.
+- Temporal invariants are explicit: `feature_cutoff_time <= snapshot_time`, `future_start_time > snapshot_time`.
+- Unit tests validate schema and temporal invariants.
 
-## Definition of Done
+## Stage 2 — Data ports and cache adapters
 
-- Schemas are typed and documented.
-- Artifact names and required columns are fixed for MVP 1.
-- Temporal invariants are explicit:
-  - `feature_cutoff_time <= snapshot_time`
-  - `future_start_time > snapshot_time`
-- Unit tests validate the basic schema invariants.
+Goal: build clean data access boundaries without importing legacy internals.
 
----
+Required behavior:
 
-# Stage 2 — Data ports and cache adapters
+- read 1m candles;
+- read 5m candles;
+- read closed 5m OI if available;
+- read liquidation flow if available;
+- read symbol metadata;
+- report missing data explicitly.
 
-## Goal
+Definition of Done:
 
-Build clean data access boundaries without importing legacy internals.
-
-## Required modules
-
-```text
-src/anomaly_science/data/ports.py
-src/anomaly_science/data/cache.py
-src/anomaly_science/data/readers.py
-src/anomaly_science/data/availability.py
-```
-
-## Required behavior
-
-- Read 1m candles.
-- Read 5m candles.
-- Read closed 5m open interest if available.
-- Read liquidation flow if available.
-- Read symbol metadata.
-- Report missing data explicitly.
-
-## Forbidden
-
-- No generic fallback from missing fields into proxy fields.
-- No silent conversion of bad payloads into empty data.
-- No dependency on legacy private client fields.
-
-## Definition of Done
-
-- Data ports are interfaces or explicit boundary functions.
-- Cache adapters are replaceable.
+- Data access uses replaceable ports/adapters.
 - Missing data is represented as data quality condition, not market signal.
 - Tests cover missing columns, bad timestamps, duplicates, and empty data.
 
----
+## Stage 3 — Data quality gates
 
-# Stage 3 — Data quality gates
+Goal: reject or mark invalid data before any research result is produced.
 
-## Goal
-
-Reject or mark invalid data before any research result is produced.
-
-## Required artifact
+Required artifact:
 
 ```text
 anomaly_data_quality.csv
 ```
 
-## Required checks
+Definition of Done:
 
-- Missing candles.
-- Duplicate candles.
-- Bad timestamps.
-- Timezone misalignment.
-- Non-positive prices.
-- Impossible returns.
-- Zero-volume anomalies.
-- OI gaps.
-- Liquidation data gaps.
-- Symbol listing gaps.
+- Checks cover missing candles, duplicates, bad timestamps, timezone alignment, non-positive prices, impossible returns, zero-volume anomalies, OI gaps, liquidation gaps, and listing gaps.
+- Data quality returns deterministic PASS/WARN/FAIL rows.
+- Critical FAIL prevents interpretation of research results.
 
-## Definition of Done
+## Stage 4 — Point-in-time universe
 
-- Data quality can return PASS/WARN/FAIL.
-- Research pipeline refuses to interpret results when critical checks FAIL.
-- Data quality output is deterministic and saved per run.
+Goal: prevent survivorship bias and future-universe leakage.
 
----
-
-# Stage 4 — Point-in-time universe
-
-## Goal
-
-Prevent survivorship bias and future-universe leakage.
-
-## Required artifact
+Required artifact:
 
 ```text
 symbol_universe_by_day.csv
 ```
 
-## Required columns
-
-```text
-trade_date
-symbol
-listed_asof_day
-delisted_asof_day
-tradable_on_day
-has_1m_data
-has_5m_data
-has_oi_data
-has_liquidation_data
-liquidity_eligible_on_day
-reason_if_excluded
-```
-
-## Definition of Done
+Definition of Done:
 
 - Static current-universe research is forbidden by audit.
 - Delisted historical symbols are not excluded when data exists.
 - Universe decisions are reproducible from saved artifacts.
 
----
+## Stage 5 — Broad anomaly detector
 
-# Stage 5 — Broad anomaly detector
+Goal: detect broad market activity moments, not trade setups.
 
-## Goal
-
-Detect broad market activity moments, not trade setups.
-
-## Required artifact
+Required artifact:
 
 ```text
 anomaly_events.csv
 ```
 
-## Required properties
+Definition of Done:
 
-- Detector must not know future outcomes.
-- Detector should be broad enough to include one-shot spikes, bursts, grinds,
-  volume-only anomalies, range expansions, breakouts, noise pumps, session bursts,
-  and market-wide impulses.
+- Detector uses only data available at detection time.
+- Detector does not know future outcome.
+- Detector is broad enough to include spikes, bursts, grind pumps, volume-only anomalies, range expansions, breakouts, noisy pumps, session bursts, and market-wide impulses.
 
-## Required columns
+## Stage 6 — Online 1m state builder
+
+Goal: update state every minute after an anomaly is detected.
+
+Required artifact:
 
 ```text
-event_id
-symbol
-event_start_time
-event_detection_time
-seed_time
-seed_open
-seed_high
-seed_low
-seed_close
-initial_move_pct
-initial_volume_zscore
-initial_quote_volume_zscore
-initial_trade_count_zscore
+anomaly_state_1m.csv
+```
+
+Definition of Done:
+
+- Every state row has `event_id`, `symbol`, `state_time`, `snapshot_time`, `feature_cutoff_time`.
+- Running high/low are strictly as-of-state, not final future values.
+- Tests prove future candles cannot affect state rows.
+
+## Stage 7 — Future paths and labels
+
+Goal: save raw future outcomes first; labels are derived later from raw outcomes.
+
+Required artifact:
+
+```text
+anomaly_future_paths.csv
+```
+
+Definition of Done:
+
+- Future windows start strictly after `snapshot_time`.
+- Raw outcomes exist before scenario labels.
+- Multi-horizon paths are saved for at least 15m, 30m, 60m, and 120m where data exists.
+
+## Stage 8 — Protocol audit
+
+Goal: make temporal and data-contract violations impossible to ignore.
+
+Required artifact:
+
+```text
+anomaly_protocol_audit.csv
+```
+
+Definition of Done:
+
+- Audit checks feature/label time separation, train/test separation, closed 5m OI usage, point-in-time universe, liquidation timestamp availability, and no static future universe.
+- Any FAIL makes the run non-interpretable.
+
+## Stage 9 — Nature atlas
+
+Goal: map anomaly types and future behaviors before ML and trading.
+
+Required artifacts:
+
+```text
+anomaly_nature_atlas.csv
+anomaly_response_surfaces.csv
+anomaly_context_splits.csv
+anomaly_market_shock_groups.csv
+```
+
+Definition of Done:
+
+- Atlas describes hypotheses only; it is not treated as proof of edge.
+- Results are sliced by price shape, speed, volume, flow, OI, liquidation regime, session, and market context.
+
+## Stage 10 — Walk-forward prediction and calibration
+
+Goal: predict future nature with calibrated OOS probabilities.
+
+Required artifacts:
+
+```text
+anomaly_oos_predictions.csv
+anomaly_calibration.csv
+anomaly_feature_stability.csv
+anomaly_placebo_tests.csv
+research_ledger.csv
+holdout_access_log.csv
+```
+
+Definition of Done:
+
+- All fit operations occur only inside train folds.
+- Purging/embargo is applied for overlapping labels.
+- Calibration, placebo, and baseline comparisons pass.
+
+## Stage 11 — Decision timing and expected utility
+
+Goal: prove that confidence appears before RR is gone.
+
+Required artifacts:
+
+```text
+anomaly_decision_timing.csv
+anomaly_expected_utility.csv
+```
+
+Definition of Done:
+
+- Signals are evaluated as wait/no_trade/enter_long/enter_short/hold/exit choices.
+- EV is compared against wait and no_trade.
+- Late correct predictions are not counted as tradable edge.
+
+## Stage 12 — Simplified pessimistic trade simulation
+
+Goal: test whether calibrated predictions and timing can become positive EV after basic costs.
+
+Required artifacts:
+
+```text
+anomaly_trade_simulation.csv
+anomaly_position_state.csv
+anomaly_exit_policy_oos.csv
+anomaly_mae_mfe.csv
+```
+
+Definition of Done:
+
+- Entry uses next 1m open only as reference price.
+- Entry is pessimised by fixed/ATR slippage penalty.
+- Fees are included.
+- The simulator uses the same contracts and decision modules intended for shadow/live.
+
+## Stage 13 — Shadow live
+
+Goal: verify live/backtest parity without money.
+
+Definition of Done:
+
+- Shadow live uses the same state, feature, prediction, and decision modules as research.
+- Differences are written as audit artifacts, not hidden in logs.
+
+## Stage 14 — Production live
+
+Goal: production execution only after scientific validity and shadow parity.
+
+Definition of Done:
+
+- Execution reliability, latency, partial fills, reconciliation, kill switch, and account safety are implemented separately from research logic.
+
+## Stage 15 — Legacy deletion
+
+Goal: delete `legacy_quarantine` once the new system fully replaces useful legacy behavior.
+
+Definition of Done:
+
+- No required workflow depends on legacy reference files.
+- Useful legacy lessons are reimplemented cleanly in the new architecture.
+- `legacy_quarantine` is removed in one explicit cleanup commit.
