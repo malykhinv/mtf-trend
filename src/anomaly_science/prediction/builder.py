@@ -54,6 +54,10 @@ class PredictionInputRow:
     def target_scenario_60m(self) -> str:
         return self.label.scenario_60m
 
+    @property
+    def target_scenario_120m(self) -> str:
+        return self.label.scenario_120m
+
 
 def load_prediction_inputs(
     *,
@@ -142,7 +146,6 @@ def build_walk_forward_predictions(
                     p_long_continuation=probabilities["long_continuation"],
                     p_short_fade=probabilities["short_fade"],
                     p_static_or_chop=probabilities["static_or_chop"],
-                    p_trap=probabilities["trap"],
                     p_unclear=probabilities["unclear"],
                     predicted_scenario=predicted_scenario,
                     prediction_confidence=confidence,
@@ -365,7 +368,6 @@ def _oos_prediction_from_mapping(row: Mapping[str, object]) -> OosPredictionRow:
         p_long_continuation=_required_float(row, "p_long_continuation"),
         p_short_fade=_required_float(row, "p_short_fade"),
         p_static_or_chop=_required_float(row, "p_static_or_chop"),
-        p_trap=_required_float(row, "p_trap"),
         p_unclear=_required_float(row, "p_unclear"),
         predicted_scenario=_required_str(row, "predicted_scenario"),
         prediction_confidence=_required_float(row, "prediction_confidence"),
@@ -405,6 +407,8 @@ def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> 
         return label.scenario_30m
     if horizon_minutes == 60:
         return label.scenario_60m
+    if horizon_minutes == 120:
+        return label.scenario_120m
     raise ValueError(f"unsupported prediction target horizon: {horizon_minutes}")
 
 
@@ -511,7 +515,6 @@ def _probability_for_scenario(row: OosPredictionRow, scenario: str) -> float:
         "long_continuation": row.p_long_continuation,
         "short_fade": row.p_short_fade,
         "static_or_chop": row.p_static_or_chop,
-        "trap": row.p_trap,
         "unclear": row.p_unclear,
     }[scenario]
 

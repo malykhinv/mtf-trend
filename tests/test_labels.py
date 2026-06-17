@@ -83,12 +83,27 @@ def _future_row(
     future_return_15m: float | None = 0.02,
     future_return_30m: float | None = 0.02,
     future_return_60m: float | None = 0.02,
+    future_return_120m: float | None = 0.02,
     future_max_15m: float | None = 0.03,
     future_max_30m: float | None = 0.04,
     future_max_60m: float | None = 0.05,
+    future_max_120m: float | None = 0.05,
     future_min_15m: float | None = -0.002,
     future_min_30m: float | None = -0.002,
     future_min_60m: float | None = -0.002,
+    future_min_120m: float | None = -0.002,
+    future_return_atr_15m: float | None = 1.2,
+    future_return_atr_30m: float | None = 1.2,
+    future_return_atr_60m: float | None = 1.2,
+    future_return_atr_120m: float | None = 1.2,
+    future_max_atr_15m: float | None = 2.0,
+    future_max_atr_30m: float | None = 2.0,
+    future_max_atr_60m: float | None = 2.0,
+    future_max_atr_120m: float | None = 2.0,
+    future_min_atr_15m: float | None = -0.1,
+    future_min_atr_30m: float | None = -0.1,
+    future_min_atr_60m: float | None = -0.1,
+    future_min_atr_120m: float | None = -0.1,
     reclaimed_running_high_30m: bool | None = True,
     reclaimed_running_high_60m: bool | None = True,
 ) -> FuturePathRow:
@@ -99,18 +114,39 @@ def _future_row(
         snapshot_time_ms=snapshot_time_ms,
         feature_cutoff_time_ms=snapshot_time_ms,
         future_start_time_ms=snapshot_time_ms + 60_000,
+        atr_window_minutes=1440,
+        ATR_1d_asof_t=2.0,
+        ATR_1d_pct_asof_t=0.02,
         future_return_5m=0.005,
         future_return_15m=future_return_15m,
         future_return_30m=future_return_30m,
         future_return_60m=future_return_60m,
+        future_return_120m=future_return_120m,
         future_max_5m=0.01,
         future_max_15m=future_max_15m,
         future_max_30m=future_max_30m,
         future_max_60m=future_max_60m,
+        future_max_120m=future_max_120m,
         future_min_5m=-0.001,
         future_min_15m=future_min_15m,
         future_min_30m=future_min_30m,
         future_min_60m=future_min_60m,
+        future_min_120m=future_min_120m,
+        future_return_atr_5m=0.3,
+        future_return_atr_15m=future_return_atr_15m,
+        future_return_atr_30m=future_return_atr_30m,
+        future_return_atr_60m=future_return_atr_60m,
+        future_return_atr_120m=future_return_atr_120m,
+        future_max_atr_5m=0.5,
+        future_max_atr_15m=future_max_atr_15m,
+        future_max_atr_30m=future_max_atr_30m,
+        future_max_atr_60m=future_max_atr_60m,
+        future_max_atr_120m=future_max_atr_120m,
+        future_min_atr_5m=-0.05,
+        future_min_atr_15m=future_min_atr_15m,
+        future_min_atr_30m=future_min_atr_30m,
+        future_min_atr_60m=future_min_atr_60m,
+        future_min_atr_120m=future_min_atr_120m,
         reclaimed_running_high_30m=reclaimed_running_high_30m,
         reclaimed_running_high_60m=reclaimed_running_high_60m,
         broke_structural_low_30m=None,
@@ -133,9 +169,9 @@ def test_future_nature_scenarios_are_descriptive_not_trade_labels() -> None:
     assert (
         assign_future_nature_scenario(
             future=_future_row(
-                future_return_30m=-0.025,
-                future_max_30m=0.002,
-                future_min_30m=-0.04,
+                future_return_atr_30m=-1.2,
+                future_max_atr_30m=0.1,
+                future_min_atr_30m=-2.0,
                 reclaimed_running_high_30m=False,
             ),
             horizon_minutes=30,
@@ -145,9 +181,9 @@ def test_future_nature_scenarios_are_descriptive_not_trade_labels() -> None:
     assert (
         assign_future_nature_scenario(
             future=_future_row(
-                future_return_30m=0.001,
-                future_max_30m=0.004,
-                future_min_30m=-0.003,
+                future_return_atr_30m=0.05,
+                future_max_atr_30m=0.1,
+                future_min_atr_30m=-0.1,
                 reclaimed_running_high_30m=False,
             ),
             horizon_minutes=30,
@@ -157,16 +193,16 @@ def test_future_nature_scenarios_are_descriptive_not_trade_labels() -> None:
     assert (
         assign_future_nature_scenario(
             future=_future_row(
-                future_return_30m=-0.001,
-                future_max_30m=0.04,
-                future_min_30m=-0.04,
+                future_return_atr_30m=-0.1,
+                future_max_atr_30m=1.5,
+                future_min_atr_30m=-1.5,
                 reclaimed_running_high_30m=True,
             ),
             horizon_minutes=30,
         )
-        == "trap"
+        == "unclear"
     )
-    assert assign_future_nature_scenario(future=_future_row(future_return_30m=None), horizon_minutes=30) == "missing_future"
+    assert assign_future_nature_scenario(future=_future_row(future_return_atr_30m=None), horizon_minutes=30) == "missing_future"
 
 
 def test_outcome_labels_use_state_only_for_join_and_temporal_audit() -> None:
@@ -180,7 +216,7 @@ def test_outcome_labels_use_state_only_for_join_and_temporal_audit() -> None:
     assert base_labels[0].scenario_30m == "long_continuation"
     assert base_labels[0].scenario_60m == "long_continuation"
     assert base_labels[0].label_available_30m is True
-    assert base_labels[0].label_source == "raw_future_paths_only"
+    assert base_labels[0].label_source == "atr_normalized_future_paths_only"
     assert base_labels[0].temporal_contract == TEMPORAL_LABEL_CONTRACT
 
 
@@ -192,9 +228,15 @@ def test_missing_future_is_explicit_data_condition() -> None:
                 future_return_15m=None,
                 future_max_15m=None,
                 future_min_15m=None,
+                future_return_atr_15m=None,
+                future_max_atr_15m=None,
+                future_min_atr_15m=None,
                 future_return_30m=0.001,
                 future_max_30m=0.003,
                 future_min_30m=-0.002,
+                future_return_atr_30m=0.05,
+                future_max_atr_30m=0.1,
+                future_min_atr_30m=-0.1,
                 reclaimed_running_high_30m=False,
             )
         ],
@@ -260,7 +302,12 @@ def test_run_mvp1_labels_cli_writes_label_artifacts(tmp_path: Path) -> None:
         rows = list(csv.DictReader(file_obj))
     assert rows == [
         {
-            "label_policy_version": "mvp1_outcome_labels_v1",
+            "label_schema_version": "atr_outcome_labels_v1",
+            "atr_window_minutes": "1440",
+            "ATR_1d_asof_t": "2.0",
+            "k_continuation": "1.0",
+            "k_fade": "1.0",
+            "k_chop": "0.25",
             "event_id": "evt_labels",
             "symbol": "AAA/USDT:USDT",
             "snapshot_time_ms": str(BASE_TS + 2 * 60_000),
@@ -269,10 +316,12 @@ def test_run_mvp1_labels_cli_writes_label_artifacts(tmp_path: Path) -> None:
             "scenario_15m": "long_continuation",
             "scenario_30m": "long_continuation",
             "scenario_60m": "long_continuation",
+            "scenario_120m": "long_continuation",
             "label_available_15m": "True",
             "label_available_30m": "True",
             "label_available_60m": "True",
-            "label_source": "raw_future_paths_only",
+            "label_available_120m": "True",
+            "label_source": "atr_normalized_future_paths_only",
             "temporal_contract": TEMPORAL_LABEL_CONTRACT,
         }
     ]

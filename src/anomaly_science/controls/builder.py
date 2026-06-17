@@ -358,6 +358,8 @@ def _label_with_target(*, label: AnomalyOutcomeLabelRow, horizon_minutes: int, t
         return replace(label, scenario_30m=target, label_available_30m=True)
     if horizon_minutes == 60:
         return replace(label, scenario_60m=target, label_available_60m=True)
+    if horizon_minutes == 120:
+        return replace(label, scenario_120m=target, label_available_120m=True)
     raise ControlsArtifactError(f"unsupported target horizon: {horizon_minutes}")
 
 
@@ -406,6 +408,8 @@ def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> 
         return label.scenario_30m
     if horizon_minutes == 60:
         return label.scenario_60m
+    if horizon_minutes == 120:
+        return label.scenario_120m
     raise ControlsArtifactError(f"unsupported target horizon: {horizon_minutes}")
 
 
@@ -481,7 +485,6 @@ def _probabilities_from_prediction(row: OosPredictionRow) -> dict[str, float]:
         "long_continuation": row.p_long_continuation,
         "short_fade": row.p_short_fade,
         "static_or_chop": row.p_static_or_chop,
-        "trap": row.p_trap,
         "unclear": row.p_unclear,
     }
 

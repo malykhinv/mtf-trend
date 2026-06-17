@@ -94,7 +94,7 @@ def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[Protoc
         ProtocolAuditRow(
             check_name="labels_use_future_paths_only",
             status=AuditStatus.PASS,
-            message="scenario values are derived only from raw future path fields; state rows are used only for strict join and temporal audit",
+            message="scenario values are derived only from ATR-normalized future path fields; state rows are used only for strict join and temporal audit",
             artifact="anomaly_outcome_labels.csv",
         ),
         ProtocolAuditRow(
@@ -140,12 +140,14 @@ def _run_config_rows(
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
         RunConfigRow(key="stage", value="mvp1_labels", source="runtime"),
-        RunConfigRow(key="label_policy_version", value=config.label_policy_version, source="runtime"),
-        RunConfigRow(key="horizons_minutes", value="15|30|60", source="runtime"),
-        RunConfigRow(key="continuation_move_threshold", value=str(config.continuation_move_threshold), source="runtime"),
-        RunConfigRow(key="fade_move_threshold", value=str(config.fade_move_threshold), source="runtime"),
-        RunConfigRow(key="chop_return_threshold", value=str(config.chop_return_threshold), source="runtime"),
-        RunConfigRow(key="scenario_labels", value="descriptive_not_trading_labels", source="runtime"),
+        RunConfigRow(key="label_schema_version", value=config.label_schema_version, source="runtime"),
+        RunConfigRow(key="horizons_minutes", value="15|30|60|120", source="runtime"),
+        RunConfigRow(key="atr_window_minutes", value=str(config.atr_window_minutes), source="runtime"),
+        RunConfigRow(key="k_continuation", value=str(config.k_continuation), source="runtime"),
+        RunConfigRow(key="k_fade", value=str(config.k_fade), source="runtime"),
+        RunConfigRow(key="k_chop", value=str(config.k_chop), source="runtime"),
+        RunConfigRow(key="trap_policy", value=config.trap_policy, source="runtime"),
+        RunConfigRow(key="scenario_labels", value="atr_normalized_4class_descriptive_not_trading_labels", source="runtime"),
     ]
 
 

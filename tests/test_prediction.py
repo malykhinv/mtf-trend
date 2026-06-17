@@ -68,11 +68,18 @@ def _label_row(
     scenario_30m: str,
     scenario_15m: str | None = None,
     scenario_60m: str | None = None,
+    scenario_120m: str | None = None,
 ) -> AnomalyOutcomeLabelRow:
     scenario_15m = scenario_15m or scenario_30m
     scenario_60m = scenario_60m or scenario_30m
+    scenario_120m = scenario_120m or scenario_30m
     return AnomalyOutcomeLabelRow(
-        label_policy_version="mvp1_outcome_labels_v1",
+        label_schema_version="atr_outcome_labels_v1",
+        atr_window_minutes=1440,
+        ATR_1d_asof_t=2.0,
+        k_continuation=1.0,
+        k_fade=1.0,
+        k_chop=0.25,
         event_id=state.event_id,
         symbol=state.symbol,
         snapshot_time_ms=state.snapshot_time_ms,
@@ -81,10 +88,12 @@ def _label_row(
         scenario_15m=scenario_15m,
         scenario_30m=scenario_30m,
         scenario_60m=scenario_60m,
+        scenario_120m=scenario_120m,
         label_available_15m=scenario_15m != "missing_future",
         label_available_30m=scenario_30m != "missing_future",
         label_available_60m=scenario_60m != "missing_future",
-        label_source="raw_future_paths_only",
+        label_available_120m=scenario_120m != "missing_future",
+        label_source="atr_normalized_future_paths_only",
         temporal_contract=TEMPORAL_LABEL_CONTRACT,
     )
 

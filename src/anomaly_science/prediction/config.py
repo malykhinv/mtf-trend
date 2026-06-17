@@ -20,8 +20,8 @@ class WalkForwardPredictionConfig:
     model_family: str = "state_bin_empirical_calibrated_baseline"
 
     def __post_init__(self) -> None:
-        if self.target_horizon_minutes not in (15, 30, 60):
-            raise ValueError("target_horizon_minutes must be one of 15, 30, or 60")
+        if self.target_horizon_minutes not in (15, 30, 60, 120):
+            raise ValueError("target_horizon_minutes must be one of 15, 30, 60, or 120")
         if self.purge_horizon_minutes < self.target_horizon_minutes:
             raise ValueError("purge_horizon_minutes must be >= target_horizon_minutes")
         if self.min_train_rows <= 0:

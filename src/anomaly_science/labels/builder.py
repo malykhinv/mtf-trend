@@ -10,6 +10,7 @@ import pandas as pd
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.future import FuturePathRow
 from anomaly_science.contracts.labels import (
+    ATR_LABEL_SOURCE,
     MISSING_FUTURE_SCENARIO,
     TEMPORAL_LABEL_CONTRACT,
     AnomalyOutcomeLabelRow,
@@ -98,9 +99,15 @@ def build_anomaly_outcome_labels_from_inputs(
         scenario_15m = assign_future_nature_scenario(future=future, horizon_minutes=15, config=cfg)
         scenario_30m = assign_future_nature_scenario(future=future, horizon_minutes=30, config=cfg)
         scenario_60m = assign_future_nature_scenario(future=future, horizon_minutes=60, config=cfg)
+        scenario_120m = assign_future_nature_scenario(future=future, horizon_minutes=120, config=cfg)
         rows.append(
             AnomalyOutcomeLabelRow(
-                label_policy_version=cfg.label_policy_version,
+                label_schema_version=cfg.label_schema_version,
+                atr_window_minutes=cfg.atr_window_minutes,
+                ATR_1d_asof_t=future.ATR_1d_asof_t,
+                k_continuation=cfg.k_continuation,
+                k_fade=cfg.k_fade,
+                k_chop=cfg.k_chop,
                 event_id=future.event_id,
                 symbol=future.symbol,
                 snapshot_time_ms=future.snapshot_time_ms,
@@ -109,10 +116,12 @@ def build_anomaly_outcome_labels_from_inputs(
                 scenario_15m=scenario_15m,
                 scenario_30m=scenario_30m,
                 scenario_60m=scenario_60m,
+                scenario_120m=scenario_120m,
                 label_available_15m=_label_available(scenario_15m),
                 label_available_30m=_label_available(scenario_30m),
                 label_available_60m=_label_available(scenario_60m),
-                label_source="raw_future_paths_only",
+                label_available_120m=_label_available(scenario_120m),
+                label_source=ATR_LABEL_SOURCE,
                 temporal_contract=TEMPORAL_LABEL_CONTRACT,
             )
         )
@@ -125,33 +134,38 @@ def assign_future_nature_scenario(
     horizon_minutes: int,
     config: OutcomeLabelConfig | None = None,
 ) -> str:
-    """Assign a coarse future-nature scenario from raw future path fields only.
+    """Assign a coarse future-nature scenario from ATR-normalized future paths.
 
     This is a scientific target for prediction calibration. It is not a trade
-    direction, not an entry rule, and not an EV/PnL optimization target.
+    direction, not an entry rule, and not an EV/PnL optimization target. Raw
+    percent fields are intentionally ignored: labels are ATR-normalized only.
+    Ambiguous two-sided / trap-like paths are mapped to ``unclear`` for the MVP
+    4-class target contract.
     """
     cfg = config or OutcomeLabelConfig()
     if horizon_minutes not in cfg.horizons_minutes:
-        raise ValueError(f"unsupported MVP1 label horizon: {horizon_minutes}")
+        raise ValueError(f"unsupported ATR label horizon: {horizon_minutes}")
+    if future.atr_window_minutes != cfg.atr_window_minutes:
+        raise MarketDataContractError(
+            f"future atr_window_minutes={future.atr_window_minutes} does not match label schema atr_window_minutes={cfg.atr_window_minutes}"
+        )
 
-    future_return = _future_value(future=future, base_name="future_return", horizon_minutes=horizon_minutes)
-    future_max = _future_value(future=future, base_name="future_max", horizon_minutes=horizon_minutes)
-    future_min = _future_value(future=future, base_name="future_min", horizon_minutes=horizon_minutes)
-    if future_return is None or future_max is None or future_min is None:
+    future_return_atr = _future_value(future=future, base_name="future_return_atr", horizon_minutes=horizon_minutes)
+    future_max_atr = _future_value(future=future, base_name="future_max_atr", horizon_minutes=horizon_minutes)
+    future_min_atr = _future_value(future=future, base_name="future_min_atr", horizon_minutes=horizon_minutes)
+    if future.ATR_1d_asof_t is None or future_return_atr is None or future_max_atr is None or future_min_atr is None:
         return MISSING_FUTURE_SCENARIO
 
-    upside_extension = future_max >= cfg.continuation_move_threshold
-    downside_extension = future_min <= -cfg.fade_move_threshold
-    reclaimed_high = _reclaimed_running_high(future=future, horizon_minutes=horizon_minutes)
-    continuation_attempt = upside_extension or reclaimed_high is True
+    upside_extension = future_max_atr >= cfg.k_continuation
+    downside_extension = future_min_atr <= -cfg.k_fade
 
-    if continuation_attempt and downside_extension:
-        return "trap"
-    if continuation_attempt and future_return >= cfg.chop_return_threshold:
+    if upside_extension and downside_extension:
+        return "unclear"
+    if upside_extension and future_return_atr >= cfg.k_chop:
         return "long_continuation"
-    if downside_extension and future_return <= -cfg.chop_return_threshold:
+    if downside_extension and future_return_atr <= -cfg.k_chop:
         return "short_fade"
-    if abs(future_return) <= cfg.chop_return_threshold and not upside_extension and not downside_extension:
+    if future_max_atr < cfg.k_chop and future_min_atr > -cfg.k_chop:
         return "static_or_chop"
     return "unclear"
 
@@ -176,7 +190,12 @@ def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLab
         try:
             rows.append(
                 AnomalyOutcomeLabelRow(
-                    label_policy_version=_required_str(row, "label_policy_version"),
+                    label_schema_version=_required_str(row, "label_schema_version"),
+                    atr_window_minutes=_required_int(row, "atr_window_minutes"),
+                    ATR_1d_asof_t=_optional_float(row, "ATR_1d_asof_t"),
+                    k_continuation=_required_float(row, "k_continuation"),
+                    k_fade=_required_float(row, "k_fade"),
+                    k_chop=_required_float(row, "k_chop"),
                     event_id=_required_str(row, "event_id"),
                     symbol=_required_str(row, "symbol"),
                     snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
@@ -185,9 +204,11 @@ def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLab
                     scenario_15m=_required_str(row, "scenario_15m"),
                     scenario_30m=_required_str(row, "scenario_30m"),
                     scenario_60m=_required_str(row, "scenario_60m"),
+                    scenario_120m=_required_str(row, "scenario_120m"),
                     label_available_15m=_required_bool(row, "label_available_15m"),
                     label_available_30m=_required_bool(row, "label_available_30m"),
                     label_available_60m=_required_bool(row, "label_available_60m"),
+                    label_available_120m=_required_bool(row, "label_available_120m"),
                     label_source=_required_str(row, "label_source"),
                     temporal_contract=_required_str(row, "temporal_contract"),
                 )
@@ -211,13 +232,6 @@ def _future_value(*, future: FuturePathRow, base_name: str, horizon_minutes: int
         raise MarketDataContractError(f"{base_name}_{horizon_minutes}m must be finite when present")
     return value
 
-
-def _reclaimed_running_high(*, future: FuturePathRow, horizon_minutes: int) -> bool | None:
-    if horizon_minutes == 30:
-        return future.reclaimed_running_high_30m
-    if horizon_minutes == 60:
-        return future.reclaimed_running_high_60m
-    return None
 
 
 def _label_available(scenario: str) -> bool:
@@ -270,6 +284,26 @@ def _required_int(row: Mapping[str, object], name: str) -> int:
     if pd.isna(value):
         raise ValueError(f"{name} is required")
     return int(value)
+
+
+def _required_float(row: Mapping[str, object], name: str) -> float:
+    value = row[name]
+    if pd.isna(value):
+        raise ValueError(f"{name} is required")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _optional_float(row: Mapping[str, object], name: str) -> float | None:
+    value = row[name]
+    if pd.isna(value) or value == "":
+        return None
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite when present")
+    return result
 
 
 def _required_bool(row: Mapping[str, object], name: str) -> bool:

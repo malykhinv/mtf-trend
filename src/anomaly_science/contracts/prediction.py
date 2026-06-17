@@ -2,17 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .labels import VALID_OUTCOME_SCENARIOS
+from .labels import PREDICTABLE_OUTCOME_SCENARIOS, VALID_OUTCOME_SCENARIOS
 from .market import MarketDataContractError
 from .time import validate_timestamp_ms
 
-PREDICTED_SCENARIOS = (
-    "long_continuation",
-    "short_fade",
-    "static_or_chop",
-    "trap",
-    "unclear",
-)
+PREDICTED_SCENARIOS = PREDICTABLE_OUTCOME_SCENARIOS
 PREDICTION_TEMPORAL_CONTRACT = "train_snapshot_time_ms_plus_horizon<=test_day_start_ms;features<=snapshot_time<label_future_start"
 
 
@@ -35,7 +29,6 @@ class OosPredictionRow:
     p_long_continuation: float
     p_short_fade: float
     p_static_or_chop: float
-    p_trap: float
     p_unclear: float
     predicted_scenario: str
     prediction_confidence: float
@@ -70,7 +63,6 @@ class OosPredictionRow:
             self.p_long_continuation,
             self.p_short_fade,
             self.p_static_or_chop,
-            self.p_trap,
             self.p_unclear,
         )
         for value in probabilities:
