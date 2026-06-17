@@ -6,6 +6,8 @@ from pathlib import Path
 
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.events import run_mvp1_events
+from anomaly_science.future import run_mvp1_future
+from anomaly_science.state import run_mvp1_state
 
 
 _BOOTSTRAP_MESSAGE = "anomaly_science bootstrap ok"
@@ -37,6 +39,22 @@ def build_parser() -> argparse.ArgumentParser:
     events.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
     events.add_argument("--out", required=True, help="Directory where event artifacts will be written.")
 
+    state = subparsers.add_parser(
+        "run-mvp1-state",
+        help="Build MVP1 online 1m anomaly state from normalized candles and anomaly_events.csv.",
+    )
+    state.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
+    state.add_argument("--events", required=True, help="Path to anomaly_events.csv from run-mvp1-events.")
+    state.add_argument("--out", required=True, help="Directory where state artifacts will be written.")
+
+    future = subparsers.add_parser(
+        "run-mvp1-future",
+        help="Build MVP1 raw future paths from normalized candles and anomaly_state_1m.csv.",
+    )
+    future.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
+    future.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
+    future.add_argument("--out", required=True, help="Directory where future path artifacts will be written.")
+
     return parser
 
 
@@ -56,6 +74,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-mvp1-events":
         output_dir = run_mvp1_events(input_dir=Path(args.input), out_dir=Path(args.out))
         print(f"mvp1 broad event artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-state":
+        output_dir = run_mvp1_state(input_dir=Path(args.input), events_path=Path(args.events), out_dir=Path(args.out))
+        print(f"mvp1 online state artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-future":
+        output_dir = run_mvp1_future(input_dir=Path(args.input), state_path=Path(args.state), out_dir=Path(args.out))
+        print(f"mvp1 raw future path artifacts written: {output_dir}")
         return 0
 
     parser.print_help()
