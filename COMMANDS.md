@@ -104,3 +104,17 @@ Tests:
 ```bash
 python -m pytest tests
 ```
+
+Apply newest generated patch and commit it:
+
+```bash
+python tools/apply_latest_patch.py
+```
+
+Dry-run patch application without modifying the working tree:
+
+```bash
+python tools/apply_latest_patch.py --dry-run
+```
+
+Patch files are read from `.patches/*.patch`. The commit message is the patch filename without `.patch`, so use filenames like `Add technical noise shock gate for raw 1m timestamp gaps.patch`.
