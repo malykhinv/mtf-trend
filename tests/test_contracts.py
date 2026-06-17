@@ -9,6 +9,8 @@ from anomaly_science.contracts import (
     Candle1m,
     FeatureCatalogRow,
     FeatureFamily,
+    FeatureMissingPolicy,
+    FeatureNormalization,
     FuturePathRow,
     LiquidationEvent,
     OpenInterest5m,
@@ -207,23 +209,52 @@ def test_symbol_universe_requires_exclusion_reason_for_non_tradable_day() -> Non
         )
 
 
-def test_feature_catalog_rejects_future_features() -> None:
+def test_feature_catalog_rejects_future_and_raw_model_features() -> None:
     FeatureCatalogRow(
+        feature_schema_version="feature_schema_test",
         feature_name="return_from_start",
-        family=FeatureFamily.PRICE_PATH,
+        feature_family=FeatureFamily.PRICE_PATH,
+        source_artifact="anomaly_state_1m.csv",
+        available_asof_time="computed from candles with available_time_ms <= snapshot_time_ms",
+        uses_future_data=False,
+        normalization_type=FeatureNormalization.DIMENSIONLESS_RATIO,
+        is_model_feature=True,
+        is_audit_field=True,
+        missing_policy=FeatureMissingPolicy.NOT_NULL,
         dtype="float",
         description="Return from event start to snapshot.",
-        availability_rule="computed from candles with available_time_ms <= snapshot_time_ms",
     )
 
     with pytest.raises(ValueError):
         FeatureCatalogRow(
+            feature_schema_version="feature_schema_test",
             feature_name="future_max_60m_as_feature",
-            family=FeatureFamily.PRICE_PATH,
+            feature_family=FeatureFamily.PRICE_PATH,
+            source_artifact="future",
+            available_asof_time="uses future window",
+            uses_future_data=True,
+            normalization_type=FeatureNormalization.ATR_NORMALIZED,
+            is_model_feature=True,
+            is_audit_field=False,
+            missing_policy=FeatureMissingPolicy.NOT_NULL,
             dtype="float",
             description="invalid",
-            availability_rule="uses future window",
-            uses_future_data=True,
+        )
+
+    with pytest.raises(ValueError):
+        FeatureCatalogRow(
+            feature_schema_version="feature_schema_test",
+            feature_name="raw_quote_volume",
+            feature_family=FeatureFamily.VOLUME,
+            source_artifact="candles_1m",
+            available_asof_time="computed as-of snapshot",
+            uses_future_data=False,
+            normalization_type=FeatureNormalization.RAW_AUDIT_ONLY,
+            is_model_feature=True,
+            is_audit_field=False,
+            missing_policy=FeatureMissingPolicy.NOT_NULL,
+            dtype="float",
+            description="invalid raw model feature",
         )
 
 

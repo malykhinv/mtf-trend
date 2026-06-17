@@ -8,6 +8,7 @@ from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.events import run_mvp1_events
+from anomaly_science.features import run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
@@ -58,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     future.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
     future.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
     future.add_argument("--out", required=True, help="Directory where future path artifacts will be written.")
+
+    features = subparsers.add_parser(
+        "run-mvp1-features",
+        help="Write the MVP1 feature catalog contract with as-of and normalization metadata.",
+    )
+    features.add_argument("--out", required=True, help="Directory where feature catalog artifacts will be written.")
 
     atlas = subparsers.add_parser(
         "run-mvp1-atlas",
@@ -165,6 +172,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-mvp1-future":
         output_dir = run_mvp1_future(input_dir=Path(args.input), state_path=Path(args.state), out_dir=Path(args.out))
         print(f"mvp1 raw future path artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-features":
+        output_dir = run_mvp1_features(out_dir=Path(args.out))
+        print(f"mvp1 feature catalog artifacts written: {output_dir}")
         return 0
 
     if args.command == "run-mvp1-atlas":
