@@ -1,0 +1,519 @@
+from __future__ import annotations
+
+import math
+import random
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
+from typing import Callable, Iterable, Mapping, Sequence
+
+from anomaly_science.contracts.controls import (
+    CONTROL_STATUS_DEFERRED,
+    CONTROL_STATUS_OK,
+    CONTROL_STATUS_SKIPPED,
+    BaselineComparisonRow,
+    PlaceboTestRow,
+)
+from anomaly_science.contracts.labels import AnomalyOutcomeLabelRow, MISSING_FUTURE_SCENARIO
+from anomaly_science.contracts.prediction import OosPredictionRow, PREDICTED_SCENARIOS
+from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.controls.config import ControlsConfig
+from anomaly_science.prediction.builder import PredictionInputRow, build_walk_forward_predictions
+from anomaly_science.prediction.config import WalkForwardPredictionConfig
+
+ONE_MINUTE_MS = 60_000
+_EPS = 1e-15
+
+
+class ControlsArtifactError(ValueError):
+    """Raised when MVP1 control artifacts cannot be built cleanly."""
+
+
+@dataclass(frozen=True, slots=True)
+class ControlEvaluation:
+    available_label_rows: int
+    oos_prediction_rows: int
+    accuracy: float
+    multiclass_brier: float
+    log_loss: float
+
+
+def build_placebo_test_rows(
+    *,
+    inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow],
+    config: ControlsConfig | None = None,
+) -> tuple[PlaceboTestRow, ...]:
+    """Build negative placebo-control summaries for the Patch 9 prediction layer."""
+    cfg = config or ControlsConfig()
+    rows = _available_rows(inputs, cfg)
+    reference = _evaluate_reference_model(rows=rows, config=cfg)
+    reference_brier = reference.multiclass_brier
+    if len(rows) < 2:
+        return tuple(
+            _placebo_row(
+                cfg=cfg,
+                control_name=name,
+                evaluation=ControlEvaluation(len(rows), 0, 0.0, 0.0, 0.0),
+                reference_brier=reference_brier,
+                status=CONTROL_STATUS_SKIPPED,
+                notes="not enough non-missing labels for placebo shuffling",
+            )
+            for name in ("random_labels", "time_shuffled_labels", "symbol_shuffled_labels")
+        )
+
+    placebo_maps: list[tuple[str, dict[tuple[str, str, int, int], str], str]] = [
+        ("random_labels", _random_label_map(rows=rows, cfg=cfg), "deterministic random permutation of descriptive scenario targets"),
+        ("time_shuffled_labels", _time_shuffled_label_map(rows=rows, cfg=cfg), "deterministic circular time shift of descriptive scenario targets"),
+    ]
+    symbol_map = _symbol_shuffled_label_map(rows=rows, cfg=cfg)
+    if symbol_map is None:
+        symbol_status = CONTROL_STATUS_SKIPPED
+        symbol_notes = "symbol-shuffled placebo requires at least two symbols with non-missing labels"
+        symbol_evaluation = ControlEvaluation(len(rows), 0, 0.0, 0.0, 0.0)
+    else:
+        symbol_status = CONTROL_STATUS_OK
+        symbol_notes = "deterministic cross-symbol rotation of descriptive scenario targets"
+        symbol_evaluation = _evaluate_reference_model(rows=_replace_targets(rows=rows, target_by_key=symbol_map, cfg=cfg), config=cfg)
+
+    result: list[PlaceboTestRow] = []
+    for control_name, target_by_key, notes in placebo_maps:
+        evaluation = _evaluate_reference_model(rows=_replace_targets(rows=rows, target_by_key=target_by_key, cfg=cfg), config=cfg)
+        result.append(
+            _placebo_row(
+                cfg=cfg,
+                control_name=control_name,
+                evaluation=evaluation,
+                reference_brier=reference_brier,
+                status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                notes=notes if evaluation.oos_prediction_rows > 0 else "placebo produced no OOS rows after train-size and purge checks",
+            )
+        )
+    result.append(
+        _placebo_row(
+            cfg=cfg,
+            control_name="symbol_shuffled_labels",
+            evaluation=symbol_evaluation,
+            reference_brier=reference_brier,
+            status=symbol_status if symbol_evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+            notes=symbol_notes if symbol_evaluation.oos_prediction_rows > 0 else symbol_notes,
+        )
+    )
+    return tuple(result)
+
+
+def build_baseline_comparison_rows(
+    *,
+    inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow],
+    config: ControlsConfig | None = None,
+) -> tuple[BaselineComparisonRow, ...]:
+    """Build simple baseline comparisons without trading thresholds or PnL."""
+    cfg = config or ControlsConfig()
+    rows = _available_rows(inputs, cfg)
+    reference = _evaluate_reference_model(rows=rows, config=cfg)
+    reference_brier = reference.multiclass_brier
+    target_by_key = {_row_key(row): _target_for_horizon(row.label, cfg.target_horizon_minutes) for row in rows}
+
+    baseline_specs: tuple[tuple[str, str, Callable[[AnomalyState1mRow], str], str], ...] = (
+        ("global_prior_only", "global_label_prior", _global_feature_key, "daily walk-forward global class-prior baseline"),
+        ("session_only", "snapshot_utc_session", _session_feature_key, "daily walk-forward baseline using only UTC session/time buckets"),
+        ("event_time_only", "event_clock", _event_time_feature_key, "daily walk-forward baseline using only minutes since detection/event start"),
+        ("price_path_only", "state_price_path", _price_path_feature_key, "daily walk-forward baseline using only online price-path state bins"),
+    )
+    result: list[BaselineComparisonRow] = []
+    for baseline_name, feature_family, feature_key_fn, notes in baseline_specs:
+        evaluation = _evaluate_feature_family_model(
+            rows=rows,
+            target_by_key=target_by_key,
+            feature_key_fn=feature_key_fn,
+            config=cfg,
+        )
+        result.append(
+            _baseline_row(
+                cfg=cfg,
+                baseline_name=baseline_name,
+                feature_family=feature_family,
+                evaluation=evaluation,
+                reference_brier=reference_brier,
+                status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                notes=notes if evaluation.oos_prediction_rows > 0 else "baseline produced no OOS rows after train-size and purge checks",
+            )
+        )
+
+    result.append(
+        _baseline_row(
+            cfg=cfg,
+            baseline_name="volume_only",
+            feature_family="volume",
+            evaluation=ControlEvaluation(available_label_rows=len(rows), oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0),
+            reference_brier=reference_brier,
+            status=CONTROL_STATUS_DEFERRED,
+            notes="deferred cleanly: anomaly_state_1m.csv currently has no volume feature columns, so no proxy volume baseline is emitted",
+        )
+    )
+    return tuple(result)
+
+
+def placebo_test_rows_to_artifact(rows: Sequence[PlaceboTestRow] | Iterable[PlaceboTestRow]) -> list[dict[str, object]]:
+    return [asdict(row) for row in rows]
+
+
+def baseline_comparison_rows_to_artifact(rows: Sequence[BaselineComparisonRow] | Iterable[BaselineComparisonRow]) -> list[dict[str, object]]:
+    return [asdict(row) for row in rows]
+
+
+def _available_rows(inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow], cfg: ControlsConfig) -> tuple[PredictionInputRow, ...]:
+    rows = tuple(inputs)
+    available = [row for row in rows if _target_for_horizon(row.label, cfg.target_horizon_minutes) != MISSING_FUTURE_SCENARIO]
+    available.sort(key=lambda row: (row.state.snapshot_time_ms, row.state.symbol, row.state.event_id))
+    return tuple(available)
+
+
+def _evaluate_reference_model(*, rows: Sequence[PredictionInputRow], config: ControlsConfig) -> ControlEvaluation:
+    prediction_config = WalkForwardPredictionConfig(
+        target_horizon_minutes=config.target_horizon_minutes,
+        purge_horizon_minutes=config.purge_horizon_minutes,
+        min_train_rows=config.min_train_rows,
+        min_group_rows=config.min_group_rows,
+        smoothing_strength=config.smoothing_strength,
+    )
+    predictions = build_walk_forward_predictions(inputs=rows, config=prediction_config)
+    return _evaluate_oos_predictions(available_label_rows=len(rows), predictions=predictions)
+
+
+def _evaluate_oos_predictions(*, available_label_rows: int, predictions: Sequence[OosPredictionRow]) -> ControlEvaluation:
+    if not predictions:
+        return ControlEvaluation(
+            available_label_rows=available_label_rows,
+            oos_prediction_rows=0,
+            accuracy=0.0,
+            multiclass_brier=0.0,
+            log_loss=0.0,
+        )
+    return ControlEvaluation(
+        available_label_rows=available_label_rows,
+        oos_prediction_rows=len(predictions),
+        accuracy=_mean(1.0 if row.predicted_scenario == row.target_scenario else 0.0 for row in predictions),
+        multiclass_brier=_mean(_prediction_brier(row) for row in predictions),
+        log_loss=_mean(_prediction_log_loss(row) for row in predictions),
+    )
+
+
+def _evaluate_feature_family_model(
+    *,
+    rows: Sequence[PredictionInputRow],
+    target_by_key: Mapping[tuple[str, str, int, int], str],
+    feature_key_fn: Callable[[AnomalyState1mRow], str],
+    config: ControlsConfig,
+) -> ControlEvaluation:
+    if not rows:
+        return ControlEvaluation(available_label_rows=0, oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0)
+
+    rows_by_test_day: dict[str, list[PredictionInputRow]] = defaultdict(list)
+    for row in rows:
+        rows_by_test_day[_utc_day(row.state.snapshot_time_ms)].append(row)
+
+    evaluated: list[tuple[str, dict[str, float], str]] = []
+    for test_day in sorted(rows_by_test_day):
+        test_day_start_ms = _day_start_ms(test_day)
+        train_cutoff_time_ms = test_day_start_ms - config.purge_horizon_minutes * ONE_MINUTE_MS
+        train_rows = [row for row in rows if row.state.snapshot_time_ms <= train_cutoff_time_ms]
+        if len(train_rows) < config.min_train_rows:
+            continue
+        model = _FeatureFamilyEmpiricalModel.fit(
+            rows=train_rows,
+            target_by_key=target_by_key,
+            feature_key_fn=feature_key_fn,
+            config=config,
+        )
+        for test_row in sorted(rows_by_test_day[test_day], key=lambda row: (row.state.snapshot_time_ms, row.state.symbol, row.state.event_id)):
+            target = target_by_key[_row_key(test_row)]
+            probabilities = model.predict(test_row.state)
+            predicted = _predicted_scenario(probabilities)
+            evaluated.append((target, probabilities, predicted))
+
+    if not evaluated:
+        return ControlEvaluation(available_label_rows=len(rows), oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0)
+    return ControlEvaluation(
+        available_label_rows=len(rows),
+        oos_prediction_rows=len(evaluated),
+        accuracy=_mean(1.0 if predicted == target else 0.0 for target, _, predicted in evaluated),
+        multiclass_brier=_mean(_brier_for_distribution(target=target, probabilities=probabilities) for target, probabilities, _ in evaluated),
+        log_loss=_mean(-math.log(max(probabilities[target], _EPS)) for target, probabilities, _ in evaluated),
+    )
+
+
+class _FeatureFamilyEmpiricalModel:
+    def __init__(
+        self,
+        *,
+        group_counts: Mapping[str, Counter[str]],
+        global_counts: Counter[str],
+        feature_key_fn: Callable[[AnomalyState1mRow], str],
+        config: ControlsConfig,
+    ) -> None:
+        self._group_counts = dict(group_counts)
+        self._global_counts = global_counts
+        self._global_prior = _smoothed_distribution(global_counts, prior=None, smoothing_strength=0.0)
+        self._feature_key_fn = feature_key_fn
+        self._config = config
+
+    @classmethod
+    def fit(
+        cls,
+        *,
+        rows: Sequence[PredictionInputRow],
+        target_by_key: Mapping[tuple[str, str, int, int], str],
+        feature_key_fn: Callable[[AnomalyState1mRow], str],
+        config: ControlsConfig,
+    ) -> _FeatureFamilyEmpiricalModel:
+        group_counts: dict[str, Counter[str]] = defaultdict(Counter)
+        global_counts: Counter[str] = Counter()
+        for row in rows:
+            target = target_by_key[_row_key(row)]
+            group_counts[feature_key_fn(row.state)][target] += 1
+            global_counts[target] += 1
+        return cls(group_counts=group_counts, global_counts=global_counts, feature_key_fn=feature_key_fn, config=config)
+
+    def predict(self, state: AnomalyState1mRow) -> dict[str, float]:
+        key = self._feature_key_fn(state)
+        group = self._group_counts.get(key)
+        if group is not None and sum(group.values()) >= self._config.min_group_rows:
+            return _smoothed_distribution(group, prior=self._global_prior, smoothing_strength=self._config.smoothing_strength)
+        return dict(self._global_prior)
+
+
+def _placebo_row(
+    *,
+    cfg: ControlsConfig,
+    control_name: str,
+    evaluation: ControlEvaluation,
+    reference_brier: float,
+    status: str,
+    notes: str,
+) -> PlaceboTestRow:
+    return PlaceboTestRow(
+        control_version=cfg.control_version,
+        control_name=control_name,
+        target_horizon_minutes=cfg.target_horizon_minutes,
+        random_seed=cfg.random_seed,
+        available_label_rows=evaluation.available_label_rows,
+        oos_prediction_rows=evaluation.oos_prediction_rows,
+        accuracy=evaluation.accuracy,
+        multiclass_brier=evaluation.multiclass_brier,
+        log_loss=evaluation.log_loss,
+        reference_real_brier=reference_brier,
+        brier_delta_vs_real=evaluation.multiclass_brier - reference_brier,
+        status=status,
+        notes=notes,
+    )
+
+
+def _baseline_row(
+    *,
+    cfg: ControlsConfig,
+    baseline_name: str,
+    feature_family: str,
+    evaluation: ControlEvaluation,
+    reference_brier: float,
+    status: str,
+    notes: str,
+) -> BaselineComparisonRow:
+    return BaselineComparisonRow(
+        control_version=cfg.control_version,
+        baseline_name=baseline_name,
+        feature_family=feature_family,
+        target_horizon_minutes=cfg.target_horizon_minutes,
+        available_label_rows=evaluation.available_label_rows,
+        oos_prediction_rows=evaluation.oos_prediction_rows,
+        accuracy=evaluation.accuracy,
+        multiclass_brier=evaluation.multiclass_brier,
+        log_loss=evaluation.log_loss,
+        reference_real_brier=reference_brier,
+        brier_delta_vs_real=evaluation.multiclass_brier - reference_brier,
+        status=status,
+        notes=notes,
+    )
+
+
+def _replace_targets(
+    *,
+    rows: Sequence[PredictionInputRow],
+    target_by_key: Mapping[tuple[str, str, int, int], str],
+    cfg: ControlsConfig,
+) -> tuple[PredictionInputRow, ...]:
+    result: list[PredictionInputRow] = []
+    for row in rows:
+        target = target_by_key[_row_key(row)]
+        label = _label_with_target(label=row.label, horizon_minutes=cfg.target_horizon_minutes, target=target)
+        result.append(PredictionInputRow(state=row.state, label=label))
+    return tuple(result)
+
+
+def _label_with_target(*, label: AnomalyOutcomeLabelRow, horizon_minutes: int, target: str) -> AnomalyOutcomeLabelRow:
+    if target not in PREDICTED_SCENARIOS:
+        raise ControlsArtifactError(f"placebo target must be predictable in MVP1, got {target!r}")
+    if horizon_minutes == 15:
+        return replace(label, scenario_15m=target, label_available_15m=True)
+    if horizon_minutes == 30:
+        return replace(label, scenario_30m=target, label_available_30m=True)
+    if horizon_minutes == 60:
+        return replace(label, scenario_60m=target, label_available_60m=True)
+    raise ControlsArtifactError(f"unsupported target horizon: {horizon_minutes}")
+
+
+def _random_label_map(*, rows: Sequence[PredictionInputRow], cfg: ControlsConfig) -> dict[tuple[str, str, int, int], str]:
+    keys = [_row_key(row) for row in rows]
+    targets = [_target_for_horizon(row.label, cfg.target_horizon_minutes) for row in rows]
+    rng = random.Random(cfg.random_seed)
+    shuffled = list(targets)
+    rng.shuffle(shuffled)
+    return dict(zip(keys, shuffled, strict=True))
+
+
+def _time_shuffled_label_map(*, rows: Sequence[PredictionInputRow], cfg: ControlsConfig) -> dict[tuple[str, str, int, int], str]:
+    if not rows:
+        return {}
+    # Use a deterministic circular shift large enough to break row-level alignment
+    # without sampling labels from outside the available-label population.
+    shift = max(1, len(rows) // 3)
+    targets = [_target_for_horizon(row.label, cfg.target_horizon_minutes) for row in rows]
+    shifted = targets[-shift:] + targets[:-shift]
+    return {_row_key(row): target for row, target in zip(rows, shifted, strict=True)}
+
+
+def _symbol_shuffled_label_map(*, rows: Sequence[PredictionInputRow], cfg: ControlsConfig) -> dict[tuple[str, str, int, int], str] | None:
+    by_symbol: dict[str, list[PredictionInputRow]] = defaultdict(list)
+    for row in rows:
+        by_symbol[row.state.symbol].append(row)
+    symbols = sorted(by_symbol)
+    if len(symbols) < 2:
+        return None
+    result: dict[tuple[str, str, int, int], str] = {}
+    for target_index, symbol in enumerate(symbols):
+        source_symbol = symbols[target_index - 1]
+        source_rows = sorted(by_symbol[source_symbol], key=lambda row: (row.state.snapshot_time_ms, row.state.event_id))
+        target_rows = sorted(by_symbol[symbol], key=lambda row: (row.state.snapshot_time_ms, row.state.event_id))
+        source_targets = [_target_for_horizon(row.label, cfg.target_horizon_minutes) for row in source_rows]
+        for index, target_row in enumerate(target_rows):
+            result[_row_key(target_row)] = source_targets[index % len(source_targets)]
+    return result
+
+
+def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> str:
+    if horizon_minutes == 15:
+        return label.scenario_15m
+    if horizon_minutes == 30:
+        return label.scenario_30m
+    if horizon_minutes == 60:
+        return label.scenario_60m
+    raise ControlsArtifactError(f"unsupported target horizon: {horizon_minutes}")
+
+
+def _row_key(row: PredictionInputRow) -> tuple[str, str, int, int]:
+    return (row.state.event_id, row.state.symbol, row.state.snapshot_time_ms, row.state.feature_cutoff_time_ms)
+
+
+def _global_feature_key(state: AnomalyState1mRow) -> str:
+    return "global_prior_only"
+
+
+def _session_feature_key(state: AnomalyState1mRow) -> str:
+    moment = datetime.fromtimestamp(state.snapshot_time_ms / 1000.0, tz=timezone.utc)
+    hour_bucket = _integer_bucket(moment.hour, ((0, 5, "utc_00_05"), (6, 11, "utc_06_11"), (12, 17, "utc_12_17")), "utc_18_23")
+    weekday = "weekday" if moment.weekday() < 5 else "weekend"
+    return f"session|hour={hour_bucket}|day={weekday}"
+
+
+def _event_time_feature_key(state: AnomalyState1mRow) -> str:
+    detection = _integer_bucket(state.minutes_since_detection, ((0, 2, "detect_0_2m"), (3, 5, "detect_3_5m"), (6, 10, "detect_6_10m")), "detect_11m_plus")
+    event_age = _integer_bucket(state.minutes_since_event_start, ((0, 5, "age_0_5m"), (6, 15, "age_6_15m"), (16, 30, "age_16_30m")), "age_31m_plus")
+    return f"event_time|{detection}|{event_age}"
+
+
+def _price_path_feature_key(state: AnomalyState1mRow) -> str:
+    return_bucket = _float_bucket(state.current_return_from_start, ((-0.02, "return_deep_negative"), (-0.005, "return_negative"), (0.005, "return_flat"), (0.02, "return_positive")), "return_strong_positive")
+    high_bucket = _float_bucket(state.distance_to_running_high, ((-0.03, "far_below_high"), (-0.01, "below_high"), (-0.001, "near_high"), (0.001, "at_high")), "above_high")
+    low_bucket = _float_bucket(state.distance_to_running_low, ((0.001, "at_low"), (0.01, "near_low"), (0.03, "above_low")), "far_above_low")
+    high_age = _integer_bucket(state.time_since_running_high_minutes, ((0, 0, "just_made_high"), (1, 3, "high_1_3m_ago"), (4, 10, "high_4_10m_ago")), "high_11m_plus_ago")
+    return f"price_path|{return_bucket}|{high_bucket}|{low_bucket}|{high_age}"
+
+
+def _smoothed_distribution(counts: Counter[str], *, prior: Mapping[str, float] | None, smoothing_strength: float) -> dict[str, float]:
+    total = float(sum(counts.values()))
+    if prior is None:
+        if total <= 0:
+            return {scenario: 1.0 / len(PREDICTED_SCENARIOS) for scenario in PREDICTED_SCENARIOS}
+        distribution = {scenario: float(counts.get(scenario, 0)) / total for scenario in PREDICTED_SCENARIOS}
+    else:
+        denominator = total + smoothing_strength
+        distribution = {
+            scenario: (float(counts.get(scenario, 0)) + smoothing_strength * float(prior[scenario])) / denominator
+            for scenario in PREDICTED_SCENARIOS
+        }
+    return _normalize_probabilities(distribution)
+
+
+def _normalize_probabilities(distribution: Mapping[str, float]) -> dict[str, float]:
+    raw = {scenario: max(0.0, float(distribution.get(scenario, 0.0))) for scenario in PREDICTED_SCENARIOS}
+    total = sum(raw.values())
+    if total <= 0:
+        return {scenario: 1.0 / len(PREDICTED_SCENARIOS) for scenario in PREDICTED_SCENARIOS}
+    normalized = {scenario: raw[scenario] / total for scenario in PREDICTED_SCENARIOS}
+    last = PREDICTED_SCENARIOS[-1]
+    normalized[last] = 1.0 - sum(normalized[scenario] for scenario in PREDICTED_SCENARIOS[:-1])
+    return normalized
+
+
+def _predicted_scenario(probabilities: Mapping[str, float]) -> str:
+    return max(PREDICTED_SCENARIOS, key=lambda name: (probabilities[name], -PREDICTED_SCENARIOS.index(name)))
+
+
+def _prediction_brier(row: OosPredictionRow) -> float:
+    return _brier_for_distribution(target=row.target_scenario, probabilities=_probabilities_from_prediction(row))
+
+
+def _prediction_log_loss(row: OosPredictionRow) -> float:
+    return -math.log(max(_probabilities_from_prediction(row)[row.target_scenario], _EPS))
+
+
+def _probabilities_from_prediction(row: OosPredictionRow) -> dict[str, float]:
+    return {
+        "long_continuation": row.p_long_continuation,
+        "short_fade": row.p_short_fade,
+        "static_or_chop": row.p_static_or_chop,
+        "trap": row.p_trap,
+        "unclear": row.p_unclear,
+    }
+
+
+def _brier_for_distribution(*, target: str, probabilities: Mapping[str, float]) -> float:
+    return sum((probabilities[scenario] - (1.0 if target == scenario else 0.0)) ** 2 for scenario in PREDICTED_SCENARIOS)
+
+
+def _mean(values: Iterable[float]) -> float:
+    items = list(values)
+    if not items:
+        return 0.0
+    return float(sum(items)) / float(len(items))
+
+
+def _integer_bucket(value: int, ranges: Sequence[tuple[int, int, str]], default: str) -> str:
+    for lower, upper, label in ranges:
+        if lower <= value <= upper:
+            return label
+    return default
+
+
+def _float_bucket(value: float, upper_bounds: Sequence[tuple[float, str]], default: str) -> str:
+    for upper_bound, label in upper_bounds:
+        if value <= upper_bound:
+            return label
+    return default
+
+
+def _utc_day(timestamp_ms: int) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _day_start_ms(day: str) -> int:
+    return int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)

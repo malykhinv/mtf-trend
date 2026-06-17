@@ -17,6 +17,8 @@ REQUIRED_MVP1 = {
     "anomaly_oos_predictions.csv",
     "anomaly_calibration.csv",
     "anomaly_prediction_metrics.csv",
+    "anomaly_placebo_tests.csv",
+    "anomaly_baseline_comparison.csv",
     "anomaly_feature_catalog.csv",
     "anomaly_nature_atlas.csv",
     "anomaly_context_splits.csv",

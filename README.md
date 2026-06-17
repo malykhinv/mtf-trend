@@ -9,7 +9,7 @@ Current target:
 ```text
 MVP 1 — data quality, broad anomaly detector, online 1m state, future paths, protocol audit.
 MVP 2 atlas slice — descriptive anomaly nature atlas over MVP1 state/future artifacts.
-MVP 3 label/prediction slice — descriptive future-nature scenario labels and first daily prequential calibrated baseline prediction.
+MVP 3 label/prediction/control slice — descriptive future-nature scenario labels, first daily prequential calibrated baseline prediction, and placebo/control checks.
 ```
 
 The project does not currently define a live trading strategy. Trading simulation and live execution come only after calibrated prediction, decision timing and EV checks.
@@ -26,6 +26,7 @@ python main.py run-mvp1-future --input tests/fixtures/minimal_market_data --stat
 python main.py run-mvp1-atlas --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_atlas
 python main.py run-mvp1-labels --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_labels
 python main.py run-mvp1-prediction --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_prediction
+python main.py run-mvp1-controls --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_controls
 ```
 
 `run-mvp1-state` builds `anomaly_state_1m.csv` from normalized closed 1m candles and a strict `anomaly_events.csv` artifact boundary. It updates state only at times greater than or equal to `event_detection_time_ms`, and state features use only candles with `available_time_ms <= state_time_ms`.
@@ -50,5 +51,12 @@ Atlas grouping uses state-only as-of fields. Coarse 30m response bins are descri
 - `anomaly_prediction_metrics.csv`
 
 The baseline is an empirical calibrated frequency model over state bins, not trading logic. It estimates scenario probabilities for scientific predictability checks only.
+
+`run-mvp1-controls` reads the same strict state/label boundaries and writes negative scientific controls:
+
+- `anomaly_placebo_tests.csv`
+- `anomaly_baseline_comparison.csv`
+
+The controls include deterministic random-label, time-shuffled-label, and symbol-shuffled-label placebos plus simple baselines such as global-prior, session-only, event-time-only, and price-path-only. `volume_only` is explicitly deferred until real volume features exist in `anomaly_state_1m.csv`; no proxy volume fallback is used.
 
 This stage still does not build entry logic, EV, PnL, trade simulation, shadow live, or production live.

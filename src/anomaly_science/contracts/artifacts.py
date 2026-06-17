@@ -263,6 +263,48 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         description="Aggregate OOS prediction metrics and protocol counters; not PnL or trading evaluation.",
     ),
 
+
+    "anomaly_placebo_tests.csv": ArtifactSchema(
+        name="anomaly_placebo_tests.csv",
+        stage="mvp1_controls",
+        required_columns=(
+            "control_version",
+            "control_name",
+            "target_horizon_minutes",
+            "random_seed",
+            "available_label_rows",
+            "oos_prediction_rows",
+            "accuracy",
+            "multiclass_brier",
+            "log_loss",
+            "reference_real_brier",
+            "brier_delta_vs_real",
+            "status",
+            "notes",
+        ),
+        description="Negative placebo tests for MVP1 prediction; shuffled targets are controls only, not scientific labels or trading signals.",
+    ),
+    "anomaly_baseline_comparison.csv": ArtifactSchema(
+        name="anomaly_baseline_comparison.csv",
+        stage="mvp1_controls",
+        required_columns=(
+            "control_version",
+            "baseline_name",
+            "feature_family",
+            "target_horizon_minutes",
+            "available_label_rows",
+            "oos_prediction_rows",
+            "accuracy",
+            "multiclass_brier",
+            "log_loss",
+            "reference_real_brier",
+            "brier_delta_vs_real",
+            "status",
+            "notes",
+        ),
+        description="Simple baseline comparison for MVP1 prediction; no EV, PnL, thresholds, or trade simulation.",
+    ),
+
     "anomaly_feature_catalog.csv": ArtifactSchema(
         name="anomaly_feature_catalog.csv",
         stage="mvp1_features",

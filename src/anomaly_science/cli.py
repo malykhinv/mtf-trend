@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from anomaly_science.atlas import run_mvp1_atlas
+from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.events import run_mvp1_events
 from anomaly_science.future import run_mvp1_future
@@ -89,6 +90,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Descriptive scenario horizon to predict. Default: 30.",
     )
 
+    controls = subparsers.add_parser(
+        "run-mvp1-controls",
+        help="Run MVP1 placebo/control checks for walk-forward prediction artifacts.",
+    )
+    controls.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
+    controls.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
+    controls.add_argument("--out", required=True, help="Directory where control artifacts will be written.")
+    controls.add_argument(
+        "--horizon-minutes",
+        type=int,
+        default=30,
+        choices=(15, 30, 60),
+        help="Descriptive scenario horizon to control-test. Default: 30.",
+    )
+
     return parser
 
 
@@ -139,6 +155,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=config,
         )
         print(f"mvp1 walk-forward prediction artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-controls":
+        config = ControlsConfig(target_horizon_minutes=args.horizon_minutes)
+        output_dir = run_mvp1_controls(
+            state_path=Path(args.state),
+            labels_path=Path(args.labels),
+            out_dir=Path(args.out),
+            config=config,
+        )
+        print(f"mvp1 placebo/control artifacts written: {output_dir}")
         return 0
 
     parser.print_help()

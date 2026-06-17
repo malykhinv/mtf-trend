@@ -48,6 +48,12 @@ MVP1 daily prequential calibrated baseline prediction:
 python main.py run-mvp1-prediction --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_prediction
 ```
 
+MVP1 placebo/control checks:
+
+```bash
+python main.py run-mvp1-controls --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_controls
+```
+
 Compile check:
 
 ```bash
