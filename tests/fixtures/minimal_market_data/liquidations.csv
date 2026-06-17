@@ -1,0 +1,2 @@
+symbol,event_time_ms,available_time_ms,side,price,quantity,quote_quantity,source
+AAA/USDT:USDT,1704067230000,1704067230000,short,101.0,2.0,202.0,fixture_force_order

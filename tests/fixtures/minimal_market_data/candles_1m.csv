@@ -1,0 +1,4 @@
+symbol,open_time_ms,available_time_ms,open,high,low,close,volume,quote_volume,number_of_trades,taker_buy_quote_volume
+AAA/USDT:USDT,1704067200000,1704067260000,100.0,101.0,99.5,100.5,10.0,1005.0,20,550.0
+AAA/USDT:USDT,1704067260000,1704067320000,100.5,102.0,100.0,101.5,11.0,1116.5,22,600.0
+BBB/USDT:USDT,1704067200000,1704067260000,10.0,10.2,9.9,10.1,5.0,50.5,8,30.0
