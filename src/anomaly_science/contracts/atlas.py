@@ -10,14 +10,20 @@ class AtlasNatureRow:
     split_value: str
     outcome_horizon_minutes: int
     atlas_outcome_bin: str
+    outcome_coordinate: str
     row_count: int
     unique_event_count: int
     unique_symbol_count: int
+    mean_future_return_atr: float | None
+    median_future_return_atr: float | None
+    mean_future_max_atr: float | None
+    mean_future_min_atr: float | None
     mean_future_return: float | None
     median_future_return: float | None
     mean_future_max: float | None
     mean_future_min: float | None
     reclaim_rate: float | None
+    double_barrier_stop_first_rate: float | None
     feature_min_snapshot_time_ms: int
     feature_max_snapshot_time_ms: int
     temporal_contract: str
@@ -27,6 +33,7 @@ class AtlasNatureRow:
         _require_text(self.split_family, "split_family")
         _require_text(self.split_value, "split_value")
         _require_text(self.atlas_outcome_bin, "atlas_outcome_bin")
+        _require_text(self.outcome_coordinate, "outcome_coordinate")
         _require_positive_int(self.outcome_horizon_minutes, "outcome_horizon_minutes")
         _require_non_negative_int(self.row_count, "row_count")
         _require_non_negative_int(self.unique_event_count, "unique_event_count")
@@ -43,23 +50,26 @@ class AtlasContextSplitRow:
     atlas_version: str
     context_name: str
     context_value: str
+    outcome_coordinate: str
     row_count: int
     unique_event_count: int
     unique_symbol_count: int
-    mean_minutes_since_detection: float | None
+    mean_minutes_since_trigger: float | None
     mean_current_return_from_start: float | None
-    mean_distance_to_running_high: float | None
+    mean_distance_to_running_high_atr: float | None
     upside_continuation_share: float | None
     downside_extension_share: float | None
     two_sided_share: float | None
     range_chop_share: float | None
     mixed_drift_share: float | None
-    missing_future_share: float | None
+    missing_atr_future_share: float | None
+    stop_first_barrier_share: float | None
 
     def __post_init__(self) -> None:
         _require_text(self.atlas_version, "atlas_version")
         _require_text(self.context_name, "context_name")
         _require_text(self.context_value, "context_value")
+        _require_text(self.outcome_coordinate, "outcome_coordinate")
         _require_non_negative_int(self.row_count, "row_count")
         _require_non_negative_int(self.unique_event_count, "unique_event_count")
         _require_non_negative_int(self.unique_symbol_count, "unique_symbol_count")
@@ -74,12 +84,14 @@ class AtlasResponseSurfaceRow:
     y_axis: str
     y_bin: str
     outcome_horizon_minutes: int
+    outcome_coordinate: str
     row_count: int
     unique_event_count: int
-    mean_future_return: float | None
-    mean_future_max: float | None
-    mean_future_min: float | None
+    mean_future_return_atr: float | None
+    mean_future_max_atr: float | None
+    mean_future_min_atr: float | None
     reclaim_rate: float | None
+    double_barrier_stop_first_rate: float | None
     dominant_outcome_bin: str
 
     def __post_init__(self) -> None:
@@ -89,6 +101,7 @@ class AtlasResponseSurfaceRow:
         _require_text(self.x_bin, "x_bin")
         _require_text(self.y_axis, "y_axis")
         _require_text(self.y_bin, "y_bin")
+        _require_text(self.outcome_coordinate, "outcome_coordinate")
         _require_positive_int(self.outcome_horizon_minutes, "outcome_horizon_minutes")
         _require_non_negative_int(self.row_count, "row_count")
         _require_non_negative_int(self.unique_event_count, "unique_event_count")
@@ -99,24 +112,31 @@ class AtlasResponseSurfaceRow:
 class AtlasMarketShockGroupRow:
     atlas_version: str
     market_shock_group_id: str
+    market_shock_id: str
+    systemic_cluster_regime: str
     snapshot_time_ms: int
     row_count: int
     unique_event_count: int
     unique_symbol_count: int
+    simultaneous_anomalies_count_1m: int
+    simultaneous_anomalies_share_1m: float | None
     symbols: str
     market_shock_candidate: bool
     mean_current_return_from_start: float | None
-    mean_future_return_30m: float | None
+    mean_future_return_atr_30m: float | None
     dominant_outcome_bin: str
     temporal_contract: str
 
     def __post_init__(self) -> None:
         _require_text(self.atlas_version, "atlas_version")
         _require_text(self.market_shock_group_id, "market_shock_group_id")
+        _require_text(self.market_shock_id, "market_shock_id")
+        _require_text(self.systemic_cluster_regime, "systemic_cluster_regime")
         _require_non_negative_int(self.snapshot_time_ms, "snapshot_time_ms")
         _require_non_negative_int(self.row_count, "row_count")
         _require_non_negative_int(self.unique_event_count, "unique_event_count")
         _require_non_negative_int(self.unique_symbol_count, "unique_symbol_count")
+        _require_non_negative_int(self.simultaneous_anomalies_count_1m, "simultaneous_anomalies_count_1m")
         _require_text(self.dominant_outcome_bin, "dominant_outcome_bin")
         _require_text(self.temporal_contract, "temporal_contract")
 

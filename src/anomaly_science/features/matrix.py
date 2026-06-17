@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 import statistics
 from dataclasses import asdict
@@ -121,6 +122,103 @@ def feature_matrix_rows_to_artifact(rows: Sequence[AnomalyFeatureMatrixRow]) -> 
         payload = asdict(row)
         result.append({key: _csv_value(value) for key, value in payload.items()})
     return result
+
+
+class AnomalyFeatureMatrixArtifactError(ValueError):
+    """Raised when anomaly_feature_matrix.csv violates its declared schema."""
+
+
+def load_anomaly_feature_matrix_csv(path: str | Path) -> tuple[AnomalyFeatureMatrixRow, ...]:
+    """Read anomaly_feature_matrix.csv through the strict artifact schema."""
+    feature_path = Path(path)
+    if not feature_path.exists():
+        raise AnomalyFeatureMatrixArtifactError(f"feature matrix artifact is missing: {feature_path}")
+
+    schema = get_artifact_schema("anomaly_feature_matrix.csv")
+    expected_columns = list(schema.required_columns)
+    with feature_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_columns:
+            raise AnomalyFeatureMatrixArtifactError(
+                f"feature matrix artifact columns must match {expected_columns}, got {actual_columns}"
+            )
+        rows: list[AnomalyFeatureMatrixRow] = []
+        for row_index, row in enumerate(reader):
+            try:
+                rows.append(_feature_matrix_row_from_csv(row))
+            except (TypeError, ValueError, MarketDataContractError) as exc:
+                raise AnomalyFeatureMatrixArtifactError(
+                    f"invalid anomaly_feature_matrix.csv row {row_index}: {exc}"
+                ) from exc
+    return tuple(rows)
+
+
+def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> AnomalyFeatureMatrixRow:
+    return AnomalyFeatureMatrixRow(
+        feature_schema_version=_required_str(row, "feature_schema_version"),
+        feature_matrix_version=_required_str(row, "feature_matrix_version"),
+        event_id=_required_str(row, "event_id"),
+        symbol=_required_str(row, "symbol"),
+        snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+        feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+        minutes_since_trigger=_required_int(row, "minutes_since_trigger"),
+        ATR_1d_asof_t=_optional_float(row, "ATR_1d_asof_t"),
+        ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
+        current_return_from_start=_required_float(row, "current_return_from_start"),
+        range_since_start_atr=_optional_float(row, "range_since_start_atr"),
+        distance_to_running_high_atr=_optional_float(row, "distance_to_running_high_atr"),
+        distance_to_running_low_atr=_optional_float(row, "distance_to_running_low_atr"),
+        retracement_from_high_atr=_optional_float(row, "retracement_from_high_atr"),
+        price_speed_atr=_optional_float(row, "price_speed_atr"),
+        clock_maturity=_required_float(row, "clock_maturity"),
+        event_age_ratio=_required_float(row, "event_age_ratio"),
+        alpha_decay_bucket=_required_str(row, "alpha_decay_bucket"),
+        feature_source_status=_required_str(row, "feature_source_status"),
+        quote_volume_1m_to_24h_median=_optional_float(row, "quote_volume_1m_to_24h_median"),
+        volume_zscore=_optional_float(row, "volume_zscore"),
+        quote_volume_zscore=_optional_float(row, "quote_volume_zscore"),
+        closed_5m_oi_asof_t=_optional_float(row, "closed_5m_oi_asof_t"),
+        oi_change_5m=_optional_float(row, "oi_change_5m"),
+        oi_change_10m=_optional_float(row, "oi_change_10m"),
+        oi_change_5m_pct_of_oi=_optional_float(row, "oi_change_5m_pct_of_oi"),
+        oi_change_10m_pct_of_oi=_optional_float(row, "oi_change_10m_pct_of_oi"),
+        missing_oi_flag=_required_bool(row, "missing_oi_flag"),
+        short_liq_intensity=_optional_float(row, "short_liq_intensity"),
+        long_liq_intensity=_optional_float(row, "long_liq_intensity"),
+        liquidation_imbalance=_optional_float(row, "liquidation_imbalance"),
+        cumulative_liq_intensity_since_event_start=_optional_float(row, "cumulative_liq_intensity_since_event_start"),
+        missing_liquidation_flag=_required_bool(row, "missing_liquidation_flag"),
+        cvd_quote_since_event_start=_optional_float(row, "cvd_quote_since_event_start"),
+        cvd_change_3m=_optional_float(row, "cvd_change_3m"),
+        cvd_change_5m=_optional_float(row, "cvd_change_5m"),
+        cvd_change_10m=_optional_float(row, "cvd_change_10m"),
+        cvd_price_divergence_3m=_optional_float(row, "cvd_price_divergence_3m"),
+        cvd_price_divergence_5m=_optional_float(row, "cvd_price_divergence_5m"),
+        cvd_price_divergence_10m=_optional_float(row, "cvd_price_divergence_10m"),
+        price_up_cvd_down_flag=_required_bool(row, "price_up_cvd_down_flag"),
+        price_down_cvd_up_flag=_required_bool(row, "price_down_cvd_up_flag"),
+        cvd_failed_to_confirm_high_flag=_required_bool(row, "cvd_failed_to_confirm_high_flag"),
+        volume_market_percentile=_optional_float(row, "volume_market_percentile"),
+        quote_volume_market_percentile=_optional_float(row, "quote_volume_market_percentile"),
+        return_1m_market_percentile=_optional_float(row, "return_1m_market_percentile"),
+        return_from_event_market_percentile=_optional_float(row, "return_from_event_market_percentile"),
+        oi_growth_market_percentile=_optional_float(row, "oi_growth_market_percentile"),
+        liq_intensity_market_percentile=_optional_float(row, "liq_intensity_market_percentile"),
+        range_expansion_market_percentile=_optional_float(row, "range_expansion_market_percentile"),
+        cross_section_available=_required_bool(row, "cross_section_available"),
+        cross_section_symbol_count=_required_int(row, "cross_section_symbol_count"),
+        corr_with_btc_15m=_optional_float(row, "corr_with_btc_15m"),
+        corr_with_btc_30m=_optional_float(row, "corr_with_btc_30m"),
+        corr_with_btc_60m=_optional_float(row, "corr_with_btc_60m"),
+        symbol_return_minus_btc_return_5m=_optional_float(row, "symbol_return_minus_btc_return_5m"),
+        symbol_return_minus_btc_return_15m=_optional_float(row, "symbol_return_minus_btc_return_15m"),
+        idiosyncratic_momentum_score=_optional_float(row, "idiosyncratic_momentum_score"),
+        simultaneous_anomalies_count_1m=_required_int(row, "simultaneous_anomalies_count_1m"),
+        simultaneous_anomalies_share_1m=_optional_float(row, "simultaneous_anomalies_share_1m"),
+        systemic_cluster_regime=_required_str(row, "systemic_cluster_regime"),
+        market_shock_id=_required_str(row, "market_shock_id"),
+    )
 
 
 def run_mvp1_feature_matrix(
@@ -1213,6 +1311,63 @@ def _run_config_rows(
         RunConfigRow(key="moderate_cluster_min_count", value=str(config.moderate_cluster_min_count), source="runtime"),
         RunConfigRow(key="systemic_cluster_min_count", value=str(config.systemic_cluster_min_count), source="runtime"),
     ]
+
+
+def _required_str(row: Mapping[str, object], name: str) -> str:
+    value = row[name]
+    if _is_missing(value):
+        raise ValueError(f"{name} is required")
+    result = str(value)
+    if not result:
+        raise ValueError(f"{name} is required")
+    return result
+
+
+def _required_int(row: Mapping[str, object], name: str) -> int:
+    value = row[name]
+    if _is_missing(value):
+        raise ValueError(f"{name} is required")
+    return int(value)
+
+
+def _required_float(row: Mapping[str, object], name: str) -> float:
+    value = row[name]
+    if _is_missing(value):
+        raise ValueError(f"{name} is required")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _optional_float(row: Mapping[str, object], name: str) -> float | None:
+    value = row[name]
+    if _is_missing(value):
+        return None
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite when provided")
+    return result
+
+
+def _required_bool(row: Mapping[str, object], name: str) -> bool:
+    value = row[name]
+    if isinstance(value, bool):
+        return value
+    if _is_missing(value):
+        raise ValueError(f"{name} is required")
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1"}:
+        return True
+    if text in {"false", "0"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _is_missing(value: object) -> bool:
+    return value is None or value == ""
 
 
 def _csv_value(value: object) -> object:

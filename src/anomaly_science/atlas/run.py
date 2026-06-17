@@ -6,6 +6,7 @@ from pathlib import Path
 
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.atlas.builder import (
+    OUTCOME_COORDINATE_ATR,
     build_atlas_artifacts_from_inputs,
     context_split_rows_to_artifact,
     load_atlas_inputs,
@@ -14,9 +15,9 @@ from anomaly_science.atlas.builder import (
     response_surface_rows_to_artifact,
 )
 from anomaly_science.atlas.config import AtlasConfig
+from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.audit import build_methodology_v2_audit_rows
 
 
 def run_mvp1_atlas(
@@ -24,21 +25,33 @@ def run_mvp1_atlas(
     state_path: str | Path,
     future_path: str | Path,
     out_dir: str | Path,
+    feature_matrix_path: str | Path | None = None,
     config: AtlasConfig | None = None,
 ) -> Path:
     """Run MVP1 anomaly nature atlas and write descriptive discovery artifacts."""
     state_artifact_path = Path(state_path)
     future_artifact_path = Path(future_path)
+    feature_artifact_path = None if feature_matrix_path is None else Path(feature_matrix_path)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or AtlasConfig()
 
-    inputs = load_atlas_inputs(state_path=state_artifact_path, future_path=future_artifact_path, config=cfg)
+    inputs = load_atlas_inputs(
+        state_path=state_artifact_path,
+        future_path=future_artifact_path,
+        feature_matrix_path=feature_artifact_path,
+        config=cfg,
+    )
     artifacts = build_atlas_artifacts_from_inputs(inputs=inputs, config=cfg)
-    protocol_rows = _protocol_rows(input_row_count=len(inputs), market_shock_group_count=len(artifacts.market_shock_group_rows))
+    protocol_rows = _protocol_rows(
+        input_row_count=len(inputs),
+        market_shock_group_count=len(artifacts.market_shock_group_rows),
+        feature_matrix_joined=feature_artifact_path is not None,
+    )
     run_config_rows = _run_config_rows(
         state_path=state_artifact_path,
         future_path=future_artifact_path,
+        feature_matrix_path=feature_artifact_path,
         output_path=output_path,
         config=cfg,
     )
@@ -91,7 +104,7 @@ def run_mvp1_atlas(
     return output_path
 
 
-def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> list[ProtocolAuditRow]:
+def _protocol_rows(*, input_row_count: int, market_shock_group_count: int, feature_matrix_joined: bool) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_atlas_scope",
@@ -111,27 +124,41 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> li
             artifact="anomaly_future_paths.csv",
         ),
         ProtocolAuditRow(
+            check_name="feature_matrix_schema_boundary",
+            status=AuditStatus.PASS if feature_matrix_joined else AuditStatus.NOT_IMPLEMENTED,
+            message=(
+                "anomaly_feature_matrix.csv accepted through strict schema boundary and used for relative atlas contexts"
+                if feature_matrix_joined
+                else "feature matrix was not provided; atlas used state-only fallback contexts and cannot cover full relative/OI/liquidation/CVD/systemic methodology slices"
+            ),
+            artifact="anomaly_feature_matrix.csv",
+        ),
+        ProtocolAuditRow(
             check_name="atlas_temporal_contract",
             status=AuditStatus.PASS,
             message="atlas join preserves feature_cutoff_time_ms <= snapshot_time_ms < future_start_time_ms for every joined row",
             artifact="anomaly_nature_atlas.csv",
         ),
         ProtocolAuditRow(
-            check_name="atlas_grouping_uses_state_only",
+            check_name="atlas_grouping_uses_asof_features_only",
             status=AuditStatus.PASS,
-            message="price/context/surface grouping bins are derived only from anomaly_state_1m.csv as-of fields; future fields are used only for descriptive response summaries",
+            message="context/surface grouping bins are derived only from anomaly_state_1m.csv and optional anomaly_feature_matrix.csv as-of fields; future fields are used only for descriptive response summaries",
             artifact="anomaly_context_splits.csv",
         ),
         ProtocolAuditRow(
-            check_name="atlas_outcome_bins_not_trading_labels",
+            check_name="atlas_outcome_bins_atr_normalized",
             status=AuditStatus.PASS,
-            message="coarse 30m outcome bins are atlas-only descriptive bins and are not decision, entry, exit, EV, or trade labels",
+            message="coarse 30m outcome bins are built from future_return_atr_30m/future_max_atr_30m/future_min_atr_30m and are atlas-only descriptive bins",
             artifact="anomaly_nature_atlas.csv",
         ),
         ProtocolAuditRow(
-            check_name="market_shock_groups_clean_boundary",
-            status=AuditStatus.PASS,
-            message=f"anomaly_market_shock_groups.csv groups simultaneous snapshots by snapshot_time_ms only; {market_shock_group_count} groups written without market-beta inference",
+            check_name="market_shock_groups_from_point_in_time_feature_context",
+            status=AuditStatus.PASS if feature_matrix_joined else AuditStatus.NOT_IMPLEMENTED,
+            message=(
+                f"anomaly_market_shock_groups.csv groups by point-in-time market_shock_id/systemic_cluster_regime; {market_shock_group_count} groups written"
+                if feature_matrix_joined
+                else "feature matrix was not provided; market-shock groups fall back to snapshot_time_ms only"
+            ),
             artifact="anomaly_market_shock_groups.csv",
         ),
         ProtocolAuditRow(
@@ -156,6 +183,7 @@ def _run_config_rows(
     *,
     state_path: Path,
     future_path: Path,
+    feature_matrix_path: Path | None,
     output_path: Path,
     config: AtlasConfig,
 ) -> list[RunConfigRow]:
@@ -163,19 +191,26 @@ def _run_config_rows(
         RunConfigRow(key="command", value="run-mvp1-atlas", source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="future_path", value=str(future_path), source="cli"),
+        RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
         RunConfigRow(key="stage", value="mvp1_atlas", source="runtime"),
         RunConfigRow(key="atlas_version", value=config.atlas_version, source="runtime"),
+        RunConfigRow(key="outcome_coordinate", value=OUTCOME_COORDINATE_ATR, source="runtime"),
         RunConfigRow(key="outcome_horizon_minutes", value=str(config.outcome_horizon_minutes), source="runtime"),
-        RunConfigRow(key="outcome_move_threshold", value=str(config.outcome_move_threshold), source="runtime"),
-        RunConfigRow(key="outcome_chop_threshold", value=str(config.outcome_chop_threshold), source="runtime"),
+        RunConfigRow(
+            key="outcome_continuation_threshold_atr",
+            value=str(config.outcome_continuation_threshold_atr),
+            source="runtime",
+        ),
+        RunConfigRow(key="outcome_fade_threshold_atr", value=str(config.outcome_fade_threshold_atr), source="runtime"),
+        RunConfigRow(key="outcome_chop_threshold_atr", value=str(config.outcome_chop_threshold_atr), source="runtime"),
         RunConfigRow(
             key="min_symbols_for_market_shock_candidate",
             value=str(config.min_symbols_for_market_shock_candidate),
             source="runtime",
         ),
-        RunConfigRow(key="atlas_outcome_bins", value="descriptive_not_trading_labels", source="runtime"),
+        RunConfigRow(key="atlas_outcome_bins", value="atr_normalized_descriptive_not_trading_labels", source="runtime"),
     ]
 
 
