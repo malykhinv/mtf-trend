@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 from xml.etree import ElementTree
 
 import requests
@@ -114,6 +114,9 @@ LIQ_QTY_CANDIDATES = (
     "l",
 )
 
+
+
+ProgressCallback = Callable[[str, str, int, int, int], None]
 
 @dataclass(frozen=True, slots=True)
 class CacheConfig:
@@ -275,10 +278,53 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
     metadata_dir.mkdir(parents=True, exist_ok=True)
     stats: list[SymbolStats] = []
 
-    progress = tqdm(symbols, desc="Binance Vision cache", unit="symbol")
-    for symbol in progress:
-        progress.set_postfix(symbol=symbol, disk=human_bytes(directory_size(DEFAULT_MARKET_CACHE_ROOT)))
-        symbol_stats = build_symbol_cache(symbol=symbol, blocks=blocks, config=config, start_date=start, end_date=end)
+    started_at = time.monotonic()
+    completed_block_units = 0
+    estimated_block_units = max(1, len(symbols) * max(1, len(blocks)))
+
+    progress = tqdm(symbols, desc="Binance Vision cache", unit="symbol", mininterval=1.0)
+    for symbol_index, symbol in enumerate(progress, start=1):
+
+        def on_block_progress(
+            progress_symbol: str,
+            block_label: str,
+            symbol_blocks_done: int,
+            symbol_blocks_total: int,
+            rows_written: int,
+        ) -> None:
+            nonlocal completed_block_units, estimated_block_units
+            completed_block_units += 1
+            estimated_block_units = max(
+                estimated_block_units,
+                (symbol_index - 1) * max(1, len(blocks)) + symbol_blocks_total,
+                completed_block_units,
+            )
+            progress.set_postfix(
+                symbol=progress_symbol,
+                block=f"{symbol_blocks_done}/{symbol_blocks_total}",
+                current=block_label,
+                blocks=f"{completed_block_units}/{estimated_block_units}",
+                rows=rows_written,
+                disk=human_bytes(directory_size(DEFAULT_MARKET_CACHE_ROOT)),
+                eta=format_eta(started_at, completed_block_units, estimated_block_units),
+                refresh=True,
+            )
+
+        progress.set_postfix(
+            symbol=symbol,
+            block=f"0/{len(blocks)}",
+            disk=human_bytes(directory_size(DEFAULT_MARKET_CACHE_ROOT)),
+            eta=format_eta(started_at, completed_block_units, estimated_block_units),
+            refresh=True,
+        )
+        symbol_stats = build_symbol_cache(
+            symbol=symbol,
+            blocks=blocks,
+            config=config,
+            start_date=start,
+            end_date=end,
+            progress_callback=on_block_progress,
+        )
         stats.append(symbol_stats)
         write_stats(metadata_dir / "cache_stats.csv", stats)
         write_manifest(metadata_dir / "manifest.json", config=config, stats=stats, start_date=start, end_date=end)
@@ -292,6 +338,7 @@ def build_symbol_cache(
     config: CacheConfig,
     start_date: date,
     end_date: date,
+    progress_callback: ProgressCallback | None = None,
 ) -> SymbolStats:
     import pyarrow.parquet as pq
 
@@ -317,15 +364,28 @@ def build_symbol_cache(
     missing_metric_blocks = 0
     missing_liquidation_blocks = 0
     last_oi: float | None = None
+    symbol_blocks_done = 0
+    symbol_blocks_total = max(1, len(blocks))
+
+    def notify_block(label: str) -> None:
+        nonlocal symbol_blocks_done, symbol_blocks_total
+        symbol_blocks_done += 1
+        symbol_blocks_total = max(symbol_blocks_total, symbol_blocks_done)
+        if progress_callback is not None:
+            progress_callback(symbol, label, symbol_blocks_done, symbol_blocks_total, rows_written)
 
     try:
         for block in blocks:
             files = download_block_files(symbol=symbol, block=block, config=config)
             if files.missing_required_klines and block.is_monthly:
-                for daily_block in daily_blocks(block.start_date, min(block.end_date, end_date)):
+                notify_block(f"{block.period}:{block.label}:missing-monthly")
+                fallback_days = daily_blocks(block.start_date, min(block.end_date, end_date))
+                symbol_blocks_total += len(fallback_days)
+                for daily_block in fallback_days:
                     daily_files = download_block_files(symbol=symbol, block=daily_block, config=config)
                     if daily_files.missing_required_klines:
                         missing_kline_blocks += 1
+                        notify_block(f"{daily_block.period}:{daily_block.label}:missing")
                         continue
                     frame, last_oi = process_block(
                         files=daily_files,
@@ -341,11 +401,13 @@ def build_symbol_cache(
                     writer = append_parquet_frame(writer=writer, path=tmp_path, frame=frame, compression=config.compression)
                     rows_written += frame.height
                     blocks_written += int(frame.height > 0)
+                    notify_block(f"{daily_block.period}:{daily_block.label}")
                     maybe_sleep(config.request_sleep_seconds)
                 continue
 
             if files.missing_required_klines:
                 missing_kline_blocks += 1
+                notify_block(f"{block.period}:{block.label}:missing")
                 maybe_sleep(config.request_sleep_seconds)
                 continue
 
@@ -363,6 +425,7 @@ def build_symbol_cache(
             writer = append_parquet_frame(writer=writer, path=tmp_path, frame=frame, compression=config.compression)
             rows_written += frame.height
             blocks_written += int(frame.height > 0)
+            notify_block(f"{block.period}:{block.label}")
             maybe_sleep(config.request_sleep_seconds)
     finally:
         if writer is not None:
@@ -949,6 +1012,26 @@ def human_bytes(size: int) -> str:
             return f"{value:.1f}{unit}"
         value /= 1024
     return f"{value:.1f}TB"
+
+
+def format_eta(started_at: float, completed_units: int, total_units: int) -> str:
+    if completed_units <= 0:
+        return "calculating"
+    remaining_units = max(0, total_units - completed_units)
+    elapsed = max(0.0, time.monotonic() - started_at)
+    seconds_per_unit = elapsed / completed_units
+    return format_duration(remaining_units * seconds_per_unit)
+
+
+def format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h{minutes:02d}m"
+    if minutes > 0:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 def maybe_sleep(seconds: float) -> None:
