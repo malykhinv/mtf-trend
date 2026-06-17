@@ -3,6 +3,7 @@
 
 Rules:
 - skip any file or directory whose name starts with "." or "_";
+- except required Python package marker files: __init__.py;
 - skip existing .zip files unless --include-existing-zip-files is passed;
 - optionally skip legacy_quarantine;
 - do not follow symlinks.
@@ -17,8 +18,15 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
+ALLOWED_DUNDER_FILES = {"__init__.py"}
+
+
 def _allowed_name(name: str) -> bool:
-    return bool(name) and not name.startswith(".") and not name.startswith("_")
+    if not name:
+        return False
+    if name in ALLOWED_DUNDER_FILES:
+        return True
+    return not name.startswith(".") and not name.startswith("_")
 
 
 def _iter_project_files(
