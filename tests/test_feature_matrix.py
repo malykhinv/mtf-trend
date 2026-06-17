@@ -7,8 +7,9 @@ from pathlib import Path
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus
-from anomaly_science.contracts.market import Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m
+from anomaly_science.contracts.market import Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
 from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.contracts.time import utc_ms_to_datetime
 from anomaly_science.features import (
     FeatureMatrixConfig,
     alpha_decay_bucket,
@@ -191,6 +192,70 @@ def test_feature_matrix_marks_missing_optional_flow_sources_without_fallback() -
     assert row.cvd_quote_since_event_start is None
     assert row.price_up_cvd_down_flag is False
 
+
+def test_feature_matrix_materializes_point_in_time_cross_section_percentiles() -> None:
+    aaa = list(_candles_for_symbol(symbol="AAAUSDT", count=1446, base_price=100.0, volume_base=20.0))
+    bbb = list(_candles_for_symbol(symbol="BBBUSDT", count=1446, base_price=80.0, volume_base=10.0))
+    ccc = list(_candles_for_symbol(symbol="CCCUSDT", count=1446, base_price=60.0, volume_base=30.0))
+    snapshot_time_ms = aaa[-1].available_time_ms
+    trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
+    states = [
+        _state(snapshot_time_ms=snapshot_time_ms, current_close=aaa[-1].close),
+        _state_for_symbol(
+            event_id="e2",
+            symbol="BBBUSDT",
+            snapshot_time_ms=snapshot_time_ms,
+            current_close=bbb[-1].close,
+            current_return_from_start=0.01,
+        ),
+        _state_for_symbol(
+            event_id="e3",
+            symbol="CCCUSDT",
+            snapshot_time_ms=snapshot_time_ms,
+            current_close=ccc[-1].close,
+            current_return_from_start=0.09,
+        ),
+    ]
+    universe = [
+        _universe_row(trade_date=trade_date, symbol="AAAUSDT"),
+        _universe_row(trade_date=trade_date, symbol="BBBUSDT"),
+        _universe_row(trade_date=trade_date, symbol="CCCUSDT"),
+        _universe_row(trade_date=trade_date, symbol="FUTUREUSDT"),
+    ]
+
+    rows = build_price_time_feature_matrix(
+        candles_1m=[*aaa, *bbb, *ccc],
+        state_rows=states,
+        symbol_universe_by_day=universe,
+        config=FeatureMatrixConfig(volume_baseline_window_minutes=10, min_cross_section_symbols=3),
+    )
+    row = next(item for item in rows if item.symbol == "AAAUSDT")
+
+    assert row.cross_section_available is True
+    assert row.cross_section_symbol_count == 3
+    assert row.volume_market_percentile == 0.5
+    assert row.quote_volume_market_percentile == 1.0
+    assert row.return_1m_market_percentile is not None
+    assert row.return_from_event_market_percentile == 0.5
+    assert row.range_expansion_market_percentile is not None
+    assert 0.0 <= row.return_1m_market_percentile <= 1.0
+    assert 0.0 <= row.range_expansion_market_percentile <= 1.0
+
+
+def test_feature_matrix_leaves_cross_section_null_when_universe_is_missing() -> None:
+    candles = list(_candles(count=1442))
+    state = _state(snapshot_time_ms=candles[-1].available_time_ms, current_close=candles[-1].close)
+
+    row = build_price_time_feature_matrix(candles_1m=candles, state_rows=[state])[0]
+
+    assert row.cross_section_available is False
+    assert row.cross_section_symbol_count == 0
+    assert row.volume_market_percentile is None
+    assert row.quote_volume_market_percentile is None
+    assert row.return_1m_market_percentile is None
+    assert row.return_from_event_market_percentile is None
+
+
 def test_feature_matrix_artifact_schema_roundtrip() -> None:
     candles = list(_candles(count=1442))
     state = _state(snapshot_time_ms=candles[-1].available_time_ms, current_close=candles[-1].close)
@@ -295,6 +360,76 @@ def _state(*, snapshot_time_ms: int, current_close: float) -> AnomalyState1mRow:
         distance_to_structural_high=None,
     )
 
+
+
+def _candles_for_symbol(*, symbol: str, count: int, base_price: float, volume_base: float) -> tuple[Candle1m, ...]:
+    rows: list[Candle1m] = []
+    for index in range(count):
+        open_price = base_price + index * 0.01
+        volume = volume_base + (index % 5)
+        quote_volume = volume * open_price
+        rows.append(
+            Candle1m(
+                symbol=symbol,
+                open_time_ms=index * ONE_MINUTE_MS,
+                available_time_ms=(index + 1) * ONE_MINUTE_MS,
+                open=open_price,
+                high=open_price + 1.0,
+                low=open_price - 1.0,
+                close=open_price + 0.2,
+                volume=volume,
+                quote_volume=quote_volume,
+                taker_buy_quote_volume=quote_volume * 0.5,
+            )
+        )
+    return tuple(rows)
+
+
+def _state_for_symbol(
+    *,
+    event_id: str,
+    symbol: str,
+    snapshot_time_ms: int,
+    current_close: float,
+    current_return_from_start: float,
+) -> AnomalyState1mRow:
+    base = _state(snapshot_time_ms=snapshot_time_ms, current_close=current_close)
+    return AnomalyState1mRow(
+        event_id=event_id,
+        symbol=symbol,
+        state_time_ms=base.state_time_ms,
+        snapshot_time_ms=base.snapshot_time_ms,
+        feature_cutoff_time_ms=base.feature_cutoff_time_ms,
+        minutes_since_event_start=base.minutes_since_event_start,
+        minutes_since_detection=base.minutes_since_detection,
+        event_alive=base.event_alive,
+        running_high_asof_t=current_close + 2.0,
+        running_high_time_asof_t_ms=base.running_high_time_asof_t_ms,
+        running_low_asof_t=current_close - 3.0,
+        running_low_time_asof_t_ms=base.running_low_time_asof_t_ms,
+        time_since_running_high_minutes=base.time_since_running_high_minutes,
+        current_close=current_close,
+        current_return_from_start=current_return_from_start,
+        distance_to_running_high=base.distance_to_running_high,
+        distance_to_running_low=base.distance_to_running_low,
+        distance_to_structural_low=None,
+        distance_to_structural_high=None,
+    )
+
+
+def _universe_row(*, trade_date: str, symbol: str) -> SymbolDayUniverseRow:
+    return SymbolDayUniverseRow(
+        trade_date=trade_date,
+        symbol=symbol,
+        listed_asof_day=True,
+        delisted_asof_day=False,
+        tradable_on_day=True,
+        has_1m_data=True,
+        has_5m_data=True,
+        has_oi_data=False,
+        has_liquidation_data=False,
+        liquidity_eligible_on_day=True,
+    )
 
 def _write_candles_csv(path: Path, candles: list[Candle1m]) -> None:
     fieldnames = [

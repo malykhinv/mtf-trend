@@ -127,6 +127,15 @@ class AnomalyFeatureMatrixRow:
     price_up_cvd_down_flag: bool = False
     price_down_cvd_up_flag: bool = False
     cvd_failed_to_confirm_high_flag: bool = False
+    volume_market_percentile: float | None = None
+    quote_volume_market_percentile: float | None = None
+    return_1m_market_percentile: float | None = None
+    return_from_event_market_percentile: float | None = None
+    oi_growth_market_percentile: float | None = None
+    liq_intensity_market_percentile: float | None = None
+    range_expansion_market_percentile: float | None = None
+    cross_section_available: bool = False
+    cross_section_symbol_count: int = 0
 
     def __post_init__(self) -> None:
         if not self.feature_schema_version:
@@ -172,6 +181,13 @@ class AnomalyFeatureMatrixRow:
             "cvd_price_divergence_3m",
             "cvd_price_divergence_5m",
             "cvd_price_divergence_10m",
+            "volume_market_percentile",
+            "quote_volume_market_percentile",
+            "return_1m_market_percentile",
+            "return_from_event_market_percentile",
+            "oi_growth_market_percentile",
+            "liq_intensity_market_percentile",
+            "range_expansion_market_percentile",
         ):
             value = getattr(self, field_name)
             if value is not None and not math.isfinite(value):
@@ -204,3 +220,30 @@ class AnomalyFeatureMatrixRow:
             raise MarketDataContractError("feature_source_status is required")
         if self.liquidation_imbalance is not None and not -1.0 <= self.liquidation_imbalance <= 1.0:
             raise MarketDataContractError("liquidation_imbalance must be inside [-1, 1]")
+        for field_name in (
+            "volume_market_percentile",
+            "quote_volume_market_percentile",
+            "return_1m_market_percentile",
+            "return_from_event_market_percentile",
+            "oi_growth_market_percentile",
+            "liq_intensity_market_percentile",
+            "range_expansion_market_percentile",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not 0.0 <= value <= 1.0:
+                raise MarketDataContractError(f"{field_name} must be inside [0, 1]")
+        if self.cross_section_symbol_count < 0:
+            raise MarketDataContractError("cross_section_symbol_count must be non-negative")
+        if not self.cross_section_available:
+            for field_name in (
+                "volume_market_percentile",
+                "quote_volume_market_percentile",
+                "return_1m_market_percentile",
+                "oi_growth_market_percentile",
+                "liq_intensity_market_percentile",
+                "range_expansion_market_percentile",
+            ):
+                if getattr(self, field_name) is not None:
+                    raise MarketDataContractError(
+                        f"{field_name} must be null when cross_section_available is false"
+                    )

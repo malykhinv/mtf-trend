@@ -5,7 +5,7 @@ from typing import TypeVar
 
 import pandas as pd
 
-from anomaly_science.contracts.market import Candle1m, Candle5m, LiquidationEvent, OpenInterest5m
+from anomaly_science.contracts.market import Candle1m, Candle5m, LiquidationEvent, OpenInterest5m, SymbolDayUniverseRow
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +95,40 @@ def normalize_liquidations(frame: pd.DataFrame | None) -> tuple[LiquidationEvent
             quantity=float(row["quantity"]),
             quote_quantity=float(row["quote_quantity"]),
             source=str(row["source"]),
+        )
+        for row in _records(frame)
+    )
+
+
+def _bool_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n", ""}:
+        return False
+    raise ValueError(f"cannot parse boolean value: {value!r}")
+
+
+def normalize_symbol_universe_by_day(frame: pd.DataFrame | None) -> tuple[SymbolDayUniverseRow, ...]:
+    if frame is None:
+        return ()
+    return tuple(
+        SymbolDayUniverseRow(
+            trade_date=str(row["trade_date"]),
+            symbol=str(row["symbol"]),
+            listed_asof_day=_bool_value(row["listed_asof_day"]),
+            delisted_asof_day=_bool_value(row["delisted_asof_day"]),
+            tradable_on_day=_bool_value(row["tradable_on_day"]),
+            has_1m_data=_bool_value(row["has_1m_data"]),
+            has_5m_data=_bool_value(row["has_5m_data"]),
+            has_oi_data=_bool_value(row["has_oi_data"]),
+            has_liquidation_data=_bool_value(row["has_liquidation_data"]),
+            liquidity_eligible_on_day=_bool_value(row["liquidity_eligible_on_day"]),
+            reason_if_excluded="" if "reason_if_excluded" not in row or pd.isna(row["reason_if_excluded"]) else str(row["reason_if_excluded"]),
         )
         for row in _records(frame)
     )

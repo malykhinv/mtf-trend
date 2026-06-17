@@ -5,16 +5,17 @@ import statistics
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
-from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m
+from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
 from anomaly_science.contracts.state import AnomalyState1mRow
-from anomaly_science.data.normalized import normalize_candles_1m, normalize_liquidations, normalize_open_interest_5m
+from anomaly_science.contracts.time import utc_ms_to_datetime
+from anomaly_science.data.normalized import normalize_candles_1m, normalize_liquidations, normalize_open_interest_5m, normalize_symbol_universe_by_day
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource, MarketDataSource
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION, build_default_feature_catalog, feature_rows_to_artifact
 from anomaly_science.features.config import FeatureMatrixConfig
@@ -30,6 +31,7 @@ def build_price_time_feature_matrix(
     state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
     open_interest_5m: Sequence[OpenInterest5m] | Iterable[OpenInterest5m] | None = None,
     liquidations: Sequence[LiquidationEvent] | Iterable[LiquidationEvent] | None = None,
+    symbol_universe_by_day: Sequence[SymbolDayUniverseRow] | Iterable[SymbolDayUniverseRow] | None = None,
     config: FeatureMatrixConfig | None = None,
 ) -> tuple[AnomalyFeatureMatrixRow, ...]:
     """Build as-of feature rows from state rows.
@@ -40,6 +42,7 @@ def build_price_time_feature_matrix(
     dependency on future outcome artifacts.
     """
     cfg = config or FeatureMatrixConfig()
+    state_rows = tuple(state_rows)
     candles_by_symbol: dict[str, list[Candle1m]] = {}
     for candle in candles_1m:
         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
@@ -62,6 +65,11 @@ def build_price_time_feature_matrix(
         for symbol in liquidations_by_symbol:
             liquidations_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.event_time_ms))
 
+    universe_by_day = _universe_symbols_by_day(symbol_universe_by_day)
+    states_by_snapshot: dict[int, list[AnomalyState1mRow]] = {}
+    for state in state_rows:
+        states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
+
     rows: list[AnomalyFeatureMatrixRow] = []
     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
         symbol_candles = candles_by_symbol.get(state.symbol, [])
@@ -73,6 +81,11 @@ def build_price_time_feature_matrix(
                 liquidation_rows=None
                 if liquidations_by_symbol is None
                 else liquidations_by_symbol.get(state.symbol, []),
+                candles_by_symbol=candles_by_symbol,
+                open_interest_by_symbol=oi_by_symbol,
+                liquidations_by_symbol=liquidations_by_symbol,
+                universe_by_day=universe_by_day,
+                states_at_snapshot=states_by_snapshot.get(state.snapshot_time_ms, []),
                 config=cfg,
             )
         )
@@ -90,11 +103,13 @@ def build_price_time_feature_matrix_from_source(
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
     oi_frame = source.read_frame("open_interest_5m", required=False)
     liquidation_frame = source.read_frame("liquidations", required=False)
+    universe_frame = source.read_frame("symbol_universe_by_day", required=False)
     state_rows = load_anomaly_state_1m_csv(state_path)
     return build_price_time_feature_matrix(
         candles_1m=normalize_candles_1m(frame),
         open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
         liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
+        symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
         state_rows=state_rows,
         config=config,
     )
@@ -176,6 +191,11 @@ def _build_state_feature_row(
     candles: Sequence[Candle1m],
     open_interest_rows: Sequence[OpenInterest5m] | None,
     liquidation_rows: Sequence[LiquidationEvent] | None,
+    candles_by_symbol: Mapping[str, Sequence[Candle1m]],
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
+    universe_by_day: Mapping[str, set[str]],
+    states_at_snapshot: Sequence[AnomalyState1mRow],
     config: FeatureMatrixConfig,
 ) -> AnomalyFeatureMatrixRow:
     atr_value: float | None = None
@@ -226,6 +246,15 @@ def _build_state_feature_row(
         atr_value=atr_value,
         windows_minutes=config.cvd_windows_minutes,
     )
+    cross_section_features = _cross_section_features(
+        state=state,
+        candles_by_symbol=candles_by_symbol,
+        open_interest_by_symbol=open_interest_by_symbol,
+        liquidations_by_symbol=liquidations_by_symbol,
+        universe_by_day=universe_by_day,
+        states_at_snapshot=states_at_snapshot,
+        min_cross_section_symbols=config.min_cross_section_symbols,
+    )
 
     time_to_running_high = max(state.minutes_since_event_start - state.time_since_running_high_minutes, 0)
     clock_maturity = state.time_since_running_high_minutes / max(time_to_running_high, 1)
@@ -275,6 +304,15 @@ def _build_state_feature_row(
         price_up_cvd_down_flag=cvd_features.price_up_cvd_down_flag,
         price_down_cvd_up_flag=cvd_features.price_down_cvd_up_flag,
         cvd_failed_to_confirm_high_flag=cvd_features.cvd_failed_to_confirm_high_flag,
+        volume_market_percentile=cross_section_features.volume_market_percentile,
+        quote_volume_market_percentile=cross_section_features.quote_volume_market_percentile,
+        return_1m_market_percentile=cross_section_features.return_1m_market_percentile,
+        return_from_event_market_percentile=cross_section_features.return_from_event_market_percentile,
+        oi_growth_market_percentile=cross_section_features.oi_growth_market_percentile,
+        liq_intensity_market_percentile=cross_section_features.liq_intensity_market_percentile,
+        range_expansion_market_percentile=cross_section_features.range_expansion_market_percentile,
+        cross_section_available=cross_section_features.cross_section_available,
+        cross_section_symbol_count=cross_section_features.cross_section_symbol_count,
     )
 
 
@@ -613,12 +651,205 @@ def _window_price_change_atr(*, window_candles: Sequence[Candle1m], atr_value: f
     return (window_candles[-1].close - window_candles[0].open) / atr_value
 
 
+class _CrossSectionFeatures:
+    def __init__(
+        self,
+        *,
+        volume_market_percentile: float | None,
+        quote_volume_market_percentile: float | None,
+        return_1m_market_percentile: float | None,
+        return_from_event_market_percentile: float | None,
+        oi_growth_market_percentile: float | None,
+        liq_intensity_market_percentile: float | None,
+        range_expansion_market_percentile: float | None,
+        cross_section_available: bool,
+        cross_section_symbol_count: int,
+    ) -> None:
+        self.volume_market_percentile = volume_market_percentile
+        self.quote_volume_market_percentile = quote_volume_market_percentile
+        self.return_1m_market_percentile = return_1m_market_percentile
+        self.return_from_event_market_percentile = return_from_event_market_percentile
+        self.oi_growth_market_percentile = oi_growth_market_percentile
+        self.liq_intensity_market_percentile = liq_intensity_market_percentile
+        self.range_expansion_market_percentile = range_expansion_market_percentile
+        self.cross_section_available = cross_section_available
+        self.cross_section_symbol_count = cross_section_symbol_count
+
+
+def _cross_section_features(
+    *,
+    state: AnomalyState1mRow,
+    candles_by_symbol: Mapping[str, Sequence[Candle1m]],
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
+    universe_by_day: Mapping[str, set[str]],
+    states_at_snapshot: Sequence[AnomalyState1mRow],
+    min_cross_section_symbols: int,
+) -> _CrossSectionFeatures:
+    trade_date = utc_ms_to_datetime(state.snapshot_time_ms).date().isoformat()
+    universe_symbols = universe_by_day.get(trade_date, set())
+    if not universe_symbols:
+        return _missing_cross_section_features(symbol_count=0)
+
+    metric_values: dict[str, dict[str, float]] = {
+        "volume": {},
+        "quote_volume": {},
+        "return_1m": {},
+        "oi_growth": {},
+        "liq_intensity": {},
+        "range_expansion": {},
+    }
+    symbols_with_current_candle = 0
+    for symbol in sorted(universe_symbols):
+        candles = candles_by_symbol.get(symbol, ())
+        current = _current_candle(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
+        if current is None:
+            continue
+        symbols_with_current_candle += 1
+        metric_values["volume"][symbol] = current.volume
+        metric_values["quote_volume"][symbol] = current.quote_volume
+        return_1m = _one_minute_return(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
+        if return_1m is not None:
+            metric_values["return_1m"][symbol] = return_1m
+        if current.close > 0:
+            metric_values["range_expansion"][symbol] = (current.high - current.low) / current.close
+        if open_interest_by_symbol is not None:
+            oi = _oi_features(
+                open_interest_rows=open_interest_by_symbol.get(symbol, ()),
+                snapshot_time_ms=state.snapshot_time_ms,
+            )
+            if oi.oi_change_5m_pct_of_oi is not None:
+                metric_values["oi_growth"][symbol] = oi.oi_change_5m_pct_of_oi
+        if liquidations_by_symbol is not None:
+            liq_intensity = _minute_liq_intensity(
+                current=current,
+                liquidation_rows=liquidations_by_symbol.get(symbol, ()),
+                snapshot_time_ms=state.snapshot_time_ms,
+            )
+            if liq_intensity is not None:
+                metric_values["liq_intensity"][symbol] = liq_intensity
+
+    if symbols_with_current_candle < min_cross_section_symbols:
+        return _missing_cross_section_features(symbol_count=symbols_with_current_candle)
+
+    return _CrossSectionFeatures(
+        volume_market_percentile=_rank_percentile(metric_values["volume"], state.symbol),
+        quote_volume_market_percentile=_rank_percentile(metric_values["quote_volume"], state.symbol),
+        return_1m_market_percentile=_rank_percentile(metric_values["return_1m"], state.symbol),
+        return_from_event_market_percentile=_return_from_event_percentile(
+            states_at_snapshot=states_at_snapshot,
+            symbol=state.symbol,
+            min_cross_section_symbols=min_cross_section_symbols,
+        ),
+        oi_growth_market_percentile=_rank_percentile(metric_values["oi_growth"], state.symbol),
+        liq_intensity_market_percentile=_rank_percentile(metric_values["liq_intensity"], state.symbol),
+        range_expansion_market_percentile=_rank_percentile(metric_values["range_expansion"], state.symbol),
+        cross_section_available=True,
+        cross_section_symbol_count=symbols_with_current_candle,
+    )
+
+
+def _missing_cross_section_features(*, symbol_count: int) -> _CrossSectionFeatures:
+    return _CrossSectionFeatures(
+        volume_market_percentile=None,
+        quote_volume_market_percentile=None,
+        return_1m_market_percentile=None,
+        return_from_event_market_percentile=None,
+        oi_growth_market_percentile=None,
+        liq_intensity_market_percentile=None,
+        range_expansion_market_percentile=None,
+        cross_section_available=False,
+        cross_section_symbol_count=symbol_count,
+    )
+
+
+def _universe_symbols_by_day(rows: Sequence[SymbolDayUniverseRow] | Iterable[SymbolDayUniverseRow] | None) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    if rows is None:
+        return result
+    for row in rows:
+        if row.tradable_on_day and row.liquidity_eligible_on_day and row.has_1m_data:
+            result.setdefault(row.trade_date, set()).add(row.symbol)
+    return result
+
+
+def _one_minute_return(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> float | None:
+    asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+    if len(asof_rows) < 2:
+        return None
+    current = asof_rows[-1]
+    previous = asof_rows[-2]
+    if current.available_time_ms != snapshot_time_ms or previous.close <= 0:
+        return None
+    return current.close / previous.close - 1.0
+
+
+def _minute_liq_intensity(
+    *,
+    current: Candle1m,
+    liquidation_rows: Sequence[LiquidationEvent],
+    snapshot_time_ms: int,
+) -> float | None:
+    minute_start_ms = snapshot_time_ms - ONE_MINUTE_MS
+    quote = sum(
+        item.quote_quantity
+        for item in liquidation_rows
+        if item.available_time_ms <= snapshot_time_ms and minute_start_ms <= item.event_time_ms < snapshot_time_ms
+    )
+    if current.quote_volume <= 0:
+        return None
+    return quote / current.quote_volume
+
+
+def _return_from_event_percentile(
+    *,
+    states_at_snapshot: Sequence[AnomalyState1mRow],
+    symbol: str,
+    min_cross_section_symbols: int,
+) -> float | None:
+    values = {
+        f"{item.symbol}::{item.event_id}": item.current_return_from_start
+        for item in states_at_snapshot
+        if item.current_return_from_start is not None
+    }
+    current_keys = [key for key in values if key.startswith(f"{symbol}::")]
+    if len(values) < min_cross_section_symbols or not current_keys:
+        return None
+    # If several events for the same symbol are active at the same snapshot,
+    # use the strongest as-of return for this symbol instead of leaking any future outcome.
+    symbol_value = max(values[key] for key in current_keys)
+    symbol_values: dict[str, float] = {}
+    for key, value in values.items():
+        row_symbol = key.split("::", 1)[0]
+        previous = symbol_values.get(row_symbol)
+        if previous is None or value > previous:
+            symbol_values[row_symbol] = value
+    return _rank_percentile(symbol_values, symbol)
+
+
+def _rank_percentile(values_by_symbol: Mapping[str, float], symbol: str) -> float | None:
+    if symbol not in values_by_symbol:
+        return None
+    items = [(item_symbol, value) for item_symbol, value in values_by_symbol.items() if math.isfinite(value)]
+    if not items or symbol not in {item_symbol for item_symbol, _ in items}:
+        return None
+    sorted_values = sorted(value for _, value in items)
+    value = values_by_symbol[symbol]
+    tied_positions = [index + 1 for index, item_value in enumerate(sorted_values) if item_value == value]
+    if not tied_positions:
+        return None
+    average_rank = statistics.fmean(tied_positions)
+    denominator = max(len(sorted_values) - 1, 1)
+    percentile = (average_rank - 1.0) / denominator
+    return min(max(percentile, 0.0), 1.0)
+
+
 def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_feature_matrix_scope",
             status=AuditStatus.PASS,
-            message="price/time/alpha-decay plus volume/OI/liquidation/CVD feature matrix only; no cross-section/ML/decision/trade simulation",
+            message="price/time/alpha-decay plus volume/OI/liquidation/CVD and point-in-time cross-sectional feature matrix only; no BTC/systemic cluster/ML/decision/trade simulation",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -643,6 +874,12 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
             check_name="feature_matrix_flow_oi_liquidation_cvd_asof",
             status=AuditStatus.PASS,
             message="OI uses closed 5m rows available <= snapshot; liquidation and CVD use events/candles available <= snapshot only",
+            artifact="anomaly_feature_matrix.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="feature_matrix_cross_section_point_in_time",
+            status=AuditStatus.PASS,
+            message="cross-sectional percentiles use only point-in-time universe symbols with current candles available <= snapshot_time_ms",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -708,6 +945,7 @@ def _run_config_rows(
             source="runtime",
         ),
         RunConfigRow(key="cvd_windows_minutes", value=",".join(str(item) for item in config.cvd_windows_minutes), source="runtime"),
+        RunConfigRow(key="min_cross_section_symbols", value=str(config.min_cross_section_symbols), source="runtime"),
     ]
 
 
