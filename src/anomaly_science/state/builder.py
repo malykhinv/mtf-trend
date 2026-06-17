@@ -59,6 +59,9 @@ def load_anomaly_events_csv(path: str | Path) -> tuple[AnomalyEvent, ...]:
                     initial_quote_volume_zscore=_optional_float(row, "initial_quote_volume_zscore"),
                     initial_trade_count_zscore=_optional_float(row, "initial_trade_count_zscore"),
                     detector_version=_required_str(row, "detector_version"),
+                    technical_noise_shock=_optional_bool(row, "technical_noise_shock", default=False),
+                    raw_candle_gap_minutes=_optional_float(row, "raw_candle_gap_minutes"),
+                    excluded_by_data_quality_gate=_optional_bool(row, "excluded_by_data_quality_gate", default=False),
                 )
             )
         except (TypeError, ValueError) as exc:
@@ -215,6 +218,20 @@ def _optional_float(row: Mapping[str, object], name: str) -> float | None:
     if not math.isfinite(result):
         raise ValueError(f"{name} must be finite when provided")
     return result
+
+
+def _optional_bool(row: Mapping[str, object], name: str, *, default: bool) -> bool:
+    value = row[name]
+    if pd.isna(value) or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    raise ValueError(f"{name} must be boolean when provided")
 
 
 def _csv_value(value: object) -> object:

@@ -22,6 +22,9 @@ class AnomalyEvent:
     initial_quote_volume_zscore: float | None
     initial_trade_count_zscore: float | None
     detector_version: str
+    technical_noise_shock: bool = False
+    raw_candle_gap_minutes: float | None = None
+    excluded_by_data_quality_gate: bool = False
 
     def __post_init__(self) -> None:
         if not self.event_id:
@@ -37,6 +40,10 @@ class AnomalyEvent:
             raise MarketDataContractError("seed_time_ms must be >= event_start_time_ms")
         if not self.detector_version:
             raise MarketDataContractError("detector_version is required")
+        if self.raw_candle_gap_minutes is not None and self.raw_candle_gap_minutes <= 0:
+            raise MarketDataContractError("raw_candle_gap_minutes must be positive when present")
+        if self.technical_noise_shock and not self.excluded_by_data_quality_gate:
+            raise MarketDataContractError("technical_noise_shock events must be excluded by data-quality gate")
         for field_name in ("seed_open", "seed_high", "seed_low", "seed_close"):
             value = getattr(self, field_name)
             if value <= 0:

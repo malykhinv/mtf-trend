@@ -71,6 +71,50 @@ def test_data_quality_flags_duplicate_candles() -> None:
     assert by_name["open_interest_5m_present"].status == AuditStatus.WARN
 
 
+def test_data_quality_marks_first_1m_candle_after_gap_as_technical_noise_shock() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "open_time_ms": 0,
+                "available_time_ms": 60_000,
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.0,
+                "volume": 1.0,
+                "quote_volume": 10.0,
+            },
+            {
+                "symbol": "AAA/USDT:USDT",
+                "open_time_ms": 4 * 60_000,
+                "available_time_ms": 5 * 60_000,
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.0,
+                "volume": 1.0,
+                "quote_volume": 10.0,
+            },
+        ]
+    )
+
+    rows = run_data_quality({"candles_1m": frame, "candles_5m": frame, "open_interest_5m": None, "liquidations": None})
+    shock_rows = [row for row in rows if row.check_name == "candles_1m_technical_noise_shock"]
+
+    assert len(shock_rows) == 1
+    shock = shock_rows[0]
+    assert shock.status == AuditStatus.WARN
+    assert shock.symbol == "AAA/USDT:USDT"
+    assert shock.timestamp_ms == 4 * 60_000
+    assert shock.previous_timestamp_ms == 0
+    assert shock.gap_minutes == 4.0
+    assert shock.technical_noise_shock is True
+    assert shock.excluded_from_detector is True
+    assert shock.excluded_from_ml_dataset is True
+    assert shock.reason == "api_maintenance_gap_aftershock"
+
+
 def test_universe_marks_missing_5m_as_explicit_exclusion_reason() -> None:
     candles_1m = pd.read_csv(FIXTURE_DIR / "candles_1m.csv")
     candles_5m = pd.read_csv(FIXTURE_DIR / "candles_5m.csv")

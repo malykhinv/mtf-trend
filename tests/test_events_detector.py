@@ -92,6 +92,39 @@ def test_broad_detector_can_detect_volume_anomaly_without_return_threshold() -> 
     assert events[0].initial_quote_volume_zscore >= 4.0
 
 
+def test_broad_detector_excludes_first_candle_after_raw_gap_from_candidates_and_baseline() -> None:
+    candles = [
+        _candle(0, close=100.0, quote_volume=100.0),
+        _candle(1, close=100.1, quote_volume=105.0),
+        _candle(2, close=99.9, quote_volume=95.0),
+        _candle(3, close=100.0, quote_volume=100.0),
+        _candle(4, close=100.1, quote_volume=100.0),
+        _candle(10, close=150.0, quote_volume=1_000_000.0),  # first candle after 6m raw gap
+        _candle(11, close=100.0, quote_volume=100.0),
+        _candle(12, close=100.1, quote_volume=105.0),
+        _candle(13, close=99.9, quote_volume=95.0),
+        _candle(14, close=100.0, quote_volume=100.0),
+        _candle(15, close=100.1, quote_volume=100.0),
+        _candle(16, close=104.0, quote_volume=1_000.0),
+    ]
+    config = BroadAnomalyDetectorConfig(
+        baseline_bars=5,
+        min_baseline_bars=5,
+        min_abs_return_pct=0.03,
+        min_quote_volume_zscore=99.0,
+        min_volume_zscore=99.0,
+        min_trade_count_zscore=99.0,
+        min_range_zscore=99.0,
+    )
+
+    events = detect_broad_anomaly_events(candles, config=config)
+
+    assert [event.seed_time_ms for event in events] == [BASE_TS + 16 * 60_000]
+    assert events[0].technical_noise_shock is False
+    assert events[0].excluded_by_data_quality_gate is False
+    assert events[0].raw_candle_gap_minutes == 1.0
+
+
 def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
     output_dir = tmp_path / "events"
 
@@ -134,5 +167,8 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
         "initial_volume_zscore",
         "initial_quote_volume_zscore",
         "initial_trade_count_zscore",
+        "technical_noise_shock",
+        "raw_candle_gap_minutes",
+        "excluded_by_data_quality_gate",
         "detector_version",
     ]

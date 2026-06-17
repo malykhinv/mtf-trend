@@ -33,15 +33,26 @@ def detect_broad_anomaly_events(
     for symbol in sorted(by_symbol):
         rows = sorted(by_symbol[symbol], key=lambda item: item.open_time_ms)
         last_event_start_ms: int | None = None
-        for index, candle in enumerate(rows):
-            baseline = rows[max(0, index - cfg.baseline_bars):index]
+        detector_baseline: list[Candle1m] = []
+        previous_open_time_ms: int | None = None
+        for candle in rows:
+            raw_gap_minutes = _raw_gap_minutes(candle.open_time_ms, previous_open_time_ms)
+            previous_open_time_ms = candle.open_time_ms
+
+            if _is_technical_noise_shock(raw_gap_minutes):
+                continue
+
+            baseline = detector_baseline[-cfg.baseline_bars:]
             if len(baseline) < cfg.min_baseline_bars:
+                detector_baseline.append(candle)
                 continue
             if _in_cooldown(candle.open_time_ms, last_event_start_ms, cfg.cooldown_minutes):
+                detector_baseline.append(candle)
                 continue
 
             metrics = _seed_metrics(candle, baseline)
             if not _is_broad_activity(metrics, cfg):
+                detector_baseline.append(candle)
                 continue
 
             event = AnomalyEvent(
@@ -58,10 +69,14 @@ def detect_broad_anomaly_events(
                 initial_volume_zscore=metrics["volume_zscore"],
                 initial_quote_volume_zscore=metrics["quote_volume_zscore"],
                 initial_trade_count_zscore=metrics["trade_count_zscore"],
+                technical_noise_shock=False,
+                raw_candle_gap_minutes=raw_gap_minutes,
+                excluded_by_data_quality_gate=False,
                 detector_version=cfg.detector_version,
             )
             events.append(event)
             last_event_start_ms = candle.open_time_ms
+            detector_baseline.append(candle)
     return tuple(events)
 
 
@@ -105,6 +120,16 @@ def _is_broad_activity(metrics: dict[str, float | None], config: BroadAnomalyDet
 
 def _range_pct(candle: Candle1m) -> float:
     return (candle.high / candle.low) - 1.0
+
+
+def _raw_gap_minutes(open_time_ms: int, previous_open_time_ms: int | None) -> float | None:
+    if previous_open_time_ms is None:
+        return None
+    return (open_time_ms - previous_open_time_ms) / ONE_MINUTE_MS
+
+
+def _is_technical_noise_shock(raw_gap_minutes: float | None) -> bool:
+    return raw_gap_minutes is not None and raw_gap_minutes > 3.0
 
 
 def _zscore(value: float | int | None, baseline_values: Sequence[float | int | None]) -> float | None:

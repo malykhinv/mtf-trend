@@ -19,7 +19,7 @@ def rows_to_artifact(rows: list[DataQualityRow]) -> list[dict[str, object]]:
     for row in rows:
         payload = asdict(row)
         payload["status"] = row.status.value
-        result.append(payload)
+        result.append({key: _csv_value(value) for key, value in payload.items()})
     return result
 
 
@@ -40,13 +40,36 @@ def has_critical_fail(rows: list[DataQualityRow]) -> bool:
     return any(row.status == AuditStatus.FAIL and row.severity == CRITICAL for row in rows)
 
 
-def _row(check_name: str, status: AuditStatus, severity: str, affected_rows: int, message: str) -> DataQualityRow:
+def _row(
+    check_name: str,
+    status: AuditStatus,
+    severity: str,
+    affected_rows: int,
+    message: str,
+    *,
+    symbol: str = "",
+    timestamp_ms: int | None = None,
+    previous_timestamp_ms: int | None = None,
+    gap_minutes: float | None = None,
+    technical_noise_shock: bool | None = None,
+    excluded_from_detector: bool | None = None,
+    excluded_from_ml_dataset: bool | None = None,
+    reason: str = "",
+) -> DataQualityRow:
     return DataQualityRow(
         check_name=check_name,
         status=status,
         severity=severity,
         affected_rows=affected_rows,
         message=message,
+        symbol=symbol,
+        timestamp_ms=timestamp_ms,
+        previous_timestamp_ms=previous_timestamp_ms,
+        gap_minutes=gap_minutes,
+        technical_noise_shock=technical_noise_shock,
+        excluded_from_detector=excluded_from_detector,
+        excluded_from_ml_dataset=excluded_from_ml_dataset,
+        reason=reason,
     )
 
 
@@ -143,6 +166,8 @@ def _candle_checks(frame: pd.DataFrame | None, *, dataset_name: str, timeframe_m
         ))
 
     rows.extend(_monotonic_and_gap_checks(frame, dataset_name=dataset_name, time_column="open_time_ms", expected_step_ms=timeframe_ms))
+    if dataset_name == "candles_1m":
+        rows.extend(_technical_noise_shock_checks(frame))
     return rows
 
 
@@ -191,6 +216,56 @@ def _monotonic_and_gap_checks(frame: pd.DataFrame, *, dataset_name: str, time_co
         f"timestamp gaps or unexpected intervals vs {expected_step_ms}ms" if gap_count else "no unexpected timestamp intervals",
     ))
     return rows
+
+
+def _technical_noise_shock_checks(frame: pd.DataFrame) -> list[DataQualityRow]:
+    rows: list[DataQualityRow] = []
+    if not {"symbol", "open_time_ms"}.issubset(frame.columns):
+        return rows
+
+    shock_rows: list[DataQualityRow] = []
+    for symbol, group in frame.sort_values(["symbol", "open_time_ms"]).groupby("symbol", sort=False):
+        times = group["open_time_ms"].astype("int64")
+        previous_times = times.shift(1)
+        gaps_ms = times - previous_times
+        mask = gaps_ms > 3 * ONE_MINUTE_MS
+        for index in group.index[mask.fillna(False)]:
+            timestamp_ms = int(frame.at[index, "open_time_ms"])
+            previous_timestamp_ms = int(previous_times.loc[index])
+            gap_minutes = float((timestamp_ms - previous_timestamp_ms) / ONE_MINUTE_MS)
+            shock_rows.append(_row(
+                "candles_1m_technical_noise_shock",
+                AuditStatus.WARN,
+                WARNING,
+                1,
+                "first 1m candle after raw timestamp gap > 3 minutes; excluded from detector and ML dataset",
+                symbol=str(symbol),
+                timestamp_ms=timestamp_ms,
+                previous_timestamp_ms=previous_timestamp_ms,
+                gap_minutes=gap_minutes,
+                technical_noise_shock=True,
+                excluded_from_detector=True,
+                excluded_from_ml_dataset=True,
+                reason="api_maintenance_gap_aftershock",
+            ))
+
+    rows.append(_row(
+        "candles_1m_technical_noise_shock_detected",
+        AuditStatus.WARN if shock_rows else AuditStatus.PASS,
+        WARNING if shock_rows else INFO,
+        len(shock_rows),
+        "technical aftershock candles detected and marked for exclusion" if shock_rows else "no first candles after raw timestamp gaps > 3 minutes",
+        technical_noise_shock=bool(shock_rows),
+        excluded_from_detector=bool(shock_rows),
+        excluded_from_ml_dataset=bool(shock_rows),
+        reason="api_maintenance_gap_aftershock" if shock_rows else "",
+    ))
+    rows.extend(shock_rows)
+    return rows
+
+
+def _csv_value(value: object) -> object:
+    return "" if value is None else value
 
 
 def _open_interest_checks(frame: pd.DataFrame | None) -> list[DataQualityRow]:

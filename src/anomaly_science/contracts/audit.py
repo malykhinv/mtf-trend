@@ -17,6 +17,14 @@ class DataQualityRow:
     severity: str
     affected_rows: int
     message: str
+    symbol: str = ""
+    timestamp_ms: int | None = None
+    previous_timestamp_ms: int | None = None
+    gap_minutes: float | None = None
+    technical_noise_shock: bool | None = None
+    excluded_from_detector: bool | None = None
+    excluded_from_ml_dataset: bool | None = None
+    reason: str = ""
     artifact: str = "anomaly_data_quality.csv"
 
     def __post_init__(self) -> None:

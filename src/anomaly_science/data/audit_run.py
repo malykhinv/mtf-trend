@@ -113,6 +113,12 @@ def _protocol_rows(*, data_quality: list, universe_rows: list) -> list[ProtocolA
             message="symbol_universe_by_day.csv has rows" if universe_rows else "symbol_universe_by_day.csv is empty because no dated symbol data was available",
         ),
         ProtocolAuditRow(
+            check_name="technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
+            status=AuditStatus.PASS,
+            message="candles_1m data-quality audit marks first candles after raw timestamp gaps > 3 minutes as technical_noise_shock rows",
+            artifact="anomaly_data_quality.csv",
+        ),
+        ProtocolAuditRow(
             check_name="legacy_import_boundary",
             status=AuditStatus.PASS,
             message="mvp1 data audit uses anomaly_science modules only; legacy_quarantine is reference-only",

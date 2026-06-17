@@ -53,6 +53,7 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
         universe_rows_present=bool(universe_rows),
         event_count=len(events),
         event_error=event_error,
+        technical_noise_shock_count=_technical_noise_shock_count(data_quality),
     )
     run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, config=cfg)
 
@@ -112,6 +113,7 @@ def _protocol_rows(
     universe_rows_present: bool,
     event_count: int,
     event_error: str | None,
+    technical_noise_shock_count: int,
 ) -> list[ProtocolAuditRow]:
     rows = [
         ProtocolAuditRow(
@@ -142,6 +144,12 @@ def _protocol_rows(
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
+            check_name="technical_noise_shock_excluded_from_broad_detector",
+            status=AuditStatus.PASS,
+            message=f"excluded {technical_noise_shock_count} first candles after raw timestamp gaps > 3 minutes from broad detector candidates and baselines",
+            artifact="anomaly_events.csv",
+        ),
+        ProtocolAuditRow(
             check_name="legacy_import_boundary",
             status=AuditStatus.PASS,
             message="mvp1 events uses anomaly_science modules only; legacy_quarantine is reference-only",
@@ -149,6 +157,15 @@ def _protocol_rows(
     ]
     return rows
 
+
+
+def _technical_noise_shock_count(rows: list) -> int:
+    return sum(
+        1
+        for row in rows
+        if getattr(row, "check_name", "") == "candles_1m_technical_noise_shock"
+        and getattr(row, "technical_noise_shock", False) is True
+    )
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:
