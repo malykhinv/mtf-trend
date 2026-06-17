@@ -80,6 +80,19 @@ Smoke test on a small subset:
 python main.py build-binance-vision-cache --symbols BTCUSDT,ETHUSDT --days 7 --overwrite
 ```
 
+
+Binance Vision USD-M Futures cache build:
+
+```bash
+python main.py build-binance-vision-cache --days 380
+```
+
+Smoke test on a small subset:
+
+```bash
+python main.py build-binance-vision-cache --symbols BTCUSDT,ETHUSDT --days 7 --overwrite
+```
+
 Compile check:
 
 ```bash

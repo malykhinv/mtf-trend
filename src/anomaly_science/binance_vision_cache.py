@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import io
 import os
 import re
@@ -19,7 +20,8 @@ import requests
 
 BINANCE_VISION_BASE_URL = "https://data.binance.vision"
 S3_LIST_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
-DEFAULT_MARKET_CACHE_DIR = Path(".output/market")
+DEFAULT_MARKET_CACHE_ROOT = Path(".output/market")
+DEFAULT_MARKET_CACHE_DIR = DEFAULT_MARKET_CACHE_ROOT / "binance_vision" / "um_futures" / "enriched_1m"
 ONE_MINUTE_MS = 60_000
 ONE_DAY_MS = 86_400_000
 
@@ -269,14 +271,17 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
         raise RuntimeError("No symbols to process. Discovery returned empty set and no --symbols were provided.")
 
     config.out_dir.mkdir(parents=True, exist_ok=True)
+    metadata_dir = cache_metadata_dir(config.out_dir)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
     stats: list[SymbolStats] = []
 
     progress = tqdm(symbols, desc="Binance Vision cache", unit="symbol")
     for symbol in progress:
-        progress.set_postfix(symbol=symbol, disk=human_bytes(directory_size(config.out_dir)))
+        progress.set_postfix(symbol=symbol, disk=human_bytes(directory_size(DEFAULT_MARKET_CACHE_ROOT)))
         symbol_stats = build_symbol_cache(symbol=symbol, blocks=blocks, config=config, start_date=start, end_date=end)
         stats.append(symbol_stats)
-        write_stats(config.out_dir / "_binance_vision_cache_stats.csv", stats)
+        write_stats(metadata_dir / "cache_stats.csv", stats)
+        write_manifest(metadata_dir / "manifest.json", config=config, stats=stats, start_date=start, end_date=end)
     return stats
 
 
@@ -855,6 +860,10 @@ def read_symbols_arg(symbols_arg: str, symbols_file: str) -> list[str]:
     return symbols
 
 
+def cache_metadata_dir(out_dir: Path) -> Path:
+    return out_dir.parent / "metadata"
+
+
 def write_stats(path: Path, stats: list[SymbolStats]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -884,6 +893,39 @@ def write_stats(path: Path, stats: list[SymbolStats]) -> None:
                     "output_path": str(item.output_path) if item.output_path is not None else "",
                 }
             )
+    os.replace(tmp_path, path)
+
+
+def write_manifest(
+    path: Path,
+    *,
+    config: CacheConfig,
+    stats: list[SymbolStats],
+    start_date: date,
+    end_date: date,
+) -> None:
+    payload = {
+        "source": "binance_vision",
+        "market": "um_futures",
+        "dataset": "enriched_1m",
+        "data_dir": str(config.out_dir),
+        "metadata_dir": str(path.parent),
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "days": config.days,
+        "symbols_requested": list(config.symbols),
+        "symbols_seen": [item.symbol for item in stats],
+        "symbols_written": [item.symbol for item in stats if item.rows_written > 0],
+        "symbols_skipped_existing": [item.symbol for item in stats if item.rows_written == -1],
+        "rows_written": sum(max(0, item.rows_written) for item in stats),
+        "blocks_written": sum(item.blocks_written for item in stats),
+        "compression": config.compression,
+        "oi_join_strategy": config.oi_join_strategy,
+        "output_columns": OUTPUT_COLUMNS,
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp_path, path)
 
 

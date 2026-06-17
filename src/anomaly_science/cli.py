@@ -166,6 +166,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cache.add_argument("--request-sleep", type=float, default=0.0, help="Optional sleep after each processed block.")
 
+    cache = subparsers.add_parser(
+        "build-binance-vision-cache",
+        help="Build per-symbol 1m Parquet cache from Binance Vision USD-M Futures archives.",
+    )
+    cache.add_argument("--days", type=int, default=380, help="Inclusive lookback window in calendar days. Default: 380.")
+    cache.add_argument(
+        "--end-date",
+        default="",
+        help="Inclusive UTC end date YYYY-MM-DD. Default: yesterday UTC, because daily archives lag by one day.",
+    )
+    cache.add_argument(
+        "--symbols",
+        default="",
+        help="Optional comma-separated symbols. Empty means discover all archived USD-M Futures symbols.",
+    )
+    cache.add_argument("--symbols-file", default="", help="Optional text file with one symbol per line.")
+    cache.add_argument("--max-symbols", type=int, default=None, help="Optional cap for smoke tests.")
+    cache.add_argument("--download-workers", type=int, default=3, help="Concurrent downloads per block; valid range: 1..3.")
+    cache.add_argument("--timeout", type=float, default=60.0, help="Per-request read timeout in seconds.")
+    cache.add_argument("--connect-timeout", type=float, default=10.0, help="Per-request connect timeout in seconds.")
+    cache.add_argument("--retries", type=int, default=3, help="Retries per file download.")
+    cache.add_argument("--overwrite", action="store_true", help="Rebuild symbols even if {symbol}.parquet already exists.")
+    cache.add_argument(
+        "--oi-join-strategy",
+        choices=("backward", "nearest"),
+        default="backward",
+        help="Default backward is no-lookahead-safe; nearest is available only when explicitly requested.",
+    )
+    cache.add_argument("--request-sleep", type=float, default=0.0, help="Optional sleep after each processed block.")
+
     return parser
 
 
@@ -234,6 +264,35 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         config = CacheConfig(
             out_dir=Path(args.out),
+            days=args.days,
+            end_date=parse_optional_date(args.end_date),
+            symbols=tuple(read_symbols_arg(args.symbols, args.symbols_file)),
+            max_symbols=args.max_symbols,
+            download_workers=args.download_workers,
+            timeout_seconds=args.timeout,
+            connect_timeout_seconds=args.connect_timeout,
+            retries=args.retries,
+            overwrite=args.overwrite,
+            oi_join_strategy=args.oi_join_strategy,
+            request_sleep_seconds=args.request_sleep,
+        )
+        stats = build_binance_vision_cache(config)
+        written = sum(1 for item in stats if item.rows_written > 0)
+        skipped_existing = sum(1 for item in stats if item.rows_written == -1)
+        print(f"binance vision cache done: written={written}, skipped_existing={skipped_existing}, out={config.out_dir}")
+        return 0
+
+    if args.command == "build-binance-vision-cache":
+        from anomaly_science.binance_vision_cache import (
+            DEFAULT_MARKET_CACHE_DIR,
+            CacheConfig,
+            build_binance_vision_cache,
+            parse_optional_date,
+            read_symbols_arg,
+        )
+
+        config = CacheConfig(
+            out_dir=DEFAULT_MARKET_CACHE_DIR,
             days=args.days,
             end_date=parse_optional_date(args.end_date),
             symbols=tuple(read_symbols_arg(args.symbols, args.symbols_file)),
