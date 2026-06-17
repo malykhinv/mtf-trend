@@ -42,6 +42,12 @@ MVP1 descriptive future-nature outcome labels:
 python main.py run-mvp1-labels --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_labels
 ```
 
+MVP1 daily prequential calibrated baseline prediction:
+
+```bash
+python main.py run-mvp1-prediction --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_prediction
+```
+
 Compile check:
 
 ```bash

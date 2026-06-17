@@ -9,6 +9,7 @@ from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.events import run_mvp1_events
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
+from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
 from anomaly_science.state import run_mvp1_state
 
 
@@ -73,6 +74,21 @@ def build_parser() -> argparse.ArgumentParser:
     labels.add_argument("--future", required=True, help="Path to anomaly_future_paths.csv from run-mvp1-future.")
     labels.add_argument("--out", required=True, help="Directory where outcome label artifacts will be written.")
 
+    prediction = subparsers.add_parser(
+        "run-mvp1-prediction",
+        help="Run MVP1 daily prequential calibrated baseline prediction from state and outcome labels.",
+    )
+    prediction.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
+    prediction.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
+    prediction.add_argument("--out", required=True, help="Directory where prediction artifacts will be written.")
+    prediction.add_argument(
+        "--horizon-minutes",
+        type=int,
+        default=30,
+        choices=(15, 30, 60),
+        help="Descriptive scenario horizon to predict. Default: 30.",
+    )
+
     return parser
 
 
@@ -112,6 +128,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-mvp1-labels":
         output_dir = run_mvp1_labels(state_path=Path(args.state), future_path=Path(args.future), out_dir=Path(args.out))
         print(f"mvp1 outcome label artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-prediction":
+        config = WalkForwardPredictionConfig(target_horizon_minutes=args.horizon_minutes)
+        output_dir = run_mvp1_prediction(
+            state_path=Path(args.state),
+            labels_path=Path(args.labels),
+            out_dir=Path(args.out),
+            config=config,
+        )
+        print(f"mvp1 walk-forward prediction artifacts written: {output_dir}")
         return 0
 
     parser.print_help()

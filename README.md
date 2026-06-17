@@ -9,7 +9,7 @@ Current target:
 ```text
 MVP 1 — data quality, broad anomaly detector, online 1m state, future paths, protocol audit.
 MVP 2 atlas slice — descriptive anomaly nature atlas over MVP1 state/future artifacts.
-MVP 3 label kernel slice — descriptive future-nature scenario labels for later OOS prediction.
+MVP 3 label/prediction slice — descriptive future-nature scenario labels and first daily prequential calibrated baseline prediction.
 ```
 
 The project does not currently define a live trading strategy. Trading simulation and live execution come only after calibrated prediction, decision timing and EV checks.
@@ -25,6 +25,7 @@ python main.py run-mvp1-state --input tests/fixtures/minimal_market_data --event
 python main.py run-mvp1-future --input tests/fixtures/minimal_market_data --state tmp/mvp1_state/anomaly_state_1m.csv --out tmp/mvp1_future
 python main.py run-mvp1-atlas --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_atlas
 python main.py run-mvp1-labels --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_labels
+python main.py run-mvp1-prediction --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_prediction
 ```
 
 `run-mvp1-state` builds `anomaly_state_1m.csv` from normalized closed 1m candles and a strict `anomaly_events.csv` artifact boundary. It updates state only at times greater than or equal to `event_detection_time_ms`, and state features use only candles with `available_time_ms <= state_time_ms`.
@@ -42,4 +43,12 @@ Atlas grouping uses state-only as-of fields. Coarse 30m response bins are descri
 
 `run-mvp1-labels` reads the same state/future artifacts through strict boundaries, joins them one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`, and writes `anomaly_outcome_labels.csv` with `scenario_15m`, `scenario_30m`, and `scenario_60m`. Scenario values are descriptive future-nature targets for later walk-forward prediction calibration: `long_continuation`, `short_fade`, `static_or_chop`, `trap`, `unclear`, or explicit `missing_future`. State rows are used only for join and temporal audit; scenario assignment uses raw future path fields only.
 
-This stage still does not build ML, calibrated probabilities, PnL, trade simulation, shadow live, or production live.
+`run-mvp1-prediction` reads `anomaly_state_1m.csv` and `anomaly_outcome_labels.csv` through strict boundaries, then runs a daily prequential walk-forward calibrated baseline. Each test day is predicted only from earlier rows after purging the configured horizon, and the model uses state-only bins from `anomaly_state_1m.csv`. It writes:
+
+- `anomaly_oos_predictions.csv`
+- `anomaly_calibration.csv`
+- `anomaly_prediction_metrics.csv`
+
+The baseline is an empirical calibrated frequency model over state bins, not trading logic. It estimates scenario probabilities for scientific predictability checks only.
+
+This stage still does not build entry logic, EV, PnL, trade simulation, shadow live, or production live.
