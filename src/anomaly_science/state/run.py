@@ -7,6 +7,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.source import CsvDirectoryDataSource
 from anomaly_science.state.builder import (
     build_online_anomaly_state_1m_from_source,
@@ -73,7 +74,7 @@ def run_mvp1_state(
 
 
 def _protocol_rows(*, event_count: int, state_row_count: int) -> list[ProtocolAuditRow]:
-    return [
+    base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_state_scope",
             status=AuditStatus.PASS,
@@ -109,6 +110,7 @@ def _protocol_rows(*, event_count: int, state_row_count: int) -> list[ProtocolAu
             message="mvp1 state uses anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
+    return base_rows + build_methodology_v2_audit_rows(stage="mvp1_state")
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

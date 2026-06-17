@@ -8,6 +8,7 @@ class AuditStatus(str, Enum):
     PASS = "PASS"
     WARN = "WARN"
     FAIL = "FAIL"
+    NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
 
 
 @dataclass(frozen=True, slots=True)

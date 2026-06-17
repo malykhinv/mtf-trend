@@ -9,6 +9,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, run_data_quality
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
@@ -115,7 +116,7 @@ def _protocol_rows(
     event_error: str | None,
     technical_noise_shock_count: int,
 ) -> list[ProtocolAuditRow]:
-    rows = [
+    base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_events_scope",
             status=AuditStatus.PASS,
@@ -144,18 +145,29 @@ def _protocol_rows(
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
-            check_name="technical_noise_shock_excluded_from_broad_detector",
-            status=AuditStatus.PASS,
-            message=f"excluded {technical_noise_shock_count} first candles after raw timestamp gaps > 3 minutes from broad detector candidates and baselines",
-            artifact="anomaly_events.csv",
-        ),
-        ProtocolAuditRow(
             check_name="legacy_import_boundary",
             status=AuditStatus.PASS,
             message="mvp1 events uses anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
-    return rows
+    implemented_methodology_rows = [
+        ProtocolAuditRow(
+            check_name="technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
+            status=AuditStatus.PASS,
+            message="candles_1m data-quality audit marks first candles after raw timestamp gaps > 3 minutes as technical_noise_shock rows",
+            artifact="anomaly_data_quality.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="technical_noise_shock_excluded_from_broad_detector",
+            status=AuditStatus.PASS,
+            message=f"excluded {technical_noise_shock_count} first candles after raw timestamp gaps > 3 minutes from broad detector candidates and baselines",
+            artifact="anomaly_events.csv",
+        ),
+    ]
+    return base_rows + build_methodology_v2_audit_rows(
+        stage="mvp1_events",
+        implemented=implemented_methodology_rows,
+    )
 
 
 

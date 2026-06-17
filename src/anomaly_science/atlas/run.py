@@ -16,6 +16,7 @@ from anomaly_science.atlas.builder import (
 from anomaly_science.atlas.config import AtlasConfig
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.audit import build_methodology_v2_audit_rows
 
 
 def run_mvp1_atlas(
@@ -91,7 +92,7 @@ def run_mvp1_atlas(
 
 
 def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> list[ProtocolAuditRow]:
-    return [
+    base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_atlas_scope",
             status=AuditStatus.PASS,
@@ -139,6 +140,7 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> li
             message="mvp1 atlas uses anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
+    return base_rows + build_methodology_v2_audit_rows(stage="mvp1_atlas")
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

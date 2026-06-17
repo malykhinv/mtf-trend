@@ -7,6 +7,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.controls.builder import (
     baseline_comparison_rows_to_artifact,
     build_baseline_comparison_rows,
@@ -77,7 +78,7 @@ def run_mvp1_controls(
 
 
 def _protocol_rows(*, input_row_count: int, placebo_count: int, baseline_count: int, config: ControlsConfig) -> list[ProtocolAuditRow]:
-    return [
+    base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_controls_scope",
             status=AuditStatus.PASS,
@@ -125,6 +126,7 @@ def _protocol_rows(*, input_row_count: int, placebo_count: int, baseline_count: 
             message="mvp1 controls use anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
+    return base_rows + build_methodology_v2_audit_rows(stage="mvp1_controls")
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

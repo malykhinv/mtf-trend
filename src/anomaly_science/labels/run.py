@@ -7,6 +7,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.labels.builder import (
     build_anomaly_outcome_labels_from_inputs,
     load_outcome_label_inputs,
@@ -67,7 +68,7 @@ def run_mvp1_labels(
 
 
 def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[ProtocolAuditRow]:
-    return [
+    base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_labels_scope",
             status=AuditStatus.PASS,
@@ -115,6 +116,30 @@ def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[Protoc
             message="mvp1 labels use anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
+    implemented_methodology_rows = [
+        ProtocolAuditRow(
+            check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
+            status=AuditStatus.PASS,
+            message="labels consume ATR_1d_asof_t from future paths, which is computed strictly as-of snapshot_time_ms",
+            artifact="anomaly_outcome_labels.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="fixed_percent_labels_forbidden",
+            status=AuditStatus.PASS,
+            message="OutcomeLabelConfig exposes only ATR-unit thresholds k_continuation, k_fade, and k_chop; fixed-percent label thresholds are not part of the label schema",
+            artifact="anomaly_outcome_labels.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
+            status=AuditStatus.PASS,
+            message="label builder maps stop_loss_first double-barrier rows to unclear and never credits a profit-label for same-candle target/stop collisions",
+            artifact="anomaly_outcome_labels.csv",
+        ),
+    ]
+    return base_rows + build_methodology_v2_audit_rows(
+        stage="mvp1_labels",
+        implemented=implemented_methodology_rows,
+    )
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

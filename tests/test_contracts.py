@@ -246,3 +246,36 @@ def test_temporal_audit_reports_failures_without_throwing() -> None:
     result = audit_temporal_contract(rows)
 
     assert [row.status for row in result] == [AuditStatus.PASS, AuditStatus.FAIL]
+
+
+def test_methodology_v2_audit_rows_emit_not_implemented_for_missing_checks() -> None:
+    from anomaly_science.audit import METHODOLOGY_V2_REQUIRED_CHECKS, build_methodology_v2_audit_rows
+    from anomaly_science.contracts.audit import ProtocolAuditRow
+
+    rows = build_methodology_v2_audit_rows(
+        stage="unit_test_stage",
+        implemented=[
+            ProtocolAuditRow(
+                check_name="fixed_percent_labels_forbidden",
+                status=AuditStatus.PASS,
+                message="fixed-percent labels are not available",
+            )
+        ],
+    )
+
+    by_name = {row.check_name: row for row in rows}
+    assert tuple(by_name) == METHODOLOGY_V2_REQUIRED_CHECKS
+    assert by_name["fixed_percent_labels_forbidden"].status == AuditStatus.PASS
+    assert by_name["weekly_walk_forward_heavy_models_enforced"].status == AuditStatus.NOT_IMPLEMENTED
+    assert "unit_test_stage" in by_name["weekly_walk_forward_heavy_models_enforced"].message
+
+
+def test_methodology_v2_audit_rejects_unknown_check_name() -> None:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+    from anomaly_science.contracts.audit import ProtocolAuditRow
+
+    with pytest.raises(ValueError, match="unknown methodology-v2 check"):
+        build_methodology_v2_audit_rows(
+            stage="unit_test_stage",
+            implemented=[ProtocolAuditRow(check_name="not_a_contract_check", status=AuditStatus.PASS, message="bad")],
+        )

@@ -7,6 +7,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.source import CsvDirectoryDataSource
 from anomaly_science.future.builder import (
     build_anomaly_future_paths_from_source,
@@ -73,7 +74,7 @@ def run_mvp1_future(
 
 
 def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[ProtocolAuditRow]:
-    return [
+    base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_future_scope",
             status=AuditStatus.PASS,
@@ -115,6 +116,24 @@ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[Proto
             message="mvp1 future paths use anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
+    implemented_methodology_rows = [
+        ProtocolAuditRow(
+            check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
+            status=AuditStatus.PASS,
+            message="future path builder computes ATR_1d_asof_t from the last 1440 true ranges using closed 1m candles available <= snapshot_time_ms",
+            artifact="anomaly_future_paths.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
+            status=AuditStatus.PASS,
+            message="future path builder marks same-1m target/stop barrier collisions as intracandle_double_barrier_hit with barrier_resolution=stop_loss_first",
+            artifact="anomaly_future_paths.csv",
+        ),
+    ]
+    return base_rows + build_methodology_v2_audit_rows(
+        stage="mvp1_future",
+        implemented=implemented_methodology_rows,
+    )
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:
