@@ -560,6 +560,25 @@ def read_klines(zip_bytes: bytes):
     frame = frame.rename(rename_map)
     if "open_time" not in frame.columns:
         raise ValueError("kline CSV has no open_time column")
+    taker_buy_base_column = first_existing_column(
+        frame.columns,
+        (
+            "taker_buy_base_volume",
+            "taker_buy_volume",
+            "taker_buy_base_asset_volume",
+        ),
+    )
+    taker_buy_quote_column = first_existing_column(
+        frame.columns,
+        (
+            "taker_buy_quote_volume",
+            "taker_buy_quote_asset_volume",
+        ),
+    )
+    if taker_buy_base_column is None:
+        raise ValueError(f"kline CSV has no taker buy base volume column: {frame.columns}")
+    if taker_buy_quote_column is None:
+        raise ValueError(f"kline CSV has no taker buy quote volume column: {frame.columns}")
     selected = frame.select(
         normalize_timestamp_expr("open_time").alias("timestamp"),
         pl.col("open").cast(pl.Float64),
@@ -567,8 +586,8 @@ def read_klines(zip_bytes: bytes):
         pl.col("low").cast(pl.Float64),
         pl.col("close").cast(pl.Float64),
         pl.col("volume").cast(pl.Float64),
-        pl.col("taker_buy_base_volume").cast(pl.Float64),
-        pl.col("taker_buy_quote_volume").cast(pl.Float64),
+        pl.col(taker_buy_base_column).cast(pl.Float64).alias("taker_buy_base_volume"),
+        pl.col(taker_buy_quote_column).cast(pl.Float64).alias("taker_buy_quote_volume"),
     )
     return selected.unique(subset=["timestamp"], keep="last").sort("timestamp")
 
