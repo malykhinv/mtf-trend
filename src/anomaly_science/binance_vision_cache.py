@@ -813,14 +813,14 @@ def read_klines(zip_bytes: bytes):
         raise ValueError(f"kline CSV has no taker buy quote volume column: {frame.columns}")
     selected = frame.select(
         normalize_timestamp_expr("open_time").alias("timestamp"),
-        pl.col("open").cast(pl.Float64),
-        pl.col("high").cast(pl.Float64),
-        pl.col("low").cast(pl.Float64),
-        pl.col("close").cast(pl.Float64),
-        pl.col("volume").cast(pl.Float64),
-        pl.col(taker_buy_base_column).cast(pl.Float64).alias("taker_buy_base_volume"),
-        pl.col(taker_buy_quote_column).cast(pl.Float64).alias("taker_buy_quote_volume"),
-    )
+        pl.col("open").cast(pl.Float64, strict=False),
+        pl.col("high").cast(pl.Float64, strict=False),
+        pl.col("low").cast(pl.Float64, strict=False),
+        pl.col("close").cast(pl.Float64, strict=False),
+        pl.col("volume").cast(pl.Float64, strict=False),
+        pl.col(taker_buy_base_column).cast(pl.Float64, strict=False).alias("taker_buy_base_volume"),
+        pl.col(taker_buy_quote_column).cast(pl.Float64, strict=False).alias("taker_buy_quote_volume"),
+    ).drop_nulls(subset=["timestamp", "open", "high", "low", "close"])
     return selected.unique(subset=["timestamp"], keep="last").sort("timestamp")
 
 
@@ -845,7 +845,7 @@ def read_metrics(zip_bytes: bytes | None):
     return (
         frame.select(
             normalize_timestamp_expr(time_column).alias("timestamp"),
-            pl.col(oi_column).cast(pl.Float64).alias("open_interest"),
+            pl.col(oi_column).cast(pl.Float64, strict=False).alias("open_interest"),
         )
         .drop_nulls(subset=["timestamp"])
         .unique(subset=["timestamp"], keep="last")
@@ -880,7 +880,7 @@ def read_liquidations(zip_bytes: bytes | None):
     normalized = frame.select(
         ((normalize_timestamp_expr(time_column) // ONE_MINUTE_MS) * ONE_MINUTE_MS).alias("timestamp"),
         pl.col(side_column).cast(pl.Utf8).str.to_uppercase().alias("side"),
-        pl.col(qty_column).cast(pl.Float64).fill_null(0.0).alias("qty"),
+        pl.col(qty_column).cast(pl.Float64, strict=False).fill_null(0.0).alias("qty"),
     ).drop_nulls(subset=["timestamp", "side"])
 
     if normalized.height == 0:
@@ -941,12 +941,45 @@ def empty_liquidation_frame():
 def normalize_timestamp_expr(column: str):
     import polars as pl
 
-    expr = pl.col(column)
-    # Numeric milliseconds are the normal futures format. Microsecond timestamps are normalized defensively.
-    numeric = expr.cast(pl.Int64, strict=False)
-    parsed = expr.cast(pl.Utf8).str.strptime(pl.Datetime(time_unit="ms", time_zone="UTC"), strict=False).dt.timestamp("ms")
+    text = pl.col(column).cast(pl.Utf8, strict=False).str.strip_chars()
+    numeric = text.cast(pl.Int64, strict=False)
+    parsed = pl.coalesce(
+        [
+            text.str.strptime(
+                pl.Datetime(time_unit="ms", time_zone="UTC"),
+                format="%Y-%m-%d %H:%M:%S%.f",
+                strict=False,
+            ).dt.timestamp("ms"),
+            text.str.strptime(
+                pl.Datetime(time_unit="ms", time_zone="UTC"),
+                format="%Y-%m-%d %H:%M:%S",
+                strict=False,
+            ).dt.timestamp("ms"),
+            text.str.strptime(
+                pl.Datetime(time_unit="ms", time_zone="UTC"),
+                format="%Y-%m-%dT%H:%M:%S%.fZ",
+                strict=False,
+            ).dt.timestamp("ms"),
+            text.str.strptime(
+                pl.Datetime(time_unit="ms", time_zone="UTC"),
+                format="%Y-%m-%dT%H:%M:%SZ",
+                strict=False,
+            ).dt.timestamp("ms"),
+        ]
+    )
     timestamp = pl.coalesce([numeric, parsed])
-    return pl.when(timestamp > 10_000_000_000_000).then(timestamp // 1000).otherwise(timestamp).cast(pl.Int64)
+    return (
+        pl.when(timestamp.is_null())
+        .then(pl.lit(None, dtype=pl.Int64))
+        .when(timestamp > 1_000_000_000_000_000)
+        .then(timestamp // 1_000_000)
+        .when(timestamp > 10_000_000_000_000)
+        .then(timestamp // 1000)
+        .when(timestamp < 100_000_000_000)
+        .then(timestamp * 1000)
+        .otherwise(timestamp)
+        .cast(pl.Int64)
+    )
 
 
 def first_csv_from_zip(zip_bytes: bytes) -> bytes:
