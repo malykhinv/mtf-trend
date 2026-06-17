@@ -683,7 +683,7 @@ def write_parquet_frame(*, path: Path, frame, compression: str) -> None:
 
     if frame.height == 0:
         return
-    table = frame.to_arrow()
+    table = normalize_output_arrow_table(frame.to_arrow())
     pq.write_table(
         table,
         where=path,
@@ -691,6 +691,51 @@ def write_parquet_frame(*, path: Path, frame, compression: str) -> None:
         use_dictionary=True,
         write_statistics=True,
     )
+
+
+def output_arrow_schema():
+    import pyarrow as pa
+
+    return pa.schema(
+        [
+            ("timestamp", pa.int64()),
+            ("open", pa.float32()),
+            ("high", pa.float32()),
+            ("low", pa.float32()),
+            ("close", pa.float32()),
+            ("volume", pa.float32()),
+            ("taker_buy_base_volume", pa.float32()),
+            ("taker_buy_quote_volume", pa.float32()),
+            ("open_interest", pa.float32()),
+            ("long_liquidations_vol", pa.float32()),
+            ("short_liquidations_vol", pa.float32()),
+            ("oi_available", pa.bool_()),
+            ("missing_oi_flag", pa.bool_()),
+            ("liquidation_available", pa.bool_()),
+            ("missing_liquidation_flag", pa.bool_()),
+        ]
+    )
+
+
+def normalize_output_arrow_table(table):
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    schema = output_arrow_schema()
+    arrays = []
+    for field in schema:
+        name = field.name
+        if name in table.column_names:
+            column = table.column(name)
+        elif name == "oi_available" and "open_interest" in table.column_names:
+            column = pc.invert(pc.is_null(table.column("open_interest")))
+        else:
+            column = pa.nulls(table.num_rows, type=field.type)
+
+        if not column.type.equals(field.type):
+            column = column.cast(field.type, safe=False)
+        arrays.append(column)
+    return pa.Table.from_arrays(arrays, schema=schema)
 
 
 def compact_symbol_parts(*, part_paths: list[Path], final_path: Path, compression: str) -> None:
@@ -702,15 +747,16 @@ def compact_symbol_parts(*, part_paths: list[Path], final_path: Path, compressio
     final_path.parent.mkdir(parents=True, exist_ok=True)
 
     writer: pq.ParquetWriter | None = None
+    schema = output_arrow_schema()
     try:
         for part_path in part_paths:
-            table = pq.read_table(part_path)
+            table = normalize_output_arrow_table(pq.read_table(part_path))
             if table.num_rows == 0:
                 continue
             if writer is None:
                 writer = pq.ParquetWriter(
                     where=tmp_path,
-                    schema=table.schema,
+                    schema=schema,
                     compression=compression,
                     use_dictionary=True,
                     write_statistics=True,
