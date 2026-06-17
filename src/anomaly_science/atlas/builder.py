@@ -5,9 +5,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import median
-from typing import Iterable, Mapping, Sequence
-
-import pandas as pd
+from typing import Iterable, Sequence
 
 from anomaly_science.atlas.config import AtlasConfig
 from anomaly_science.contracts.artifacts import get_artifact_schema
@@ -20,13 +18,19 @@ from anomaly_science.contracts.atlas import (
 from anomaly_science.contracts.future import FuturePathRow
 from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.state import AnomalyState1mRow
-from anomaly_science.future.builder import AnomalyStateArtifactError, load_anomaly_state_1m_csv
+from anomaly_science.future.builder import (
+    AnomalyFutureArtifactError,
+    AnomalyStateArtifactError,
+    load_anomaly_future_paths_csv,
+    load_anomaly_state_1m_csv,
+)
 
 TEMPORAL_CONTRACT_TEXT = "feature_cutoff_time_ms<=snapshot_time_ms<future_start_time_ms"
 
 
-class AnomalyFutureArtifactError(ValueError):
-    """Raised when anomaly_future_paths.csv violates its strict artifact boundary."""
+# Re-exported for callers that imported the strict future boundary from the atlas module in Patch 7.
+# The source of truth now lives in anomaly_science.future.builder because labels and later
+# prediction stages need the same artifact contract without depending on atlas.
 
 
 class AtlasInputError(ValueError):
@@ -47,56 +51,6 @@ class AtlasArtifacts:
     context_split_rows: tuple[AtlasContextSplitRow, ...]
     response_surface_rows: tuple[AtlasResponseSurfaceRow, ...]
     market_shock_group_rows: tuple[AtlasMarketShockGroupRow, ...]
-
-
-def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]:
-    """Read anomaly_future_paths.csv through the declared strict artifact schema."""
-    future_path = Path(path)
-    if not future_path.exists():
-        raise AnomalyFutureArtifactError(f"future artifact is missing: {future_path}")
-
-    frame = pd.read_csv(future_path)
-    schema = get_artifact_schema("anomaly_future_paths.csv")
-    expected_columns = list(schema.required_columns)
-    actual_columns = list(frame.columns)
-    if actual_columns != expected_columns:
-        raise AnomalyFutureArtifactError(
-            f"future artifact columns must match {expected_columns}, got {actual_columns}"
-        )
-
-    rows: list[FuturePathRow] = []
-    for row_index, row in frame.iterrows():
-        try:
-            rows.append(
-                FuturePathRow(
-                    event_id=_required_str(row, "event_id"),
-                    symbol=_required_str(row, "symbol"),
-                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
-                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
-                    future_start_time_ms=_required_int(row, "future_start_time_ms"),
-                    future_return_5m=_optional_float(row, "future_return_5m"),
-                    future_return_15m=_optional_float(row, "future_return_15m"),
-                    future_return_30m=_optional_float(row, "future_return_30m"),
-                    future_return_60m=_optional_float(row, "future_return_60m"),
-                    future_max_5m=_optional_float(row, "future_max_5m"),
-                    future_max_15m=_optional_float(row, "future_max_15m"),
-                    future_max_30m=_optional_float(row, "future_max_30m"),
-                    future_max_60m=_optional_float(row, "future_max_60m"),
-                    future_min_5m=_optional_float(row, "future_min_5m"),
-                    future_min_15m=_optional_float(row, "future_min_15m"),
-                    future_min_30m=_optional_float(row, "future_min_30m"),
-                    future_min_60m=_optional_float(row, "future_min_60m"),
-                    reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
-                    reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
-                    broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
-                    broke_structural_low_60m=_optional_bool(row, "broke_structural_low_60m"),
-                    time_to_new_high_minutes=_optional_int(row, "time_to_new_high_minutes"),
-                    time_to_structural_break_minutes=_optional_int(row, "time_to_structural_break_minutes"),
-                )
-            )
-        except (TypeError, ValueError) as exc:
-            raise AnomalyFutureArtifactError(f"invalid anomaly_future_paths.csv row {row_index}: {exc}") from exc
-    return tuple(rows)
 
 
 def load_atlas_inputs(
@@ -469,65 +423,6 @@ def _bool_rate(values: Iterable[bool | None]) -> float | None:
     if not clean:
         return None
     return sum(1 for value in clean if value) / len(clean)
-
-
-def _required_str(row: Mapping[str, object], name: str) -> str:
-    value = row[name]
-    if pd.isna(value):
-        raise ValueError(f"{name} is required")
-    result = str(value)
-    if not result:
-        raise ValueError(f"{name} is required")
-    return result
-
-
-def _required_int(row: Mapping[str, object], name: str) -> int:
-    value = row[name]
-    if pd.isna(value):
-        raise ValueError(f"{name} is required")
-    return int(value)
-
-
-def _optional_int(row: Mapping[str, object], name: str) -> int | None:
-    value = row[name]
-    if _is_missing(value):
-        return None
-    return int(value)
-
-
-def _optional_float(row: Mapping[str, object], name: str) -> float | None:
-    value = row[name]
-    if _is_missing(value):
-        return None
-    result = float(value)
-    if not math.isfinite(result):
-        raise ValueError(f"{name} must be finite when provided")
-    return result
-
-
-def _optional_bool(row: Mapping[str, object], name: str) -> bool | None:
-    value = row[name]
-    if _is_missing(value):
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
-    text = str(value).strip().lower()
-    if text in {"true", "1"}:
-        return True
-    if text in {"false", "0"}:
-        return False
-    raise ValueError(f"{name} must be a boolean when provided")
-
-
-def _is_missing(value: object) -> bool:
-    if value == "":
-        return True
-    try:
-        return bool(pd.isna(value))
-    except TypeError:
-        return False
 
 
 def _row_to_csv_payload(row: object) -> dict[str, object]:

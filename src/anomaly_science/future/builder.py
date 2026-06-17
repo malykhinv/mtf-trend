@@ -20,6 +20,10 @@ class AnomalyStateArtifactError(ValueError):
     """Raised when anomaly_state_1m.csv violates its strict artifact boundary."""
 
 
+class AnomalyFutureArtifactError(ValueError):
+    """Raised when anomaly_future_paths.csv violates its strict artifact boundary."""
+
+
 def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]:
     """Read anomaly_state_1m.csv through the declared MVP1 artifact schema.
 
@@ -68,6 +72,56 @@ def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]
             )
         except (TypeError, ValueError) as exc:
             raise AnomalyStateArtifactError(f"invalid anomaly_state_1m.csv row {row_index}: {exc}") from exc
+    return tuple(rows)
+
+
+def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]:
+    """Read anomaly_future_paths.csv through the declared MVP1 artifact schema."""
+    future_path = Path(path)
+    if not future_path.exists():
+        raise AnomalyFutureArtifactError(f"future artifact is missing: {future_path}")
+
+    frame = pd.read_csv(future_path)
+    schema = get_artifact_schema("anomaly_future_paths.csv")
+    expected_columns = list(schema.required_columns)
+    actual_columns = list(frame.columns)
+    if actual_columns != expected_columns:
+        raise AnomalyFutureArtifactError(
+            f"future artifact columns must match {expected_columns}, got {actual_columns}"
+        )
+
+    rows: list[FuturePathRow] = []
+    for row_index, row in frame.iterrows():
+        try:
+            rows.append(
+                FuturePathRow(
+                    event_id=_required_str(row, "event_id"),
+                    symbol=_required_str(row, "symbol"),
+                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+                    future_start_time_ms=_required_int(row, "future_start_time_ms"),
+                    future_return_5m=_optional_float(row, "future_return_5m"),
+                    future_return_15m=_optional_float(row, "future_return_15m"),
+                    future_return_30m=_optional_float(row, "future_return_30m"),
+                    future_return_60m=_optional_float(row, "future_return_60m"),
+                    future_max_5m=_optional_float(row, "future_max_5m"),
+                    future_max_15m=_optional_float(row, "future_max_15m"),
+                    future_max_30m=_optional_float(row, "future_max_30m"),
+                    future_max_60m=_optional_float(row, "future_max_60m"),
+                    future_min_5m=_optional_float(row, "future_min_5m"),
+                    future_min_15m=_optional_float(row, "future_min_15m"),
+                    future_min_30m=_optional_float(row, "future_min_30m"),
+                    future_min_60m=_optional_float(row, "future_min_60m"),
+                    reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
+                    reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
+                    broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
+                    broke_structural_low_60m=_optional_bool(row, "broke_structural_low_60m"),
+                    time_to_new_high_minutes=_optional_int(row, "time_to_new_high_minutes"),
+                    time_to_structural_break_minutes=_optional_int(row, "time_to_structural_break_minutes"),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise AnomalyFutureArtifactError(f"invalid anomaly_future_paths.csv row {row_index}: {exc}") from exc
     return tuple(rows)
 
 
@@ -279,7 +333,7 @@ def _required_float(row: Mapping[str, object], name: str) -> float:
 
 def _optional_float(row: Mapping[str, object], name: str) -> float | None:
     value = row[name]
-    if pd.isna(value) or value == "":
+    if _is_missing(value):
         return None
     result = float(value)
     if not math.isfinite(result):
@@ -287,11 +341,18 @@ def _optional_float(row: Mapping[str, object], name: str) -> float | None:
     return result
 
 
+def _optional_int(row: Mapping[str, object], name: str) -> int | None:
+    value = row[name]
+    if _is_missing(value):
+        return None
+    return int(value)
+
+
 def _required_bool(row: Mapping[str, object], name: str) -> bool:
     value = row[name]
     if isinstance(value, bool):
         return value
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     if isinstance(value, (int, float)) and value in (0, 1):
         return bool(value)
@@ -301,6 +362,31 @@ def _required_bool(row: Mapping[str, object], name: str) -> bool:
     if text in {"false", "0"}:
         return False
     raise ValueError(f"{name} must be a boolean")
+
+
+def _optional_bool(row: Mapping[str, object], name: str) -> bool | None:
+    value = row[name]
+    if _is_missing(value):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1"}:
+        return True
+    if text in {"false", "0"}:
+        return False
+    raise ValueError(f"{name} must be a boolean when provided")
+
+
+def _is_missing(value: object) -> bool:
+    if value == "":
+        return True
+    try:
+        return bool(pd.isna(value))
+    except TypeError:
+        return False
 
 
 def _csv_value(value: object) -> object:

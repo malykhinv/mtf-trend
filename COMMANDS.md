@@ -36,6 +36,12 @@ MVP1 descriptive anomaly atlas:
 python main.py run-mvp1-atlas --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_atlas
 ```
 
+MVP1 descriptive future-nature outcome labels:
+
+```bash
+python main.py run-mvp1-labels --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_labels
+```
+
 Compile check:
 
 ```bash

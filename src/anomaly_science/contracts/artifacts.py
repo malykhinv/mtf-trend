@@ -97,6 +97,27 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         ),
         description="Raw future paths strictly after each snapshot_time.",
     ),
+    "anomaly_outcome_labels.csv": ArtifactSchema(
+        name="anomaly_outcome_labels.csv",
+        stage="mvp1_labels",
+        required_columns=(
+            "label_policy_version",
+            "event_id",
+            "symbol",
+            "snapshot_time_ms",
+            "feature_cutoff_time_ms",
+            "future_start_time_ms",
+            "scenario_15m",
+            "scenario_30m",
+            "scenario_60m",
+            "label_available_15m",
+            "label_available_30m",
+            "label_available_60m",
+            "label_source",
+            "temporal_contract",
+        ),
+        description="MVP1 descriptive future-nature scenario labels derived only from raw future paths; not trading labels.",
+    ),
 
     "anomaly_nature_atlas.csv": ArtifactSchema(
         name="anomaly_nature_atlas.csv",

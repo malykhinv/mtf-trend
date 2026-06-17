@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+import math
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Iterable, Mapping, Sequence
+
+import pandas as pd
+
+from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.future import FuturePathRow
+from anomaly_science.contracts.labels import (
+    MISSING_FUTURE_SCENARIO,
+    TEMPORAL_LABEL_CONTRACT,
+    AnomalyOutcomeLabelRow,
+)
+from anomaly_science.contracts.market import MarketDataContractError
+from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.future import load_anomaly_future_paths_csv, load_anomaly_state_1m_csv
+from anomaly_science.labels.config import OutcomeLabelConfig
+
+
+class OutcomeLabelInputError(ValueError):
+    """Raised when state/future inputs cannot produce one-to-one outcome labels."""
+
+
+class OutcomeLabelArtifactError(ValueError):
+    """Raised when anomaly_outcome_labels.csv violates its strict artifact boundary."""
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeLabelInputRow:
+    state: AnomalyState1mRow
+    future: FuturePathRow
+
+
+def load_outcome_label_inputs(
+    *,
+    state_path: str | Path,
+    future_path: str | Path,
+) -> tuple[OutcomeLabelInputRow, ...]:
+    """Load state and future artifacts through strict schema boundaries."""
+    return build_outcome_label_inputs(
+        state_rows=load_anomaly_state_1m_csv(state_path),
+        future_rows=load_anomaly_future_paths_csv(future_path),
+    )
+
+
+def build_outcome_label_inputs(
+    *,
+    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
+) -> tuple[OutcomeLabelInputRow, ...]:
+    states = tuple(state_rows)
+    futures = tuple(future_rows)
+    state_by_key = _unique_by_join_key(states, artifact_name="anomaly_state_1m.csv")
+    future_by_key = _unique_by_join_key(futures, artifact_name="anomaly_future_paths.csv")
+
+    state_keys = set(state_by_key)
+    future_keys = set(future_by_key)
+    if state_keys != future_keys:
+        missing_future = sorted(state_keys - future_keys)[:5]
+        orphan_future = sorted(future_keys - state_keys)[:5]
+        raise OutcomeLabelInputError(
+            "state/future label join must be one-to-one on "
+            "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
+            f"missing_future={missing_future}, orphan_future={orphan_future}"
+        )
+
+    rows: list[OutcomeLabelInputRow] = []
+    for key in sorted(state_keys):
+        state = state_by_key[key]
+        future = future_by_key[key]
+        _enforce_label_temporal_contract(state=state, future=future)
+        rows.append(OutcomeLabelInputRow(state=state, future=future))
+    return tuple(rows)
+
+
+def build_anomaly_outcome_labels(
+    *,
+    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
+    config: OutcomeLabelConfig | None = None,
+) -> tuple[AnomalyOutcomeLabelRow, ...]:
+    inputs = build_outcome_label_inputs(state_rows=state_rows, future_rows=future_rows)
+    return build_anomaly_outcome_labels_from_inputs(inputs=inputs, config=config)
+
+
+def build_anomaly_outcome_labels_from_inputs(
+    *,
+    inputs: Sequence[OutcomeLabelInputRow] | Iterable[OutcomeLabelInputRow],
+    config: OutcomeLabelConfig | None = None,
+) -> tuple[AnomalyOutcomeLabelRow, ...]:
+    cfg = config or OutcomeLabelConfig()
+    rows: list[AnomalyOutcomeLabelRow] = []
+    for input_row in inputs:
+        future = input_row.future
+        scenario_15m = assign_future_nature_scenario(future=future, horizon_minutes=15, config=cfg)
+        scenario_30m = assign_future_nature_scenario(future=future, horizon_minutes=30, config=cfg)
+        scenario_60m = assign_future_nature_scenario(future=future, horizon_minutes=60, config=cfg)
+        rows.append(
+            AnomalyOutcomeLabelRow(
+                label_policy_version=cfg.label_policy_version,
+                event_id=future.event_id,
+                symbol=future.symbol,
+                snapshot_time_ms=future.snapshot_time_ms,
+                feature_cutoff_time_ms=future.feature_cutoff_time_ms,
+                future_start_time_ms=future.future_start_time_ms,
+                scenario_15m=scenario_15m,
+                scenario_30m=scenario_30m,
+                scenario_60m=scenario_60m,
+                label_available_15m=_label_available(scenario_15m),
+                label_available_30m=_label_available(scenario_30m),
+                label_available_60m=_label_available(scenario_60m),
+                label_source="raw_future_paths_only",
+                temporal_contract=TEMPORAL_LABEL_CONTRACT,
+            )
+        )
+    return tuple(rows)
+
+
+def assign_future_nature_scenario(
+    *,
+    future: FuturePathRow,
+    horizon_minutes: int,
+    config: OutcomeLabelConfig | None = None,
+) -> str:
+    """Assign a coarse future-nature scenario from raw future path fields only.
+
+    This is a scientific target for prediction calibration. It is not a trade
+    direction, not an entry rule, and not an EV/PnL optimization target.
+    """
+    cfg = config or OutcomeLabelConfig()
+    if horizon_minutes not in cfg.horizons_minutes:
+        raise ValueError(f"unsupported MVP1 label horizon: {horizon_minutes}")
+
+    future_return = _future_value(future=future, base_name="future_return", horizon_minutes=horizon_minutes)
+    future_max = _future_value(future=future, base_name="future_max", horizon_minutes=horizon_minutes)
+    future_min = _future_value(future=future, base_name="future_min", horizon_minutes=horizon_minutes)
+    if future_return is None or future_max is None or future_min is None:
+        return MISSING_FUTURE_SCENARIO
+
+    upside_extension = future_max >= cfg.continuation_move_threshold
+    downside_extension = future_min <= -cfg.fade_move_threshold
+    reclaimed_high = _reclaimed_running_high(future=future, horizon_minutes=horizon_minutes)
+    continuation_attempt = upside_extension or reclaimed_high is True
+
+    if continuation_attempt and downside_extension:
+        return "trap"
+    if continuation_attempt and future_return >= cfg.chop_return_threshold:
+        return "long_continuation"
+    if downside_extension and future_return <= -cfg.chop_return_threshold:
+        return "short_fade"
+    if abs(future_return) <= cfg.chop_return_threshold and not upside_extension and not downside_extension:
+        return "static_or_chop"
+    return "unclear"
+
+
+def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLabelRow, ...]:
+    """Read anomaly_outcome_labels.csv through the declared strict artifact schema."""
+    labels_path = Path(path)
+    if not labels_path.exists():
+        raise OutcomeLabelArtifactError(f"outcome labels artifact is missing: {labels_path}")
+
+    frame = pd.read_csv(labels_path)
+    schema = get_artifact_schema("anomaly_outcome_labels.csv")
+    expected_columns = list(schema.required_columns)
+    actual_columns = list(frame.columns)
+    if actual_columns != expected_columns:
+        raise OutcomeLabelArtifactError(
+            f"outcome labels artifact columns must match {expected_columns}, got {actual_columns}"
+        )
+
+    rows: list[AnomalyOutcomeLabelRow] = []
+    for row_index, row in frame.iterrows():
+        try:
+            rows.append(
+                AnomalyOutcomeLabelRow(
+                    label_policy_version=_required_str(row, "label_policy_version"),
+                    event_id=_required_str(row, "event_id"),
+                    symbol=_required_str(row, "symbol"),
+                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+                    future_start_time_ms=_required_int(row, "future_start_time_ms"),
+                    scenario_15m=_required_str(row, "scenario_15m"),
+                    scenario_30m=_required_str(row, "scenario_30m"),
+                    scenario_60m=_required_str(row, "scenario_60m"),
+                    label_available_15m=_required_bool(row, "label_available_15m"),
+                    label_available_30m=_required_bool(row, "label_available_30m"),
+                    label_available_60m=_required_bool(row, "label_available_60m"),
+                    label_source=_required_str(row, "label_source"),
+                    temporal_contract=_required_str(row, "temporal_contract"),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise OutcomeLabelArtifactError(f"invalid anomaly_outcome_labels.csv row {row_index}: {exc}") from exc
+    return tuple(rows)
+
+
+def outcome_label_rows_to_artifact(rows: Sequence[AnomalyOutcomeLabelRow]) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for row in rows:
+        payload = asdict(row)
+        result.append({key: _csv_value(value) for key, value in payload.items()})
+    return result
+
+
+def _future_value(*, future: FuturePathRow, base_name: str, horizon_minutes: int) -> float | None:
+    value = getattr(future, f"{base_name}_{horizon_minutes}m")
+    if value is not None and not math.isfinite(float(value)):
+        raise MarketDataContractError(f"{base_name}_{horizon_minutes}m must be finite when present")
+    return value
+
+
+def _reclaimed_running_high(*, future: FuturePathRow, horizon_minutes: int) -> bool | None:
+    if horizon_minutes == 30:
+        return future.reclaimed_running_high_30m
+    if horizon_minutes == 60:
+        return future.reclaimed_running_high_60m
+    return None
+
+
+def _label_available(scenario: str) -> bool:
+    return scenario != MISSING_FUTURE_SCENARIO
+
+
+def _unique_by_join_key(
+    rows: Iterable[AnomalyState1mRow] | Iterable[FuturePathRow],
+    *,
+    artifact_name: str,
+) -> dict[tuple[str, str, int, int], object]:
+    result: dict[tuple[str, str, int, int], object] = {}
+    for row in rows:
+        key = _join_key(row)
+        if key in result:
+            raise OutcomeLabelInputError(f"duplicate label join key in {artifact_name}: {key}")
+        result[key] = row
+    return result
+
+
+def _join_key(row: AnomalyState1mRow | FuturePathRow) -> tuple[str, str, int, int]:
+    return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
+
+
+def _enforce_label_temporal_contract(*, state: AnomalyState1mRow, future: FuturePathRow) -> None:
+    if state.snapshot_time_ms != future.snapshot_time_ms:
+        raise MarketDataContractError("label join requires equal state/future snapshot_time_ms")
+    if state.feature_cutoff_time_ms != future.feature_cutoff_time_ms:
+        raise MarketDataContractError("label join requires equal state/future feature_cutoff_time_ms")
+    if state.feature_cutoff_time_ms > state.snapshot_time_ms:
+        raise MarketDataContractError("label state feature_cutoff_time_ms must be <= snapshot_time_ms")
+    if future.feature_cutoff_time_ms > future.snapshot_time_ms:
+        raise MarketDataContractError("label future feature_cutoff_time_ms must be <= snapshot_time_ms")
+    if future.future_start_time_ms <= state.snapshot_time_ms:
+        raise MarketDataContractError("label future_start_time_ms must be > state snapshot_time_ms")
+
+
+def _required_str(row: Mapping[str, object], name: str) -> str:
+    value = row[name]
+    if pd.isna(value):
+        raise ValueError(f"{name} is required")
+    result = str(value)
+    if not result:
+        raise ValueError(f"{name} is required")
+    return result
+
+
+def _required_int(row: Mapping[str, object], name: str) -> int:
+    value = row[name]
+    if pd.isna(value):
+        raise ValueError(f"{name} is required")
+    return int(value)
+
+
+def _required_bool(row: Mapping[str, object], name: str) -> bool:
+    value = row[name]
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        raise ValueError(f"{name} is required")
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1"}:
+        return True
+    if text in {"false", "0"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def _csv_value(value: object) -> object:
+    return "" if value is None else value

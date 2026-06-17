@@ -8,6 +8,7 @@ from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.events import run_mvp1_events
 from anomaly_science.future import run_mvp1_future
+from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.state import run_mvp1_state
 
 
@@ -64,6 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
     atlas.add_argument("--future", required=True, help="Path to anomaly_future_paths.csv from run-mvp1-future.")
     atlas.add_argument("--out", required=True, help="Directory where atlas artifacts will be written.")
 
+    labels = subparsers.add_parser(
+        "run-mvp1-labels",
+        help="Build MVP1 descriptive future-nature scenario labels from state and raw future path artifacts.",
+    )
+    labels.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
+    labels.add_argument("--future", required=True, help="Path to anomaly_future_paths.csv from run-mvp1-future.")
+    labels.add_argument("--out", required=True, help="Directory where outcome label artifacts will be written.")
+
     return parser
 
 
@@ -98,6 +107,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-mvp1-atlas":
         output_dir = run_mvp1_atlas(state_path=Path(args.state), future_path=Path(args.future), out_dir=Path(args.out))
         print(f"mvp1 anomaly atlas artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-labels":
+        output_dir = run_mvp1_labels(state_path=Path(args.state), future_path=Path(args.future), out_dir=Path(args.out))
+        print(f"mvp1 outcome label artifacts written: {output_dir}")
         return 0
 
     parser.print_help()

@@ -6,12 +6,14 @@ from .audit import AuditStatus, DataQualityRow, ProtocolAuditRow, RunConfigRow
 from .events import AnomalyEvent
 from .features import FeatureCatalogRow, FeatureFamily
 from .future import FuturePathRow
+from .labels import AnomalyOutcomeLabelRow
 from .market import Candle1m, Candle5m, LiquidationEvent, OpenInterest5m, SymbolDayUniverseRow
 from .state import AnomalyState1mRow
 from .time import SnapshotTiming, TemporalContractError, datetime_to_utc_ms, utc_ms_to_datetime
 
 __all__ = [
     "AnomalyEvent",
+    "AnomalyOutcomeLabelRow",
     "AnomalyState1mRow",
     "ArtifactSchema",
     "AtlasContextSplitRow",
