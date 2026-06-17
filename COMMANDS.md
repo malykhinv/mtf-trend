@@ -12,6 +12,12 @@ MVP1 data audit:
 python main.py run-mvp1-data-audit --input tests/fixtures/minimal_market_data --out tmp/mvp1_audit
 ```
 
+MVP1 broad anomaly events:
+
+```bash
+python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out tmp/mvp1_events
+```
+
 Compile check:
 
 ```bash

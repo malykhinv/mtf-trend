@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import hashlib
+import math
+from dataclasses import asdict
+from statistics import fmean, pstdev
+from typing import Iterable, Sequence
+
+from anomaly_science.contracts.events import AnomalyEvent
+from anomaly_science.contracts.market import Candle1m
+from anomaly_science.events.config import BroadAnomalyDetectorConfig
+
+ONE_MINUTE_MS = 60_000
+
+
+def detect_broad_anomaly_events(
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    *,
+    config: BroadAnomalyDetectorConfig | None = None,
+) -> tuple[AnomalyEvent, ...]:
+    """Detect broad 1m anomaly events from closed candles only.
+
+    Every decision for a seed candle uses only earlier candles of the same symbol
+    plus the current closed seed candle. Future candles cannot affect an event's
+    event_id, detection time, or initial metrics.
+    """
+    cfg = config or BroadAnomalyDetectorConfig()
+    by_symbol: dict[str, list[Candle1m]] = {}
+    for candle in candles_1m:
+        by_symbol.setdefault(candle.symbol, []).append(candle)
+
+    events: list[AnomalyEvent] = []
+    for symbol in sorted(by_symbol):
+        rows = sorted(by_symbol[symbol], key=lambda item: item.open_time_ms)
+        last_event_start_ms: int | None = None
+        for index, candle in enumerate(rows):
+            baseline = rows[max(0, index - cfg.baseline_bars):index]
+            if len(baseline) < cfg.min_baseline_bars:
+                continue
+            if _in_cooldown(candle.open_time_ms, last_event_start_ms, cfg.cooldown_minutes):
+                continue
+
+            metrics = _seed_metrics(candle, baseline)
+            if not _is_broad_activity(metrics, cfg):
+                continue
+
+            event = AnomalyEvent(
+                event_id=_event_id(cfg.detector_version, candle.symbol, candle.open_time_ms),
+                symbol=candle.symbol,
+                event_start_time_ms=candle.open_time_ms,
+                event_detection_time_ms=candle.available_time_ms,
+                seed_time_ms=candle.open_time_ms,
+                seed_open=candle.open,
+                seed_high=candle.high,
+                seed_low=candle.low,
+                seed_close=candle.close,
+                initial_move_pct=metrics["move_pct"],
+                initial_volume_zscore=metrics["volume_zscore"],
+                initial_quote_volume_zscore=metrics["quote_volume_zscore"],
+                initial_trade_count_zscore=metrics["trade_count_zscore"],
+                detector_version=cfg.detector_version,
+            )
+            events.append(event)
+            last_event_start_ms = candle.open_time_ms
+    return tuple(events)
+
+
+def events_to_artifact(events: Sequence[AnomalyEvent]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for event in events:
+        payload = asdict(event)
+        rows.append({key: _csv_value(value) for key, value in payload.items()})
+    return rows
+
+
+def _seed_metrics(candle: Candle1m, baseline: Sequence[Candle1m]) -> dict[str, float | None]:
+    baseline_ranges = [_range_pct(item) for item in baseline]
+    return {
+        "move_pct": (candle.close / candle.open) - 1.0,
+        "range_pct": _range_pct(candle),
+        "volume_zscore": _zscore(candle.volume, [item.volume for item in baseline]),
+        "quote_volume_zscore": _zscore(candle.quote_volume, [item.quote_volume for item in baseline]),
+        "trade_count_zscore": _zscore(
+            candle.number_of_trades,
+            [item.number_of_trades for item in baseline if item.number_of_trades is not None],
+        ),
+        "range_zscore": _zscore(_range_pct(candle), baseline_ranges),
+    }
+
+
+def _is_broad_activity(metrics: dict[str, float | None], config: BroadAnomalyDetectorConfig) -> bool:
+    move_pct = metrics["move_pct"]
+    if move_pct is not None and abs(move_pct) >= config.min_abs_return_pct:
+        return True
+    return any(
+        _at_least(metrics[name], threshold)
+        for name, threshold in (
+            ("quote_volume_zscore", config.min_quote_volume_zscore),
+            ("volume_zscore", config.min_volume_zscore),
+            ("trade_count_zscore", config.min_trade_count_zscore),
+            ("range_zscore", config.min_range_zscore),
+        )
+    )
+
+
+def _range_pct(candle: Candle1m) -> float:
+    return (candle.high / candle.low) - 1.0
+
+
+def _zscore(value: float | int | None, baseline_values: Sequence[float | int | None]) -> float | None:
+    if value is None:
+        return None
+    values = [float(item) for item in baseline_values if item is not None and math.isfinite(float(item))]
+    if len(values) < 2:
+        return None
+    stdev = pstdev(values)
+    if stdev <= 0.0:
+        return None
+    return (float(value) - fmean(values)) / stdev
+
+
+def _at_least(value: float | None, threshold: float) -> bool:
+    return value is not None and value >= threshold
+
+
+def _in_cooldown(open_time_ms: int, last_event_start_ms: int | None, cooldown_minutes: int) -> bool:
+    if last_event_start_ms is None or cooldown_minutes <= 0:
+        return False
+    return open_time_ms - last_event_start_ms < cooldown_minutes * ONE_MINUTE_MS
+
+
+def _event_id(detector_version: str, symbol: str, seed_time_ms: int) -> str:
+    raw = f"{detector_version}|{symbol}|{seed_time_ms}".encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:16]
+    return f"evt_{digest}"
+
+
+def _csv_value(value: object) -> object:
+    return "" if value is None else value
