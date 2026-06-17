@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import io
 import os
@@ -38,6 +39,10 @@ OUTPUT_COLUMNS = [
     "open_interest",
     "long_liquidations_vol",
     "short_liquidations_vol",
+    "oi_available",
+    "missing_oi_flag",
+    "liquidation_available",
+    "missing_liquidation_flag",
 ]
 
 KLINE_RAW_COLUMNS = [
@@ -132,7 +137,7 @@ class CacheConfig:
     retries: int = 3
     overwrite: bool = False
     compression: str = "zstd"
-    oi_join_strategy: Literal["backward", "nearest"] = "backward"
+    oi_join_strategy: Literal["backward"] = "backward"
     request_sleep_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -148,8 +153,8 @@ class CacheConfig:
             raise ValueError("retries must be non-negative")
         if self.max_symbols is not None and self.max_symbols <= 0:
             raise ValueError("max_symbols must be positive when provided")
-        if self.oi_join_strategy not in {"backward", "nearest"}:
-            raise ValueError("oi_join_strategy must be 'backward' or 'nearest'")
+        if self.oi_join_strategy != "backward":
+            raise ValueError("oi_join_strategy must be 'backward'; nearest can leak future OI into past 1m candles")
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,12 +247,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overwrite", action="store_true", help="Rebuild symbols even if {symbol}.parquet already exists.")
     parser.add_argument(
         "--oi-join-strategy",
-        choices=("backward", "nearest"),
+        choices=("backward",),
         default="backward",
-        help=(
-            "How to align sparse metrics/OI to 1m candles. Default backward is research-safe; "
-            "nearest follows the literal nearest-sample rule but can leak future OI."
-        ),
+        help="Align sparse metrics/OI to 1m candles using only closed samples at or before each candle timestamp.",
     )
     parser.add_argument(
         "--request-sleep",
@@ -496,6 +498,8 @@ def build_symbol_cache(
                 block_last_oi=last_oi,
             )
             notify_block(f"{block.period}:{block.label}:missing-monthly")
+            del files
+            gc.collect()
             fallback_days = daily_blocks(block.start_date, min(block.end_date, end_date))
             symbol_blocks_total += len(fallback_days)
             for daily_block in fallback_days:
@@ -516,6 +520,8 @@ def build_symbol_cache(
                 block_last_oi=last_oi,
             )
             notify_block(f"{block.period}:{block.label}:missing")
+            del files
+            gc.collect()
             maybe_sleep(config.request_sleep_seconds)
             return
 
@@ -546,6 +552,8 @@ def build_symbol_cache(
                 block_last_oi=last_oi,
             )
             notify_block(f"{block.period}:{block.label}:empty")
+            del frame, files
+            gc.collect()
             maybe_sleep(config.request_sleep_seconds)
             return
 
@@ -573,6 +581,8 @@ def build_symbol_cache(
             block_last_oi=last_oi,
         )
         notify_block(f"{block.period}:{block.label}")
+        del frame, files
+        gc.collect()
         maybe_sleep(config.request_sleep_seconds)
 
     for block in blocks:
@@ -712,7 +722,7 @@ def process_block(
     start_date: date,
     end_date: date,
     last_oi: float | None,
-    oi_join_strategy: Literal["backward", "nearest"],
+    oi_join_strategy: Literal["backward"],
 ):
     import polars as pl
 
@@ -728,6 +738,9 @@ def process_block(
     if candles.height == 0:
         return empty_output_frame(), last_oi
 
+    if oi_join_strategy != "backward":
+        raise ValueError("oi_join_strategy must be 'backward'; nearest can leak future OI")
+
     metrics = read_metrics(files.metrics_zip) if files.metrics_zip is not None else empty_oi_frame()
     liquidations = read_liquidations(files.liquidations_zip) if files.liquidations_zip is not None else empty_liquidation_frame()
 
@@ -735,13 +748,23 @@ def process_block(
         metrics = metrics.filter(pl.col("timestamp") < end_exclusive_ms).sort("timestamp")
     candles = candles.sort("timestamp")
 
+    metrics_data_missing = files.metrics_zip is None or metrics.height == 0
+    liquidation_data_missing = files.liquidations_zip is None
+
     if metrics.height > 0:
-        joined = candles.join_asof(metrics, on="timestamp", strategy=oi_join_strategy)
+        # Research-safe as-of alignment: every 1m candle may only see the latest
+        # closed metrics/OI sample whose timestamp is <= the candle timestamp.
+        joined = candles.join_asof(metrics, on="timestamp", strategy="backward")
     else:
         joined = candles.with_columns(pl.lit(None, dtype=pl.Float64).alias("open_interest"))
 
-    fill_oi = 0.0 if last_oi is None else float(last_oi)
-    joined = joined.with_columns(pl.col("open_interest").fill_null(strategy="forward").fill_null(fill_oi))
+    oi_expr = pl.col("open_interest").fill_null(strategy="forward")
+    if last_oi is not None:
+        oi_expr = oi_expr.fill_null(float(last_oi))
+    joined = joined.with_columns(oi_expr.alias("open_interest")).with_columns(
+        pl.col("open_interest").is_not_null().alias("oi_available"),
+        (pl.lit(metrics_data_missing) | pl.col("open_interest").is_null()).alias("missing_oi_flag"),
+    )
 
     if liquidations.height > 0:
         joined = joined.join(liquidations, on="timestamp", how="left")
@@ -755,23 +778,30 @@ def process_block(
         joined.with_columns(
             pl.col("long_liquidations_vol").fill_null(0.0),
             pl.col("short_liquidations_vol").fill_null(0.0),
+            pl.lit(not liquidation_data_missing).alias("liquidation_available"),
+            pl.lit(liquidation_data_missing).alias("missing_liquidation_flag"),
         )
         .select(OUTPUT_COLUMNS)
         .with_columns(
             pl.col("timestamp").cast(pl.Int64),
-            pl.col("open").cast(pl.Float64),
-            pl.col("high").cast(pl.Float64),
-            pl.col("low").cast(pl.Float64),
-            pl.col("close").cast(pl.Float64),
-            pl.col("volume").cast(pl.Float64),
-            pl.col("taker_buy_base_volume").cast(pl.Float64),
-            pl.col("taker_buy_quote_volume").cast(pl.Float64),
-            pl.col("open_interest").cast(pl.Float64),
-            pl.col("long_liquidations_vol").cast(pl.Float64),
-            pl.col("short_liquidations_vol").cast(pl.Float64),
+            pl.col("open").cast(pl.Float32),
+            pl.col("high").cast(pl.Float32),
+            pl.col("low").cast(pl.Float32),
+            pl.col("close").cast(pl.Float32),
+            pl.col("volume").cast(pl.Float32),
+            pl.col("taker_buy_base_volume").cast(pl.Float32),
+            pl.col("taker_buy_quote_volume").cast(pl.Float32),
+            pl.col("open_interest").cast(pl.Float32),
+            pl.col("long_liquidations_vol").cast(pl.Float32),
+            pl.col("short_liquidations_vol").cast(pl.Float32),
+            pl.col("oi_available").cast(pl.Boolean),
+            pl.col("missing_oi_flag").cast(pl.Boolean),
+            pl.col("liquidation_available").cast(pl.Boolean),
+            pl.col("missing_liquidation_flag").cast(pl.Boolean),
         )
     )
-    next_last_oi = float(frame.select(pl.col("open_interest").last()).item()) if frame.height > 0 else last_oi
+    last_non_null_oi = frame.select(pl.col("open_interest").drop_nulls().last()).item() if frame.height > 0 else None
+    next_last_oi = float(last_non_null_oi) if last_non_null_oi is not None else last_oi
     return frame, next_last_oi
 
 
@@ -841,7 +871,7 @@ def read_metrics(zip_bytes: bytes | None):
     time_column = first_existing_column(frame.columns, TIME_COLUMN_CANDIDATES)
     oi_column = first_existing_column(frame.columns, OI_COLUMN_CANDIDATES)
     if time_column is None or oi_column is None:
-        return empty_oi_frame()
+        raise ValueError(f"metrics CSV has unsupported schema: {frame.columns}")
     return (
         frame.select(
             normalize_timestamp_expr(time_column).alias("timestamp"),
@@ -875,7 +905,7 @@ def read_liquidations(zip_bytes: bytes | None):
     side_column = first_existing_column(frame.columns, LIQ_SIDE_CANDIDATES)
     qty_column = first_existing_column(frame.columns, LIQ_QTY_CANDIDATES)
     if time_column is None or side_column is None or qty_column is None:
-        return empty_liquidation_frame()
+        raise ValueError(f"liquidation CSV has unsupported schema: {frame.columns}")
 
     normalized = frame.select(
         ((normalize_timestamp_expr(time_column) // ONE_MINUTE_MS) * ONE_MINUTE_MS).alias("timestamp"),
@@ -906,16 +936,20 @@ def empty_output_frame():
     return pl.DataFrame(
         schema={
             "timestamp": pl.Int64,
-            "open": pl.Float64,
-            "high": pl.Float64,
-            "low": pl.Float64,
-            "close": pl.Float64,
-            "volume": pl.Float64,
-            "taker_buy_base_volume": pl.Float64,
-            "taker_buy_quote_volume": pl.Float64,
-            "open_interest": pl.Float64,
-            "long_liquidations_vol": pl.Float64,
-            "short_liquidations_vol": pl.Float64,
+            "open": pl.Float32,
+            "high": pl.Float32,
+            "low": pl.Float32,
+            "close": pl.Float32,
+            "volume": pl.Float32,
+            "taker_buy_base_volume": pl.Float32,
+            "taker_buy_quote_volume": pl.Float32,
+            "open_interest": pl.Float32,
+            "long_liquidations_vol": pl.Float32,
+            "short_liquidations_vol": pl.Float32,
+            "oi_available": pl.Boolean,
+            "missing_oi_flag": pl.Boolean,
+            "liquidation_available": pl.Boolean,
+            "missing_liquidation_flag": pl.Boolean,
         }
     )
 
