@@ -136,11 +136,21 @@ def build_parser() -> argparse.ArgumentParser:
     cache.add_argument("--overwrite", action="store_true", help="Rebuild symbols even if {symbol}.parquet already exists.")
     cache.add_argument(
         "--oi-join-strategy",
-        choices=("backward", "nearest"),
+        choices=("backward",),
         default="backward",
-        help="Default backward is no-lookahead-safe; nearest is available only when explicitly requested.",
+        help="Align sparse metrics/OI using only closed samples at or before each candle timestamp.",
     )
     cache.add_argument("--request-sleep", type=float, default=0.0, help="Optional sleep after each processed block.")
+    cache.add_argument(
+        "--no-archive-file-index",
+        action="store_true",
+        help="Disable S3 file-index preflight and probe archives directly. Slower, but useful for diagnostics.",
+    )
+    cache.add_argument(
+        "--refresh-archive-file-index",
+        action="store_true",
+        help="Refresh cached Binance Vision file listings before processing each symbol.",
+    )
 
 
     return parser
@@ -233,6 +243,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             overwrite=args.overwrite,
             oi_join_strategy=args.oi_join_strategy,
             request_sleep_seconds=args.request_sleep,
+            use_archive_file_index=not args.no_archive_file_index,
+            refresh_archive_file_index=args.refresh_archive_file_index,
         )
         stats = build_binance_vision_cache(config)
         written = sum(1 for item in stats if item.rows_written > 0)

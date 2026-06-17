@@ -139,6 +139,8 @@ class CacheConfig:
     compression: str = "zstd"
     oi_join_strategy: Literal["backward"] = "backward"
     request_sleep_seconds: float = 0.0
+    use_archive_file_index: bool = True
+    refresh_archive_file_index: bool = False
 
     def __post_init__(self) -> None:
         if self.days <= 0:
@@ -167,6 +169,19 @@ class VisionBlock:
     @property
     def is_monthly(self) -> bool:
         return self.period == "monthly"
+
+
+ArchiveDataset = Literal["klines", "metrics", "liquidationSnapshot"]
+ArchivePeriod = Literal["monthly", "daily"]
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveFileIndex:
+    symbol: str
+    labels: dict[tuple[ArchivePeriod, ArchiveDataset], frozenset[str]]
+
+    def has(self, *, block: VisionBlock, dataset: ArchiveDataset) -> bool:
+        return block.label in self.labels.get((block.period, dataset), frozenset())
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +272,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Optional sleep after each block to be gentle to the public archive.",
     )
+    parser.add_argument(
+        "--no-archive-file-index",
+        action="store_true",
+        help="Disable S3 file-index preflight and probe archives directly. Slower, but useful for diagnostics.",
+    )
+    parser.add_argument(
+        "--refresh-archive-file-index",
+        action="store_true",
+        help="Refresh cached Binance Vision file listings before processing each symbol.",
+    )
     return parser
 
 
@@ -275,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
         overwrite=args.overwrite,
         oi_join_strategy=args.oi_join_strategy,
         request_sleep_seconds=args.request_sleep,
+        use_archive_file_index=not args.no_archive_file_index,
+        refresh_archive_file_index=args.refresh_archive_file_index,
     )
     build_binance_vision_cache(cfg)
     return 0
@@ -404,6 +431,15 @@ def build_symbol_cache(
     symbol_blocks_total = max(1, len(blocks))
     new_or_changed_parts = False
     completed_part_paths: list[Path] = []
+    archive_file_index: ArchiveFileIndex | None = None
+
+    def get_archive_file_index() -> ArchiveFileIndex | None:
+        nonlocal archive_file_index
+        if not config.use_archive_file_index:
+            return None
+        if archive_file_index is None:
+            archive_file_index = load_or_build_archive_file_index(symbol=symbol, config=config)
+        return archive_file_index
 
     def notify_block(label: str) -> None:
         nonlocal symbol_blocks_done, symbol_blocks_total
@@ -484,7 +520,7 @@ def build_symbol_cache(
         if reuse_completed_block(block, actual_start, actual_end):
             return
 
-        files = download_block_files(symbol=symbol, block=block, config=config)
+        files = download_block_files(symbol=symbol, block=block, config=config, archive_file_index=get_archive_file_index())
         if files.missing_required_klines and block.is_monthly:
             write_ledger_record(
                 block=block,
@@ -1076,17 +1112,36 @@ def first_existing_column(columns: Iterable[str], candidates: Iterable[str]) -> 
     return None
 
 
-def download_block_files(*, symbol: str, block: VisionBlock, config: CacheConfig) -> DownloadedBlockFiles:
-    urls = {
+def download_block_files(
+    *,
+    symbol: str,
+    block: VisionBlock,
+    config: CacheConfig,
+    archive_file_index: ArchiveFileIndex | None = None,
+) -> DownloadedBlockFiles:
+    if archive_file_index is not None and not archive_file_index.has(block=block, dataset="klines"):
+        return DownloadedBlockFiles(
+            klines_zip=None,
+            metrics_zip=None,
+            liquidations_zip=None,
+            missing_required_klines=True,
+        )
+
+    urls: dict[str, str] = {
         "klines_zip": make_archive_url(symbol=symbol, block=block, dataset="klines"),
-        "metrics_zip": make_archive_url(symbol=symbol, block=block, dataset="metrics"),
-        "liquidations_zip": make_archive_url(symbol=symbol, block=block, dataset="liquidationSnapshot"),
     }
-    results: dict[str, bytes | None] = {name: None for name in urls}
-    with ThreadPoolExecutor(max_workers=config.download_workers) as executor:
-        future_to_name = {
-            executor.submit(download_optional_bytes, url, config): name for name, url in urls.items()
-        }
+    if archive_file_index is None or archive_file_index.has(block=block, dataset="metrics"):
+        urls["metrics_zip"] = make_archive_url(symbol=symbol, block=block, dataset="metrics")
+    if archive_file_index is None or archive_file_index.has(block=block, dataset="liquidationSnapshot"):
+        urls["liquidations_zip"] = make_archive_url(symbol=symbol, block=block, dataset="liquidationSnapshot")
+
+    results: dict[str, bytes | None] = {
+        "klines_zip": None,
+        "metrics_zip": None,
+        "liquidations_zip": None,
+    }
+    with ThreadPoolExecutor(max_workers=min(config.download_workers, max(1, len(urls)))) as executor:
+        future_to_name = {executor.submit(download_optional_bytes, url, config): name for name, url in urls.items()}
         for future in as_completed(future_to_name):
             name = future_to_name[future]
             results[name] = future.result()
@@ -1132,6 +1187,86 @@ def make_archive_url(*, symbol: str, block: VisionBlock, dataset: Literal["kline
     return f"{BINANCE_VISION_BASE_URL}/{path}"
 
 
+def load_or_build_archive_file_index(*, symbol: str, config: CacheConfig) -> ArchiveFileIndex:
+    index_path = archive_file_index_path(config.out_dir, symbol)
+    if index_path.exists() and not config.refresh_archive_file_index:
+        return read_archive_file_index(index_path)
+    index = build_archive_file_index(symbol=symbol, config=config)
+    write_archive_file_index(index_path, index)
+    return index
+
+
+def archive_file_index_path(out_dir: Path, symbol: str) -> Path:
+    return cache_metadata_dir(out_dir) / "archive_file_index" / f"{symbol.upper()}.json"
+
+
+def build_archive_file_index(*, symbol: str, config: CacheConfig) -> ArchiveFileIndex:
+    labels: dict[tuple[ArchivePeriod, ArchiveDataset], frozenset[str]] = {}
+    for period in ("monthly", "daily"):
+        for dataset in ("klines", "metrics", "liquidationSnapshot"):
+            prefix = archive_dataset_prefix(symbol=symbol, period=period, dataset=dataset)
+            keys = list_s3_object_keys(prefix=prefix, config=config)
+            labels[(period, dataset)] = frozenset(
+                label
+                for label in (extract_archive_label_from_key(symbol=symbol, dataset=dataset, key=key) for key in keys)
+                if label
+            )
+    return ArchiveFileIndex(symbol=symbol.upper(), labels=labels)
+
+
+def write_archive_file_index(path: Path, index: ArchiveFileIndex) -> None:
+    payload = {
+        "symbol": index.symbol,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "labels": {
+            f"{period}:{dataset}": sorted(values)
+            for (period, dataset), values in index.labels.items()
+        },
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def read_archive_file_index(path: Path) -> ArchiveFileIndex:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    symbol = str(payload.get("symbol") or path.stem).upper()
+    raw_labels = payload.get("labels") or {}
+    labels: dict[tuple[ArchivePeriod, ArchiveDataset], frozenset[str]] = {}
+    for key, values in raw_labels.items():
+        period_raw, dataset_raw = key.split(":", 1)
+        if period_raw not in {"monthly", "daily"} or dataset_raw not in {"klines", "metrics", "liquidationSnapshot"}:
+            raise ValueError(f"unsupported archive index key in {path}: {key}")
+        period: ArchivePeriod = period_raw  # type: ignore[assignment]
+        dataset: ArchiveDataset = dataset_raw  # type: ignore[assignment]
+        labels[(period, dataset)] = frozenset(str(item) for item in values)
+    for period in ("monthly", "daily"):
+        for dataset in ("klines", "metrics", "liquidationSnapshot"):
+            labels.setdefault((period, dataset), frozenset())
+    return ArchiveFileIndex(symbol=symbol, labels=labels)
+
+
+def archive_dataset_prefix(*, symbol: str, period: ArchivePeriod, dataset: ArchiveDataset) -> str:
+    symbol = symbol.upper()
+    if dataset == "klines":
+        return f"data/futures/um/{period}/klines/{symbol}/1m/"
+    return f"data/futures/um/{period}/{dataset}/{symbol}/"
+
+
+def extract_archive_label_from_key(*, symbol: str, dataset: ArchiveDataset, key: str) -> str:
+    filename = key.rsplit("/", 1)[-1]
+    escaped_symbol = re.escape(symbol.upper())
+    if dataset == "klines":
+        pattern = rf"^{escaped_symbol}-1m-(?P<label>\d{{4}}-\d{{2}}(?:-\d{{2}})?)\.zip$"
+    elif dataset == "metrics":
+        pattern = rf"^{escaped_symbol}-metrics-(?P<label>\d{{4}}-\d{{2}}(?:-\d{{2}})?)\.zip$"
+    else:
+        pattern = rf"^{escaped_symbol}-liquidationSnapshot-(?P<label>\d{{4}}-\d{{2}}(?:-\d{{2}})?)\.zip$"
+    match = re.match(pattern, filename)
+    return match.group("label") if match else ""
+
+
 def discover_um_futures_symbols(config: CacheConfig) -> list[str]:
     prefixes = set()
     for root_prefix in ("data/futures/um/monthly/klines/", "data/futures/um/daily/klines/"):
@@ -1143,6 +1278,31 @@ def discover_um_futures_symbols(config: CacheConfig) -> list[str]:
         if symbol and symbol != "klines":
             symbols.append(symbol)
     return sorted(set(symbols))
+
+
+def list_s3_object_keys(*, prefix: str, config: CacheConfig) -> list[str]:
+    object_keys: list[str] = []
+    continuation_token: str | None = None
+    timeout = (config.connect_timeout_seconds, config.timeout_seconds)
+
+    while True:
+        params: dict[str, str] = {"list-type": "2", "prefix": prefix, "max-keys": "1000"}
+        if continuation_token:
+            params["continuation-token"] = continuation_token
+        try:
+            response = requests.get(S3_LIST_URL, params=params, timeout=timeout)
+            response.raise_for_status()
+            root = ElementTree.fromstring(response.content)
+        except (requests.RequestException, ElementTree.ParseError) as exc:
+            raise RuntimeError(f"failed to list Binance Vision archive prefix {prefix}: {exc}") from exc
+        namespace_match = re.match(r"\{.*\}", root.tag)
+        ns = namespace_match.group(0) if namespace_match else ""
+        object_keys.extend(element.text or "" for element in root.findall(f".//{ns}Contents/{ns}Key"))
+        is_truncated = (root.findtext(f"{ns}IsTruncated") or "false").lower() == "true"
+        continuation_token = root.findtext(f"{ns}NextContinuationToken")
+        if not is_truncated or not continuation_token:
+            break
+    return [item for item in object_keys if item]
 
 
 def list_s3_common_prefixes(prefix: str, config: CacheConfig) -> list[str]:
@@ -1409,6 +1569,9 @@ def write_manifest(
         "blocks_written": sum(item.blocks_written for item in stats),
         "compression": config.compression,
         "oi_join_strategy": config.oi_join_strategy,
+        "use_archive_file_index": config.use_archive_file_index,
+        "refresh_archive_file_index": config.refresh_archive_file_index,
+        "archive_file_index_dir": str(cache_metadata_dir(config.out_dir) / "archive_file_index"),
         "output_columns": OUTPUT_COLUMNS,
     }
     tmp_path = path.with_suffix(path.suffix + ".tmp")

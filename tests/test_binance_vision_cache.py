@@ -129,3 +129,99 @@ def test_present_metrics_with_unknown_schema_fail_instead_of_silent_empty_fallba
 
     with pytest.raises(ValueError, match="unsupported schema"):
         read_metrics(bad_metrics_zip)
+
+
+def test_archive_file_index_skips_missing_optional_archive_downloads(monkeypatch) -> None:
+    from anomaly_science import binance_vision_cache as cache
+    from anomaly_science.binance_vision_cache import ArchiveFileIndex, VisionBlock, download_block_files
+
+    block = VisionBlock(period="monthly", label="2025-09", start_date=date(2025, 9, 1), end_date=date(2025, 9, 30))
+    index = ArchiveFileIndex(
+        symbol="AAAUSDT",
+        labels={
+            ("monthly", "klines"): frozenset({"2025-09"}),
+            ("monthly", "metrics"): frozenset(),
+            ("monthly", "liquidationSnapshot"): frozenset(),
+            ("daily", "klines"): frozenset(),
+            ("daily", "metrics"): frozenset(),
+            ("daily", "liquidationSnapshot"): frozenset(),
+        },
+    )
+    urls: list[str] = []
+
+    def fake_download(url: str, config: CacheConfig) -> bytes | None:
+        urls.append(url)
+        return b"zip-bytes"
+
+    monkeypatch.setattr(cache, "download_optional_bytes", fake_download)
+
+    files = download_block_files(
+        symbol="AAAUSDT",
+        block=block,
+        config=CacheConfig(out_dir=Path(".cache"), download_workers=1),
+        archive_file_index=index,
+    )
+
+    assert files.klines_zip == b"zip-bytes"
+    assert files.metrics_zip is None
+    assert files.liquidations_zip is None
+    assert not files.missing_required_klines
+    assert len(urls) == 1
+    assert "/klines/AAAUSDT/1m/AAAUSDT-1m-2025-09.zip" in urls[0]
+
+
+def test_archive_file_index_skips_whole_block_when_klines_archive_is_missing(monkeypatch) -> None:
+    from anomaly_science import binance_vision_cache as cache
+    from anomaly_science.binance_vision_cache import ArchiveFileIndex, VisionBlock, download_block_files
+
+    block = VisionBlock(period="monthly", label="2025-09", start_date=date(2025, 9, 1), end_date=date(2025, 9, 30))
+    index = ArchiveFileIndex(
+        symbol="AAAUSDT",
+        labels={
+            ("monthly", "klines"): frozenset(),
+            ("monthly", "metrics"): frozenset({"2025-09"}),
+            ("monthly", "liquidationSnapshot"): frozenset({"2025-09"}),
+            ("daily", "klines"): frozenset(),
+            ("daily", "metrics"): frozenset(),
+            ("daily", "liquidationSnapshot"): frozenset(),
+        },
+    )
+
+    def fail_download(url: str, config: CacheConfig) -> bytes | None:  # pragma: no cover - should never run
+        raise AssertionError(f"unexpected download: {url}")
+
+    monkeypatch.setattr(cache, "download_optional_bytes", fail_download)
+
+    files = download_block_files(
+        symbol="AAAUSDT",
+        block=block,
+        config=CacheConfig(out_dir=Path(".cache"), download_workers=1),
+        archive_file_index=index,
+    )
+
+    assert files.klines_zip is None
+    assert files.metrics_zip is None
+    assert files.liquidations_zip is None
+    assert files.missing_required_klines
+
+
+def test_archive_file_index_roundtrip(tmp_path: Path) -> None:
+    from anomaly_science.binance_vision_cache import ArchiveFileIndex, read_archive_file_index, write_archive_file_index
+
+    path = tmp_path / "AAAUSDT.json"
+    index = ArchiveFileIndex(
+        symbol="AAAUSDT",
+        labels={
+            ("monthly", "klines"): frozenset({"2025-09"}),
+            ("monthly", "metrics"): frozenset({"2025-09"}),
+            ("monthly", "liquidationSnapshot"): frozenset(),
+            ("daily", "klines"): frozenset({"2025-10-01"}),
+            ("daily", "metrics"): frozenset(),
+            ("daily", "liquidationSnapshot"): frozenset({"2025-10-01"}),
+        },
+    )
+
+    write_archive_file_index(path, index)
+    loaded = read_archive_file_index(path)
+
+    assert loaded == index
