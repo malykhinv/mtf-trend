@@ -7,7 +7,7 @@ from pathlib import Path
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus
-from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
+from anomaly_science.contracts.market import Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.features import (
     FeatureMatrixConfig,
@@ -79,6 +79,118 @@ def test_feature_matrix_leaves_atr_features_null_without_fallback() -> None:
     assert row.feature_source_status == "insufficient_atr_history"
 
 
+
+def test_feature_matrix_materializes_volume_oi_liquidation_and_cvd_asof_only() -> None:
+    candles = list(_candles(count=1446, with_taker=True, varying_volume=True))
+    snapshot_time_ms = candles[-1].available_time_ms
+    state = _state(snapshot_time_ms=snapshot_time_ms, current_close=candles[-1].close)
+    future_liquidation = LiquidationEvent(
+        symbol="AAAUSDT",
+        event_time_ms=snapshot_time_ms + 1,
+        available_time_ms=snapshot_time_ms + 1,
+        side="short",
+        price=120.0,
+        quantity=1.0,
+        quote_quantity=10_000.0,
+        source="future",
+    )
+    open_interest = [
+        OpenInterest5m(
+            symbol="AAAUSDT",
+            timestamp_ms=snapshot_time_ms - 15 * ONE_MINUTE_MS,
+            available_time_ms=snapshot_time_ms - 10 * ONE_MINUTE_MS,
+            open_interest=1000.0,
+            source="fixture",
+        ),
+        OpenInterest5m(
+            symbol="AAAUSDT",
+            timestamp_ms=snapshot_time_ms - 10 * ONE_MINUTE_MS,
+            available_time_ms=snapshot_time_ms - 5 * ONE_MINUTE_MS,
+            open_interest=1100.0,
+            source="fixture",
+        ),
+        OpenInterest5m(
+            symbol="AAAUSDT",
+            timestamp_ms=snapshot_time_ms - 5 * ONE_MINUTE_MS,
+            available_time_ms=snapshot_time_ms,
+            open_interest=1210.0,
+            source="fixture",
+        ),
+        OpenInterest5m(
+            symbol="AAAUSDT",
+            timestamp_ms=snapshot_time_ms,
+            available_time_ms=snapshot_time_ms + 5 * ONE_MINUTE_MS,
+            open_interest=9999.0,
+            source="future",
+        ),
+    ]
+    liquidations = [
+        LiquidationEvent(
+            symbol="AAAUSDT",
+            event_time_ms=snapshot_time_ms - 30_000,
+            available_time_ms=snapshot_time_ms - 20_000,
+            side="short",
+            price=120.0,
+            quantity=1.0,
+            quote_quantity=20.0,
+            source="fixture",
+        ),
+        LiquidationEvent(
+            symbol="AAAUSDT",
+            event_time_ms=snapshot_time_ms - 10_000,
+            available_time_ms=snapshot_time_ms - 5_000,
+            side="long",
+            price=120.0,
+            quantity=1.0,
+            quote_quantity=5.0,
+            source="fixture",
+        ),
+        future_liquidation,
+    ]
+
+    row = build_price_time_feature_matrix(
+        candles_1m=candles,
+        state_rows=[state],
+        open_interest_5m=open_interest,
+        liquidations=liquidations,
+    )[0]
+
+    assert row.quote_volume_1m_to_24h_median is not None
+    assert row.volume_zscore is not None
+    assert row.quote_volume_zscore is not None
+    assert row.closed_5m_oi_asof_t == 1210.0
+    assert row.oi_change_5m == 110.0
+    assert row.oi_change_10m == 210.0
+    assert row.oi_change_5m_pct_of_oi == 110.0 / 1210.0
+    assert row.oi_change_10m_pct_of_oi == 210.0 / 1210.0
+    assert row.missing_oi_flag is False
+    assert row.short_liq_intensity == 20.0 / candles[-1].quote_volume
+    assert row.long_liq_intensity == 5.0 / candles[-1].quote_volume
+    assert row.liquidation_imbalance == (20.0 - 5.0) / 25.0
+    assert row.cumulative_liq_intensity_since_event_start is not None
+    assert row.missing_liquidation_flag is False
+    assert row.cvd_quote_since_event_start is not None
+    assert row.cvd_change_3m is not None
+    assert row.cvd_change_5m is not None
+    assert row.cvd_change_10m is not None
+    assert row.cvd_price_divergence_5m is not None
+    assert row.price_up_cvd_down_flag is True
+    assert row.price_down_cvd_up_flag is False
+
+
+def test_feature_matrix_marks_missing_optional_flow_sources_without_fallback() -> None:
+    candles = list(_candles(count=1442))
+    state = _state(snapshot_time_ms=candles[-1].available_time_ms, current_close=candles[-1].close)
+
+    row = build_price_time_feature_matrix(candles_1m=candles, state_rows=[state])[0]
+
+    assert row.missing_oi_flag is True
+    assert row.closed_5m_oi_asof_t is None
+    assert row.missing_liquidation_flag is True
+    assert row.short_liq_intensity is None
+    assert row.cvd_quote_since_event_start is None
+    assert row.price_up_cvd_down_flag is False
+
 def test_feature_matrix_artifact_schema_roundtrip() -> None:
     candles = list(_candles(count=1442))
     state = _state(snapshot_time_ms=candles[-1].available_time_ms, current_close=candles[-1].close)
@@ -136,10 +248,13 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
     assert audit_rows["ATR_1d_asof_t_computed_from_closed_past_candles"]["status"] == AuditStatus.PASS.value
 
 
-def _candles(*, count: int) -> tuple[Candle1m, ...]:
+def _candles(*, count: int, with_taker: bool = False, varying_volume: bool = False) -> tuple[Candle1m, ...]:
     rows: list[Candle1m] = []
     for index in range(count):
         open_price = 100.0 + index * 0.01
+        volume = 10.0 + (index % 17) if varying_volume else 10.0
+        quote_volume = volume * open_price
+        taker_buy_quote_volume = quote_volume * 0.4 if with_taker else None
         rows.append(
             Candle1m(
                 symbol="AAAUSDT",
@@ -149,8 +264,9 @@ def _candles(*, count: int) -> tuple[Candle1m, ...]:
                 high=open_price + 1.0,
                 low=open_price - 1.0,
                 close=open_price + 0.2,
-                volume=10.0,
-                quote_volume=10.0 * open_price,
+                volume=volume,
+                quote_volume=quote_volume,
+                taker_buy_quote_volume=taker_buy_quote_volume,
             )
         )
     return tuple(rows)
@@ -191,6 +307,7 @@ def _write_candles_csv(path: Path, candles: list[Candle1m]) -> None:
         "close",
         "volume",
         "quote_volume",
+        "taker_buy_quote_volume",
     ]
     with path.open("w", encoding="utf-8", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=fieldnames)

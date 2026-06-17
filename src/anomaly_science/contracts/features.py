@@ -103,6 +103,30 @@ class AnomalyFeatureMatrixRow:
     event_age_ratio: float
     alpha_decay_bucket: str
     feature_source_status: str
+    quote_volume_1m_to_24h_median: float | None = None
+    volume_zscore: float | None = None
+    quote_volume_zscore: float | None = None
+    closed_5m_oi_asof_t: float | None = None
+    oi_change_5m: float | None = None
+    oi_change_10m: float | None = None
+    oi_change_5m_pct_of_oi: float | None = None
+    oi_change_10m_pct_of_oi: float | None = None
+    missing_oi_flag: bool = True
+    short_liq_intensity: float | None = None
+    long_liq_intensity: float | None = None
+    liquidation_imbalance: float | None = None
+    cumulative_liq_intensity_since_event_start: float | None = None
+    missing_liquidation_flag: bool = True
+    cvd_quote_since_event_start: float | None = None
+    cvd_change_3m: float | None = None
+    cvd_change_5m: float | None = None
+    cvd_change_10m: float | None = None
+    cvd_price_divergence_3m: float | None = None
+    cvd_price_divergence_5m: float | None = None
+    cvd_price_divergence_10m: float | None = None
+    price_up_cvd_down_flag: bool = False
+    price_down_cvd_up_flag: bool = False
+    cvd_failed_to_confirm_high_flag: bool = False
 
     def __post_init__(self) -> None:
         if not self.feature_schema_version:
@@ -129,6 +153,25 @@ class AnomalyFeatureMatrixRow:
             "distance_to_running_low_atr",
             "retracement_from_high_atr",
             "price_speed_atr",
+            "quote_volume_1m_to_24h_median",
+            "volume_zscore",
+            "quote_volume_zscore",
+            "closed_5m_oi_asof_t",
+            "oi_change_5m",
+            "oi_change_10m",
+            "oi_change_5m_pct_of_oi",
+            "oi_change_10m_pct_of_oi",
+            "short_liq_intensity",
+            "long_liq_intensity",
+            "liquidation_imbalance",
+            "cumulative_liq_intensity_since_event_start",
+            "cvd_quote_since_event_start",
+            "cvd_change_3m",
+            "cvd_change_5m",
+            "cvd_change_10m",
+            "cvd_price_divergence_3m",
+            "cvd_price_divergence_5m",
+            "cvd_price_divergence_10m",
         ):
             value = getattr(self, field_name)
             if value is not None and not math.isfinite(value):
@@ -144,6 +187,11 @@ class AnomalyFeatureMatrixRow:
             "retracement_from_high_atr",
             "clock_maturity",
             "event_age_ratio",
+            "quote_volume_1m_to_24h_median",
+            "closed_5m_oi_asof_t",
+            "short_liq_intensity",
+            "long_liq_intensity",
+            "cumulative_liq_intensity_since_event_start",
         ):
             value = getattr(self, field_name)
             if value is not None and value < 0:
@@ -154,3 +202,5 @@ class AnomalyFeatureMatrixRow:
             raise MarketDataContractError("alpha_decay_bucket must be a pre-registered bucket")
         if not self.feature_source_status:
             raise MarketDataContractError("feature_source_status is required")
+        if self.liquidation_imbalance is not None and not -1.0 <= self.liquidation_imbalance <= 1.0:
+            raise MarketDataContractError("liquidation_imbalance must be inside [-1, 1]")

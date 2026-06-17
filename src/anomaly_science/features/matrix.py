@@ -1,37 +1,43 @@
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Sequence
 
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
-from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
+from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m
 from anomaly_science.contracts.state import AnomalyState1mRow
-from anomaly_science.data.normalized import normalize_candles_1m
+from anomaly_science.data.normalized import normalize_candles_1m, normalize_liquidations, normalize_open_interest_5m
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource, MarketDataSource
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION, build_default_feature_catalog, feature_rows_to_artifact
 from anomaly_science.features.config import FeatureMatrixConfig
 from anomaly_science.future.atr import AtrComputationError, compute_atr_1d_asof
 from anomaly_science.future.builder import load_anomaly_state_1m_csv
 
+EPS = 1e-12
+
 
 def build_price_time_feature_matrix(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
     state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    open_interest_5m: Sequence[OpenInterest5m] | Iterable[OpenInterest5m] | None = None,
+    liquidations: Sequence[LiquidationEvent] | Iterable[LiquidationEvent] | None = None,
     config: FeatureMatrixConfig | None = None,
 ) -> tuple[AnomalyFeatureMatrixRow, ...]:
-    """Build as-of price/time/alpha-decay features from state rows.
+    """Build as-of feature rows from state rows.
 
-    This builder deliberately does not read `anomaly_future_paths.csv`. ATR is
-    recomputed from normalized 1m candles through the strict as-of ATR engine so
-    the feature matrix has no dependency on future outcome artifacts.
+    This builder deliberately does not read `anomaly_future_paths.csv`. ATR and
+    all rolling/self-history features are recomputed from normalized market data
+    with `available_time_ms <= snapshot_time_ms`, so the feature matrix has no
+    dependency on future outcome artifacts.
     """
     cfg = config or FeatureMatrixConfig()
     candles_by_symbol: dict[str, list[Candle1m]] = {}
@@ -40,10 +46,36 @@ def build_price_time_feature_matrix(
     for symbol in candles_by_symbol:
         candles_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
 
+    oi_by_symbol: dict[str, list[OpenInterest5m]] | None = None
+    if open_interest_5m is not None:
+        oi_by_symbol = {}
+        for item in open_interest_5m:
+            oi_by_symbol.setdefault(item.symbol, []).append(item)
+        for symbol in oi_by_symbol:
+            oi_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.timestamp_ms))
+
+    liquidations_by_symbol: dict[str, list[LiquidationEvent]] | None = None
+    if liquidations is not None:
+        liquidations_by_symbol = {}
+        for item in liquidations:
+            liquidations_by_symbol.setdefault(item.symbol, []).append(item)
+        for symbol in liquidations_by_symbol:
+            liquidations_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.event_time_ms))
+
     rows: list[AnomalyFeatureMatrixRow] = []
     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
         symbol_candles = candles_by_symbol.get(state.symbol, [])
-        rows.append(_build_state_feature_row(state=state, candles=symbol_candles, config=cfg))
+        rows.append(
+            _build_state_feature_row(
+                state=state,
+                candles=symbol_candles,
+                open_interest_rows=None if oi_by_symbol is None else oi_by_symbol.get(state.symbol, []),
+                liquidation_rows=None
+                if liquidations_by_symbol is None
+                else liquidations_by_symbol.get(state.symbol, []),
+                config=cfg,
+            )
+        )
     return tuple(rows)
 
 
@@ -56,9 +88,13 @@ def build_price_time_feature_matrix_from_source(
     frame = source.read_frame("candles_1m", required=True)
     if frame is None:
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    oi_frame = source.read_frame("open_interest_5m", required=False)
+    liquidation_frame = source.read_frame("liquidations", required=False)
     state_rows = load_anomaly_state_1m_csv(state_path)
     return build_price_time_feature_matrix(
         candles_1m=normalize_candles_1m(frame),
+        open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
+        liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
         state_rows=state_rows,
         config=config,
     )
@@ -138,6 +174,8 @@ def _build_state_feature_row(
     *,
     state: AnomalyState1mRow,
     candles: Sequence[Candle1m],
+    open_interest_rows: Sequence[OpenInterest5m] | None,
+    liquidation_rows: Sequence[LiquidationEvent] | None,
     config: FeatureMatrixConfig,
 ) -> AnomalyFeatureMatrixRow:
     atr_value: float | None = None
@@ -175,6 +213,20 @@ def _build_state_feature_row(
         if price_speed_atr is None and status == "ok":
             status = "missing_previous_close_for_speed"
 
+    volume_features = _volume_features(candles=candles, state=state, config=config)
+    oi_features = _oi_features(open_interest_rows=open_interest_rows, snapshot_time_ms=state.snapshot_time_ms)
+    liquidation_features = _liquidation_features(
+        candles=candles,
+        liquidation_rows=liquidation_rows,
+        state=state,
+    )
+    cvd_features = _cvd_features(
+        candles=candles,
+        state=state,
+        atr_value=atr_value,
+        windows_minutes=config.cvd_windows_minutes,
+    )
+
     time_to_running_high = max(state.minutes_since_event_start - state.time_since_running_high_minutes, 0)
     clock_maturity = state.time_since_running_high_minutes / max(time_to_running_high, 1)
     event_age_ratio = state.minutes_since_detection / max(config.expected_event_lifetime_minutes, 1)
@@ -199,6 +251,30 @@ def _build_state_feature_row(
         event_age_ratio=event_age_ratio,
         alpha_decay_bucket=alpha_decay_bucket(state.minutes_since_detection),
         feature_source_status=status,
+        quote_volume_1m_to_24h_median=volume_features.quote_volume_1m_to_24h_median,
+        volume_zscore=volume_features.volume_zscore,
+        quote_volume_zscore=volume_features.quote_volume_zscore,
+        closed_5m_oi_asof_t=oi_features.closed_5m_oi_asof_t,
+        oi_change_5m=oi_features.oi_change_5m,
+        oi_change_10m=oi_features.oi_change_10m,
+        oi_change_5m_pct_of_oi=oi_features.oi_change_5m_pct_of_oi,
+        oi_change_10m_pct_of_oi=oi_features.oi_change_10m_pct_of_oi,
+        missing_oi_flag=oi_features.missing_oi_flag,
+        short_liq_intensity=liquidation_features.short_liq_intensity,
+        long_liq_intensity=liquidation_features.long_liq_intensity,
+        liquidation_imbalance=liquidation_features.liquidation_imbalance,
+        cumulative_liq_intensity_since_event_start=liquidation_features.cumulative_liq_intensity_since_event_start,
+        missing_liquidation_flag=liquidation_features.missing_liquidation_flag,
+        cvd_quote_since_event_start=cvd_features.cvd_quote_since_event_start,
+        cvd_change_3m=cvd_features.cvd_change_by_window.get(3),
+        cvd_change_5m=cvd_features.cvd_change_by_window.get(5),
+        cvd_change_10m=cvd_features.cvd_change_by_window.get(10),
+        cvd_price_divergence_3m=cvd_features.cvd_price_divergence_by_window.get(3),
+        cvd_price_divergence_5m=cvd_features.cvd_price_divergence_by_window.get(5),
+        cvd_price_divergence_10m=cvd_features.cvd_price_divergence_by_window.get(10),
+        price_up_cvd_down_flag=cvd_features.price_up_cvd_down_flag,
+        price_down_cvd_up_flag=cvd_features.price_down_cvd_up_flag,
+        cvd_failed_to_confirm_high_flag=cvd_features.cvd_failed_to_confirm_high_flag,
     )
 
 
@@ -225,10 +301,9 @@ def _price_speed_atr(
     atr_value: float,
     atr_window_minutes: int,
 ) -> float | None:
-    asof_candles = [candle for candle in candles if candle.available_time_ms <= snapshot_time_ms]
+    asof_candles = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
     if len(asof_candles) < 2:
         return None
-    asof_candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
     current = asof_candles[-1]
     previous = asof_candles[-2]
     if current.available_time_ms != snapshot_time_ms:
@@ -239,12 +314,311 @@ def _price_speed_atr(
     return (current.close - previous.close) / expected_one_minute_atr
 
 
+class _VolumeFeatures:
+    def __init__(
+        self,
+        *,
+        quote_volume_1m_to_24h_median: float | None,
+        volume_zscore: float | None,
+        quote_volume_zscore: float | None,
+    ) -> None:
+        self.quote_volume_1m_to_24h_median = quote_volume_1m_to_24h_median
+        self.volume_zscore = volume_zscore
+        self.quote_volume_zscore = quote_volume_zscore
+
+
+def _volume_features(*, candles: Sequence[Candle1m], state: AnomalyState1mRow, config: FeatureMatrixConfig) -> _VolumeFeatures:
+    current = _current_candle(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
+    if current is None:
+        return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
+    history = [candle for candle in candles if candle.available_time_ms < current.available_time_ms]
+    history.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    history = history[-config.volume_baseline_window_minutes :]
+    if len(history) < config.volume_baseline_window_minutes:
+        return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
+
+    quote_values = [candle.quote_volume for candle in history]
+    volume_values = [candle.volume for candle in history]
+    quote_median = statistics.median(quote_values)
+    quote_ratio = None if quote_median <= 0 else current.quote_volume / quote_median
+    return _VolumeFeatures(
+        quote_volume_1m_to_24h_median=quote_ratio,
+        volume_zscore=_zscore(current.volume, volume_values),
+        quote_volume_zscore=_zscore(current.quote_volume, quote_values),
+    )
+
+
+class _OiFeatures:
+    def __init__(
+        self,
+        *,
+        closed_5m_oi_asof_t: float | None,
+        oi_change_5m: float | None,
+        oi_change_10m: float | None,
+        oi_change_5m_pct_of_oi: float | None,
+        oi_change_10m_pct_of_oi: float | None,
+        missing_oi_flag: bool,
+    ) -> None:
+        self.closed_5m_oi_asof_t = closed_5m_oi_asof_t
+        self.oi_change_5m = oi_change_5m
+        self.oi_change_10m = oi_change_10m
+        self.oi_change_5m_pct_of_oi = oi_change_5m_pct_of_oi
+        self.oi_change_10m_pct_of_oi = oi_change_10m_pct_of_oi
+        self.missing_oi_flag = missing_oi_flag
+
+
+def _oi_features(*, open_interest_rows: Sequence[OpenInterest5m] | None, snapshot_time_ms: int) -> _OiFeatures:
+    if open_interest_rows is None:
+        return _missing_oi_features()
+    asof_rows = [item for item in open_interest_rows if item.available_time_ms <= snapshot_time_ms]
+    if not asof_rows:
+        return _missing_oi_features()
+    asof_rows.sort(key=lambda item: (item.timestamp_ms, item.available_time_ms))
+    latest = asof_rows[-1]
+    prev_5m = _last_oi_at_or_before(asof_rows, latest.timestamp_ms - FIVE_MINUTES_MS)
+    prev_10m = _last_oi_at_or_before(asof_rows, latest.timestamp_ms - 2 * FIVE_MINUTES_MS)
+    change_5m = None if prev_5m is None else latest.open_interest - prev_5m.open_interest
+    change_10m = None if prev_10m is None else latest.open_interest - prev_10m.open_interest
+    pct_5m = None if change_5m is None or latest.open_interest <= 0 else change_5m / latest.open_interest
+    pct_10m = None if change_10m is None or latest.open_interest <= 0 else change_10m / latest.open_interest
+    return _OiFeatures(
+        closed_5m_oi_asof_t=latest.open_interest,
+        oi_change_5m=change_5m,
+        oi_change_10m=change_10m,
+        oi_change_5m_pct_of_oi=pct_5m,
+        oi_change_10m_pct_of_oi=pct_10m,
+        missing_oi_flag=False,
+    )
+
+
+def _missing_oi_features() -> _OiFeatures:
+    return _OiFeatures(
+        closed_5m_oi_asof_t=None,
+        oi_change_5m=None,
+        oi_change_10m=None,
+        oi_change_5m_pct_of_oi=None,
+        oi_change_10m_pct_of_oi=None,
+        missing_oi_flag=True,
+    )
+
+
+class _LiquidationFeatures:
+    def __init__(
+        self,
+        *,
+        short_liq_intensity: float | None,
+        long_liq_intensity: float | None,
+        liquidation_imbalance: float | None,
+        cumulative_liq_intensity_since_event_start: float | None,
+        missing_liquidation_flag: bool,
+    ) -> None:
+        self.short_liq_intensity = short_liq_intensity
+        self.long_liq_intensity = long_liq_intensity
+        self.liquidation_imbalance = liquidation_imbalance
+        self.cumulative_liq_intensity_since_event_start = cumulative_liq_intensity_since_event_start
+        self.missing_liquidation_flag = missing_liquidation_flag
+
+
+def _liquidation_features(
+    *,
+    candles: Sequence[Candle1m],
+    liquidation_rows: Sequence[LiquidationEvent] | None,
+    state: AnomalyState1mRow,
+) -> _LiquidationFeatures:
+    if liquidation_rows is None:
+        return _missing_liquidation_features()
+    current = _current_candle(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
+    if current is None:
+        return _missing_liquidation_features()
+    minute_start_ms = state.snapshot_time_ms - ONE_MINUTE_MS
+    asof_rows = [item for item in liquidation_rows if item.available_time_ms <= state.snapshot_time_ms]
+    minute_rows = [item for item in asof_rows if minute_start_ms <= item.event_time_ms < state.snapshot_time_ms]
+    short_quote = sum(item.quote_quantity for item in minute_rows if item.side == "short")
+    long_quote = sum(item.quote_quantity for item in minute_rows if item.side == "long")
+    total_quote = short_quote + long_quote
+    quote_volume = max(current.quote_volume, EPS)
+    event_start_time_ms = _event_start_time_ms(state)
+    cumulative_liq_quote = sum(
+        item.quote_quantity for item in asof_rows if event_start_time_ms <= item.event_time_ms < state.snapshot_time_ms
+    )
+    cumulative_quote_volume = sum(
+        candle.quote_volume
+        for candle in candles
+        if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
+    )
+    return _LiquidationFeatures(
+        short_liq_intensity=short_quote / quote_volume,
+        long_liq_intensity=long_quote / quote_volume,
+        liquidation_imbalance=0.0 if total_quote <= 0 else (short_quote - long_quote) / total_quote,
+        cumulative_liq_intensity_since_event_start=None
+        if cumulative_quote_volume <= 0
+        else cumulative_liq_quote / cumulative_quote_volume,
+        missing_liquidation_flag=False,
+    )
+
+
+def _missing_liquidation_features() -> _LiquidationFeatures:
+    return _LiquidationFeatures(
+        short_liq_intensity=None,
+        long_liq_intensity=None,
+        liquidation_imbalance=None,
+        cumulative_liq_intensity_since_event_start=None,
+        missing_liquidation_flag=True,
+    )
+
+
+class _CvdFeatures:
+    def __init__(
+        self,
+        *,
+        cvd_quote_since_event_start: float | None,
+        cvd_change_by_window: dict[int, float | None],
+        cvd_price_divergence_by_window: dict[int, float | None],
+        price_up_cvd_down_flag: bool,
+        price_down_cvd_up_flag: bool,
+        cvd_failed_to_confirm_high_flag: bool,
+    ) -> None:
+        self.cvd_quote_since_event_start = cvd_quote_since_event_start
+        self.cvd_change_by_window = cvd_change_by_window
+        self.cvd_price_divergence_by_window = cvd_price_divergence_by_window
+        self.price_up_cvd_down_flag = price_up_cvd_down_flag
+        self.price_down_cvd_up_flag = price_down_cvd_up_flag
+        self.cvd_failed_to_confirm_high_flag = cvd_failed_to_confirm_high_flag
+
+
+def _cvd_features(
+    *,
+    candles: Sequence[Candle1m],
+    state: AnomalyState1mRow,
+    atr_value: float | None,
+    windows_minutes: tuple[int, ...],
+) -> _CvdFeatures:
+    current = _current_candle(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
+    missing = _CvdFeatures(
+        cvd_quote_since_event_start=None,
+        cvd_change_by_window={window: None for window in windows_minutes},
+        cvd_price_divergence_by_window={window: None for window in windows_minutes},
+        price_up_cvd_down_flag=False,
+        price_down_cvd_up_flag=False,
+        cvd_failed_to_confirm_high_flag=False,
+    )
+    if current is None:
+        return missing
+    event_start_time_ms = _event_start_time_ms(state)
+    event_candles = [
+        candle
+        for candle in candles
+        if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
+    ]
+    event_candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    if not event_candles or any(candle.taker_buy_quote_volume is None for candle in event_candles):
+        return missing
+    cumulative_quote = sum(candle.quote_volume for candle in event_candles)
+    if cumulative_quote <= 0:
+        return missing
+    cvd_since_event = sum(_candle_delta_quote(candle) for candle in event_candles) / cumulative_quote
+
+    cvd_change_by_window: dict[int, float | None] = {}
+    divergence_by_window: dict[int, float | None] = {}
+    price_up_cvd_down = False
+    price_down_cvd_up = False
+    for window in windows_minutes:
+        window_candles = _window_candles(candles=candles, snapshot_time_ms=state.snapshot_time_ms, window_minutes=window)
+        cvd_change = _window_cvd_ratio(window_candles)
+        cvd_change_by_window[window] = cvd_change
+        price_change_atr = _window_price_change_atr(window_candles=window_candles, atr_value=atr_value)
+        divergence_by_window[window] = None if cvd_change is None or price_change_atr is None else price_change_atr - cvd_change
+        if window == 5 and cvd_change is not None and window_candles:
+            raw_price_change = window_candles[-1].close - window_candles[0].open
+            price_up_cvd_down = raw_price_change > 0 and cvd_change < 0
+            price_down_cvd_up = raw_price_change < 0 and cvd_change > 0
+
+    cvd5 = cvd_change_by_window.get(5)
+    failed_to_confirm_high = bool(cvd5 is not None and cvd5 <= 0 and math.isclose(current.close, state.running_high_asof_t, rel_tol=0.0, abs_tol=EPS))
+    return _CvdFeatures(
+        cvd_quote_since_event_start=cvd_since_event,
+        cvd_change_by_window=cvd_change_by_window,
+        cvd_price_divergence_by_window=divergence_by_window,
+        price_up_cvd_down_flag=price_up_cvd_down,
+        price_down_cvd_up_flag=price_down_cvd_up,
+        cvd_failed_to_confirm_high_flag=failed_to_confirm_high,
+    )
+
+
+def _asof_candles(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> list[Candle1m]:
+    rows = [candle for candle in candles if candle.available_time_ms <= snapshot_time_ms]
+    rows.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    return rows
+
+
+def _current_candle(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> Candle1m | None:
+    asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+    if not asof_rows:
+        return None
+    current = asof_rows[-1]
+    if current.available_time_ms != snapshot_time_ms:
+        return None
+    return current
+
+
+def _event_start_time_ms(state: AnomalyState1mRow) -> int:
+    return state.snapshot_time_ms - max(state.minutes_since_event_start, 0) * ONE_MINUTE_MS
+
+
+def _zscore(value: float, history_values: Sequence[float]) -> float | None:
+    if len(history_values) < 2:
+        return None
+    mean_value = statistics.fmean(history_values)
+    std_value = statistics.stdev(history_values)
+    if std_value <= 0 or not math.isfinite(std_value):
+        return None
+    return (value - mean_value) / std_value
+
+
+def _last_oi_at_or_before(rows: Sequence[OpenInterest5m], timestamp_ms: int) -> OpenInterest5m | None:
+    eligible = [item for item in rows if item.timestamp_ms <= timestamp_ms]
+    if not eligible:
+        return None
+    eligible.sort(key=lambda item: (item.timestamp_ms, item.available_time_ms))
+    return eligible[-1]
+
+
+def _candle_delta_quote(candle: Candle1m) -> float:
+    if candle.taker_buy_quote_volume is None:
+        raise ValueError("taker_buy_quote_volume is required for CVD computation")
+    return 2.0 * candle.taker_buy_quote_volume - candle.quote_volume
+
+
+def _window_candles(*, candles: Sequence[Candle1m], snapshot_time_ms: int, window_minutes: int) -> list[Candle1m]:
+    window_start_ms = snapshot_time_ms - window_minutes * ONE_MINUTE_MS
+    rows = [candle for candle in candles if window_start_ms <= candle.open_time_ms and candle.available_time_ms <= snapshot_time_ms]
+    rows.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    if len(rows) < window_minutes:
+        return []
+    return rows[-window_minutes:]
+
+
+def _window_cvd_ratio(window_candles: Sequence[Candle1m]) -> float | None:
+    if not window_candles or any(candle.taker_buy_quote_volume is None for candle in window_candles):
+        return None
+    quote_volume = sum(candle.quote_volume for candle in window_candles)
+    if quote_volume <= 0:
+        return None
+    return sum(_candle_delta_quote(candle) for candle in window_candles) / quote_volume
+
+
+def _window_price_change_atr(*, window_candles: Sequence[Candle1m], atr_value: float | None) -> float | None:
+    if not window_candles or atr_value is None or atr_value <= 0:
+        return None
+    return (window_candles[-1].close - window_candles[0].open) / atr_value
+
+
 def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_feature_matrix_scope",
             status=AuditStatus.PASS,
-            message="price/time/alpha-decay feature matrix only; no flow/OI/liquidation/CVD/cross-section/ML/decision/trade simulation",
+            message="price/time/alpha-decay plus volume/OI/liquidation/CVD feature matrix only; no cross-section/ML/decision/trade simulation",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -262,7 +636,13 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
         ProtocolAuditRow(
             check_name="feature_matrix_no_future_artifact_dependency",
             status=AuditStatus.PASS,
-            message="feature matrix recomputes ATR from normalized candles and does not read anomaly_future_paths.csv",
+            message="feature matrix recomputes ATR and all rolling features from normalized as-of market data and does not read anomaly_future_paths.csv",
+            artifact="anomaly_feature_matrix.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="feature_matrix_flow_oi_liquidation_cvd_asof",
+            status=AuditStatus.PASS,
+            message="OI uses closed 5m rows available <= snapshot; liquidation and CVD use events/candles available <= snapshot only",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -275,7 +655,7 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
         ProtocolAuditRow(
             check_name="relative_over_absolute_feature_contract_enforced",
             status=AuditStatus.PASS,
-            message="materialized price/time feature matrix contains ATR-normalized, dimensionless, categorical, or audit-only fields; no raw absolute model features",
+            message="materialized feature matrix contains ATR-normalized, self-history-relative, dimensionless, categorical, boolean, or audit-only fields; no raw absolute model features",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -322,6 +702,12 @@ def _run_config_rows(
             value=str(config.expected_event_lifetime_minutes),
             source="runtime",
         ),
+        RunConfigRow(
+            key="volume_baseline_window_minutes",
+            value=str(config.volume_baseline_window_minutes),
+            source="runtime",
+        ),
+        RunConfigRow(key="cvd_windows_minutes", value=",".join(str(item) for item in config.cvd_windows_minutes), source="runtime"),
     ]
 
 
