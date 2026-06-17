@@ -13,6 +13,7 @@ from anomaly_science.contracts.market import Candle1m, MarketDataContractError, 
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
+from anomaly_science.future.atr import AtrAsOfResult, compute_atr_1d_asof
 from anomaly_science.future.config import FuturePathBuilderConfig
 
 
@@ -100,18 +101,39 @@ def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]
                     snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
                     feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
                     future_start_time_ms=_required_int(row, "future_start_time_ms"),
+                    atr_window_minutes=_required_int(row, "atr_window_minutes"),
+                    ATR_1d_asof_t=_optional_float(row, "ATR_1d_asof_t"),
+                    ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
                     future_return_5m=_optional_float(row, "future_return_5m"),
                     future_return_15m=_optional_float(row, "future_return_15m"),
                     future_return_30m=_optional_float(row, "future_return_30m"),
                     future_return_60m=_optional_float(row, "future_return_60m"),
+                    future_return_120m=_optional_float(row, "future_return_120m"),
                     future_max_5m=_optional_float(row, "future_max_5m"),
                     future_max_15m=_optional_float(row, "future_max_15m"),
                     future_max_30m=_optional_float(row, "future_max_30m"),
                     future_max_60m=_optional_float(row, "future_max_60m"),
+                    future_max_120m=_optional_float(row, "future_max_120m"),
                     future_min_5m=_optional_float(row, "future_min_5m"),
                     future_min_15m=_optional_float(row, "future_min_15m"),
                     future_min_30m=_optional_float(row, "future_min_30m"),
                     future_min_60m=_optional_float(row, "future_min_60m"),
+                    future_min_120m=_optional_float(row, "future_min_120m"),
+                    future_return_atr_5m=_optional_float(row, "future_return_atr_5m"),
+                    future_return_atr_15m=_optional_float(row, "future_return_atr_15m"),
+                    future_return_atr_30m=_optional_float(row, "future_return_atr_30m"),
+                    future_return_atr_60m=_optional_float(row, "future_return_atr_60m"),
+                    future_return_atr_120m=_optional_float(row, "future_return_atr_120m"),
+                    future_max_atr_5m=_optional_float(row, "future_max_atr_5m"),
+                    future_max_atr_15m=_optional_float(row, "future_max_atr_15m"),
+                    future_max_atr_30m=_optional_float(row, "future_max_atr_30m"),
+                    future_max_atr_60m=_optional_float(row, "future_max_atr_60m"),
+                    future_max_atr_120m=_optional_float(row, "future_max_atr_120m"),
+                    future_min_atr_5m=_optional_float(row, "future_min_atr_5m"),
+                    future_min_atr_15m=_optional_float(row, "future_min_atr_15m"),
+                    future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
+                    future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
+                    future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
                     reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
                     reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
                     broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
@@ -150,7 +172,14 @@ def build_anomaly_future_paths(
     rows: list[FuturePathRow] = []
     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
         symbol_candles = candles_by_symbol.get(state.symbol, [])
-        rows.append(_build_state_future_path(state=state, candles=symbol_candles, max_horizon=max_horizon))
+        rows.append(
+            _build_state_future_path(
+                state=state,
+                candles=symbol_candles,
+                max_horizon=max_horizon,
+                atr_window_minutes=cfg.atr_window_minutes,
+            )
+        )
     return tuple(rows)
 
 
@@ -185,6 +214,7 @@ def _build_state_future_path(
     state: AnomalyState1mRow,
     candles: Sequence[Candle1m],
     max_horizon: int,
+    atr_window_minutes: int,
 ) -> FuturePathRow:
     if state.feature_cutoff_time_ms > state.snapshot_time_ms:
         raise MarketDataContractError("state feature_cutoff_time_ms must be <= snapshot_time_ms")
@@ -198,6 +228,12 @@ def _build_state_future_path(
         for candle in candles
         if candle.available_time_ms > state.snapshot_time_ms and candle.available_time_ms <= max_future_time_ms
     ]
+    atr_result = _compute_atr_when_history_available(
+        state=state,
+        candles=candles,
+        atr_window_minutes=atr_window_minutes,
+    )
+    atr_value = atr_result.atr_1d_asof_t if atr_result is not None else None
 
     return FuturePathRow(
         event_id=state.event_id,
@@ -205,18 +241,39 @@ def _build_state_future_path(
         snapshot_time_ms=state.snapshot_time_ms,
         feature_cutoff_time_ms=state.feature_cutoff_time_ms,
         future_start_time_ms=future_start_time_ms,
+        atr_window_minutes=atr_window_minutes,
+        ATR_1d_asof_t=atr_value,
+        ATR_1d_pct_asof_t=atr_result.atr_1d_pct_asof_t if atr_result is not None else None,
         future_return_5m=_future_return(state=state, candles=future_candles, horizon_minutes=5),
         future_return_15m=_future_return(state=state, candles=future_candles, horizon_minutes=15),
         future_return_30m=_future_return(state=state, candles=future_candles, horizon_minutes=30),
         future_return_60m=_future_return(state=state, candles=future_candles, horizon_minutes=60),
+        future_return_120m=_future_return(state=state, candles=future_candles, horizon_minutes=120),
         future_max_5m=_future_max(state=state, candles=future_candles, horizon_minutes=5),
         future_max_15m=_future_max(state=state, candles=future_candles, horizon_minutes=15),
         future_max_30m=_future_max(state=state, candles=future_candles, horizon_minutes=30),
         future_max_60m=_future_max(state=state, candles=future_candles, horizon_minutes=60),
+        future_max_120m=_future_max(state=state, candles=future_candles, horizon_minutes=120),
         future_min_5m=_future_min(state=state, candles=future_candles, horizon_minutes=5),
         future_min_15m=_future_min(state=state, candles=future_candles, horizon_minutes=15),
         future_min_30m=_future_min(state=state, candles=future_candles, horizon_minutes=30),
         future_min_60m=_future_min(state=state, candles=future_candles, horizon_minutes=60),
+        future_min_120m=_future_min(state=state, candles=future_candles, horizon_minutes=120),
+        future_return_atr_5m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
+        future_return_atr_15m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
+        future_return_atr_30m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
+        future_return_atr_60m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
+        future_return_atr_120m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
+        future_max_atr_5m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
+        future_max_atr_15m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
+        future_max_atr_30m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
+        future_max_atr_60m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
+        future_max_atr_120m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
+        future_min_atr_5m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
+        future_min_atr_15m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
+        future_min_atr_30m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
+        future_min_atr_60m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
+        future_min_atr_120m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
         reclaimed_running_high_30m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=30),
         reclaimed_running_high_60m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=60),
         broke_structural_low_30m=None,
@@ -277,6 +334,72 @@ def _future_min(
     if not window:
         return None
     return (min(candle.low for candle in window) / state.current_close) - 1.0
+
+
+def _future_return_atr(
+    *,
+    state: AnomalyState1mRow,
+    candles: Sequence[Candle1m],
+    horizon_minutes: int,
+    atr_value: float | None,
+) -> float | None:
+    if atr_value is None:
+        return None
+    horizon_candle = _exact_horizon_candle(state, candles, horizon_minutes)
+    if horizon_candle is None:
+        return None
+    return (horizon_candle.close - state.current_close) / atr_value
+
+
+def _future_max_atr(
+    *,
+    state: AnomalyState1mRow,
+    candles: Sequence[Candle1m],
+    horizon_minutes: int,
+    atr_value: float | None,
+) -> float | None:
+    if atr_value is None:
+        return None
+    window = _window(state, candles, horizon_minutes)
+    if not window:
+        return None
+    return (max(candle.high for candle in window) - state.current_close) / atr_value
+
+
+def _future_min_atr(
+    *,
+    state: AnomalyState1mRow,
+    candles: Sequence[Candle1m],
+    horizon_minutes: int,
+    atr_value: float | None,
+) -> float | None:
+    if atr_value is None:
+        return None
+    window = _window(state, candles, horizon_minutes)
+    if not window:
+        return None
+    return (min(candle.low for candle in window) - state.current_close) / atr_value
+
+
+def _compute_atr_when_history_available(
+    *,
+    state: AnomalyState1mRow,
+    candles: Sequence[Candle1m],
+    atr_window_minutes: int,
+) -> AtrAsOfResult | None:
+    asof_candle_count = sum(
+        1
+        for candle in candles
+        if candle.symbol == state.symbol and candle.available_time_ms <= state.snapshot_time_ms
+    )
+    if asof_candle_count < atr_window_minutes + 1:
+        return None
+    return compute_atr_1d_asof(
+        candles_1m=candles,
+        symbol=state.symbol,
+        snapshot_time_ms=state.snapshot_time_ms,
+        atr_window_minutes=atr_window_minutes,
+    )
 
 
 def _reclaimed_running_high(

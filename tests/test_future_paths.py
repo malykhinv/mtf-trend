@@ -12,7 +12,9 @@ from anomaly_science.contracts.market import Candle1m
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.future import (
     AnomalyStateArtifactError,
+    FuturePathBuilderConfig,
     build_anomaly_future_paths,
+    load_anomaly_future_paths_csv,
     load_anomaly_state_1m_csv,
 )
 
@@ -103,7 +105,11 @@ def test_future_builder_uses_only_candles_after_snapshot_time() -> None:
         _candle(6, open_price=99.0, high=104.0, low=97.5, close=103.0),
     ]
 
-    rows = build_anomaly_future_paths(candles_1m=candles, state_rows=[_state_row()])
+    rows = build_anomaly_future_paths(
+        candles_1m=candles,
+        state_rows=[_state_row()],
+        config=FuturePathBuilderConfig(atr_window_minutes=1),
+    )
 
     assert len(rows) == 1
     row = rows[0]
@@ -112,6 +118,15 @@ def test_future_builder_uses_only_candles_after_snapshot_time() -> None:
     assert row.future_return_5m == pytest.approx((103.0 / 102.0) - 1.0)
     assert row.future_max_5m == pytest.approx((106.0 / 102.0) - 1.0)
     assert row.future_min_5m == pytest.approx((97.5 / 102.0) - 1.0)
+    assert row.future_return_120m is None
+    assert row.future_max_120m == pytest.approx((106.0 / 102.0) - 1.0)
+    assert row.future_min_120m == pytest.approx((97.5 / 102.0) - 1.0)
+    assert row.ATR_1d_asof_t == pytest.approx(4.0)
+    assert row.ATR_1d_pct_asof_t == pytest.approx(4.0 / 102.0)
+    assert row.future_return_atr_5m == pytest.approx((103.0 - 102.0) / 4.0)
+    assert row.future_max_atr_5m == pytest.approx((106.0 - 102.0) / 4.0)
+    assert row.future_min_atr_5m == pytest.approx((97.5 - 102.0) / 4.0)
+    assert row.future_return_atr_120m is None
     assert row.reclaimed_running_high_30m is True
     assert row.reclaimed_running_high_60m is True
     assert row.time_to_new_high_minutes == 2
@@ -186,3 +201,56 @@ def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
     assert rows[0]["event_id"] == "evt_fixture"
     assert int(rows[0]["future_start_time_ms"]) > int(rows[0]["snapshot_time_ms"])
     assert rows[0]["broke_structural_low_30m"] == ""
+
+
+def test_future_builder_emits_missing_atr_fields_without_fallback_when_history_is_short() -> None:
+    candles = [
+        _candle(0, open_price=100.0, high=101.0, low=99.0, close=100.0),
+        _candle(1, open_price=100.0, high=103.0, low=99.0, close=102.0),
+        _candle(2, open_price=102.0, high=104.0, low=101.0, close=103.0),
+        _candle(3, open_price=103.0, high=105.0, low=102.0, close=104.0),
+        _candle(4, open_price=104.0, high=105.0, low=103.0, close=104.5),
+        _candle(5, open_price=104.5, high=106.0, low=104.0, close=105.0),
+        _candle(6, open_price=105.0, high=107.0, low=104.0, close=106.0),
+    ]
+
+    row = build_anomaly_future_paths(candles_1m=candles, state_rows=[_state_row()])[0]
+
+    assert row.atr_window_minutes == 1440
+    assert row.ATR_1d_asof_t is None
+    assert row.ATR_1d_pct_asof_t is None
+    assert row.future_return_atr_5m is None
+    assert row.future_max_atr_5m is None
+    assert row.future_min_atr_5m is None
+
+
+def test_future_path_artifact_roundtrip_accepts_atr_normalized_schema(tmp_path: Path) -> None:
+    candles = [
+        _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+        _candle(1, open_price=100.0, high=103.0, low=99.0, close=102.0),
+        _candle(2, open_price=102.0, high=104.0, low=101.0, close=103.0),
+        _candle(3, open_price=103.0, high=105.0, low=102.0, close=104.0),
+        _candle(4, open_price=104.0, high=106.0, low=103.0, close=105.0),
+        _candle(5, open_price=105.0, high=107.0, low=104.0, close=106.0),
+        _candle(6, open_price=106.0, high=108.0, low=105.0, close=107.0),
+    ]
+    from anomaly_science.artifacts import write_csv_artifact
+    from anomaly_science.future import future_rows_to_artifact
+
+    rows = build_anomaly_future_paths(
+        candles_1m=candles,
+        state_rows=[_state_row()],
+        config=FuturePathBuilderConfig(atr_window_minutes=1),
+    )
+    path = tmp_path / "anomaly_future_paths.csv"
+    write_csv_artifact(path, future_rows_to_artifact(rows), get_artifact_schema("anomaly_future_paths.csv"))
+
+    loaded = load_anomaly_future_paths_csv(path)
+
+    assert len(loaded) == len(rows)
+    assert loaded[0].event_id == rows[0].event_id
+    assert loaded[0].ATR_1d_asof_t == pytest.approx(rows[0].ATR_1d_asof_t)
+    assert loaded[0].future_max_atr_5m == pytest.approx(rows[0].future_max_atr_5m)
+    header = path.read_text(encoding="utf-8-sig").splitlines()[0].split(",")
+    assert "ATR_1d_asof_t" in header
+    assert "future_max_atr_120m" in header
