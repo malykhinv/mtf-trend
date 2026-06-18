@@ -166,14 +166,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--archive-file-index",
         action="store_true",
         help=(
-            "Opt into S3 archive preflight before processing. This can skip symbols/blocks with no klines, "
-            "but adds hundreds of metadata requests and is intentionally disabled by default."
+            "Compatibility no-op: scoped S3 kline archive preflight is enabled by default "
+            "to avoid thousands of missing archive probes."
         ),
     )
     archive_index_group.add_argument(
         "--no-archive-file-index",
         action="store_true",
-        help="Deprecated no-op kept for compatibility; direct archive probing is now the default.",
+        help=(
+            "Disable scoped S3 kline archive preflight and probe archives directly. "
+            "Use only for debugging or when S3 listing is unavailable."
+        ),
     )
     cache.add_argument(
         "--daily-fallback-for-missing-monthly",
@@ -304,7 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             overwrite=args.overwrite,
             oi_join_strategy=args.oi_join_strategy,
             request_sleep_seconds=args.request_sleep,
-            use_archive_file_index=bool(args.archive_file_index and not args.no_archive_file_index),
+            use_archive_file_index=not bool(args.no_archive_file_index),
             refresh_archive_file_index=args.refresh_archive_file_index,
             daily_fallback_for_missing_monthly=args.daily_fallback_for_missing_monthly,
         )
