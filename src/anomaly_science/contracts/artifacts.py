@@ -335,6 +335,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "fit_row_count",
             "validation_row_count",
             "calibration_row_count",
+            "best_iteration",
             "class_order",
             "model_feature_names",
             "calibration_method",

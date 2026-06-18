@@ -434,8 +434,11 @@ class _CatBoostIsotonicModel:
             return None
         fit_rows, validation_rows, calibration_rows = _train_validation_calibration_split(ordered)
         fit_targets = _targets(fit_rows, config)
+        validation_targets = _targets(validation_rows, config)
         calibration_targets = _targets(calibration_rows, config)
         if len(set(fit_targets)) < 2:
+            return None
+        if len(set(validation_targets)) < 2:
             return None
         if len(calibration_rows) < len(PREDICTED_SCENARIOS):
             return None
@@ -452,10 +455,14 @@ class _CatBoostIsotonicModel:
             verbose=False,
             allow_writing_files=False,
         )
-        eval_set = None
-        if validation_rows and len(set(_targets(validation_rows, config))) >= 2:
-            eval_set = (_feature_matrix(validation_rows), _targets(validation_rows, config))
-        model.fit(_feature_matrix(fit_rows), fit_targets, eval_set=eval_set)
+        eval_set = (_feature_matrix(validation_rows), validation_targets)
+        model.fit(
+            _feature_matrix(fit_rows),
+            fit_targets,
+            eval_set=eval_set,
+            use_best_model=True,
+            early_stopping_rounds=20,
+        )
 
         raw_calibration = _raw_probability_matrix(model, calibration_rows)
         calibrators: dict[str, IsotonicRegression] = {}
@@ -504,10 +511,17 @@ class _CatBoostIsotonicModel:
             fit_row_count=self.fit_row_count,
             validation_row_count=self.validation_row_count,
             calibration_row_count=self.calibration_row_count,
+            best_iteration=self._best_iteration(),
             class_order=",".join(PREDICTED_SCENARIOS),
             model_feature_names=",".join(MODEL_FEATURE_NAMES),
             calibration_method="one_vs_rest_isotonic_regression_on_train_calibration_split",
         )
+
+    def _best_iteration(self) -> int:
+        best_iteration = self._model.get_best_iteration()
+        if best_iteration is None:
+            return int(self._config.catboost_iterations)
+        return int(best_iteration)
 
     def feature_importance_rows(self, *, prediction_version: str, model_key: str) -> tuple[FeatureImportanceRow, ...]:
         importances = [float(value) for value in self._model.get_feature_importance()]

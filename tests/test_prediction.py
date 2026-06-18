@@ -257,6 +257,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     with (out_dir / "strategy_model_metadata.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         metadata_rows = list(csv.DictReader(file_obj))
     assert metadata_rows[0]["class_order"] == "long_continuation,short_fade,static_or_chop,unclear"
+    assert int(metadata_rows[0]["best_iteration"]) >= 0
 
     with (out_dir / "strategy_feature_importance.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         importance_rows = list(csv.DictReader(file_obj))

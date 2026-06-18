@@ -150,6 +150,7 @@ class ModelMetadataRow:
     fit_row_count: int
     validation_row_count: int
     calibration_row_count: int
+    best_iteration: int
     class_order: str
     model_feature_names: str
     calibration_method: str
@@ -166,6 +167,8 @@ class ModelMetadataRow:
         for field_name in ("train_row_count", "fit_row_count", "validation_row_count", "calibration_row_count"):
             if getattr(self, field_name) <= 0:
                 raise MarketDataContractError(f"{field_name} must be positive")
+        if self.best_iteration < 0:
+            raise MarketDataContractError("best_iteration must be non-negative")
         if not self.class_order:
             raise MarketDataContractError("class_order is required")
         if not self.model_feature_names:
