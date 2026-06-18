@@ -13,6 +13,7 @@ from catboost import CatBoostClassifier
 from sklearn.isotonic import IsotonicRegression
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
 from anomaly_science.contracts.labels import AnomalyOutcomeLabelRow, MISSING_FUTURE_SCENARIO
 from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.prediction import (
@@ -25,6 +26,8 @@ from anomaly_science.contracts.prediction import (
     PredictionMetricRow,
 )
 from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.features.catalog import build_default_feature_catalog
+from anomaly_science.features.matrix import load_anomaly_feature_matrix_csv
 from anomaly_science.future import load_anomaly_state_1m_csv
 from anomaly_science.labels import load_anomaly_outcome_labels_csv
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
@@ -32,7 +35,7 @@ from anomaly_science.prediction.config import WalkForwardPredictionConfig
 ONE_MINUTE_MS = 60_000
 ONE_DAY_MS = 86_400_000
 _EPS = 1e-15
-MODEL_FEATURE_NAMES = (
+STATE_MODEL_FEATURE_NAMES = (
     "minutes_since_event_start",
     "minutes_since_detection",
     "event_alive",
@@ -45,6 +48,12 @@ MODEL_FEATURE_NAMES = (
     "missing_structural_low",
     "missing_structural_high",
 )
+FEATURE_MATRIX_MODEL_FEATURE_NAMES = tuple(
+    f"feature_matrix.{row.feature_name}"
+    for row in build_default_feature_catalog()
+    if row.source_artifact == "anomaly_feature_matrix.csv" and row.is_model_feature and row.dtype != "str"
+)
+MODEL_FEATURE_NAMES = STATE_MODEL_FEATURE_NAMES
 
 
 class PredictionInputError(ValueError):
@@ -66,6 +75,7 @@ class WalkForwardPredictionResult:
 class PredictionInputRow:
     state: AnomalyState1mRow
     label: AnomalyOutcomeLabelRow
+    features: AnomalyFeatureMatrixRow | None = None
 
     @property
     def target_scenario_15m(self) -> str:
@@ -88,11 +98,13 @@ def load_prediction_inputs(
     *,
     state_path: str | Path,
     labels_path: str | Path,
+    feature_matrix_path: str | Path | None = None,
 ) -> tuple[PredictionInputRow, ...]:
     """Load prediction inputs through strict state and label schema boundaries."""
     return build_prediction_inputs(
         state_rows=load_anomaly_state_1m_csv(state_path),
         label_rows=load_anomaly_outcome_labels_csv(labels_path),
+        feature_rows=None if feature_matrix_path is None else load_anomaly_feature_matrix_csv(feature_matrix_path),
     )
 
 
@@ -100,11 +112,14 @@ def build_prediction_inputs(
     *,
     state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
     label_rows: Sequence[AnomalyOutcomeLabelRow] | Iterable[AnomalyOutcomeLabelRow],
+    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow] | None = None,
 ) -> tuple[PredictionInputRow, ...]:
     states = tuple(state_rows)
     labels = tuple(label_rows)
+    features = None if feature_rows is None else tuple(feature_rows)
     state_by_key = _unique_by_join_key(states, artifact_name="anomaly_state_1m.csv")
     label_by_key = _unique_by_join_key(labels, artifact_name="anomaly_outcome_labels.csv")
+    feature_by_key = None if features is None else _unique_by_join_key(features, artifact_name="anomaly_feature_matrix.csv")
 
     state_keys = set(state_by_key)
     label_keys = set(label_by_key)
@@ -116,13 +131,22 @@ def build_prediction_inputs(
             "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
             f"missing_label={missing_label}, orphan_label={orphan_label}"
         )
+    if feature_by_key is not None and set(feature_by_key) != state_keys:
+        missing_feature = sorted(state_keys - set(feature_by_key))[:5]
+        orphan_feature = sorted(set(feature_by_key) - state_keys)[:5]
+        raise PredictionInputError(
+            "state/feature prediction join must be one-to-one on "
+            "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
+            f"missing_feature={missing_feature}, orphan_feature={orphan_feature}"
+        )
 
     rows: list[PredictionInputRow] = []
     for key in sorted(state_keys):
         state = state_by_key[key]
         label = label_by_key[key]
-        _enforce_prediction_input_temporal_contract(state=state, label=label)
-        rows.append(PredictionInputRow(state=state, label=label))
+        feature = None if feature_by_key is None else feature_by_key[key]
+        _enforce_prediction_input_temporal_contract(state=state, label=label, feature=feature)
+        rows.append(PredictionInputRow(state=state, label=label, features=feature))
     return tuple(rows)
 
 
@@ -178,7 +202,7 @@ def build_walk_forward_prediction_result(
             target_scenario = _target_for_horizon(test_row.label, cfg.target_horizon_minutes)
             if target_scenario == MISSING_FUTURE_SCENARIO:
                 continue
-            raw_probabilities, probabilities, model_key, group_count = model.predict(test_row.state)
+            raw_probabilities, probabilities, model_key, group_count = model.predict(test_row)
             predicted_scenario, confidence = _predicted_scenario(probabilities)
             test_day = _utc_day(test_row.state.snapshot_time_ms)
             predictions.append(
@@ -418,6 +442,7 @@ class _CatBoostIsotonicModel:
         fit_row_count: int,
         validation_row_count: int,
         calibration_row_count: int,
+        feature_names: tuple[str, ...],
     ) -> None:
         self._config = config
         self._model = model
@@ -426,6 +451,7 @@ class _CatBoostIsotonicModel:
         self.fit_row_count = fit_row_count
         self.validation_row_count = validation_row_count
         self.calibration_row_count = calibration_row_count
+        self.feature_names = feature_names
 
     @classmethod
     def fit(cls, *, rows: Sequence[PredictionInputRow], config: WalkForwardPredictionConfig) -> _CatBoostIsotonicModel | None:
@@ -444,6 +470,7 @@ class _CatBoostIsotonicModel:
             return None
         if set(calibration_targets) != set(PREDICTED_SCENARIOS):
             return None
+        feature_names = _input_feature_names(ordered)
 
         model = CatBoostClassifier(
             loss_function="MultiClass",
@@ -455,16 +482,16 @@ class _CatBoostIsotonicModel:
             verbose=False,
             allow_writing_files=False,
         )
-        eval_set = (_feature_matrix(validation_rows), validation_targets)
+        eval_set = (_feature_matrix(validation_rows, feature_names=feature_names), validation_targets)
         model.fit(
-            _feature_matrix(fit_rows),
+            _feature_matrix(fit_rows, feature_names=feature_names),
             fit_targets,
             eval_set=eval_set,
             use_best_model=True,
             early_stopping_rounds=20,
         )
 
-        raw_calibration = _raw_probability_matrix(model, calibration_rows)
+        raw_calibration = _raw_probability_matrix(model, calibration_rows, feature_names=feature_names)
         calibrators: dict[str, IsotonicRegression] = {}
         for scenario_index, scenario in enumerate(PREDICTED_SCENARIOS):
             binary_targets = np.array([1.0 if target == scenario else 0.0 for target in calibration_targets], dtype=float)
@@ -481,10 +508,11 @@ class _CatBoostIsotonicModel:
             fit_row_count=len(fit_rows),
             validation_row_count=len(validation_rows),
             calibration_row_count=len(calibration_rows),
+            feature_names=feature_names,
         )
 
-    def predict(self, state: AnomalyState1mRow) -> tuple[dict[str, float], dict[str, float], str, int]:
-        raw_vector = self._model.predict_proba(_feature_matrix_from_states([state]))[0]
+    def predict(self, row: PredictionInputRow) -> tuple[dict[str, float], dict[str, float], str, int]:
+        raw_vector = self._model.predict_proba(_feature_matrix([row], feature_names=self.feature_names))[0]
         raw = _probability_dict(raw_vector)
         calibrated_vector = np.array(
             [self._calibrators[scenario].predict([raw[scenario]])[0] for scenario in PREDICTED_SCENARIOS],
@@ -513,7 +541,7 @@ class _CatBoostIsotonicModel:
             calibration_row_count=self.calibration_row_count,
             best_iteration=self._best_iteration(),
             class_order=",".join(PREDICTED_SCENARIOS),
-            model_feature_names=",".join(MODEL_FEATURE_NAMES),
+            model_feature_names=",".join(self.feature_names),
             calibration_method="one_vs_rest_isotonic_regression_on_train_calibration_split",
         )
 
@@ -525,7 +553,7 @@ class _CatBoostIsotonicModel:
 
     def feature_importance_rows(self, *, prediction_version: str, model_key: str) -> tuple[FeatureImportanceRow, ...]:
         importances = [float(value) for value in self._model.get_feature_importance()]
-        ranked = sorted(zip(MODEL_FEATURE_NAMES, importances, strict=True), key=lambda item: item[1], reverse=True)
+        ranked = sorted(zip(self.feature_names, importances, strict=True), key=lambda item: item[1], reverse=True)
         return tuple(
             FeatureImportanceRow(
                 prediction_version=prediction_version,
@@ -625,7 +653,7 @@ def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> 
 
 
 def _unique_by_join_key(
-    rows: Iterable[AnomalyState1mRow] | Iterable[AnomalyOutcomeLabelRow],
+    rows: Iterable[AnomalyState1mRow] | Iterable[AnomalyOutcomeLabelRow] | Iterable[AnomalyFeatureMatrixRow],
     *,
     artifact_name: str,
 ) -> dict[tuple[str, str, int, int], object]:
@@ -638,11 +666,16 @@ def _unique_by_join_key(
     return result
 
 
-def _join_key(row: AnomalyState1mRow | AnomalyOutcomeLabelRow) -> tuple[str, str, int, int]:
+def _join_key(row: AnomalyState1mRow | AnomalyOutcomeLabelRow | AnomalyFeatureMatrixRow) -> tuple[str, str, int, int]:
     return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
 
 
-def _enforce_prediction_input_temporal_contract(*, state: AnomalyState1mRow, label: AnomalyOutcomeLabelRow) -> None:
+def _enforce_prediction_input_temporal_contract(
+    *,
+    state: AnomalyState1mRow,
+    label: AnomalyOutcomeLabelRow,
+    feature: AnomalyFeatureMatrixRow | None,
+) -> None:
     if state.snapshot_time_ms != label.snapshot_time_ms:
         raise MarketDataContractError("prediction join requires equal state/label snapshot_time_ms")
     if state.feature_cutoff_time_ms != label.feature_cutoff_time_ms:
@@ -653,6 +686,13 @@ def _enforce_prediction_input_temporal_contract(*, state: AnomalyState1mRow, lab
         raise MarketDataContractError("prediction label feature_cutoff_time_ms must be <= snapshot_time_ms")
     if label.future_start_time_ms <= state.snapshot_time_ms:
         raise MarketDataContractError("prediction label future_start_time_ms must be > state snapshot_time_ms")
+    if feature is not None:
+        if feature.snapshot_time_ms != state.snapshot_time_ms:
+            raise MarketDataContractError("prediction feature join requires equal feature/state snapshot_time_ms")
+        if feature.feature_cutoff_time_ms != state.feature_cutoff_time_ms:
+            raise MarketDataContractError("prediction feature join requires equal feature/state feature_cutoff_time_ms")
+        if feature.feature_cutoff_time_ms > feature.snapshot_time_ms:
+            raise MarketDataContractError("prediction feature feature_cutoff_time_ms must be <= snapshot_time_ms")
 
 
 def _state_bins(state: AnomalyState1mRow) -> dict[str, str]:
@@ -680,32 +720,63 @@ def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionCo
     return [_target_for_horizon(row.label, config.target_horizon_minutes) for row in rows]
 
 
-def _feature_matrix(rows: Sequence[PredictionInputRow]) -> np.ndarray:
-    return _feature_matrix_from_states([row.state for row in rows])
+def _input_feature_names(rows: Sequence[PredictionInputRow]) -> tuple[str, ...]:
+    has_feature_matrix = {row.features is not None for row in rows}
+    if has_feature_matrix == {True}:
+        return (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES)
+    if has_feature_matrix == {False}:
+        return STATE_MODEL_FEATURE_NAMES
+    raise PredictionInputError("prediction rows must not mix feature-matrix and state-only inputs")
 
 
-def _feature_matrix_from_states(states: Sequence[AnomalyState1mRow]) -> np.ndarray:
-    return np.array([_state_feature_vector(state) for state in states], dtype=float)
+def _feature_matrix(rows: Sequence[PredictionInputRow], *, feature_names: tuple[str, ...]) -> np.ndarray:
+    return np.array([_feature_vector(row, feature_names=feature_names) for row in rows], dtype=float)
 
 
-def _state_feature_vector(state: AnomalyState1mRow) -> list[float]:
-    return [
-        float(state.minutes_since_event_start),
-        float(state.minutes_since_detection),
-        1.0 if state.event_alive else 0.0,
-        float(state.time_since_running_high_minutes),
-        float(state.current_return_from_start),
-        float(state.distance_to_running_high),
-        float(state.distance_to_running_low),
-        0.0 if state.distance_to_structural_low is None else float(state.distance_to_structural_low),
-        0.0 if state.distance_to_structural_high is None else float(state.distance_to_structural_high),
-        1.0 if state.distance_to_structural_low is None else 0.0,
-        1.0 if state.distance_to_structural_high is None else 0.0,
-    ]
+def _feature_vector(row: PredictionInputRow, *, feature_names: tuple[str, ...]) -> list[float]:
+    state_values = _state_feature_values(row.state)
+    values: list[float] = []
+    for name in feature_names:
+        if name in state_values:
+            values.append(state_values[name])
+            continue
+        if not name.startswith("feature_matrix."):
+            raise PredictionInputError(f"unknown model feature name: {name}")
+        if row.features is None:
+            raise PredictionInputError(f"missing anomaly_feature_matrix.csv row for model feature: {name}")
+        values.append(_feature_matrix_value(row.features, name.removeprefix("feature_matrix.")))
+    return values
 
 
-def _raw_probability_matrix(model: CatBoostClassifier, rows: Sequence[PredictionInputRow]) -> np.ndarray:
-    return np.asarray(model.predict_proba(_feature_matrix(rows)), dtype=float)
+def _state_feature_values(state: AnomalyState1mRow) -> dict[str, float]:
+    return {
+        "minutes_since_event_start": float(state.minutes_since_event_start),
+        "minutes_since_detection": float(state.minutes_since_detection),
+        "event_alive": 1.0 if state.event_alive else 0.0,
+        "time_since_running_high_minutes": float(state.time_since_running_high_minutes),
+        "current_return_from_start": float(state.current_return_from_start),
+        "distance_to_running_high": float(state.distance_to_running_high),
+        "distance_to_running_low": float(state.distance_to_running_low),
+        "distance_to_structural_low": 0.0 if state.distance_to_structural_low is None else float(state.distance_to_structural_low),
+        "distance_to_structural_high": 0.0 if state.distance_to_structural_high is None else float(state.distance_to_structural_high),
+        "missing_structural_low": 1.0 if state.distance_to_structural_low is None else 0.0,
+        "missing_structural_high": 1.0 if state.distance_to_structural_high is None else 0.0,
+    }
+
+
+def _feature_matrix_value(row: AnomalyFeatureMatrixRow, field_name: str) -> float:
+    value = getattr(row, field_name)
+    if value is None:
+        return math.nan
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    raise PredictionInputError(f"feature matrix model feature must be numeric or bool, got {field_name!r}")
+
+
+def _raw_probability_matrix(model: CatBoostClassifier, rows: Sequence[PredictionInputRow], *, feature_names: tuple[str, ...]) -> np.ndarray:
+    return np.asarray(model.predict_proba(_feature_matrix(rows, feature_names=feature_names)), dtype=float)
 
 
 def _probability_dict(values: Sequence[float] | np.ndarray) -> dict[str, float]:

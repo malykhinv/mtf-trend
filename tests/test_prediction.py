@@ -10,9 +10,11 @@ import pytest
 
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
 from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT, AnomalyOutcomeLabelRow
 from anomaly_science.contracts.prediction import PREDICTION_TEMPORAL_CONTRACT
 from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.features import FEATURE_SCHEMA_VERSION, FeatureMatrixConfig, feature_matrix_rows_to_artifact
 from anomaly_science.prediction import (
     PredictionArtifactError,
     WalkForwardPredictionConfig,
@@ -98,6 +100,66 @@ def _label_row(
     )
 
 
+def _feature_row(*, state: AnomalyState1mRow) -> AnomalyFeatureMatrixRow:
+    return AnomalyFeatureMatrixRow(
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
+        feature_matrix_version=FeatureMatrixConfig().feature_matrix_version,
+        event_id=state.event_id,
+        symbol=state.symbol,
+        snapshot_time_ms=state.snapshot_time_ms,
+        feature_cutoff_time_ms=state.feature_cutoff_time_ms,
+        minutes_since_trigger=state.minutes_since_detection,
+        ATR_1d_asof_t=2.0,
+        ATR_1d_pct_asof_t=0.02,
+        current_return_from_start=state.current_return_from_start,
+        range_since_start_atr=1.2,
+        distance_to_running_high_atr=abs(state.distance_to_running_high),
+        distance_to_running_low_atr=state.distance_to_running_low,
+        retracement_from_high_atr=abs(state.distance_to_running_high),
+        price_speed_atr=0.1,
+        clock_maturity=0.5,
+        event_age_ratio=0.1,
+        alpha_decay_bucket="3-5m",
+        feature_source_status="complete",
+        quote_volume_1m_to_24h_median=2.0,
+        volume_zscore=3.0,
+        quote_volume_zscore=3.5,
+        oi_change_5m_pct_of_oi=0.01,
+        oi_change_10m_pct_of_oi=0.02,
+        short_liq_intensity=0.03,
+        long_liq_intensity=0.01,
+        liquidation_imbalance=0.2,
+        cumulative_liq_intensity_since_event_start=0.04,
+        cvd_quote_since_event_start=0.1,
+        cvd_change_3m=0.05,
+        cvd_change_5m=0.06,
+        cvd_change_10m=0.08,
+        cvd_price_divergence_3m=0.01,
+        cvd_price_divergence_5m=0.02,
+        cvd_price_divergence_10m=0.03,
+        price_up_cvd_down_flag=state.current_return_from_start > 0,
+        volume_market_percentile=0.8,
+        quote_volume_market_percentile=0.85,
+        return_1m_market_percentile=0.75,
+        return_from_event_market_percentile=0.7,
+        oi_growth_market_percentile=0.65,
+        liq_intensity_market_percentile=0.6,
+        range_expansion_market_percentile=0.9,
+        cross_section_available=True,
+        cross_section_symbol_count=10,
+        corr_with_btc_15m=0.4,
+        corr_with_btc_30m=0.3,
+        corr_with_btc_60m=0.2,
+        symbol_return_minus_btc_return_5m=0.01,
+        symbol_return_minus_btc_return_15m=0.02,
+        idiosyncratic_momentum_score=0.5,
+        simultaneous_anomalies_count_1m=2,
+        simultaneous_anomalies_share_1m=0.2,
+        systemic_cluster_regime="moderate_cluster",
+        market_shock_id="shock_1",
+    )
+
+
 def _training_and_test_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutcomeLabelRow]]:
     scenarios = ("long_continuation", "short_fade", "static_or_chop", "unclear")
     states: list[AnomalyState1mRow] = []
@@ -132,6 +194,10 @@ def _write_state(path: Path, rows: list[AnomalyState1mRow]) -> None:
 
 def _write_labels(path: Path, rows: list[AnomalyOutcomeLabelRow]) -> None:
     write_csv_artifact(path, [asdict(row) for row in rows], get_artifact_schema("anomaly_outcome_labels.csv"))
+
+
+def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:
+    write_csv_artifact(path, feature_matrix_rows_to_artifact(rows), get_artifact_schema("anomaly_feature_matrix.csv"))
 
 
 def test_walk_forward_prediction_uses_one_frozen_model_per_iso_week() -> None:
@@ -206,9 +272,11 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     states, labels = _training_and_test_rows()
     state_path = tmp_path / "anomaly_state_1m.csv"
     labels_path = tmp_path / "anomaly_outcome_labels.csv"
+    features_path = tmp_path / "anomaly_feature_matrix.csv"
     out_dir = tmp_path / "prediction"
     _write_state(state_path, states)
     _write_labels(labels_path, labels)
+    _write_features(features_path, [_feature_row(state=state) for state in states])
 
     result = subprocess.run(
         [
@@ -219,6 +287,8 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
             str(state_path),
             "--labels",
             str(labels_path),
+            "--features",
+            str(features_path),
             "--out",
             str(out_dir),
             "--horizon-minutes",
@@ -248,6 +318,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
     assert audit_by_name["weekly_walk_forward_heavy_models_enforced"]["status"] == "PASS"
     assert audit_by_name["frozen_weekly_model_used_for_daily_oos"]["status"] == "PASS"
+    assert audit_by_name["feature_matrix_artifact_schema_boundary"]["status"] == "PASS"
 
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
@@ -258,7 +329,9 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
         metadata_rows = list(csv.DictReader(file_obj))
     assert metadata_rows[0]["class_order"] == "long_continuation,short_fade,static_or_chop,unclear"
     assert int(metadata_rows[0]["best_iteration"]) >= 0
+    assert "feature_matrix.volume_zscore" in metadata_rows[0]["model_feature_names"]
 
     with (out_dir / "strategy_feature_importance.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         importance_rows = list(csv.DictReader(file_obj))
     assert {row["feature_name"] for row in importance_rows} >= {"minutes_since_detection", "current_return_from_start"}
+    assert "feature_matrix.volume_zscore" in {row["feature_name"] for row in importance_rows}
