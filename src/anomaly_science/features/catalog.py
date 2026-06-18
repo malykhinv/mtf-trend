@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
@@ -714,6 +714,13 @@ def run_mvp1_features(*, out_dir: str | Path) -> Path:
             output_path / "anomaly_feature_catalog.csv",
             feature_rows_to_artifact(rows),
             get_artifact_schema("anomaly_feature_catalog.csv"),
+        )
+    )
+    written.append(
+        write_csv_artifact(
+            output_path / "strategy_feature_schema.csv",
+            feature_rows_to_artifact(rows),
+            get_artifact_schema("strategy_feature_schema.csv"),
         )
     )
     written.extend(

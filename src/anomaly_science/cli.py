@@ -17,6 +17,7 @@ from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
+from anomaly_science.strategy import run_mvp1_strategy_registry
 from anomaly_science.validation import run_mvp1_holdout_governance
 
 
@@ -70,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the MVP1 feature catalog contract with as-of and normalization metadata.",
     )
     features.add_argument("--out", required=True, help="Directory where feature catalog artifacts will be written.")
+
+    strategy_registry = subparsers.add_parser(
+        "run-mvp1-strategy-registry",
+        help="Write registered strategy metadata exposed through the BaseStrategy contract.",
+    )
+    strategy_registry.add_argument("--out", required=True, help="Directory where strategy registry artifacts will be written.")
 
     feature_matrix = subparsers.add_parser(
         "run-mvp1-feature-matrix",
@@ -294,6 +301,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-mvp1-features":
         output_dir = run_mvp1_features(out_dir=Path(args.out))
         print(f"mvp1 feature catalog artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-strategy-registry":
+        output_dir = run_mvp1_strategy_registry(out_dir=Path(args.out))
+        print(f"mvp1 strategy registry artifacts written: {output_dir}")
         return 0
 
     if args.command == "run-mvp1-feature-matrix":

@@ -48,6 +48,9 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
         "technical_noise_shock_excluded_from_broad_detector",
         "base_strategy_contract_valid",
     ),
+    "mvp1_strategy_registry": (
+        "base_strategy_contract_valid",
+    ),
     "mvp1_state": (
         "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
     ),
