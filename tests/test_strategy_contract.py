@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import polars as pl
 import pytest
 
@@ -9,6 +11,10 @@ from anomaly_science.strategy.anomaly import BroadAnomalyStrategy
 
 
 BASE_TS = 1_704_067_200_000
+
+
+def _dt(value_ms: int) -> datetime:
+    return datetime.fromtimestamp(value_ms / 1000, tz=timezone.utc)
 
 
 def _candle_row(index: int, *, close: float, quote_volume: float = 100.0) -> dict[str, object]:
@@ -80,6 +86,8 @@ def test_broad_anomaly_strategy_wraps_detector_behind_base_contract() -> None:
     assert "state_time" in trigger_frame.columns
     assert "state_time_ms" not in trigger_frame.columns
     assert "event_start_time" in trigger_frame.columns
+    assert "minutes_since_start" in trigger_frame.columns
+    assert trigger_frame["minutes_since_start"].to_list() == [1]
     assert trigger_frame["is_trigger"].to_list() == [True]
     assert custom_features.height == 0
     assert custom_features.columns == []
@@ -95,6 +103,30 @@ def test_trigger_frame_rejects_internal_unix_ms_time_columns() -> None:
     })
 
     with pytest.raises(StrategyContractError, match="native datetime"):
+        validate_trigger_frame(frame)
+
+
+def test_trigger_frame_requires_consistent_minutes_since_start() -> None:
+    frame = pl.DataFrame(
+        {
+            "symbol": ["AAA"],
+            "state_time": [_dt(BASE_TS + 120_000)],
+            "event_start_time": [_dt(BASE_TS)],
+            "minutes_since_start": [1],
+            "is_trigger": [True],
+            "event_id": ["evt"],
+        },
+        schema={
+            "symbol": pl.String,
+            "state_time": pl.Datetime("ms", "UTC"),
+            "event_start_time": pl.Datetime("ms", "UTC"),
+            "minutes_since_start": pl.Int64,
+            "is_trigger": pl.Boolean,
+            "event_id": pl.String,
+        },
+    )
+
+    with pytest.raises(StrategyContractError, match="minutes_since_start"):
         validate_trigger_frame(frame)
 
 

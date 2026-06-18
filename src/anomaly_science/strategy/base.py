@@ -20,6 +20,7 @@ REQUIRED_TRIGGER_FRAME_COLUMNS: tuple[str, ...] = (
     "is_trigger",
     "event_id",
     "event_start_time",
+    "minutes_since_start",
 )
 
 _FORBIDDEN_INTERNAL_TIME_COLUMNS: tuple[str, ...] = (
@@ -139,9 +140,14 @@ def validate_trigger_frame(trigger_frame: pl.DataFrame) -> None:
     _validate_datetime_column(trigger_frame, "event_start_time")
     if trigger_frame["is_trigger"].dtype != pl.Boolean:
         raise StrategyContractError("trigger frame is_trigger must be boolean")
+    if not trigger_frame["minutes_since_start"].dtype.is_integer():
+        raise StrategyContractError("trigger frame minutes_since_start must be integer minutes")
+    if trigger_frame["minutes_since_start"].null_count() > 0:
+        raise StrategyContractError("trigger frame minutes_since_start must not be null")
     invalid_time_order = trigger_frame.filter(pl.col("event_start_time") > pl.col("state_time"))
     if invalid_time_order.height:
         raise StrategyContractError("trigger frame event_start_time must be <= state_time")
+    _validate_minutes_since_start(trigger_frame)
 
 
 def validate_point_in_time_feature_equivalence(
@@ -206,6 +212,20 @@ def _validate_datetime_column(frame: pl.DataFrame, name: str) -> None:
     dtype = frame[name].dtype
     if not _is_datetime_ms(dtype):
         raise StrategyContractError(f"trigger frame {name} must be pl.Datetime with millisecond precision")
+
+
+def _validate_minutes_since_start(trigger_frame: pl.DataFrame) -> None:
+    state_times = trigger_frame["state_time"].to_list()
+    event_start_times = trigger_frame["event_start_time"].to_list()
+    minutes_values = trigger_frame["minutes_since_start"].to_list()
+    for state_time, event_start_time, minutes_since_start in zip(state_times, event_start_times, minutes_values):
+        expected_minutes = int((state_time - event_start_time).total_seconds() // 60)
+        if minutes_since_start != expected_minutes:
+            raise StrategyContractError(
+                "trigger frame minutes_since_start must equal floor(state_time - event_start_time in minutes)"
+            )
+        if minutes_since_start < 0:
+            raise StrategyContractError("trigger frame minutes_since_start must be non-negative")
 
 
 def _is_datetime_ms(dtype: object) -> bool:
