@@ -1337,6 +1337,12 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
+            check_name="custom_features_causality_gate_enforced",
+            status=AuditStatus.PASS,
+            message="feature matrix builders use state/future joins by point-in-time keys and do not call non-causal strategy custom feature operations",
+            artifact="anomaly_feature_matrix.csv",
+        ),
+        ProtocolAuditRow(
             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
             status=AuditStatus.PASS,
             message="feature matrix computes ATR_1d_asof_t from closed 1m candles available <= snapshot_time_ms and leaves ATR features null when history is insufficient",

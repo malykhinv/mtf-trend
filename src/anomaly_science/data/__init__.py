@@ -9,7 +9,7 @@ from .normalized import (
     normalize_market_data,
     normalize_open_interest_5m,
 )
-from .quality import has_critical_fail, rows_to_artifact, run_data_quality
+from .quality import filter_warmup_window_rows, has_critical_fail, rows_to_artifact, run_data_quality
 from .source import CsvDataSourceError, CsvDirectoryDataSource, CsvDatasetSpec, MarketDataSource, available_dataset_names
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "MarketDataSource",
     "NormalizedMarketData",
     "available_dataset_names",
+    "filter_warmup_window_rows",
     "has_critical_fail",
     "normalize_candles_1m",
     "normalize_candles_5m",

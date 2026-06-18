@@ -13,18 +13,25 @@ from anomaly_science.events.config import BroadAnomalyDetectorConfig
 from anomaly_science.events.detector import detect_broad_anomaly_events
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION
 from anomaly_science.labels.config import OutcomeLabelConfig
-from anomaly_science.strategy.base import BaseStrategy, StrategyMetadata, validate_required_data_streams, validate_trigger_frame
+from anomaly_science.strategy.base import (
+    BaseStrategy,
+    INTERNAL_TIME_DTYPE,
+    StrategyMetadata,
+    utc_ms_to_internal_datetime,
+    validate_required_data_streams,
+    validate_trigger_frame,
+)
 
 
 ANOMALY_STRATEGY_DEFAULTS: dict[str, dict[str, float | int | str]] = {
-    "broad_anomaly_v1_h15": {"horizon_minutes": 15, "take_profit_atr": 1.5, "stop_loss_atr": 1.0},
-    "broad_anomaly_v1_h30": {"horizon_minutes": 30, "take_profit_atr": 2.0, "stop_loss_atr": 1.1},
-    "broad_anomaly_v1_h60": {"horizon_minutes": 60, "take_profit_atr": 2.5, "stop_loss_atr": 1.2},
-    "post_anomaly_extension_v1_h60": {"horizon_minutes": 60, "take_profit_atr": 2.5, "stop_loss_atr": 1.3},
-    "post_anomaly_extension_v1_h120": {"horizon_minutes": 120, "take_profit_atr": 3.0, "stop_loss_atr": 1.5},
-    "post_pump_distribution_v1_h60": {"horizon_minutes": 60, "take_profit_atr": 2.0, "stop_loss_atr": 1.2},
-    "post_pump_distribution_v1_h120": {"horizon_minutes": 120, "take_profit_atr": 3.0, "stop_loss_atr": 1.5},
-    "post_pump_distribution_v1_h180": {"horizon_minutes": 180, "take_profit_atr": 4.0, "stop_loss_atr": 2.0},
+    "broad_anomaly_v1_h15": {"horizon_minutes": 15, "take_profit_atr_1440": 1.5, "stop_loss_atr_1440": 1.0},
+    "broad_anomaly_v1_h30": {"horizon_minutes": 30, "take_profit_atr_1440": 2.0, "stop_loss_atr_1440": 1.1},
+    "broad_anomaly_v1_h60": {"horizon_minutes": 60, "take_profit_atr_1440": 2.5, "stop_loss_atr_1440": 1.2},
+    "post_anomaly_extension_v1_h60": {"horizon_minutes": 60, "take_profit_atr_1440": 2.5, "stop_loss_atr_1440": 1.3},
+    "post_anomaly_extension_v1_h120": {"horizon_minutes": 120, "take_profit_atr_1440": 3.0, "stop_loss_atr_1440": 1.5},
+    "post_pump_distribution_v1_h60": {"horizon_minutes": 60, "take_profit_atr_1440": 2.0, "stop_loss_atr_1440": 1.2},
+    "post_pump_distribution_v1_h120": {"horizon_minutes": 120, "take_profit_atr_1440": 3.0, "stop_loss_atr_1440": 1.5},
+    "post_pump_distribution_v1_h180": {"horizon_minutes": 180, "take_profit_atr_1440": 4.0, "stop_loss_atr_1440": 2.0},
 }
 
 BROAD_ANOMALY_REQUIRED_DATA_STREAMS: dict[str, bool] = {
@@ -40,12 +47,12 @@ POST_PUMP_REQUIRED_DATA_STREAMS: dict[str, bool] = {
 _TRIGGER_FRAME_SCHEMA: dict[str, pl.DataType] = {
     "event_id": pl.String,
     "symbol": pl.String,
-    "state_time_ms": pl.Int64,
-    "event_start_time_ms": pl.Int64,
+    "state_time": INTERNAL_TIME_DTYPE,
+    "event_start_time": INTERNAL_TIME_DTYPE,
     "minutes_since_start": pl.Int64,
     "is_trigger": pl.Boolean,
-    "event_detection_time_ms": pl.Int64,
-    "seed_time_ms": pl.Int64,
+    "event_detection_time": INTERNAL_TIME_DTYPE,
+    "seed_time": INTERNAL_TIME_DTYPE,
     "seed_open": pl.Float64,
     "seed_high": pl.Float64,
     "seed_low": pl.Float64,
@@ -69,8 +76,8 @@ def anomaly_strategy_metadata(strategy_name: str) -> StrategyMetadata:
         strategy_contract_version="base_strategy_v1",
         strategy_family="anomaly",
         horizon_minutes=int(defaults["horizon_minutes"]),
-        take_profit_atr=float(defaults["take_profit_atr"]),
-        stop_loss_atr=float(defaults["stop_loss_atr"]),
+        take_profit_atr_1440=float(defaults["take_profit_atr_1440"]),
+        stop_loss_atr_1440=float(defaults["stop_loss_atr_1440"]),
         feature_schema_version=FEATURE_SCHEMA_VERSION,
         label_schema_version=OutcomeLabelConfig().label_schema_version,
     )
@@ -91,6 +98,8 @@ class BroadAnomalyStrategy(BaseStrategy):
         return BROAD_ANOMALY_REQUIRED_DATA_STREAMS
 
     def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+        if market_frame_asof.height == 0:
+            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
         pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
         candles = normalize_candles_1m(pandas_frame)
         events = self.generate_events(candles)
@@ -130,12 +139,12 @@ def _event_to_trigger_row(event: AnomalyEvent) -> dict[str, object]:
     return {
         "event_id": event.event_id,
         "symbol": event.symbol,
-        "state_time_ms": state_time_ms,
-        "event_start_time_ms": event.event_start_time_ms,
+        "state_time": utc_ms_to_internal_datetime(state_time_ms),
+        "event_start_time": utc_ms_to_internal_datetime(event.event_start_time_ms),
         "minutes_since_start": (state_time_ms - event.event_start_time_ms) // ONE_MINUTE_MS,
         "is_trigger": True,
-        "event_detection_time_ms": event.event_detection_time_ms,
-        "seed_time_ms": event.seed_time_ms,
+        "event_detection_time": utc_ms_to_internal_datetime(event.event_detection_time_ms),
+        "seed_time": utc_ms_to_internal_datetime(event.seed_time_ms),
         "seed_open": event.seed_open,
         "seed_high": event.seed_high,
         "seed_low": event.seed_low,

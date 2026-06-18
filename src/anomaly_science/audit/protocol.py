@@ -18,11 +18,14 @@ class TemporalAuditInput:
 METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
     "technical_noise_shock_excluded_from_broad_detector",
+    "warmup_window_excluded_from_trigger_generation",
+    "trigger_cascade_suppressed_before_dataset_and_simulation",
     "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
     "ATR_1d_asof_t_computed_from_closed_past_candles",
     "fixed_percent_labels_forbidden",
     "intracandle_double_barrier_resolved_as_stop_loss_first",
     "relative_over_absolute_feature_contract_enforced",
+    "custom_features_causality_gate_enforced",
     "market_shock_id_assigned",
     "simultaneous_anomalies_count_1m_point_in_time",
     "base_strategy_contract_valid",
@@ -32,6 +35,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "expected_value_computed_before_trade_simulation",
     "trade_simulation_after_calibration_and_decision_timing",
     "pessimistic_entry_price_includes_slippage_penalty",
+    "anti_pyramiding_one_open_position_per_symbol_strategy",
     "final_holdout_not_accessed_before_protocol_freeze",
 )
 
@@ -46,6 +50,8 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     "mvp1_events": (
         "technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
         "technical_noise_shock_excluded_from_broad_detector",
+        "warmup_window_excluded_from_trigger_generation",
+        "trigger_cascade_suppressed_before_dataset_and_simulation",
         "base_strategy_contract_valid",
     ),
     "mvp1_strategy_registry": (
@@ -61,10 +67,12 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     ),
     "mvp1_feature_catalog": (
         "relative_over_absolute_feature_contract_enforced",
+    "custom_features_causality_gate_enforced",
     ),
     "mvp1_feature_matrix": (
         "ATR_1d_asof_t_computed_from_closed_past_candles",
         "relative_over_absolute_feature_contract_enforced",
+    "custom_features_causality_gate_enforced",
         "market_shock_id_assigned",
         "simultaneous_anomalies_count_1m_point_in_time",
     ),
@@ -94,6 +102,7 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     "mvp1_simulation": (
         "trade_simulation_after_calibration_and_decision_timing",
         "pessimistic_entry_price_includes_slippage_penalty",
+    "anti_pyramiding_one_open_position_per_symbol_strategy",
         "intracandle_double_barrier_resolved_as_stop_loss_first",
     ),
     "mvp1_governance": (

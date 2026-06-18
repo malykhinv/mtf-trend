@@ -12,9 +12,10 @@ from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.normalized import normalize_candles_1m
-from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, run_data_quality
+from anomaly_science.data.quality import filter_warmup_window_rows, has_critical_fail, rows_to_artifact, run_data_quality
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
+from anomaly_science.events.deduplication import suppress_event_cascade
 from anomaly_science.events.detector import events_to_artifact
 from anomaly_science.strategy.base import validate_trigger_frame
 from anomaly_science.strategy.registry import get_broad_anomaly_strategy
@@ -43,16 +44,25 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     )
 
     events = ()
+    raw_event_count = 0
+    cascade_suppressed_count = 0
     event_error: str | None = None
     if frames.get("candles_1m") is not None and not has_critical_fail(data_quality):
         try:
-            market_frame = pl.DataFrame(frames["candles_1m"].to_dict(orient="records"))
+            gated_candles_1m = filter_warmup_window_rows(frames["candles_1m"])
+            market_frame = pl.DataFrame(gated_candles_1m.to_dict(orient="list"))
             trigger_frame = strategy.generate_triggers(market_frame)
             validate_trigger_frame(trigger_frame)
-            events = strategy.generate_events(
-                normalize_candles_1m(frames["candles_1m"]),
+            raw_events = (
+                ()
+                if gated_candles_1m.empty
+                else strategy.generate_events(normalize_candles_1m(gated_candles_1m))
             )
-            _enforce_trigger_frame_matches_events(trigger_frame=trigger_frame, events=events)
+            _enforce_trigger_frame_matches_events(trigger_frame=trigger_frame, events=raw_events)
+            cascade_result = suppress_event_cascade(raw_events, horizon_minutes=strategy.metadata.horizon_minutes)
+            events = cascade_result.accepted_events
+            raw_event_count = len(raw_events)
+            cascade_suppressed_count = len(cascade_result.suppressed_events)
         except (TypeError, ValueError) as exc:
             event_error = f"event detector failed: {exc}"
 
@@ -60,8 +70,11 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
         critical_fail=has_critical_fail(data_quality),
         universe_rows_present=bool(universe_rows),
         event_count=len(events),
+        raw_event_count=raw_event_count,
+        cascade_suppressed_count=cascade_suppressed_count,
         event_error=event_error,
         technical_noise_shock_count=_technical_noise_shock_count(data_quality),
+        warmup_window_count=_warmup_window_count(data_quality),
         strategy_name=strategy.metadata.strategy_name,
     )
     run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, strategy=strategy)
@@ -125,8 +138,11 @@ def _protocol_rows(
     critical_fail: bool,
     universe_rows_present: bool,
     event_count: int,
+    raw_event_count: int,
+    cascade_suppressed_count: int,
     event_error: str | None,
     technical_noise_shock_count: int,
+    warmup_window_count: int,
     strategy_name: str,
 ) -> list[ProtocolAuditRow]:
     base_rows = [
@@ -148,7 +164,7 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="broad_anomaly_detector_written",
             status=AuditStatus.FAIL if event_error else AuditStatus.PASS,
-            message=event_error or f"anomaly_events.csv written with {event_count} broad detector rows",
+            message=event_error or f"anomaly_events.csv written with {event_count} accepted broad detector rows from {raw_event_count} raw trigger rows",
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
@@ -183,6 +199,18 @@ def _protocol_rows(
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
+            check_name="warmup_window_excluded_from_trigger_generation",
+            status=AuditStatus.PASS,
+            message=f"excluded warm-up windows after data gaps before strategy.generate_triggers; warmup_window_count={warmup_window_count}",
+            artifact="anomaly_data_quality.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="trigger_cascade_suppressed_before_dataset_and_simulation",
+            status=AuditStatus.PASS,
+            message=f"suppressed {cascade_suppressed_count} repeated same-symbol triggers inside the strategy horizon before writing anomaly_events.csv",
+            artifact="anomaly_events.csv",
+        ),
+        ProtocolAuditRow(
             check_name="base_strategy_contract_valid",
             status=AuditStatus.PASS,
             message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible trigger-frame generate_triggers",
@@ -203,6 +231,10 @@ def _technical_noise_shock_count(rows: list) -> int:
         if getattr(row, "check_name", "") == "candles_1m_technical_noise_shock"
         and getattr(row, "technical_noise_shock", False) is True
     )
+
+
+def _warmup_window_count(rows: list) -> int:
+    return sum(1 for row in rows if getattr(row, "check_name", "") == "candles_1m_warmup_window")
 
 
 def _enforce_trigger_frame_matches_events(*, trigger_frame: pl.DataFrame, events: tuple) -> None:
@@ -237,6 +269,8 @@ def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[R
         RunConfigRow(key="strategy_contract_version", value=metadata.strategy_contract_version, source="runtime"),
         RunConfigRow(key="strategy_family", value=metadata.strategy_family, source="runtime"),
         RunConfigRow(key="strategy_horizon_minutes", value=str(metadata.horizon_minutes), source="runtime"),
+        RunConfigRow(key="take_profit_atr_1440", value=str(metadata.take_profit_atr_1440), source="runtime"),
+        RunConfigRow(key="stop_loss_atr_1440", value=str(metadata.stop_loss_atr_1440), source="runtime"),
         RunConfigRow(key="detector_version", value=config.detector_version, source="runtime"),
         RunConfigRow(key="detector_baseline_bars", value=str(config.baseline_bars), source="runtime"),
         RunConfigRow(key="detector_min_baseline_bars", value=str(config.min_baseline_bars), source="runtime"),

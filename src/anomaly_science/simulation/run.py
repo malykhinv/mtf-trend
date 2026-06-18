@@ -98,7 +98,7 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int) -> lis
         ProtocolAuditRow(
             check_name="next_open_entry_with_slippage",
             status=AuditStatus.PASS,
-            message="each simulated trade enters at the next 1m open after snapshot_time_ms with pessimistic slippage applied",
+            message="each simulated trade enters at the next 1m open after snapshot_time_ms with pessimistic slippage and toxic-entry penalty applied",
             artifact="anomaly_trade_simulation.csv",
         ),
         ProtocolAuditRow(
@@ -129,7 +129,13 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int) -> lis
         ProtocolAuditRow(
             check_name="pessimistic_entry_price_includes_slippage_penalty",
             status=AuditStatus.PASS,
-            message="entry and exit prices include side-aware pessimistic slippage penalties",
+            message="entry prices include side-aware pessimistic slippage plus toxic-entry 1m range penalty; exit prices include pessimistic slippage",
+            artifact="anomaly_trade_simulation.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="anti_pyramiding_one_open_position_per_symbol_strategy",
+            status=AuditStatus.PASS,
+            message="simulation suppresses parallel open positions per symbol + strategy variant",
             artifact="anomaly_trade_simulation.csv",
         ),
         ProtocolAuditRow(
@@ -168,6 +174,7 @@ def _run_config_rows(
         RunConfigRow(key="stage", value="mvp1_simulation", source="runtime"),
         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
+        RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),
         RunConfigRow(key="require_prediction_confident", value=str(config.require_prediction_confident), source="runtime"),
         RunConfigRow(key="require_rr_acceptable", value=str(config.require_rr_acceptable), source="runtime"),
         RunConfigRow(key="simulation_scope", value="simplified_pessimistic_not_live_execution", source="runtime"),

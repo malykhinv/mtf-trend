@@ -58,13 +58,20 @@ def build_trade_simulation_rows(
         candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
 
     rows: list[TradeSimulationRow] = []
+    active_until_by_strategy_symbol: dict[tuple[str, str, str], int] = {}
     for decision in sorted(decision_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
         if decision.target_horizon_minutes != cfg.target_horizon_minutes:
             continue
         if not _is_simulatable_decision(decision, config=cfg):
             continue
+        key = (decision.strategy_name, decision.strategy_version, decision.symbol)
+        active_until_ms = active_until_by_strategy_symbol.get(key)
+        if active_until_ms is not None and decision.snapshot_time_ms <= active_until_ms:
+            continue
         symbol_candles = candles_by_symbol.get(decision.symbol, [])
-        rows.append(_simulate_decision(decision=decision, candles=symbol_candles, config=cfg))
+        row = _simulate_decision(decision=decision, candles=symbol_candles, config=cfg)
+        rows.append(row)
+        active_until_by_strategy_symbol[key] = row.exit_time_ms
     return tuple(rows)
 
 
@@ -148,7 +155,13 @@ def _simulate_decision(
     if not exit_candles:
         raise TradeSimulationInputError(f"no simulation candles for decision {decision.event_id}")
     side = decision.best_action
-    entry_price = _entry_price(side=side, entry_open=entry_candle.open, slippage_bps=decision.slippage_bps)
+    toxic_entry_penalty = _toxic_entry_penalty(decision=decision, candles=candles, config=config)
+    entry_price = _entry_price(
+        side=side,
+        entry_open=entry_candle.open,
+        slippage_bps=decision.slippage_bps,
+        toxic_entry_penalty=toxic_entry_penalty,
+    )
     target_price, stop_price = _barrier_prices(
         side=side,
         entry_price=entry_price,
@@ -213,11 +226,22 @@ def _entry_candle(*, decision: ExpectedValueRow, candles: Sequence[Candle1m]) ->
     raise TradeSimulationInputError(f"next 1m open is missing for decision {decision.event_id}")
 
 
-def _entry_price(*, side: str, entry_open: float, slippage_bps: float) -> float:
+def _entry_price(*, side: str, entry_open: float, slippage_bps: float, toxic_entry_penalty: float) -> float:
     penalty = slippage_bps / 10_000.0
     if side == "long":
-        return entry_open * (1.0 + penalty)
-    return entry_open * (1.0 - penalty)
+        return entry_open * (1.0 + penalty) + toxic_entry_penalty
+    return entry_open * (1.0 - penalty) - toxic_entry_penalty
+
+
+def _toxic_entry_penalty(*, decision: ExpectedValueRow, candles: Sequence[Candle1m], config: TradeSimulationConfig) -> float:
+    if config.toxic_entry_atr_1m_fraction == 0.0:
+        return 0.0
+    asof_candles = [candle for candle in candles if candle.available_time_ms <= decision.snapshot_time_ms]
+    if not asof_candles:
+        return 0.0
+    last_closed = max(asof_candles, key=lambda item: item.available_time_ms)
+    atr_1m_proxy = max(last_closed.high - last_closed.low, 0.0)
+    return atr_1m_proxy * config.toxic_entry_atr_1m_fraction
 
 
 def _barrier_prices(*, side: str, entry_price: float, target_distance: float, stop_distance: float) -> tuple[float, float]:

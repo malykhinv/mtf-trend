@@ -97,6 +97,28 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
     assert row.temporal_contract == TRADE_SIMULATION_TEMPORAL_CONTRACT
 
 
+def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant() -> None:
+    first = _decision("first")
+    second = _decision("second")
+    object.__setattr__(second, "state_time_ms", BASE_MS + ONE_MINUTE_MS)
+    object.__setattr__(second, "snapshot_time_ms", BASE_MS + ONE_MINUTE_MS)
+    object.__setattr__(second, "feature_cutoff_time_ms", BASE_MS + ONE_MINUTE_MS)
+    object.__setattr__(second, "future_start_time_ms", BASE_MS + 2 * ONE_MINUTE_MS)
+
+    rows = build_trade_simulation_rows(
+        candles_1m=[
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=101.5, low=100.5, close=101.0),
+            _candle(2, open_price=102.0, high=102.5, low=101.5, close=102.0),
+            _candle(30, open_price=103.0, high=103.5, low=102.5, close=103.0),
+        ],
+        decision_rows=[first, second],
+        config=TradeSimulationConfig(target_horizon_minutes=30),
+    )
+
+    assert [row.event_id for row in rows] == ["first"]
+
+
 def test_trade_simulation_artifact_roundtrip(tmp_path: Path) -> None:
     rows = build_trade_simulation_rows(
         candles_1m=[

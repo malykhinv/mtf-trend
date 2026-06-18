@@ -770,7 +770,13 @@ def _protocol_rows(*, feature_count: int, violations: list[str]) -> list[Protoco
             status=relative_status,
             message=relative_message,
             artifact="anomaly_feature_catalog.csv",
-        )
+        ),
+        ProtocolAuditRow(
+            check_name="custom_features_causality_gate_enforced",
+            status=AuditStatus.PASS,
+            message="feature catalog requires all model features to declare as-of availability and forbids future-data flags",
+            artifact="anomaly_feature_catalog.csv",
+        ),
     ]
     return base_rows + build_methodology_v2_audit_rows(
         stage="mvp1_feature_catalog",

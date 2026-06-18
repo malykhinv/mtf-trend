@@ -38,8 +38,8 @@ def test_strategy_metadata_validates_required_base_contract_fields() -> None:
             strategy_contract_version="base_strategy_v1",
             strategy_family="anomaly",
             horizon_minutes=0,
-            take_profit_atr=1.0,
-            stop_loss_atr=1.0,
+            take_profit_atr_1440=1.0,
+            stop_loss_atr_1440=1.0,
             feature_schema_version="features_v1",
             label_schema_version="labels_v1",
         )
@@ -53,8 +53,8 @@ def test_strategy_metadata_rejects_multi_horizon_values() -> None:
             strategy_contract_version="base_strategy_v1",
             strategy_family="anomaly",
             horizon_minutes=(15, 30),  # type: ignore[arg-type]
-            take_profit_atr=1.0,
-            stop_loss_atr=1.0,
+            take_profit_atr_1440=1.0,
+            stop_loss_atr_1440=1.0,
             feature_schema_version="features_v1",
             label_schema_version="labels_v1",
         )
@@ -73,13 +73,29 @@ def test_broad_anomaly_strategy_wraps_detector_behind_base_contract() -> None:
     assert strategy.metadata.strategy_family == "anomaly"
     assert strategy.metadata.strategy_contract_version == "base_strategy_v1"
     assert strategy.metadata.horizon_minutes == 30
-    assert strategy.metadata.take_profit_atr == 2.0
-    assert strategy.metadata.stop_loss_atr == 1.1
+    assert strategy.metadata.take_profit_atr_1440 == 2.0
+    assert strategy.metadata.stop_loss_atr_1440 == 1.1
     assert strategy.required_data_streams == {"open_interest": False, "liquidations": False}
     assert trigger_frame.height == 1
+    assert "state_time" in trigger_frame.columns
+    assert "state_time_ms" not in trigger_frame.columns
+    assert "event_start_time" in trigger_frame.columns
     assert trigger_frame["is_trigger"].to_list() == [True]
     assert custom_features.height == 0
     assert custom_features.columns == []
+
+
+def test_trigger_frame_rejects_internal_unix_ms_time_columns() -> None:
+    frame = pl.DataFrame({
+        "symbol": ["AAA"],
+        "state_time_ms": [BASE_TS],
+        "event_start_time_ms": [BASE_TS],
+        "is_trigger": [True],
+        "event_id": ["evt"],
+    })
+
+    with pytest.raises(StrategyContractError, match="native datetime"):
+        validate_trigger_frame(frame)
 
 
 def test_strategy_registry_exposes_broad_anomaly_by_contract_name() -> None:

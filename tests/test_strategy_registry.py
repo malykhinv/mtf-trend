@@ -11,6 +11,8 @@ from anomaly_science.strategy import anomaly_reject_reason_codes
 EXPECTED_ANOMALY_REJECT_REASONS = {
     "not_triggered",
     "technical_noise_shock",
+    "warmup_after_data_gap",
+    "cascade_suppressed",
     "data_quality_fail",
     "insufficient_history_for_ATR",
     "insufficient_cross_section",
@@ -19,6 +21,7 @@ EXPECTED_ANOMALY_REJECT_REASONS = {
     "horizon_not_available",
     "future_path_incomplete",
     "anti_binary_rule_failed",
+    "causality_gate_failed",
     "outside_strategy_lifecycle",
     "RR_unacceptable",
     "calibrated_confidence_too_low",

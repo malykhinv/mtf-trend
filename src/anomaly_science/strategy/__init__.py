@@ -1,4 +1,10 @@
-from anomaly_science.strategy.base import BaseStrategy, StrategyContractError, StrategyMetadata, validate_trigger_frame
+from anomaly_science.strategy.base import (
+    BaseStrategy,
+    StrategyContractError,
+    StrategyMetadata,
+    validate_point_in_time_feature_equivalence,
+    validate_trigger_frame,
+)
 from anomaly_science.strategy.reject_reasons import StrategyRejectReason, anomaly_reject_reason_codes, anomaly_reject_reasons
 from anomaly_science.strategy.registry import StrategyRegistryEntry, StrategyRegistryError, available_strategies, get_strategy
 from anomaly_science.strategy.run import run_mvp1_strategy_registry
@@ -11,6 +17,7 @@ __all__ = [
     "StrategyContractError",
     "StrategyMetadata",
     "validate_trigger_frame",
+    "validate_point_in_time_feature_equivalence",
     "anomaly_reject_reason_codes",
     "anomaly_reject_reasons",
     "available_strategies",

@@ -71,7 +71,7 @@ strategy_family
 trigger definition
 event/state lifecycle semantics
 strategy horizon
-take_profit_atr / stop_loss_atr defaults
+take_profit_atr_1440 / stop_loss_atr_1440 defaults
 strategy-specific custom features
 strategy-specific artifact aliases, если нужны
 strategy-specific reject reasons
@@ -116,8 +116,8 @@ class StrategyMetadata:
     strategy_contract_version: str
     strategy_family: str
     horizon_minutes: int
-    take_profit_atr: float
-    stop_loss_atr: float
+    take_profit_atr_1440: float
+    stop_loss_atr_1440: float
     feature_schema_version: str
     label_schema_version: str
 
@@ -192,9 +192,9 @@ pl.Datetime(time_unit="ms")
 Правило:
 
 ```text
-state_time, snapshot_time, feature_cutoff_time, future_start_time, event_start_time, event_detection_time и все lifecycle timestamps внутри Core являются pl.Datetime[ms].
-Суффикс `_ms` запрещён для внутренних contract/artifact columns, чтобы не смешивать нативное время Polars с Unix timestamp serialization.
-Unix timestamp Int64 в миллисекундах разрешён только на внешней границе: import/export legacy CSV/Parquet или API payload normalization.
+state_time, event_start_time, event_detection_time и seed_time внутри BaseStrategy/Polars calculation frames являются pl.Datetime[ms, UTC].
+Суффикс `_ms` запрещён на BaseStrategy boundary, чтобы не смешивать нативное время Polars с Unix timestamp serialization.
+Unix timestamp Int64 в миллисекундах разрешён только на внешней границе: import/export legacy CSV/Parquet, API payload normalization и dataclass-модели persisted artifacts. Если dataclass поле имеет суффикс `_ms`, оно считается serialization boundary, а не hot-path Polars contract.
 ```
 
 Запрещено:
@@ -203,7 +203,7 @@ Unix timestamp Int64 в миллисекундах разрешён только
 держать разные внутренние timestamp-типы для разных builders
 делать повторные cast Int64 <-> Datetime внутри hot path feature/state/future builders
 использовать join_asof между колонками времени разных типов
-сохранять `_ms` columns как canonical research contract
+возвращать `_ms` columns из BaseStrategy.generate_triggers
 ```
 
 
@@ -221,8 +221,8 @@ strategy_family
 horizon_minutes
 feature_schema_version
 label_schema_version
-take_profit_atr
-stop_loss_atr
+take_profit_atr_1440
+stop_loss_atr_1440
 required_data_streams
 ```
 
@@ -537,6 +537,26 @@ is_model_feature
 is_audit_only
 ```
 
+
+### 9.1. Core ATR-1440 volatility scale
+
+Базовым системным измерителем масштаба цены является `core_atr_1440`: суточная rolling-volatility/ATR, рассчитанная по закрытым 1m candles за 1440 минут.
+
+Правило:
+
+```text
+core_atr_1440 считается только из candles с available_time <= snapshot_time.
+Все geometry distances, TP/SL defaults, label thresholds и EV distances, где нужен универсальный price scale, нормализуются в долях core_atr_1440.
+Короткие ATR/1m range proxy разрешены только для execution micro-penalty, но не как основной label/geometry scale.
+```
+
+Граница совместимости:
+
+```text
+Исторические artifact columns `ATR_1d_asof_t` / `ATR_1d_pct_asof_t` трактуются как serialization aliases для core_atr_1440.
+Новый код обязан использовать смысловое имя core_atr_1440 в contracts/docs, даже если legacy CSV column ещё называется ATR_1d_asof_t.
+```
+
 ## 10. Anti-Binary Rule для strategy geometry
 
 Core не должен получать от стратегии экспертный hard verdict вместо геометрии.
@@ -834,17 +854,27 @@ probability of follow-through
 
 Trade simulation разрешена только после calibration и decision timing.
 
-`take_profit_atr` и `stop_loss_atr` являются simulation defaults конкретного strategy instance из `StrategyMetadata`. Они определяют физические границы simplified simulator и не являются label thresholds Core.
+`take_profit_atr_1440` и `stop_loss_atr_1440` являются simulation defaults конкретного strategy instance из `StrategyMetadata`. Они определяют физические границы simplified simulator и не являются label thresholds Core.
 
 Обязательные правила:
 
 ```text
 entry_reference = next 1m open after signal
-entry_price must include pessimistic slippage penalty
+entry_price must include pessimistic slippage penalty and toxic-entry ATR_1m penalty
 stop/target must be ATR-normalized or structure-based ATR-normalized
 fees must be included at least roughly
+funding fees must be included when funding_rate stream is present; if absent, short-distribution conclusions are audit-limited
 intracandle double barrier resolves as stop_loss_first
 one open simulated position per symbol/strategy variant unless an explicit pyramiding experiment is registered
+entry toxic penalty = 0.2 * last closed 1m high-low proxy by default, added against the trade direction
+```
+
+Funding / systemic-risk boundary:
+
+```text
+Если funding_rate stream доступен, simulation обязана списывать funding при пересечении funding cut-off во время hold.
+Если funding_rate stream отсутствует, post_pump_distribution short conclusions нельзя считать final EV proof; это audit limitation, а не zero-cost assumption.
+Systemic Regime Emergency Exit допускается только от Core market-context stream, рассчитанного as-of-t: simultaneous_anomalies_count_1m и BTC volatility impulse. Strategy не имеет права локально выключать этот risk layer.
 ```
 
 Запрещено:
@@ -935,7 +965,7 @@ strategy/core separation enforced
 BaseStrategy contract valid
 one strategy instance has exactly one horizon_minutes
 trigger frame schema valid and lifecycle timestamps ordered
-internal timestamp columns are pl.Datetime[ms], not Int64 `_ms` columns
+BaseStrategy trigger-frame timestamp columns are pl.Datetime[ms, UTC], not Int64 `_ms` columns
 trigger cascade suppression applied before dataset/simulation rows
 required_data_streams applied before trigger generation
 strategy simulation defaults present in StrategyMetadata
@@ -961,8 +991,8 @@ label schema version
 strategy name/version/contract
 strategy_family
 horizon_minutes
-take_profit_atr
-stop_loss_atr
+take_profit_atr_1440
+stop_loss_atr_1440
 required_data_streams
 max_feature_lookback_minutes
 trigger_deduplication_policy

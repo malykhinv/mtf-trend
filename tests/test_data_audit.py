@@ -11,6 +11,7 @@ import pytest
 
 from anomaly_science.contracts.audit import AuditStatus
 from anomaly_science.data import CsvDataSourceError, CsvDirectoryDataSource, run_data_quality, run_mvp1_data_audit
+from anomaly_science.data.quality import filter_warmup_window_rows
 from anomaly_science.universe import build_symbol_universe_by_day
 
 
@@ -113,6 +114,29 @@ def test_data_quality_marks_first_1m_candle_after_gap_as_technical_noise_shock()
     assert shock.excluded_from_detector is True
     assert shock.excluded_from_ml_dataset is True
     assert shock.reason == "api_maintenance_gap_aftershock"
+
+    warmup_rows = [row for row in rows if row.check_name == "candles_1m_warmup_window"]
+    assert len(warmup_rows) == 1
+    assert warmup_rows[0].reason == "warmup_after_data_gap"
+    assert warmup_rows[0].affected_rows == 1
+
+
+def test_warmup_filter_removes_rows_inside_1440m_window_after_gap() -> None:
+    frame = pd.DataFrame([
+        {"symbol": "AAA/USDT:USDT", "open_time_ms": 0},
+        {"symbol": "AAA/USDT:USDT", "open_time_ms": 4 * 60_000},
+        {"symbol": "AAA/USDT:USDT", "open_time_ms": 5 * 60_000},
+        {"symbol": "AAA/USDT:USDT", "open_time_ms": 1445 * 60_000},
+        {"symbol": "BBB/USDT:USDT", "open_time_ms": 4 * 60_000},
+    ])
+
+    filtered = filter_warmup_window_rows(frame)
+
+    assert filtered[["symbol", "open_time_ms"]].to_dict(orient="records") == [
+        {"symbol": "AAA/USDT:USDT", "open_time_ms": 0},
+        {"symbol": "AAA/USDT:USDT", "open_time_ms": 1445 * 60_000},
+        {"symbol": "BBB/USDT:USDT", "open_time_ms": 4 * 60_000},
+    ]
 
 
 def test_universe_marks_missing_5m_as_explicit_exclusion_reason() -> None:

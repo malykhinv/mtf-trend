@@ -9,9 +9,12 @@ class TradeSimulationConfig:
     target_horizon_minutes: int = 30
     require_prediction_confident: bool = True
     require_rr_acceptable: bool = True
+    toxic_entry_atr_1m_fraction: float = 0.2
 
     def __post_init__(self) -> None:
         if not self.simulation_version:
             raise ValueError("simulation_version is required")
         if self.target_horizon_minutes <= 0:
             raise ValueError("target_horizon_minutes must be positive")
+        if self.toxic_entry_atr_1m_fraction < 0.0:
+            raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")

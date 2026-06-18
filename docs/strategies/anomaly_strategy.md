@@ -146,8 +146,8 @@ market-wide impulse
 event_id
 symbol
 event_start_time
-event_detection_time
-seed_time
+event_detection_time / event_detection_time_ms at artifact boundary
+seed_time / seed_time_ms at artifact boundary
 seed_open
 seed_high
 seed_low
@@ -255,10 +255,10 @@ time_since_running_high
 time_to_running_high
 current_close
 current_return_from_start
-distance_to_running_high_atr
-distance_to_running_low_atr
-distance_to_structural_low_atr
-distance_to_structural_high_atr
+distance_to_running_high_core_atr_1440
+distance_to_running_low_core_atr_1440
+distance_to_structural_low_core_atr_1440
+distance_to_structural_high_core_atr_1440
 ```
 
 Правило:
@@ -306,7 +306,7 @@ anomaly_state_1m.csv:
 Anomaly strategy ожидает, что Core предоставит generic feature families:
 
 ```text
-Price Path ATR-normalized
+Price Path core_atr_1440-normalized
 Speed-normalized Time / Alpha Decay
 Volume Relative
 Trades / Flow
@@ -316,12 +316,30 @@ CVD Divergence
 Cross-Sectional / Market-Relative
 Signal Clustering / Systemic Beta
 Market Context
-Structure ATR-normalized
+Structure core_atr_1440-normalized
 Data Quality Flags
 ```
 
 Этот файл не переопределяет формулы Core feature contract.
 Если формула универсальна для всех стратегий, она должна жить в core methodology, а не здесь.
+
+## 5.1. Time context without raw calendar leakage
+
+Запрещено подавать в model features сырые календарные индексы `hour_of_day`, `day_of_week` или похожие ordinal calendar IDs.
+
+Разрешённая замена:
+
+```text
+relative_volume_hourly_phase = current rolling 60m volume / historical average volume for the same hour-of-day from train-only rolling history
+market_liquidity_rank = current cross-sectional rank of trading activity inside point-in-time universe
+session/liquidity phase features must be physical relative features, not raw clock labels
+```
+
+Смысл:
+
+```text
+Модель должна видеть, что ликвидность выше/ниже обычной для текущей фазы рынка, а не заучивать конкретный номер часа из истории.
+```
 
 ## 6. Anomaly-specific relaxed geometry features
 
@@ -330,14 +348,14 @@ Data Quality Flags
 Минимальный strategy-specific feature set:
 
 ```text
-initial_pump_height_atr
+initial_pump_height_core_atr_1440
 post_pump_consolidation_minutes
 consolidation_width_ratio
 shelf_low_asof_t
 shelf_high_asof_t
-current_low_minus_shelf_low_atr
-current_close_minus_shelf_low_atr
-current_high_minus_shelf_high_atr
+current_low_minus_shelf_low_core_atr_1440
+current_close_minus_shelf_low_core_atr_1440
+current_high_minus_shelf_high_core_atr_1440
 minutes_spent_below_shelf
 minutes_since_reclaim
 volume_on_sweep_percentile
@@ -477,9 +495,9 @@ H_max для purging/embargo рассчитывает Core как максиму
 
 ## 8.1. Trading & Simulation Defaults
 
-Параметры `take_profit_atr` и `stop_loss_atr` являются дефолтными настройками риск-менеджмента конкретных инстансов стратегий для модуля simplified trade simulation. Они определяют физические границы выхода из позиции в бэктестере и не должны смешиваться с общими математическими порогами разметки Core labels.
+Параметры `take_profit_atr_1440` и `stop_loss_atr_1440` являются дефолтными настройками риск-менеджмента конкретных инстансов стратегий для модуля simplified trade simulation. Они определяют физические границы выхода из позиции в бэктестере и не должны смешиваться с общими математическими порогами разметки Core labels.
 
-| Имя инстанса стратегии | Horizon (m) | Default TP (в долях ATR) | Default SL (в долях ATR) |
+| Имя инстанса стратегии | Horizon (m) | Default TP (в долях core_atr_1440) | Default SL (в долях core_atr_1440) |
 | :--- | :--- | :--- | :--- |
 | broad_anomaly_v1_h15 | 15 | 1.5 | 1.0 |
 | broad_anomaly_v1_h30 | 30 | 2.0 | 1.1 |
@@ -527,7 +545,7 @@ trap не является пятым основным классом для MVP
 Запрещено:
 
 ```text
-использовать fixed-percent thresholds вместо ATR-normalized labels
+использовать fixed-percent thresholds вместо core_atr_1440-normalized labels
 подбирать thresholds после OOS
 смешивать different label_schema_version в одном model_version
 ```
@@ -644,6 +662,7 @@ Strategy-specific reject reasons должны быть явными и не ма
 not_triggered
 technical_noise_shock
 warmup_after_data_gap
+cascade_suppressed
 data_quality_fail
 insufficient_history_for_ATR
 insufficient_cross_section
@@ -652,8 +671,8 @@ missing_required_oi_data
 horizon_not_available
 future_path_incomplete
 anti_binary_rule_failed
+causality_gate_failed
 outside_strategy_lifecycle
-cascade_suppressed
 RR_unacceptable
 calibrated_confidence_too_low
 systemic_cluster_guardrail
@@ -671,23 +690,33 @@ generic reject без reason_if_excluded
 
 `anomaly_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Это event/lifecycle seed artifact, а не полный поминутный state artifact. Строки упорядочиваются по `state_time`.
 
-Обязательные системные поля Core:
+Внутренний trigger frame, который стратегия возвращает в Core, обязан содержать:
 
 ```text
 event_id: str
 symbol: str
-state_time: pl.Datetime[ms]  # минута/момент калькуляции t_0 во внутреннем формате Core
-event_start_time: pl.Datetime[ms]  # физическое начало импульса/полки
-minutes_since_start: int        # возраст события: state_time - event_start_time в минутах
-is_trigger: bool                # активен ли сигнал lifecycle trigger прямо сейчас
-reason_if_excluded: str | null   # например cascade_suppressed / warmup_after_data_gap
+state_time: pl.Datetime[ms, UTC]        # минута/момент калькуляции t_0 во внутреннем формате Core
+event_start_time: pl.Datetime[ms, UTC]  # физическое начало импульса/полки
+minutes_since_start: int                # возраст события: state_time - event_start_time в минутах
+is_trigger: bool                        # активен ли signal/lifecycle trigger прямо сейчас
 ```
+
+Persisted `anomaly_events.csv` является внешней serialization boundary и сохраняет эти же времена как:
+
+```text
+state_time_ms: int
+event_start_time_ms: int
+event_detection_time_ms: int
+seed_time_ms: int
+```
+
+`cascade_suppressed` и `warmup_after_data_gap` не должны попадать в accepted event artifact как train/simulation rows; они отражаются в data-quality/protocol audit.
 
 Кастомные audit fields anomaly family, сохраняемые по declared artifact schema:
 
 ```text
-event_detection_time
-seed_time
+event_detection_time / event_detection_time_ms at artifact boundary
+seed_time / seed_time_ms at artifact boundary
 seed_open
 seed_high
 seed_low
@@ -707,6 +736,7 @@ detector_version
 ```text
 Core не выводит семантику стратегии из audit fields.
 Audit fields нужны для диагностики trigger/lifecycle, а не для обхода BaseStrategy contract.
+Persisted CSV aliases могут сериализовать время как `*_ms`; это внешний artifact boundary. BaseStrategy trigger frame обязан возвращать `state_time/event_start_time` как pl.Datetime[ms, UTC].
 Rows с cascade_suppressed или warmup_after_data_gap не имеют права попадать в model train/OOS/simulation entry set.
 ```
 

@@ -12,6 +12,7 @@ from anomaly_science.data.source import DATASET_SPECS
 CRITICAL = "critical"
 WARNING = "warning"
 INFO = "info"
+WARMUP_WINDOW_MINUTES = 1440
 
 
 def rows_to_artifact(rows: list[DataQualityRow]) -> list[dict[str, object]]:
@@ -34,6 +35,44 @@ def run_data_quality(frames: dict[str, pd.DataFrame | None], *, read_errors: lis
     rows.extend(_open_interest_checks(frames.get("open_interest_5m")))
     rows.extend(_liquidation_checks(frames.get("liquidations")))
     return rows
+
+
+
+def filter_warmup_window_rows(
+    frame: pd.DataFrame,
+    *,
+    time_column: str = "open_time_ms",
+    warmup_minutes: int = WARMUP_WINDOW_MINUTES,
+) -> pd.DataFrame:
+    """Remove rows inside symbol-specific warm-up windows after raw data gaps.
+
+    The detector and ML builders must not consume rolling-window context immediately
+    after an exchange/API gap. The first candle after the gap and all following rows
+    until ``gap_start + warmup_minutes`` are filtered before trigger generation.
+    """
+    if frame.empty or not {"symbol", time_column}.issubset(frame.columns):
+        return frame.copy()
+    if type(warmup_minutes) is not int or warmup_minutes <= 0:
+        raise ValueError("warmup_minutes must be a positive int")
+
+    keep = pd.Series(True, index=frame.index)
+    warmup_ms = warmup_minutes * ONE_MINUTE_MS
+    for _, group in frame.sort_values(["symbol", time_column]).groupby("symbol", sort=False):
+        times = group[time_column].astype("int64")
+        previous_times = times.shift(1)
+        gaps_ms = times - previous_times
+        gap_indices = group.index[(gaps_ms > 3 * ONE_MINUTE_MS).fillna(False)]
+        for gap_index in gap_indices:
+            start_ms = int(frame.at[gap_index, time_column])
+            end_ms = start_ms + warmup_ms
+            symbol = frame.at[gap_index, "symbol"]
+            in_window = (
+                (frame["symbol"] == symbol)
+                & (frame[time_column].astype("int64") >= start_ms)
+                & (frame[time_column].astype("int64") < end_ms)
+            )
+            keep &= ~in_window
+    return frame.loc[keep].copy()
 
 
 def has_critical_fail(rows: list[DataQualityRow]) -> bool:
@@ -238,7 +277,7 @@ def _technical_noise_shock_checks(frame: pd.DataFrame) -> list[DataQualityRow]:
                 AuditStatus.WARN,
                 WARNING,
                 1,
-                "first 1m candle after raw timestamp gap > 3 minutes; excluded from detector and ML dataset",
+                "first 1m candle after raw timestamp gap > 3 minutes; excluded from detector, ML dataset, and warm-up context",
                 symbol=str(symbol),
                 timestamp_ms=timestamp_ms,
                 previous_timestamp_ms=previous_timestamp_ms,
@@ -248,6 +287,8 @@ def _technical_noise_shock_checks(frame: pd.DataFrame) -> list[DataQualityRow]:
                 excluded_from_ml_dataset=True,
                 reason="api_maintenance_gap_aftershock",
             ))
+
+    rows.extend(_warmup_window_rows(frame, shock_rows))
 
     rows.append(_row(
         "candles_1m_technical_noise_shock_detected",
@@ -261,6 +302,40 @@ def _technical_noise_shock_checks(frame: pd.DataFrame) -> list[DataQualityRow]:
         reason="api_maintenance_gap_aftershock" if shock_rows else "",
     ))
     rows.extend(shock_rows)
+    return rows
+
+
+
+def _warmup_window_rows(frame: pd.DataFrame, shock_rows: list[DataQualityRow]) -> list[DataQualityRow]:
+    rows: list[DataQualityRow] = []
+    if not shock_rows or not {"symbol", "open_time_ms"}.issubset(frame.columns):
+        return rows
+    for shock in shock_rows:
+        if shock.timestamp_ms is None:
+            continue
+        start_ms = int(shock.timestamp_ms)
+        end_ms = start_ms + WARMUP_WINDOW_MINUTES * ONE_MINUTE_MS
+        mask = (
+            (frame["symbol"] == shock.symbol)
+            & (frame["open_time_ms"].astype("int64") >= start_ms)
+            & (frame["open_time_ms"].astype("int64") < end_ms)
+        )
+        affected_rows = int(mask.sum())
+        rows.append(_row(
+            "candles_1m_warmup_window",
+            AuditStatus.WARN,
+            WARNING,
+            affected_rows,
+            f"{WARMUP_WINDOW_MINUTES}m rolling-context warm-up window after raw timestamp gap; excluded from trigger generation",
+            symbol=shock.symbol,
+            timestamp_ms=start_ms,
+            previous_timestamp_ms=shock.previous_timestamp_ms,
+            gap_minutes=shock.gap_minutes,
+            technical_noise_shock=True,
+            excluded_from_detector=True,
+            excluded_from_ml_dataset=True,
+            reason="warmup_after_data_gap",
+        ))
     return rows
 
 

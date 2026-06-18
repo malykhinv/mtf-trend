@@ -22,6 +22,8 @@ BROAD_ANOMALY_VARIANTS: tuple[str, ...] = (
 _REASON_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("not_triggered", "mvp1_events", "trigger", "input row did not satisfy the anomaly trigger contract"),
     ("technical_noise_shock", "mvp1_events", "trigger", "first candle after raw timestamp gap is excluded from trigger source"),
+    ("warmup_after_data_gap", "mvp1_quality", "trigger", "rolling-context warm-up window after raw data gap blocks trigger generation"),
+    ("cascade_suppressed", "mvp1_events", "dataset", "repeated same-symbol trigger inside active horizon is audit-only and cannot create dataset or simulation rows"),
     ("data_quality_fail", "mvp1_quality", "all_downstream", "critical data-quality failure invalidates downstream interpretation"),
     ("insufficient_history_for_ATR", "mvp1_future", "labels", "ATR-normalized future paths cannot be built without enough prior history"),
     ("insufficient_cross_section", "mvp1_features", "features", "point-in-time cross-section is too small for relative market features"),
@@ -30,6 +32,7 @@ _REASON_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("horizon_not_available", "mvp1_labels", "prediction", "requested target horizon is not available for the row"),
     ("future_path_incomplete", "mvp1_future", "labels", "future window after snapshot_time is incomplete"),
     ("anti_binary_rule_failed", "mvp1_labels", "labels", "outcome cannot be represented by the registered multi-class nature labels"),
+    ("causality_gate_failed", "mvp1_features", "features", "custom strategy features are not stable under point-in-time truncation"),
     ("outside_strategy_lifecycle", "mvp1_state", "state", "snapshot is outside the registered anomaly lifecycle"),
     ("RR_unacceptable", "mvp1_decision", "decision", "ATR-normalized reward/risk is below the strategy decision contract"),
     ("calibrated_confidence_too_low", "mvp1_decision", "decision", "calibrated scenario probability is below decision threshold"),
