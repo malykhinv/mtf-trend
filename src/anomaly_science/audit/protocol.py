@@ -30,6 +30,8 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "weekly_walk_forward_heavy_models_enforced",
     "frozen_weekly_model_used_for_daily_oos",
     "expected_value_computed_before_trade_simulation",
+    "trade_simulation_after_calibration_and_decision_timing",
+    "pessimistic_entry_price_includes_slippage_penalty",
 )
 
 
@@ -84,6 +86,11 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     ),
     "mvp1_decision": (
         "expected_value_computed_before_trade_simulation",
+    ),
+    "mvp1_simulation": (
+        "trade_simulation_after_calibration_and_decision_timing",
+        "pessimistic_entry_price_includes_slippage_penalty",
+        "intracandle_double_barrier_resolved_as_stop_loss_first",
     ),
 }
 

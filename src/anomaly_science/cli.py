@@ -14,6 +14,7 @@ from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matri
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
+from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 
 
@@ -152,6 +153,31 @@ def build_parser() -> argparse.ArgumentParser:
     expected_value.add_argument("--slippage-bps", type=float, default=2.0, help="Slippage penalty basis points. Default: 2.0.")
     expected_value.add_argument("--min-confidence", type=float, default=0.40, help="Minimum calibrated confidence flag. Default: 0.40.")
     expected_value.add_argument("--min-rr", type=float, default=1.0, help="Minimum RR proxy flag. Default: 1.0.")
+
+    simulation = subparsers.add_parser(
+        "run-mvp1-trade-simulation",
+        help="Run MVP1 simplified pessimistic trade simulation from decision timing rows.",
+    )
+    simulation.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
+    simulation.add_argument("--decision-timing", required=True, help="Path to anomaly_decision_timing.csv from run-mvp1-expected-value.")
+    simulation.add_argument("--out", required=True, help="Directory where trade simulation artifacts will be written.")
+    simulation.add_argument(
+        "--horizon-minutes",
+        type=int,
+        default=30,
+        choices=(15, 30, 60),
+        help="Decision horizon to simulate. Default: 30.",
+    )
+    simulation.add_argument(
+        "--allow-unconfident",
+        action="store_true",
+        help="Simulate long/short best_action rows even if confidence flag is false.",
+    )
+    simulation.add_argument(
+        "--allow-low-rr",
+        action="store_true",
+        help="Simulate long/short best_action rows even if RR flag is false.",
+    )
 
     cache = subparsers.add_parser(
         "build-binance-vision-cache",
@@ -322,6 +348,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=config,
         )
         print(f"mvp1 expected-value artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-trade-simulation":
+        config = TradeSimulationConfig(
+            target_horizon_minutes=args.horizon_minutes,
+            require_prediction_confident=not bool(args.allow_unconfident),
+            require_rr_acceptable=not bool(args.allow_low_rr),
+        )
+        output_dir = run_mvp1_trade_simulation(
+            input_dir=Path(args.input),
+            decision_timing_path=Path(args.decision_timing),
+            out_dir=Path(args.out),
+            config=config,
+        )
+        print(f"mvp1 trade simulation artifacts written: {output_dir}")
         return 0
 
     if args.command == "build-binance-vision-cache":
