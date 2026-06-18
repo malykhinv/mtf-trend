@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from anomaly_science.artifacts import ArtifactWriteError, build_manifest, write_csv_artifact, write_manifest
+from anomaly_science.artifacts import (
+    ArtifactWriteError,
+    build_manifest,
+    write_csv_artifact,
+    write_csv_artifact_with_aliases,
+    write_manifest,
+)
 from anomaly_science.contracts.artifacts import MVP1_ARTIFACT_SCHEMAS, STRATEGY_ARTIFACT_ALIASES, get_artifact_schema
 
 
@@ -83,6 +89,36 @@ def test_strategy_artifact_aliases_keep_source_columns() -> None:
 
         assert alias.required_columns == source.required_columns
         assert alias.stage == source.stage
+
+
+def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
+    schema = get_artifact_schema("anomaly_events.csv")
+    rows = [
+        {
+            "event_id": "evt_1",
+            "symbol": "BTCUSDT",
+            "event_start_time_ms": 1,
+            "event_detection_time_ms": 2,
+            "seed_time_ms": 1,
+            "seed_open": 1.0,
+            "seed_high": 1.1,
+            "seed_low": 0.9,
+            "seed_close": 1.0,
+            "initial_move_pct": 0.0,
+            "initial_volume_zscore": "",
+            "initial_quote_volume_zscore": "",
+            "initial_trade_count_zscore": "",
+            "technical_noise_shock": False,
+            "raw_candle_gap_minutes": "",
+            "excluded_by_data_quality_gate": False,
+            "detector_version": "test",
+        }
+    ]
+
+    written = write_csv_artifact_with_aliases(tmp_path / "anomaly_events.csv", rows, schema)
+
+    assert [path.name for path in written] == ["anomaly_events.csv", "strategy_events.csv"]
+    assert (tmp_path / "strategy_events.csv").is_file()
 
 
 def test_manifest_records_written_artifacts(tmp_path: Path) -> None:

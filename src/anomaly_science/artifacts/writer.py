@@ -6,7 +6,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from anomaly_science.contracts.artifacts import ArtifactSchema
+from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_alias
 
 
 class ArtifactWriteError(ValueError):
@@ -50,3 +50,15 @@ def write_csv_artifact(path: Path, rows: list[Mapping[str, Any] | object], schem
             writer.writerow({name: row[name] for name in fieldnames})
     os.replace(tmp_path, path)
     return path
+
+
+def write_csv_artifact_with_aliases(
+    path: Path,
+    rows: list[Mapping[str, Any] | object],
+    schema: ArtifactSchema,
+) -> list[Path]:
+    written = [write_csv_artifact(path, rows, schema)]
+    alias_name = get_strategy_artifact_alias(schema.name)
+    if alias_name is not None:
+        written.append(write_csv_artifact(path.with_name(alias_name), rows, get_artifact_schema(alias_name)))
+    return written
