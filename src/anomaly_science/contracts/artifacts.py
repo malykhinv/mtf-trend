@@ -509,6 +509,36 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
 }
 
 
+STRATEGY_ARTIFACT_ALIASES: dict[str, str] = {
+    "anomaly_events.csv": "strategy_events.csv",
+    "anomaly_state_1m.csv": "strategy_state_1m.csv",
+    "anomaly_future_paths.csv": "strategy_future_paths.csv",
+    "anomaly_outcome_labels.csv": "strategy_outcome_labels.csv",
+    "anomaly_feature_catalog.csv": "strategy_feature_catalog.csv",
+    "anomaly_feature_matrix.csv": "strategy_feature_matrix.csv",
+    "anomaly_nature_atlas.csv": "strategy_nature_atlas.csv",
+    "anomaly_oos_predictions.csv": "strategy_oos_predictions.csv",
+    "anomaly_calibration.csv": "strategy_calibration.csv",
+    "anomaly_data_quality.csv": "strategy_data_quality.csv",
+    "anomaly_protocol_audit.csv": "strategy_protocol_audit.csv",
+    "anomaly_run_config.csv": "strategy_run_config.csv",
+}
+
+
+for source_name, alias_name in STRATEGY_ARTIFACT_ALIASES.items():
+    source_schema = MVP1_ARTIFACT_SCHEMAS[source_name]
+    MVP1_ARTIFACT_SCHEMAS[alias_name] = ArtifactSchema(
+        name=alias_name,
+        stage=source_schema.stage,
+        required_columns=source_schema.required_columns,
+        description=f"Strategy-neutral canonical artifact alias for {source_name}. {source_schema.description}",
+    )
+
+
+def get_strategy_artifact_alias(name: str) -> str | None:
+    return STRATEGY_ARTIFACT_ALIASES.get(name)
+
+
 def get_artifact_schema(name: str) -> ArtifactSchema:
     try:
         return MVP1_ARTIFACT_SCHEMAS[name]

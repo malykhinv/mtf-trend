@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from anomaly_science.artifacts import ArtifactWriteError, build_manifest, write_csv_artifact, write_manifest
-from anomaly_science.contracts.artifacts import MVP1_ARTIFACT_SCHEMAS, get_artifact_schema
+from anomaly_science.contracts.artifacts import MVP1_ARTIFACT_SCHEMAS, STRATEGY_ARTIFACT_ALIASES, get_artifact_schema
 
 
 REQUIRED_MVP1 = {
@@ -30,6 +30,18 @@ REQUIRED_MVP1 = {
     "anomaly_protocol_audit.csv",
     "anomaly_run_config.csv",
     "artifact_manifest.json",
+    "strategy_events.csv",
+    "strategy_state_1m.csv",
+    "strategy_future_paths.csv",
+    "strategy_outcome_labels.csv",
+    "strategy_oos_predictions.csv",
+    "strategy_calibration.csv",
+    "strategy_feature_catalog.csv",
+    "strategy_feature_matrix.csv",
+    "strategy_nature_atlas.csv",
+    "strategy_data_quality.csv",
+    "strategy_protocol_audit.csv",
+    "strategy_run_config.csv",
 }
 
 
@@ -62,6 +74,15 @@ def test_csv_writer_requires_declared_schema_columns(tmp_path: Path) -> None:
             rows=[{"key": "x", "value": "y", "source": "test", "extra": "forbidden"}],
             schema=schema,
         )
+
+
+def test_strategy_artifact_aliases_keep_source_columns() -> None:
+    for source_name, alias_name in STRATEGY_ARTIFACT_ALIASES.items():
+        source = get_artifact_schema(source_name)
+        alias = get_artifact_schema(alias_name)
+
+        assert alias.required_columns == source.required_columns
+        assert alias.stage == source.stage
 
 
 def test_manifest_records_written_artifacts(tmp_path: Path) -> None:

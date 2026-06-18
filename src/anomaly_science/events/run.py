@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
-from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.artifacts import get_artifact_schema, get_strategy_artifact_alias
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.normalized import normalize_candles_1m
@@ -61,9 +61,10 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, strategy=strategy)
 
     written: list[Path] = []
+    data_quality_rows = rows_to_artifact(data_quality)
     written.append(write_csv_artifact(
         output_path / "anomaly_data_quality.csv",
-        rows_to_artifact(data_quality),
+        data_quality_rows,
         get_artifact_schema("anomaly_data_quality.csv"),
     ))
     written.append(write_csv_artifact(
@@ -71,19 +72,29 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
         universe_rows_to_artifact(universe_rows),
         get_artifact_schema("symbol_universe_by_day.csv"),
     ))
+    event_rows = events_to_artifact(events)
     written.append(write_csv_artifact(
         output_path / "anomaly_events.csv",
-        events_to_artifact(events),
+        event_rows,
         get_artifact_schema("anomaly_events.csv"),
     ))
+    event_alias = get_strategy_artifact_alias("anomaly_events.csv")
+    if event_alias is not None:
+        written.append(write_csv_artifact(
+            output_path / event_alias,
+            event_rows,
+            get_artifact_schema(event_alias),
+        ))
+    protocol_artifact_rows = _protocol_rows_to_artifact(protocol_rows)
     written.append(write_csv_artifact(
         output_path / "anomaly_protocol_audit.csv",
-        _protocol_rows_to_artifact(protocol_rows),
+        protocol_artifact_rows,
         get_artifact_schema("anomaly_protocol_audit.csv"),
     ))
+    run_config_artifact_rows = [asdict(row) for row in run_config_rows]
     written.append(write_csv_artifact(
         output_path / "anomaly_run_config.csv",
-        [asdict(row) for row in run_config_rows],
+        run_config_artifact_rows,
         get_artifact_schema("anomaly_run_config.csv"),
     ))
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)

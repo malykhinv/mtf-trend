@@ -145,6 +145,7 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert (output_dir / "anomaly_events.csv").is_file()
+    assert (output_dir / "strategy_events.csv").is_file()
     assert (output_dir / "anomaly_data_quality.csv").is_file()
     assert (output_dir / "symbol_universe_by_day.csv").is_file()
     assert (output_dir / "anomaly_protocol_audit.csv").is_file()
