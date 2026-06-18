@@ -1,5 +1,14 @@
 # Strategy Spec: anomaly family
 
+Status:
+
+```text
+active_research_strategy = true
+live_trading_strategy = false
+primary_variant = broad_anomaly_v1
+strategy_contract_version = base_strategy_v1
+```
+
 ## 0. Назначение
 
 Этот документ описывает стратегию семейства `anomaly`.

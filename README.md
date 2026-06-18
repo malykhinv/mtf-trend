@@ -12,7 +12,7 @@ MVP 2 atlas slice — descriptive anomaly nature atlas over MVP1 state/future ar
 MVP 3 label/prediction/control slice — descriptive future-nature scenario labels, first daily prequential calibrated baseline prediction, and placebo/control checks.
 ```
 
-The project does not currently define a live trading strategy. Trading simulation and live execution come only after calibrated prediction, decision timing and EV checks.
+The project has an active anomaly research strategy documented in `docs/strategies/anomaly_strategy.md`. It does not currently define a live trading strategy. Trading simulation and live execution come only after calibrated prediction, decision timing and EV checks.
 
 ## Current executable stage
 
@@ -23,7 +23,9 @@ python main.py run-mvp1-data-audit --input tests/fixtures/minimal_market_data --
 python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out tmp/mvp1_events
 python main.py run-mvp1-state --input tests/fixtures/minimal_market_data --events tmp/mvp1_events/anomaly_events.csv --out tmp/mvp1_state
 python main.py run-mvp1-future --input tests/fixtures/minimal_market_data --state tmp/mvp1_state/anomaly_state_1m.csv --out tmp/mvp1_future
-python main.py run-mvp1-atlas --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_atlas
+python main.py run-mvp1-features --out tmp/mvp1_features
+python main.py run-mvp1-feature-matrix --input tests/fixtures/minimal_market_data --state tmp/mvp1_state/anomaly_state_1m.csv --out tmp/mvp1_feature_matrix
+python main.py run-mvp1-atlas --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --features tmp/mvp1_feature_matrix/anomaly_feature_matrix.csv --out tmp/mvp1_atlas
 python main.py run-mvp1-labels --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_labels
 python main.py run-mvp1-prediction --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_prediction
 python main.py run-mvp1-controls --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_controls

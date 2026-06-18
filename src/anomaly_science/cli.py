@@ -7,7 +7,7 @@ from pathlib import Path
 from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.data import run_mvp1_data_audit
-from anomaly_science.events import run_mvp1_events
+from anomaly_science.events.run import run_mvp1_events
 from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels

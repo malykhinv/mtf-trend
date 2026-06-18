@@ -14,7 +14,8 @@ from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, run_data_quality
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
-from anomaly_science.events.detector import detect_broad_anomaly_events, events_to_artifact
+from anomaly_science.events.detector import events_to_artifact
+from anomaly_science.strategy.anomaly import BroadAnomalyStrategy
 
 
 REQUIRED_DATASETS = ("candles_1m", "candles_5m")
@@ -28,6 +29,7 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or BroadAnomalyDetectorConfig()
+    strategy = BroadAnomalyStrategy(config=cfg)
 
     frames, read_errors = _read_source_frames(input_path)
     data_quality = run_data_quality(frames, read_errors=read_errors)
@@ -42,9 +44,8 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     event_error: str | None = None
     if frames.get("candles_1m") is not None and not has_critical_fail(data_quality):
         try:
-            events = detect_broad_anomaly_events(
+            events = strategy.generate_events(
                 normalize_candles_1m(frames["candles_1m"]),
-                config=cfg,
             )
         except (TypeError, ValueError) as exc:
             event_error = f"event detector failed: {exc}"
@@ -55,8 +56,9 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
         event_count=len(events),
         event_error=event_error,
         technical_noise_shock_count=_technical_noise_shock_count(data_quality),
+        strategy_name=strategy.metadata.strategy_name,
     )
-    run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, config=cfg)
+    run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, strategy=strategy)
 
     written: list[Path] = []
     written.append(write_csv_artifact(
@@ -115,6 +117,7 @@ def _protocol_rows(
     event_count: int,
     event_error: str | None,
     technical_noise_shock_count: int,
+    strategy_name: str,
 ) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
@@ -142,6 +145,12 @@ def _protocol_rows(
             check_name="detector_not_trade_setup",
             status=AuditStatus.PASS,
             message="detector uses only current closed 1m candle plus earlier same-symbol baseline candles; no entry/exit/trade rules",
+            artifact="anomaly_events.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="base_strategy_contract_valid",
+            status=AuditStatus.PASS,
+            message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible generate_events",
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
@@ -188,7 +197,9 @@ def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, o
         result.append(payload)
     return result
 
-def _run_config_rows(*, input_path: Path, output_path: Path, config: BroadAnomalyDetectorConfig) -> list[RunConfigRow]:
+def _run_config_rows(*, input_path: Path, output_path: Path, strategy: BroadAnomalyStrategy) -> list[RunConfigRow]:
+    config = strategy.config
+    metadata = strategy.metadata
     return [
         RunConfigRow(key="command", value="run-mvp1-events", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
@@ -196,6 +207,12 @@ def _run_config_rows(*, input_path: Path, output_path: Path, config: BroadAnomal
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
         RunConfigRow(key="stage", value="mvp1_events", source="runtime"),
+        RunConfigRow(key="strategy_name", value=metadata.strategy_name, source="runtime"),
+        RunConfigRow(key="strategy_version", value=metadata.strategy_version, source="runtime"),
+        RunConfigRow(key="strategy_contract_version", value=metadata.strategy_contract_version, source="runtime"),
+        RunConfigRow(key="strategy_family", value=metadata.strategy_family, source="runtime"),
+        RunConfigRow(key="strategy_primary_horizon_minutes", value=str(metadata.primary_horizon_minutes), source="runtime"),
+        RunConfigRow(key="strategy_label_horizons_minutes", value=",".join(str(item) for item in metadata.label_horizons_minutes), source="runtime"),
         RunConfigRow(key="detector_version", value=config.detector_version, source="runtime"),
         RunConfigRow(key="detector_baseline_bars", value=str(config.baseline_bars), source="runtime"),
         RunConfigRow(key="detector_min_baseline_bars", value=str(config.min_baseline_bars), source="runtime"),

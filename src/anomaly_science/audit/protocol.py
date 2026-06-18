@@ -25,6 +25,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "relative_over_absolute_feature_contract_enforced",
     "market_shock_id_assigned",
     "simultaneous_anomalies_count_1m_point_in_time",
+    "base_strategy_contract_valid",
     "purge_rule_snapshot_time_plus_Hmax_before_test_start",
     "weekly_walk_forward_heavy_models_enforced",
     "frozen_weekly_model_used_for_daily_oos",
