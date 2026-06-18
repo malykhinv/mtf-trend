@@ -556,6 +556,19 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         ),
         description="Registered strategy metadata exposed through the BaseStrategy contract.",
     ),
+    "strategy_reject_reasons.csv": ArtifactSchema(
+        name="strategy_reject_reasons.csv",
+        stage="mvp1_strategy_registry",
+        required_columns=(
+            "strategy_name",
+            "strategy_version",
+            "reason_code",
+            "owner_stage",
+            "blocks_stage",
+            "description",
+        ),
+        description="Explicit strategy reject-reason contract; no generic or silent rejects.",
+    ),
     "anomaly_feature_matrix.csv": ArtifactSchema(
         name="anomaly_feature_matrix.csv",
         stage="mvp1_features",

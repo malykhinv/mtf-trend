@@ -5,6 +5,26 @@ import subprocess
 import sys
 from pathlib import Path
 
+from anomaly_science.strategy import anomaly_reject_reason_codes
+
+
+EXPECTED_ANOMALY_REJECT_REASONS = {
+    "not_triggered",
+    "technical_noise_shock",
+    "data_quality_fail",
+    "insufficient_history_for_ATR",
+    "insufficient_cross_section",
+    "missing_required_liquidation_data",
+    "missing_required_oi_data",
+    "horizon_not_available",
+    "future_path_incomplete",
+    "anti_binary_rule_failed",
+    "outside_strategy_lifecycle",
+    "RR_unacceptable",
+    "calibrated_confidence_too_low",
+    "systemic_cluster_guardrail",
+}
+
 
 def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path) -> None:
     out_dir = tmp_path / "strategy_registry"
@@ -25,6 +45,7 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
     assert result.returncode == 0, result.stderr
     assert "mvp1 strategy registry artifacts written" in result.stdout
     assert (out_dir / "strategy_registry.csv").is_file()
+    assert (out_dir / "strategy_reject_reasons.csv").is_file()
     assert (out_dir / "anomaly_protocol_audit.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
@@ -34,7 +55,17 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
     assert rows[0]["strategy_contract_version"] == "base_strategy_v1"
     assert rows[0]["live_trading_strategy"] == "False"
 
+    with (out_dir / "strategy_reject_reasons.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        reject_rows = list(csv.DictReader(file_obj))
+    assert {row["reason_code"] for row in reject_rows} == EXPECTED_ANOMALY_REJECT_REASONS
+    assert all(row["strategy_name"] == "broad_anomaly_v1" for row in reject_rows)
+
     with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["base_strategy_contract_valid"]["status"] == "PASS"
+    assert audit_by_name["strategy_reject_reasons_declared"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
+
+
+def test_anomaly_reject_reason_contract_matches_strategy_doc_minimum() -> None:
+    assert anomaly_reject_reason_codes() == EXPECTED_ANOMALY_REJECT_REASONS

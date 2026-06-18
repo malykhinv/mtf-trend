@@ -8,6 +8,7 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.strategy.reject_reasons import anomaly_reject_reasons
 from anomaly_science.strategy.registry import available_strategies
 
 
@@ -15,11 +16,19 @@ def run_mvp1_strategy_registry(*, out_dir: str | Path) -> Path:
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     rows = _strategy_registry_rows()
-    protocol_rows = _protocol_rows(row_count=len(rows))
+    reject_reason_rows = _strategy_reject_reason_rows()
+    protocol_rows = _protocol_rows(row_count=len(rows), reject_reason_count=len(reject_reason_rows))
     run_config_rows = _run_config_rows(output_path=output_path)
 
     written: list[Path] = []
     written.append(write_csv_artifact(output_path / "strategy_registry.csv", rows, get_artifact_schema("strategy_registry.csv")))
+    written.append(
+        write_csv_artifact(
+            output_path / "strategy_reject_reasons.csv",
+            reject_reason_rows,
+            get_artifact_schema("strategy_reject_reasons.csv"),
+        )
+    )
     written.extend(
         write_csv_artifact_with_aliases(
             output_path / "anomaly_protocol_audit.csv",
@@ -62,7 +71,11 @@ def _strategy_registry_rows() -> list[dict[str, object]]:
     return rows
 
 
-def _protocol_rows(*, row_count: int) -> list[ProtocolAuditRow]:
+def _strategy_reject_reason_rows() -> list[dict[str, object]]:
+    return [asdict(row) for row in anomaly_reject_reasons()]
+
+
+def _protocol_rows(*, row_count: int, reject_reason_count: int) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_strategy_registry_scope",
@@ -75,6 +88,12 @@ def _protocol_rows(*, row_count: int) -> list[ProtocolAuditRow]:
             status=AuditStatus.PASS if row_count > 0 else AuditStatus.FAIL,
             message=f"strategy_registry.csv written with {row_count} registered strategies",
             artifact="strategy_registry.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="strategy_reject_reasons_declared",
+            status=AuditStatus.PASS if reject_reason_count > 0 else AuditStatus.FAIL,
+            message=f"strategy_reject_reasons.csv written with {reject_reason_count} explicit reject reasons",
+            artifact="strategy_reject_reasons.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
