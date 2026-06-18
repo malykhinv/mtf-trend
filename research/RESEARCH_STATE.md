@@ -34,4 +34,7 @@ Pending local patches from uploaded snapshot `project_20260618_115220.zip`:
   - Unconditionally skips `*_YYMMDD` delivery/fixed-date contracts.
   - Records skipped delivery contracts with `reason=delivery_contract_excluded`.
   - Adds no new CLI flag; the cache command remains compact.
+- `perf: make Binance Vision cache startup visible`
+  - Adds immediate startup stage logs and preflight progress for archive range filtering.
+  - Bakes optimized network defaults into the compact cache command: timeout 45s, connect timeout 8s, retries 2.
 - Patch status: PROPOSED until applied and verified locally.

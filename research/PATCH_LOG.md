@@ -195,3 +195,19 @@ Intent:
 Validation for this proposed patch:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest -q tests/test_binance_vision_cache.py tests/test_zip_project.py`
+
+
+## perf: make Binance Vision cache startup visible
+
+Status: PROPOSED; patch generated on top of `perf: exclude Binance delivery contracts from perpetual cache`; GitHub head not checked in this environment.
+
+Intent:
+- Emit immediate startup stage logs before symbol discovery, delivery filtering, and archive range preflight.
+- Show a dedicated `Binance Vision preflight` progress bar while archive file indexes are checked for requested-date overlap.
+- Move compact-command network defaults to the optimized values previously used manually: `timeout=45`, `connect-timeout=8`, `retries=2`.
+- Record effective network defaults in `manifest.json` for reproducibility.
+- Keep the launch command compact; no new CLI flags are introduced.
+
+Validation for this proposed patch:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_binance_vision_cache.py tests/test_binance_vision_cache_delivery_symbols.py tests/test_binance_vision_cache_startup.py tests/test_zip_project.py`

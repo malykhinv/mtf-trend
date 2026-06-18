@@ -26,6 +26,10 @@ DEFAULT_MARKET_CACHE_ROOT = Path(".output/market")
 DEFAULT_MARKET_CACHE_DIR = DEFAULT_MARKET_CACHE_ROOT / "binance_vision" / "um_futures" / "enriched_1m"
 ONE_MINUTE_MS = 60_000
 ONE_DAY_MS = 86_400_000
+DEFAULT_TIMEOUT_SECONDS = 45.0
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 8.0
+DEFAULT_RETRIES = 2
+
 
 OUTPUT_COLUMNS = [
     "timestamp",
@@ -173,9 +177,9 @@ class CacheConfig:
     symbols: tuple[str, ...] = ()
     max_symbols: int | None = None
     download_workers: int = 3
-    timeout_seconds: float = 60.0
-    connect_timeout_seconds: float = 10.0
-    retries: int = 3
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    connect_timeout_seconds: float = DEFAULT_CONNECT_TIMEOUT_SECONDS
+    retries: int = DEFAULT_RETRIES
     overwrite: bool = False
     compression: str = "zstd"
     oi_join_strategy: Literal["backward"] = "backward"
@@ -321,9 +325,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=3,
         help="Concurrent downloads inside one symbol/block. Hard-capped to 1..3 for RAM safety.",
     )
-    parser.add_argument("--timeout", type=float, default=60.0, help="Per-request read timeout in seconds.")
-    parser.add_argument("--connect-timeout", type=float, default=10.0, help="Per-request connect timeout in seconds.")
-    parser.add_argument("--retries", type=int, default=3, help="Retries per file download.")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="Per-request read timeout in seconds.")
+    parser.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
+        help="Per-request connect timeout in seconds.",
+    )
+    parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries per file download.")
     parser.add_argument("--overwrite", action="store_true", help="Rebuild symbols even if {symbol}.parquet already exists.")
     parser.add_argument(
         "--oi-join-strategy",
@@ -394,20 +403,32 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
     completions = read_symbol_completion_ledger(completion_path)
     stats: list[SymbolStats] = []
 
-    symbols = list(config.symbols) if config.symbols else discover_um_futures_symbols(config)
+    log_cache_stage(f"prepare window start={start.isoformat()} end={end.isoformat()} days={config.days}")
+    if config.symbols:
+        log_cache_stage(f"using requested symbols count={len(config.symbols)}")
+        symbols = list(config.symbols)
+    else:
+        log_cache_stage("discovering USD-M Futures symbols")
+        symbols = discover_um_futures_symbols(config)
+        log_cache_stage(f"discovered symbols count={len(symbols)}")
     symbols = sorted(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol.strip()))
 
     archive_file_indexes: dict[str, ArchiveFileIndex] = {}
     skipped_symbols: list[SkippedSymbolRecord] = []
+    before_delivery_count = len(symbols)
     symbols, delivery_skipped = filter_delivery_contract_symbols(
         symbols=symbols,
         start_date=start,
         end_date=end,
     )
     skipped_symbols.extend(delivery_skipped)
+    log_cache_stage(
+        f"delivery filter kept={len(symbols)} skipped={len(delivery_skipped)} from={before_delivery_count}"
+    )
 
     if config.max_symbols is not None:
         symbols = symbols[: config.max_symbols]
+        log_cache_stage(f"max-symbols cap applied count={len(symbols)}")
     if not symbols:
         write_skipped_symbols(skipped_symbols_path, skipped_symbols)
         write_manifest(
@@ -421,14 +442,23 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
         raise RuntimeError("No perpetual symbols to process after delivery-contract/date-range filtering.")
 
     if config.use_archive_file_index:
+        log_cache_stage(f"checking archive range availability symbols={len(symbols)}")
         symbols, archive_file_indexes, range_skipped = filter_symbols_by_archive_range(
             symbols=symbols,
             config=config,
             start_date=start,
             end_date=end,
+            progress_factory=lambda items: tqdm(
+                items,
+                desc="Binance Vision preflight",
+                unit="symbol",
+                mininterval=1.0,
+                dynamic_ncols=True,
+            ),
         )
         skipped_symbols.extend(range_skipped)
         write_skipped_symbols(skipped_symbols_path, skipped_symbols)
+        log_cache_stage(f"archive range filter kept={len(symbols)} skipped={len(range_skipped)}")
         if not symbols:
             write_manifest(
                 metadata_dir / "manifest.json",
@@ -1517,12 +1547,14 @@ def filter_symbols_by_archive_range(
     config: CacheConfig,
     start_date: date,
     end_date: date,
+    progress_factory: Callable[[list[str]], Iterable[str]] | None = None,
 ) -> tuple[list[str], dict[str, ArchiveFileIndex], list[SkippedSymbolRecord]]:
     eligible: list[str] = []
     indexes: dict[str, ArchiveFileIndex] = {}
     skipped: list[SkippedSymbolRecord] = []
     skipped_at = datetime.now(timezone.utc).isoformat()
-    for symbol in symbols:
+    iterable = progress_factory(symbols) if progress_factory is not None else symbols
+    for symbol in iterable:
         index = load_or_build_archive_file_index(symbol=symbol, config=config)
         if archive_index_has_klines_in_range(index=index, start_date=start_date, end_date=end_date):
             eligible.append(symbol)
@@ -1985,6 +2017,10 @@ def write_manifest(
         "rows_written": sum(max(0, item.rows_written) for item in stats),
         "blocks_written": sum(item.blocks_written for item in stats),
         "compression": config.compression,
+        "download_workers": config.download_workers,
+        "timeout_seconds": config.timeout_seconds,
+        "connect_timeout_seconds": config.connect_timeout_seconds,
+        "retries": config.retries,
         "oi_join_strategy": config.oi_join_strategy,
         "use_archive_file_index": config.use_archive_file_index,
         "refresh_archive_file_index": config.refresh_archive_file_index,
@@ -1995,6 +2031,11 @@ def write_manifest(
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+def log_cache_stage(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    print(f"Binance Vision cache [{timestamp} UTC] {message}", file=sys.stderr, flush=True)
 
 
 class DirectorySizeSampler:
