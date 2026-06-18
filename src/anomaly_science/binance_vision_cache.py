@@ -30,7 +30,9 @@ ONE_MINUTE_MS = 60_000
 ONE_DAY_MS = 86_400_000
 DEFAULT_TIMEOUT_SECONDS = 45.0
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 8.0
-DEFAULT_RETRIES = 2
+DEFAULT_RETRIES = 8
+DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+DEFAULT_MAX_RETRY_SLEEP_SECONDS = 10.0
 METADATA_FLUSH_INTERVAL_SECONDS = 10.0
 WINDOWS_ATOMIC_REPLACE_RETRIES = 12
 WINDOWS_ATOMIC_REPLACE_SLEEP_SECONDS = 0.25
@@ -411,7 +413,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
         help="Per-request connect timeout in seconds.",
     )
-    parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries per file download.")
+    parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES, help="Retries per network request, including metadata preflight and file downloads.")
     parser.add_argument("--overwrite", action="store_true", help="Rebuild symbols even if {symbol}.parquet already exists.")
     parser.add_argument(
         "--oi-join-strategy",
@@ -1642,25 +1644,55 @@ def download_block_files(
     )
 
 
-def download_optional_bytes(url: str, config: CacheConfig, *, session: requests.Session | None = None) -> bytes | None:
-    timeout = (config.connect_timeout_seconds, config.timeout_seconds)
-    client = session if session is not None else requests
+def retry_sleep_seconds(attempt: int) -> float:
+    return min(DEFAULT_RETRY_BACKOFF_SECONDS * (2**attempt), DEFAULT_MAX_RETRY_SLEEP_SECONDS)
+
+
+def request_with_retries(
+    method: Literal["GET", "HEAD"],
+    url: str,
+    config: CacheConfig,
+    *,
+    session: requests.Session | None = None,
+    missing_status_codes: frozenset[int] = frozenset(),
+    context: str,
+    **kwargs: object,
+) -> requests.Response | None:
+    timeout = kwargs.pop("timeout", (config.connect_timeout_seconds, config.timeout_seconds))
+    client = session if session is not None else requests.Session()
+    owns_session = session is None
     last_error: Exception | None = None
-    for attempt in range(config.retries + 1):
-        try:
-            response = client.get(url, timeout=timeout)
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            return response.content
-        except requests.RequestException as exc:
-            last_error = exc
-            if attempt >= config.retries:
-                raise RuntimeError(f"failed to download {url}: {exc}") from exc
-            time.sleep(min(2.0 * (attempt + 1), 10.0))
+    try:
+        for attempt in range(config.retries + 1):
+            try:
+                response = client.request(method, url, timeout=timeout, **kwargs)
+                if response.status_code in missing_status_codes:
+                    return None
+                response.raise_for_status()
+                return response
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= config.retries:
+                    raise RuntimeError(f"failed to {context}: {exc}") from exc
+                time.sleep(retry_sleep_seconds(attempt))
+    finally:
+        if owns_session:
+            client.close()
     if last_error is not None:
-        raise RuntimeError(f"failed to download {url}: {last_error}") from last_error
+        raise RuntimeError(f"failed to {context}: {last_error}") from last_error
     return None
+
+
+def download_optional_bytes(url: str, config: CacheConfig, *, session: requests.Session | None = None) -> bytes | None:
+    response = request_with_retries(
+        "GET",
+        url,
+        config,
+        session=session,
+        missing_status_codes=frozenset({404}),
+        context=f"download {url}",
+    )
+    return None if response is None else response.content
 
 
 def make_archive_url(*, symbol: str, block: VisionBlock, dataset: Literal["klines", "metrics", "liquidationSnapshot"]) -> str:
@@ -1857,23 +1889,15 @@ def probe_symbol_daily_kline_labels(*, symbol: str, wanted_labels: frozenset[str
 
 
 def archive_url_exists(url: str, *, config: CacheConfig) -> bool:
-    timeout = (config.connect_timeout_seconds, config.timeout_seconds)
-    last_error: Exception | None = None
-    for attempt in range(config.retries + 1):
-        try:
-            response = requests.head(url, allow_redirects=True, timeout=timeout)
-            if response.status_code == 404:
-                return False
-            response.raise_for_status()
-            return True
-        except requests.RequestException as exc:
-            last_error = exc
-            if attempt >= config.retries:
-                raise RuntimeError(f"failed to probe {url}: {exc}") from exc
-            time.sleep(min(2.0 * (attempt + 1), 10.0))
-    if last_error is not None:
-        raise RuntimeError(f"failed to probe {url}: {last_error}") from last_error
-    return False
+    response = request_with_retries(
+        "HEAD",
+        url,
+        config,
+        missing_status_codes=frozenset({404}),
+        context=f"probe {url}",
+        allow_redirects=True,
+    )
+    return response is not None
 
 
 def parse_monthly_kline_archive_key(key: str) -> tuple[str, str] | None:
@@ -2141,21 +2165,31 @@ def discover_um_futures_symbols(config: CacheConfig) -> list[str]:
     return sorted(set(symbols))
 
 
+def parse_s3_xml_response(content: bytes, *, context: str) -> ElementTree.Element:
+    try:
+        return ElementTree.fromstring(content)
+    except ElementTree.ParseError as exc:
+        raise RuntimeError(f"failed to parse {context}: {exc}") from exc
+
+
 def list_s3_object_keys(*, prefix: str, config: CacheConfig) -> list[str]:
     object_keys: list[str] = []
     continuation_token: str | None = None
-    timeout = (config.connect_timeout_seconds, config.timeout_seconds)
 
     while True:
         params: dict[str, str] = {"list-type": "2", "prefix": prefix, "max-keys": "1000"}
         if continuation_token:
             params["continuation-token"] = continuation_token
-        try:
-            response = requests.get(S3_LIST_URL, params=params, timeout=timeout)
-            response.raise_for_status()
-            root = ElementTree.fromstring(response.content)
-        except (requests.RequestException, ElementTree.ParseError) as exc:
-            raise RuntimeError(f"failed to list Binance Vision archive prefix {prefix}: {exc}") from exc
+        response = request_with_retries(
+            "GET",
+            S3_LIST_URL,
+            config,
+            params=params,
+            context=f"list Binance Vision archive prefix {prefix}",
+        )
+        if response is None:  # pragma: no cover - GET listing has no missing status.
+            raise RuntimeError(f"failed to list Binance Vision archive prefix {prefix}: empty response")
+        root = parse_s3_xml_response(response.content, context=f"Binance Vision archive prefix {prefix}")
         namespace_match = re.match(r"\{.*\}", root.tag)
         ns = namespace_match.group(0) if namespace_match else ""
         object_keys.extend(element.text or "" for element in root.findall(f".//{ns}Contents/{ns}Key"))
@@ -2169,16 +2203,22 @@ def list_s3_object_keys(*, prefix: str, config: CacheConfig) -> list[str]:
 def list_s3_common_prefixes(prefix: str, config: CacheConfig) -> list[str]:
     common_prefixes: list[str] = []
     continuation_token: str | None = None
-    timeout = (config.connect_timeout_seconds, config.timeout_seconds)
 
     try:
         while True:
             params: dict[str, str] = {"delimiter": "/", "prefix": prefix, "max-keys": "1000"}
             if continuation_token:
                 params["continuation-token"] = continuation_token
-            response = requests.get(S3_LIST_URL, params=params, timeout=timeout)
-            response.raise_for_status()
-            root = ElementTree.fromstring(response.content)
+            response = request_with_retries(
+                "GET",
+                S3_LIST_URL,
+                config,
+                params=params,
+                context=f"list Binance Vision common prefixes {prefix}",
+            )
+            if response is None:  # pragma: no cover - GET listing has no missing status.
+                raise RuntimeError(f"failed to list Binance Vision common prefixes {prefix}: empty response")
+            root = parse_s3_xml_response(response.content, context=f"Binance Vision common prefixes {prefix}")
             namespace_match = re.match(r"\{.*\}", root.tag)
             ns = namespace_match.group(0) if namespace_match else ""
             common_prefixes.extend(
@@ -2188,15 +2228,21 @@ def list_s3_common_prefixes(prefix: str, config: CacheConfig) -> list[str]:
             continuation_token = root.findtext(f"{ns}NextContinuationToken")
             if not is_truncated or not continuation_token:
                 break
-    except (requests.RequestException, ElementTree.ParseError):
+    except RuntimeError:
         common_prefixes = list_common_prefixes_from_index_page(prefix=prefix, config=config)
     return [item for item in common_prefixes if item]
 
 
 def list_common_prefixes_from_index_page(*, prefix: str, config: CacheConfig) -> list[str]:
-    timeout = (config.connect_timeout_seconds, config.timeout_seconds)
-    response = requests.get(BINANCE_VISION_BASE_URL, params={"prefix": prefix}, timeout=timeout)
-    response.raise_for_status()
+    response = request_with_retries(
+        "GET",
+        BINANCE_VISION_BASE_URL,
+        config,
+        params={"prefix": prefix},
+        context=f"list Binance Vision index page prefixes {prefix}",
+    )
+    if response is None:  # pragma: no cover - GET listing has no missing status.
+        raise RuntimeError(f"failed to list Binance Vision index page prefixes {prefix}: empty response")
     text = response.text
     escaped_prefix = re.escape(prefix)
     href_matches = re.findall(rf"{escaped_prefix}([^/'\"]+)/", text)

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import requests
+
 from anomaly_science import binance_vision_cache as cache
 from anomaly_science.binance_vision_cache import (
     DEFAULT_CONNECT_TIMEOUT_SECONDS,
@@ -22,9 +24,79 @@ def test_compact_command_uses_optimized_network_defaults() -> None:
 
     assert config.timeout_seconds == DEFAULT_TIMEOUT_SECONDS == 45.0
     assert config.connect_timeout_seconds == DEFAULT_CONNECT_TIMEOUT_SECONDS == 8.0
-    assert config.retries == DEFAULT_RETRIES == 2
+    assert config.retries == DEFAULT_RETRIES == 8
     assert config.use_archive_file_index
 
+
+
+def test_network_request_retries_transient_timeout(monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        status_code = 200
+        content = b"ok"
+        text = "ok"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeSession:
+        calls = 0
+
+        def request(self, method: str, url: str, **kwargs):
+            self.calls += 1
+            if self.calls < 3:
+                raise requests.ReadTimeout("temporary outage")
+            return FakeResponse()
+
+    session = FakeSession()
+    monkeypatch.setattr(cache.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    response = cache.request_with_retries(
+        "GET",
+        "https://example.test/archive.zip",
+        CacheConfig(out_dir=Path(".cache"), retries=3),
+        session=session,
+        context="download https://example.test/archive.zip",
+    )
+
+    assert response is not None
+    assert response.content == b"ok"
+    assert session.calls == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_network_request_does_not_retry_declared_missing_404(monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        status_code = 404
+
+        def raise_for_status(self) -> None:  # pragma: no cover - must not be called for declared missing status.
+            raise AssertionError("404 should be handled as missing before raise_for_status")
+
+    class FakeSession:
+        calls = 0
+
+        def request(self, method: str, url: str, **kwargs):
+            self.calls += 1
+            return FakeResponse()
+
+    session = FakeSession()
+    monkeypatch.setattr(cache.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    response = cache.request_with_retries(
+        "GET",
+        "https://example.test/missing.zip",
+        CacheConfig(out_dir=Path(".cache"), retries=3),
+        session=session,
+        missing_status_codes=frozenset({404}),
+        context="download https://example.test/missing.zip",
+    )
+
+    assert response is None
+    assert session.calls == 1
+    assert sleeps == []
 
 def test_archive_file_index_flag_is_backward_compatible_no_op() -> None:
     args = cache.build_arg_parser().parse_args(["--archive-file-index"])
