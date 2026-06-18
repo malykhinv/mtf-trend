@@ -11,8 +11,9 @@ strategy_contract_version = base_strategy_v1
 
 This is a research strategy, not a live trading strategy. It studies whether
 future anomaly nature is predictable online from point-in-time state and feature
-artifacts. Entry logic, EV, trade simulation, shadow live, and production live
-remain intentionally absent until prediction calibration, timing, and EV pass
+artifacts. Decision timing, EV, and simplified pessimistic simulation are
+research artifacts only. Shadow live and production live remain intentionally
+absent until prediction calibration, timing, EV, simulation, and governance pass
 audits.
 
 Current scientific sequence:
@@ -21,6 +22,8 @@ Current scientific sequence:
 3. build future paths;
 4. audit temporal correctness;
 5. study calibrated prediction and negative controls;
-6. only then study decision timing and EV.
+6. study decision timing and EV;
+7. study simplified pessimistic simulation;
+8. only then consider shadow live or production execution realism.
 
 Legacy trading rules are reference-only and must not be imported into the new core.

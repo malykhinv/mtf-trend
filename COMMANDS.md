@@ -54,16 +54,34 @@ MVP1 descriptive future-nature outcome labels:
 python main.py run-mvp1-labels --state tmp/mvp1_state/anomaly_state_1m.csv --future tmp/mvp1_future/anomaly_future_paths.csv --out tmp/mvp1_labels
 ```
 
-MVP1 daily prequential calibrated baseline prediction:
+MVP1 weekly CatBoost+Isotonic calibrated prediction:
 
 ```bash
-python main.py run-mvp1-prediction --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_prediction
+python main.py run-mvp1-prediction --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --features tmp/mvp1_feature_matrix/anomaly_feature_matrix.csv --out tmp/mvp1_prediction
 ```
 
 MVP1 placebo/control checks:
 
 ```bash
 python main.py run-mvp1-controls --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --out tmp/mvp1_controls
+```
+
+MVP1 decision timing / EV:
+
+```bash
+python main.py run-mvp1-expected-value --state tmp/mvp1_state/anomaly_state_1m.csv --labels tmp/mvp1_labels/anomaly_outcome_labels.csv --predictions tmp/mvp1_prediction/anomaly_oos_predictions.csv --out tmp/mvp1_ev
+```
+
+MVP1 pessimistic trade simulation:
+
+```bash
+python main.py run-mvp1-trade-simulation --input tests/fixtures/minimal_market_data --decision-timing tmp/mvp1_ev/anomaly_decision_timing.csv --out tmp/mvp1_simulation
+```
+
+MVP1 holdout governance:
+
+```bash
+python main.py run-mvp1-holdout-governance --out tmp/mvp1_governance --start-date 2024-01-01 --end-date 2024-12-15 --freeze-id protocol_freeze_v1
 ```
 
 

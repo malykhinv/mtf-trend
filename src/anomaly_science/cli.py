@@ -115,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prediction = subparsers.add_parser(
         "run-mvp1-prediction",
-        help="Run MVP1 daily prequential calibrated baseline prediction from state and outcome labels.",
+        help="Run MVP1 weekly CatBoost+Isotonic calibrated prediction from state, optional features, and labels.",
     )
     prediction.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
     prediction.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
