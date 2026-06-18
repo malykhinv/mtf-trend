@@ -287,6 +287,7 @@ class SkippedSymbolRecord:
 LedgerKey = tuple[str, str, str, str]
 CompletionKey = tuple[str, str, str, str]
 TIMEFRAME_NAME = "enriched_1m"
+DELIVERY_CONTRACT_SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]+_\d{6}$")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -395,20 +396,38 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
 
     symbols = list(config.symbols) if config.symbols else discover_um_futures_symbols(config)
     symbols = sorted(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol.strip()))
-    if config.max_symbols is not None:
-        symbols = symbols[: config.max_symbols]
-    if not symbols:
-        raise RuntimeError("No symbols to process. Discovery returned empty set and no --symbols were provided.")
 
     archive_file_indexes: dict[str, ArchiveFileIndex] = {}
     skipped_symbols: list[SkippedSymbolRecord] = []
+    symbols, delivery_skipped = filter_delivery_contract_symbols(
+        symbols=symbols,
+        start_date=start,
+        end_date=end,
+    )
+    skipped_symbols.extend(delivery_skipped)
+
+    if config.max_symbols is not None:
+        symbols = symbols[: config.max_symbols]
+    if not symbols:
+        write_skipped_symbols(skipped_symbols_path, skipped_symbols)
+        write_manifest(
+            metadata_dir / "manifest.json",
+            config=config,
+            stats=stats,
+            start_date=start,
+            end_date=end,
+            skipped_symbols=skipped_symbols,
+        )
+        raise RuntimeError("No perpetual symbols to process after delivery-contract/date-range filtering.")
+
     if config.use_archive_file_index:
-        symbols, archive_file_indexes, skipped_symbols = filter_symbols_by_archive_range(
+        symbols, archive_file_indexes, range_skipped = filter_symbols_by_archive_range(
             symbols=symbols,
             config=config,
             start_date=start,
             end_date=end,
         )
+        skipped_symbols.extend(range_skipped)
         write_skipped_symbols(skipped_symbols_path, skipped_symbols)
         if not symbols:
             write_manifest(
@@ -420,6 +439,8 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
                 skipped_symbols=skipped_symbols,
             )
             return stats
+    else:
+        write_skipped_symbols(skipped_symbols_path, skipped_symbols)
 
     started_at = time.monotonic()
     completed_block_units = 0
@@ -1459,6 +1480,35 @@ def extract_archive_label_from_key(*, symbol: str, dataset: ArchiveDataset, key:
         pattern = rf"^{escaped_symbol}-liquidationSnapshot-(?P<label>\d{{4}}-\d{{2}}(?:-\d{{2}})?)\.zip$"
     match = re.match(pattern, filename)
     return match.group("label") if match else ""
+
+
+def is_delivery_contract_symbol(symbol: str) -> bool:
+    return bool(DELIVERY_CONTRACT_SYMBOL_PATTERN.fullmatch(symbol.upper().strip()))
+
+
+def filter_delivery_contract_symbols(
+    *,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+) -> tuple[list[str], list[SkippedSymbolRecord]]:
+    eligible: list[str] = []
+    skipped: list[SkippedSymbolRecord] = []
+    skipped_at = datetime.now(timezone.utc).isoformat()
+    for symbol in symbols:
+        if is_delivery_contract_symbol(symbol):
+            skipped.append(
+                SkippedSymbolRecord(
+                    symbol=symbol,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                    reason="delivery_contract_excluded",
+                    skipped_at=skipped_at,
+                )
+            )
+        else:
+            eligible.append(symbol)
+    return eligible, skipped
 
 
 def filter_symbols_by_archive_range(

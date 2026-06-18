@@ -30,4 +30,8 @@ Pending local patches from uploaded snapshot `project_20260618_115220.zip`:
   - Skips symbols without kline archives in the requested date range.
   - Writes `metadata/skipped_symbols.csv`.
   - Adds `metadata/symbol_completion.csv` and deletes completed per-symbol parts after final parquet compaction.
+- `perf: exclude Binance delivery contracts from perpetual cache`
+  - Unconditionally skips `*_YYMMDD` delivery/fixed-date contracts.
+  - Records skipped delivery contracts with `reason=delivery_contract_excluded`.
+  - Adds no new CLI flag; the cache command remains compact.
 - Patch status: PROPOSED until applied and verified locally.

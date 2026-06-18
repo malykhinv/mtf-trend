@@ -180,3 +180,18 @@ Intent:
 Validation for this proposed patch:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest -q tests/test_binance_vision_cache.py tests/test_zip_project.py`
+
+
+## perf: exclude Binance delivery contracts from perpetual cache
+
+Status: PROPOSED; patch generated on top of `perf: prune Binance Vision cache work by requested date range`; GitHub head not checked in this environment.
+
+Intent:
+- Exclude Binance delivery/fixed-date symbols matching `*_YYMMDD` from the USD-M perpetual cache unconditionally.
+- Keep the cache command compact: no `--include-delivery-contracts` or other delivery-specific flag is introduced.
+- Record excluded delivery contracts in `metadata/skipped_symbols.csv` with `reason=delivery_contract_excluded`.
+- Apply delivery filtering before date-range archive probing so old fixed-date contracts do not trigger needless S3 listing/download work.
+
+Validation for this proposed patch:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_binance_vision_cache.py tests/test_zip_project.py`
