@@ -40,7 +40,7 @@ def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]
     if not state_path.exists():
         raise AnomalyStateArtifactError(f"state artifact is missing: {state_path}")
 
-    frame = pd.read_csv(state_path)
+    frame = _read_artifact_csv(state_path)
     schema = get_artifact_schema("anomaly_state_1m.csv")
     expected_columns = list(schema.required_columns)
     actual_columns = list(frame.columns)
@@ -86,7 +86,7 @@ def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]
     if not future_path.exists():
         raise AnomalyFutureArtifactError(f"future artifact is missing: {future_path}")
 
-    frame = pd.read_csv(future_path)
+    frame = _read_artifact_csv(future_path)
     schema = get_artifact_schema("anomaly_future_paths.csv")
     expected_columns = list(schema.required_columns)
     actual_columns = list(frame.columns)
@@ -161,6 +161,10 @@ def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]
         except (TypeError, ValueError) as exc:
             raise AnomalyFutureArtifactError(f"invalid anomaly_future_paths.csv row {row_index}: {exc}") from exc
     return tuple(rows)
+
+
+def _read_artifact_csv(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, low_memory=False)
 
 
 def build_anomaly_future_paths(
