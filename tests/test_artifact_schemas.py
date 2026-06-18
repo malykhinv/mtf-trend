@@ -37,6 +37,8 @@ REQUIRED_MVP1 = {
     "anomaly_market_shock_groups.csv",
     "anomaly_data_quality.csv",
     "symbol_universe_by_day.csv",
+    "research_ledger.csv",
+    "holdout_access_log.csv",
     "anomaly_protocol_audit.csv",
     "anomaly_run_config.csv",
     "artifact_manifest.json",

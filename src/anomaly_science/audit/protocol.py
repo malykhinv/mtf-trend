@@ -32,6 +32,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "expected_value_computed_before_trade_simulation",
     "trade_simulation_after_calibration_and_decision_timing",
     "pessimistic_entry_price_includes_slippage_penalty",
+    "final_holdout_not_accessed_before_protocol_freeze",
 )
 
 
@@ -91,6 +92,9 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
         "trade_simulation_after_calibration_and_decision_timing",
         "pessimistic_entry_price_includes_slippage_penalty",
         "intracandle_double_barrier_resolved_as_stop_loss_first",
+    ),
+    "mvp1_governance": (
+        "final_holdout_not_accessed_before_protocol_freeze",
     ),
 }
 

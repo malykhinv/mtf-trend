@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 from anomaly_science.atlas import run_mvp1_atlas
@@ -16,6 +17,7 @@ from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
+from anomaly_science.validation import run_mvp1_holdout_governance
 
 
 _BOOTSTRAP_MESSAGE = "anomaly_science bootstrap ok"
@@ -178,6 +180,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Simulate long/short best_action rows even if RR flag is false.",
     )
+
+    governance = subparsers.add_parser(
+        "run-mvp1-holdout-governance",
+        help="Write MVP1 research ledger and empty final-holdout access log before holdout reads.",
+    )
+    governance.add_argument("--out", required=True, help="Directory where governance artifacts will be written.")
+    governance.add_argument("--start-date", required=True, help="Research period start date YYYY-MM-DD.")
+    governance.add_argument("--end-date", required=True, help="Research period end date YYYY-MM-DD.")
+    governance.add_argument("--freeze-id", required=True, help="Explicit protocol freeze identifier.")
+    governance.add_argument("--holdout-days", type=int, default=60, help="Final locked holdout length in calendar days. Default: 60.")
 
     cache = subparsers.add_parser(
         "build-binance-vision-cache",
@@ -363,6 +375,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=config,
         )
         print(f"mvp1 trade simulation artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-holdout-governance":
+        output_dir = run_mvp1_holdout_governance(
+            out_dir=Path(args.out),
+            start_date=datetime.strptime(args.start_date, "%Y-%m-%d").date(),
+            end_date=datetime.strptime(args.end_date, "%Y-%m-%d").date(),
+            protocol_freeze_id=args.freeze_id,
+            holdout_days=args.holdout_days,
+        )
+        print(f"mvp1 holdout governance artifacts written: {output_dir}")
         return 0
 
     if args.command == "build-binance-vision-cache":
