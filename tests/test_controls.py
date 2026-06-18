@@ -169,6 +169,10 @@ def test_run_mvp1_controls_cli_writes_control_artifacts(tmp_path: Path) -> None:
     assert (out_dir / "anomaly_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
+    with (out_dir / "anomaly_protocol_audit.csv").open(newline="", encoding="utf-8-sig") as handle:
+        audit_by_name = {row["check_name"]: row for row in csv.DictReader(handle)}
+    assert audit_by_name["non_empty_oos_control_gate"]["status"] == "PASS"
+
     with (out_dir / "anomaly_baseline_comparison.csv").open(newline="", encoding="utf-8-sig") as handle:
         baseline_rows = list(csv.DictReader(handle))
     assert any(row["baseline_name"] == "volume_only" and row["status"] == CONTROL_STATUS_DEFERRED for row in baseline_rows)

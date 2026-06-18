@@ -227,6 +227,10 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert (out_dir / "anomaly_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
+    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
+    assert audit_by_name["non_empty_oos_prediction_gate"]["status"] == "PASS"
+
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert rows[0]["event_id"] == "test_row"

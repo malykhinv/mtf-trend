@@ -132,8 +132,18 @@ def _protocol_rows(*, input_row_count: int, prediction_row_count: int, config: W
         ),
         ProtocolAuditRow(
             check_name="prediction_rows_written",
-            status=AuditStatus.PASS,
+            status=AuditStatus.PASS if prediction_row_count > 0 else AuditStatus.WARN,
             message=f"wrote {prediction_row_count} anomaly_oos_predictions.csv rows",
+            artifact="anomaly_oos_predictions.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="non_empty_oos_prediction_gate",
+            status=AuditStatus.PASS if prediction_row_count > 0 else AuditStatus.WARN,
+            message=(
+                "OOS prediction rows are available for scientific interpretation"
+                if prediction_row_count > 0
+                else "no OOS prediction rows were produced; fixture smoke is valid, but scientific interpretation requires non-empty OOS predictions"
+            ),
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(

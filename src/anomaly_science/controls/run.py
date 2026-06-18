@@ -35,7 +35,14 @@ def run_mvp1_controls(
     inputs = load_prediction_inputs(state_path=state_artifact_path, labels_path=labels_artifact_path)
     placebo_rows = build_placebo_test_rows(inputs=inputs, config=cfg)
     baseline_rows = build_baseline_comparison_rows(inputs=inputs, config=cfg)
-    protocol_rows = _protocol_rows(input_row_count=len(inputs), placebo_count=len(placebo_rows), baseline_count=len(baseline_rows), config=cfg)
+    ok_control_count = sum(1 for row in (*placebo_rows, *baseline_rows) if row.status == "OK")
+    protocol_rows = _protocol_rows(
+        input_row_count=len(inputs),
+        placebo_count=len(placebo_rows),
+        baseline_count=len(baseline_rows),
+        ok_control_count=ok_control_count,
+        config=cfg,
+    )
     run_config_rows = _run_config_rows(
         state_path=state_artifact_path,
         labels_path=labels_artifact_path,
@@ -77,7 +84,14 @@ def run_mvp1_controls(
     return output_path
 
 
-def _protocol_rows(*, input_row_count: int, placebo_count: int, baseline_count: int, config: ControlsConfig) -> list[ProtocolAuditRow]:
+def _protocol_rows(
+    *,
+    input_row_count: int,
+    placebo_count: int,
+    baseline_count: int,
+    ok_control_count: int,
+    config: ControlsConfig,
+) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_controls_scope",
@@ -116,8 +130,18 @@ def _protocol_rows(*, input_row_count: int, placebo_count: int, baseline_count: 
         ),
         ProtocolAuditRow(
             check_name="control_rows_written",
-            status=AuditStatus.PASS,
+            status=AuditStatus.PASS if ok_control_count > 0 else AuditStatus.WARN,
             message=f"wrote {placebo_count} placebo rows and {baseline_count} baseline comparison rows",
+            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="non_empty_oos_control_gate",
+            status=AuditStatus.PASS if ok_control_count > 0 else AuditStatus.WARN,
+            message=(
+                f"{ok_control_count} control/baseline rows produced OOS evaluations"
+                if ok_control_count > 0
+                else "no control/baseline row produced OOS evaluations; fixture smoke is valid, but scientific interpretation requires non-empty controls"
+            ),
             artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
