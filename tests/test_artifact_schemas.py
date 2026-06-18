@@ -110,6 +110,8 @@ def test_runtime_reproducibility_rows_include_methodology_keys(tmp_path: Path) -
     assert len(by_key["data_snapshot_hash"]) == 64
     assert len(by_key["config_hash"]) == 64
     assert by_key["internal_time_type"] == "pl.Datetime[ms, UTC]"
+    assert by_key["max_feature_lookback_minutes"] == "1440"
+    assert by_key["trigger_deduplication_policy"] == "same_symbol_detection_time_within_strategy_horizon_suppressed"
     assert by_key["git_commit"]
     assert by_key["dependency_versions"]
 

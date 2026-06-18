@@ -16,6 +16,8 @@ from anomaly_science.contracts.audit import RunConfigRow
 
 DEPENDENCY_NAMES = ("pandas", "polars", "pyarrow", "requests", "tqdm")
 INTERNAL_TIME_TYPE = "pl.Datetime[ms, UTC]"
+MAX_FEATURE_LOOKBACK_MINUTES = 1440
+TRIGGER_DEDUPLICATION_POLICY = "same_symbol_detection_time_within_strategy_horizon_suppressed"
 
 
 def runtime_reproducibility_rows(
@@ -29,6 +31,8 @@ def runtime_reproducibility_rows(
         RunConfigRow(key="data_snapshot_hash", value=_data_snapshot_hash(data_paths), source="runtime"),
         RunConfigRow(key="config_hash", value=_config_hash(config=config, extra_config=extra_config), source="runtime"),
         RunConfigRow(key="internal_time_type", value=INTERNAL_TIME_TYPE, source="runtime"),
+        RunConfigRow(key="max_feature_lookback_minutes", value=str(MAX_FEATURE_LOOKBACK_MINUTES), source="runtime"),
+        RunConfigRow(key="trigger_deduplication_policy", value=TRIGGER_DEDUPLICATION_POLICY, source="runtime"),
         RunConfigRow(key="run_timestamp_utc", value=datetime.now(timezone.utc).isoformat(), source="runtime"),
         RunConfigRow(key="python_version", value=platform.python_version(), source="runtime"),
         RunConfigRow(key="python_executable", value=sys.executable, source="runtime"),
