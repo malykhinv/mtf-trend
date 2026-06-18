@@ -64,11 +64,18 @@ def _strategy_registry_rows() -> list[dict[str, object]]:
                 "stop_loss_atr": metadata.stop_loss_atr,
                 "feature_schema_version": metadata.feature_schema_version,
                 "label_schema_version": metadata.label_schema_version,
+                "required_data_streams": _format_required_data_streams(strategy.required_data_streams),
                 "active_research_strategy": True,
                 "live_trading_strategy": False,
             }
         )
     return rows
+
+
+def _format_required_data_streams(streams: object) -> str:
+    if not isinstance(streams, dict):
+        streams = dict(streams)  # type: ignore[arg-type]
+    return ";".join(f"{name}={str(required).lower()}" for name, required in sorted(streams.items()))
 
 
 def _strategy_reject_reason_rows() -> list[dict[str, object]]:
@@ -105,7 +112,7 @@ def _protocol_rows(*, row_count: int, reject_reason_count: int) -> list[Protocol
         ProtocolAuditRow(
             check_name="base_strategy_contract_valid",
             status=AuditStatus.PASS,
-            message="all registered strategies expose StrategyMetadata and BaseStrategy generate_triggers/generate_custom_features contract",
+            message="all registered strategies expose StrategyMetadata, required_data_streams, trigger-frame generate_triggers, and generate_custom_features contract",
             artifact="strategy_registry.csv",
         )
     ]

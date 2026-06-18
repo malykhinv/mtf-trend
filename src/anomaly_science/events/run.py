@@ -16,6 +16,7 @@ from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, ru
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
 from anomaly_science.events.detector import events_to_artifact
+from anomaly_science.strategy.base import validate_trigger_frame
 from anomaly_science.strategy.registry import get_broad_anomaly_strategy
 
 
@@ -45,12 +46,13 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     event_error: str | None = None
     if frames.get("candles_1m") is not None and not has_critical_fail(data_quality):
         try:
-            trigger_frame = pl.DataFrame(frames["candles_1m"].to_dict(orient="records"))
-            trigger_mask = strategy.generate_triggers(trigger_frame)
+            market_frame = pl.DataFrame(frames["candles_1m"].to_dict(orient="records"))
+            trigger_frame = strategy.generate_triggers(market_frame)
+            validate_trigger_frame(trigger_frame)
             events = strategy.generate_events(
                 normalize_candles_1m(frames["candles_1m"]),
             )
-            _enforce_trigger_mask_matches_events(trigger_mask=trigger_mask, frame=frames["candles_1m"], events=events)
+            _enforce_trigger_frame_matches_events(trigger_frame=trigger_frame, events=events)
         except (TypeError, ValueError) as exc:
             event_error = f"event detector failed: {exc}"
 
@@ -158,7 +160,7 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="base_strategy_contract_valid",
             status=AuditStatus.PASS,
-            message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible generate_triggers",
+            message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible trigger-frame generate_triggers",
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
@@ -183,7 +185,7 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="base_strategy_contract_valid",
             status=AuditStatus.PASS,
-            message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible generate_triggers",
+            message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible trigger-frame generate_triggers",
             artifact="anomaly_events.csv",
         ),
     ]
@@ -203,13 +205,13 @@ def _technical_noise_shock_count(rows: list) -> int:
     )
 
 
-def _enforce_trigger_mask_matches_events(*, trigger_mask: pl.Series, frame: pd.DataFrame, events: tuple) -> None:
-    if len(trigger_mask) != len(frame):
-        raise ValueError("strategy generate_triggers length must match market frame length")
-    trigger_times = {int(row["open_time_ms"]) for index, row in frame.iterrows() if bool(trigger_mask[index])}
-    event_seed_times = {event.seed_time_ms for event in events}
-    if trigger_times != event_seed_times:
-        raise ValueError("strategy trigger mask must match materialized event seed_time_ms values")
+def _enforce_trigger_frame_matches_events(*, trigger_frame: pl.DataFrame, events: tuple) -> None:
+    trigger_event_ids = set(trigger_frame["event_id"].to_list()) if "event_id" in trigger_frame.columns else set()
+    event_ids = {event.event_id for event in events}
+    if trigger_event_ids != event_ids:
+        raise ValueError("strategy trigger frame event_id values must match materialized events")
+    if trigger_frame.height and not all(trigger_frame["is_trigger"].to_list()):
+        raise ValueError("strategy trigger frame must contain only active trigger rows")
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

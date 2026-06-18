@@ -111,7 +111,10 @@ def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
         {
             "event_id": "evt_1",
             "symbol": "BTCUSDT",
+            "state_time_ms": 2,
             "event_start_time_ms": 1,
+            "minutes_since_start": 0,
+            "is_trigger": True,
             "event_detection_time_ms": 2,
             "seed_time_ms": 1,
             "seed_open": 1.0,

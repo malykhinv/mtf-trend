@@ -157,7 +157,10 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
     assert header == [
         "event_id",
         "symbol",
+        "state_time_ms",
         "event_start_time_ms",
+        "minutes_since_start",
+        "is_trigger",
         "event_detection_time_ms",
         "seed_time_ms",
         "seed_open",

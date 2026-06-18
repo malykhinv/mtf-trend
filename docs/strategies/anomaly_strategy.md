@@ -5,7 +5,7 @@ Status:
 ```text
 active_research_strategy = true
 live_trading_strategy = false
-primary_variant = broad_anomaly_v1
+primary_variant = broad_anomaly_v1_h30
 strategy_contract_version = base_strategy_v1
 ```
 
@@ -32,12 +32,17 @@ strategy_family = anomaly
 strategy_contract_version = base_strategy_v1
 ```
 
-Рекомендуемые конкретные strategy_name:
+Рекомендуемые конкретные strategy_name обязаны включать suffix горизонта `_h[minutes]`:
 
 ```text
-broad_anomaly_v1
-post_anomaly_extension_v1
-post_pump_distribution_v1
+broad_anomaly_v1_h15
+broad_anomaly_v1_h30
+broad_anomaly_v1_h60
+post_anomaly_extension_v1_h60
+post_anomaly_extension_v1_h120
+post_pump_distribution_v1_h60
+post_pump_distribution_v1_h120
+post_pump_distribution_v1_h180
 ```
 
 Правило:
@@ -81,7 +86,7 @@ unclear
 Anomaly strategy может иметь несколько trigger variants.
 Каждый variant должен быть отдельным `strategy_name` или отдельным `strategy_version`.
 
-### 3.1. broad_anomaly_v1
+### 3.1. broad_anomaly_v1_*
 
 Цель:
 
@@ -134,7 +139,7 @@ excluded_by_data_quality_gate
 detector_version
 ```
 
-### 3.2. post_pump_distribution_v1
+### 3.2. post_pump_distribution_v1_*
 
 Цель:
 
@@ -289,21 +294,57 @@ CVD divergence помогает отличать подтверждённый п
 делать short/long signal только из факта убыточного противоположного сценария
 ```
 
-## 8. Horizons
+## 7.1. Missing Data Policy: required_data_streams
 
-Anomaly family поддерживает разные horizons по variant.
-
-Рекомендуемые стартовые значения:
+Запрещено использовать факт отсутствия или наличия данных Open Interest и Liquidation как торговый паттерн, edge или model feature. Anomaly family использует явную матрицу требований к данным.
 
 ```text
-broad_anomaly_v1:
-  horizon_minutes: 15, 30, 60
+broad_anomaly_v1_*:
+  open_interest: optional
+  liquidations: optional
+  если stream отсутствует, Core выставляет missing_oi_flag / missing_liquidation_flag и не трактует missing как edge
 
-post_anomaly_extension_v1:
-  horizon_minutes: 60, 120, 180
+post_pump_distribution_v1_*:
+  open_interest: required
+  liquidations: required
+  если stream отсутствует за symbol/day, Core делает explicit reject до генерации triggers
 
-post_pump_distribution_v1:
-  horizon_minutes: 60, 120, 180
+post_anomaly_extension_v1_*:
+  open_interest: optional by default
+  liquidations: optional by default
+  required mode допускается только как отдельный strategy_version или experiment mode
+```
+
+Ablation Runs:
+
+```text
+no_oi_mode / no_liquidation_mode могут принудительно переключать required=false,
+но только как отдельный experiment с записью в EXPERIMENT_LOG/research ledger.
+```
+
+## 8. Strategy variants and horizons
+
+Anomaly family поддерживает разные horizons только через отдельные strategy variants.
+
+Правило:
+
+```text
+Каждая комбинация торговой логики и временного горизонта регистрируется как самостоятельный изолированный инстанс стратегии.
+Запрещено смешивать разные горизонты прогнозирования внутри одной модели CatBoost.
+Один strategy_name/version = один horizon_minutes.
+```
+
+Утверждённый список базовых инстансов платформы:
+
+```text
+broad_anomaly_v1_h15              быстрый скальпинг импульса
+broad_anomaly_v1_h30
+broad_anomaly_v1_h60
+post_anomaly_extension_v1_h60     торговля продолжения на часовом окне
+post_anomaly_extension_v1_h120
+post_pump_distribution_v1_h60     торговля полки распределения
+post_pump_distribution_v1_h120
+post_pump_distribution_v1_h180
 ```
 
 Правило:
@@ -314,6 +355,21 @@ post-extension / post-pump strategies не должны использовать
 ```
 
 H_max для purging/embargo рассчитывает Core как максимум horizons активных strategies run-а.
+
+## 8.1. Trading & Simulation Defaults
+
+Параметры `take_profit_atr` и `stop_loss_atr` являются дефолтными настройками риск-менеджмента конкретных инстансов стратегий для модуля simplified trade simulation. Они определяют физические границы выхода из позиции в бэктестере и не должны смешиваться с общими математическими порогами разметки Core labels.
+
+| Имя инстанса стратегии | Horizon (m) | Default TP (в долях ATR) | Default SL (в долях ATR) |
+| :--- | :--- | :--- | :--- |
+| broad_anomaly_v1_h15 | 15 | 1.5 | 1.0 |
+| broad_anomaly_v1_h30 | 30 | 2.0 | 1.1 |
+| broad_anomaly_v1_h60 | 60 | 2.5 | 1.2 |
+| post_anomaly_extension_v1_h60 | 60 | 2.5 | 1.3 |
+| post_anomaly_extension_v1_h120 | 120 | 3.0 | 1.5 |
+| post_pump_distribution_v1_h60 | 60 | 2.0 | 1.2 |
+| post_pump_distribution_v1_h120 | 120 | 3.0 | 1.5 |
+| post_pump_distribution_v1_h180 | 180 | 4.0 | 2.0 |
 
 ## 9. Label semantics for anomaly family
 
@@ -364,7 +420,7 @@ trap не является пятым основным классом для MVP
 ```text
 market_frame
   -> anomaly_strategy.generate_triggers(market_frame_asof)
-  -> is_trigger
+  -> trigger_frame with event_id/state_time/event_start_time/is_trigger
   -> keep only is_trigger == true
   -> build train/validation/calibration/OOS prediction rows
 ```
@@ -456,7 +512,48 @@ generic reject без reason_if_excluded
 скрывать неизвестную схему данных под empty result без audit
 ```
 
-## 14. Artifact aliases for anomaly family
+## 14. Anomaly events artifact lifecycle structure
+
+`anomaly_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Строки упорядочиваются по `state_time_ms`.
+
+Обязательные системные поля Core:
+
+```text
+event_id: str
+symbol: str
+state_time_ms: int              # минута/момент калькуляции t_0 в canonical ms timestamp
+event_start_time_ms: int        # физическое начало импульса/полки
+minutes_since_start: int        # возраст события: state_time_ms - event_start_time_ms
+is_trigger: bool                # активен ли сигнал lifecycle trigger прямо сейчас
+```
+
+Кастомные audit fields anomaly family, сохраняемые по declared artifact schema:
+
+```text
+event_detection_time_ms
+seed_time_ms
+seed_open
+seed_high
+seed_low
+seed_close
+initial_move_pct
+initial_volume_zscore
+initial_quote_volume_zscore
+initial_trade_count_zscore
+technical_noise_shock
+raw_candle_gap_minutes
+excluded_by_data_quality_gate
+detector_version
+```
+
+Правило:
+
+```text
+Core не выводит семантику стратегии из audit fields.
+Audit fields нужны для диагностики trigger/lifecycle, а не для обхода BaseStrategy contract.
+```
+
+## 15. Artifact aliases for anomaly family
 
 Core canonical artifacts остаются strategy-neutral.
 
@@ -483,7 +580,7 @@ Alias не должен становиться Core contract.
 Новая не-anomaly стратегия не обязана создавать anomaly_* artifacts.
 ```
 
-## 15. What belongs here vs Core
+## 16. What belongs here vs Core
 
 Менять этот файл, если меняется:
 
@@ -520,7 +617,7 @@ BaseStrategy contract
 или мы снова смешиваем методологию со стратегией?
 ```
 
-## 16. Короткий принцип anomaly family
+## 17. Короткий принцип anomaly family
 
 ```text
 Аномалия — только один подключаемый strategy family.

@@ -43,7 +43,7 @@ def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
     return ExpectedValueRow(
         ev_version="mvp1_expected_value_oos_calibrated_proxy_v1",
         strategy_name="anomaly",
-        strategy_version="broad_anomaly_v1",
+        strategy_version="broad_anomaly_v1_h30",
         event_id=event_id,
         symbol="AAA/USDT:USDT",
         state_time_ms=BASE_MS,

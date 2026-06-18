@@ -51,14 +51,23 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
 
     with (out_dir / "strategy_registry.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
-    assert rows[0]["strategy_name"] == "broad_anomaly_v1"
+    assert [row["strategy_name"] for row in rows] == [
+        "broad_anomaly_v1_h15",
+        "broad_anomaly_v1_h30",
+        "broad_anomaly_v1_h60",
+    ]
     assert rows[0]["strategy_contract_version"] == "base_strategy_v1"
+    assert rows[0]["required_data_streams"] == "liquidations=false;open_interest=false"
     assert rows[0]["live_trading_strategy"] == "False"
 
     with (out_dir / "strategy_reject_reasons.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         reject_rows = list(csv.DictReader(file_obj))
     assert {row["reason_code"] for row in reject_rows} == EXPECTED_ANOMALY_REJECT_REASONS
-    assert all(row["strategy_name"] == "broad_anomaly_v1" for row in reject_rows)
+    assert {row["strategy_name"] for row in reject_rows} == {
+        "broad_anomaly_v1_h15",
+        "broad_anomaly_v1_h30",
+        "broad_anomaly_v1_h60",
+    }
 
     with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}

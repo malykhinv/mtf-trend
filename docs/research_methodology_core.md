@@ -97,18 +97,19 @@ no-leakage invariants
 
 ## 4. Stable BaseStrategy contract
 
-Любая стратегия подключается через стабильный контракт.
+Любая стратегия подключается через стабильный контракт. Один инстанс стратегии обслуживает ровно один фиксированный горизонт прогнозирования. Multi-horizon research регистрируется как набор отдельных strategy variants, а не как tuple/list внутри одного model_version.
 
 ```python
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Mapping
 
 import polars as pl
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StrategyMetadata:
     strategy_name: str
     strategy_version: str
@@ -121,15 +122,38 @@ class StrategyMetadata:
     label_schema_version: str
 
 
-class BaseStrategy(Protocol):
-    metadata: StrategyMetadata
+class BaseStrategy(ABC):
+    @property
+    @abstractmethod
+    def metadata(self) -> StrategyMetadata:
+        """Identity, one fixed horizon, schemas and simulation defaults."""
 
-    def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.Series:
+    @property
+    @abstractmethod
+    def required_data_streams(self) -> Mapping[str, bool]:
         """
-        Возвращает is_trigger для строк, где стратегия имеет право строить dataset/prediction.
-        Использует только данные <= state_time/snapshot_time.
+        Missing Data Policy matrix.
+        Key = data stream name, value = whether it is required for this strategy instance.
+        Core gates missing required streams before trigger generation.
         """
 
+    @abstractmethod
+    def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+        """
+        Return a trigger frame using only data <= state_time/snapshot_time.
+
+        Required columns:
+            symbol: pl.String
+            state_time_ms: pl.Int64
+            is_trigger: pl.Boolean
+            event_id: pl.String
+            event_start_time_ms: pl.Int64
+
+        Strategy may add custom audit fields. Core does not parse their semantics;
+        it stores only columns declared by the artifact schema.
+        """
+
+    @abstractmethod
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         """
         Возвращает только strategy-specific фичи.
@@ -144,6 +168,15 @@ class BaseStrategy(Protocol):
 Core зависит только от BaseStrategy contract.
 Strategy зависит от BaseStrategy contract.
 Core не зависит от конкретного strategy module.
+```
+
+Запрещено:
+
+```text
+передавать tuple/list horizons в один strategy instance
+смешивать разные horizons внутри одного CatBoost model_version
+возвращать из generate_triggers голый boolean mask без event lifecycle metadata
+использовать missing required data stream как model feature или market edge
 ```
 
 ## 5. Universal temporal contract
@@ -257,6 +290,27 @@ technical_noise_shock candles after data restoration
 включать technical_noise_shock в ML train/validation/calibration/test
 заменять технические gaps silent forward-fill так, будто рынок торговался непрерывно
 ```
+
+### 7.1. Missing Data Policy через required_data_streams
+
+Core обязан применять декларативную матрицу `strategy.required_data_streams` до генерации triggers.
+
+Правило:
+
+```text
+required_data_streams[stream] = true  -> отсутствие stream за symbol/day даёт explicit reject
+required_data_streams[stream] = false -> stream optional, missing flag обязателен, missing не является edge
+```
+
+Запрещено:
+
+```text
+использовать факт отсутствия OI/liquidation/trade_count как торговый сигнал
+сдвигать Train и OOS выборки разными missing-data правилами
+молчаливо заменять required stream нулями без reject reason
+```
+
+Ablation experiments могут временно переключать required streams в `false`, но только как отдельный experiment mode с записью в experiment/research ledger.
 
 ## 8. Point-in-Time Universe
 
@@ -435,7 +489,7 @@ Core использует недельное переобучение тяжёл
 4. H_max = max(label_horizon_minutes) среди активных strategies run-а
 5. apply purging: train_snapshot_time + H_max <= weekly_model_freeze_time_W
 6. exclude data-quality failures
-7. apply S.generate_triggers(df_asof) -> is_trigger
+7. apply S.generate_triggers(df_asof) -> trigger_frame with event lifecycle metadata
 8. remove is_trigger=false rows before train/test for strategy-specific model
 9. build features using only data <= snapshot_time
 10. split weekly train into train_fit / train_validation / train_calibration
@@ -570,6 +624,8 @@ probability of follow-through
 ## 19. Simplified pessimistic trade simulation
 
 Trade simulation разрешена только после calibration и decision timing.
+
+`take_profit_atr` и `stop_loss_atr` являются simulation defaults конкретного strategy instance из `StrategyMetadata`. Они определяют физические границы simplified simulator и не являются label thresholds Core.
 
 Обязательные правила:
 

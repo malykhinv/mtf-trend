@@ -75,7 +75,10 @@ def _write_events_csv(path: Path) -> None:
             {
                 "event_id": "evt_fixture",
                 "symbol": "AAA/USDT:USDT",
+                "state_time_ms": "1704067260000",
                 "event_start_time_ms": "1704067200000",
+                "minutes_since_start": "1",
+                "is_trigger": "True",
                 "event_detection_time_ms": "1704067260000",
                 "seed_time_ms": "1704067200000",
                 "seed_open": "100.0",

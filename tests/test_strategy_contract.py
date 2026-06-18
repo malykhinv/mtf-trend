@@ -3,7 +3,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from anomaly_science.strategy import StrategyContractError, StrategyMetadata
+from anomaly_science.strategy import StrategyContractError, StrategyMetadata, validate_trigger_frame
 from anomaly_science.strategy.registry import available_strategies, get_strategy
 from anomaly_science.strategy.anomaly import BroadAnomalyStrategy
 
@@ -45,27 +45,51 @@ def test_strategy_metadata_validates_required_base_contract_fields() -> None:
         )
 
 
+def test_strategy_metadata_rejects_multi_horizon_values() -> None:
+    with pytest.raises(StrategyContractError, match="one fixed int"):
+        StrategyMetadata(
+            strategy_name="bad",
+            strategy_version="1.0.0",
+            strategy_contract_version="base_strategy_v1",
+            strategy_family="anomaly",
+            horizon_minutes=(15, 30),  # type: ignore[arg-type]
+            take_profit_atr=1.0,
+            stop_loss_atr=1.0,
+            feature_schema_version="features_v1",
+            label_schema_version="labels_v1",
+        )
+
+
 def test_broad_anomaly_strategy_wraps_detector_behind_base_contract() -> None:
     strategy = BroadAnomalyStrategy()
     rows = [_candle_row(index, close=100.0) for index in range(20)]
     rows.append(_candle_row(20, close=104.0, quote_volume=10_000.0))
 
-    triggers = strategy.generate_triggers(pl.DataFrame(rows))
+    trigger_frame = strategy.generate_triggers(pl.DataFrame(rows))
     custom_features = strategy.generate_custom_features(pl.DataFrame({"x": [1, 2]}))
 
-    assert strategy.metadata.strategy_name == "broad_anomaly_v1"
+    validate_trigger_frame(trigger_frame)
+    assert strategy.metadata.strategy_name == "broad_anomaly_v1_h30"
     assert strategy.metadata.strategy_family == "anomaly"
     assert strategy.metadata.strategy_contract_version == "base_strategy_v1"
     assert strategy.metadata.horizon_minutes == 30
-    assert triggers.to_list().count(True) == 1
+    assert strategy.metadata.take_profit_atr == 2.0
+    assert strategy.metadata.stop_loss_atr == 1.1
+    assert strategy.required_data_streams == {"open_interest": False, "liquidations": False}
+    assert trigger_frame.height == 1
+    assert trigger_frame["is_trigger"].to_list() == [True]
     assert custom_features.height == 0
     assert custom_features.columns == []
 
 
 def test_strategy_registry_exposes_broad_anomaly_by_contract_name() -> None:
     entries = available_strategies()
-    strategy = get_strategy("broad_anomaly_v1")
+    strategy = get_strategy("broad_anomaly_v1_h30")
 
-    assert [entry.strategy_name for entry in entries] == ["broad_anomaly_v1"]
-    assert strategy.metadata.strategy_name == "broad_anomaly_v1"
+    assert [entry.strategy_name for entry in entries] == [
+        "broad_anomaly_v1_h15",
+        "broad_anomaly_v1_h30",
+        "broad_anomaly_v1_h60",
+    ]
+    assert strategy.metadata.strategy_name == "broad_anomaly_v1_h30"
     assert strategy.metadata.strategy_contract_version == "base_strategy_v1"

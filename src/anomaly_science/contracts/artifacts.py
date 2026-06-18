@@ -26,7 +26,10 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         required_columns=(
             "event_id",
             "symbol",
+            "state_time_ms",
             "event_start_time_ms",
+            "minutes_since_start",
+            "is_trigger",
             "event_detection_time_ms",
             "seed_time_ms",
             "seed_open",
@@ -42,7 +45,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "excluded_by_data_quality_gate",
             "detector_version",
         ),
-        description="Broad anomaly events; detector output, not trade setups.",
+        description="Anomaly event lifecycle trigger frame; detector output, not trade setups.",
     ),
     "anomaly_state_1m.csv": ArtifactSchema(
         name="anomaly_state_1m.csv",
@@ -572,6 +575,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "stop_loss_atr",
             "feature_schema_version",
             "label_schema_version",
+            "required_data_streams",
             "active_research_strategy",
             "live_trading_strategy",
         ),
