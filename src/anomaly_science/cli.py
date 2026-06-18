@@ -176,6 +176,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Deprecated no-op kept for compatibility; direct archive probing is now the default.",
     )
     cache.add_argument(
+        "--daily-fallback-for-missing-monthly",
+        action="store_true",
+        help=(
+            "Probe daily archives when a closed monthly kline archive is missing. "
+            "Disabled by default because missing historical monthly klines usually mean the symbol was not listed yet."
+        ),
+    )
+    cache.add_argument(
         "--refresh-archive-file-index",
         action="store_true",
         help="Refresh cached Binance Vision file listings before processing each symbol when --archive-file-index is enabled.",
@@ -298,6 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             request_sleep_seconds=args.request_sleep,
             use_archive_file_index=bool(args.archive_file_index and not args.no_archive_file_index),
             refresh_archive_file_index=args.refresh_archive_file_index,
+            daily_fallback_for_missing_monthly=args.daily_fallback_for_missing_monthly,
         )
         stats = build_binance_vision_cache(config)
         written = sum(1 for item in stats if item.rows_written > 0)

@@ -10,6 +10,7 @@ import os
 import shutil
 import re
 import sys
+import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -191,6 +192,7 @@ class CacheConfig:
     request_sleep_seconds: float = 0.0
     use_archive_file_index: bool = False
     refresh_archive_file_index: bool = False
+    daily_fallback_for_missing_monthly: bool = False
 
     def __post_init__(self) -> None:
         if self.days <= 0:
@@ -260,6 +262,58 @@ class DownloadedBlockFiles:
     metrics_zip: bytes | None
     liquidations_zip: bytes | None
     missing_required_klines: bool
+
+
+class ArchiveDownloadPool:
+    """Run-wide bounded downloader with per-thread keep-alive HTTP sessions."""
+
+    def __init__(self, config: CacheConfig) -> None:
+        self.config = config
+        self._executor = ThreadPoolExecutor(
+            max_workers=config.download_workers,
+            thread_name_prefix="bvc-http",
+        )
+        self._local = threading.local()
+        self._sessions: list[requests.Session] = []
+        self._sessions_lock = threading.Lock()
+
+    def __enter__(self) -> "ArchiveDownloadPool":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=False)
+        with self._sessions_lock:
+            sessions = list(self._sessions)
+            self._sessions.clear()
+        for session in sessions:
+            session.close()
+
+    def submit_download(self, url: str):
+        return self._executor.submit(self.download_optional_bytes, url)
+
+    def download_optional_bytes(self, url: str) -> bytes | None:
+        return download_optional_bytes(url, self.config, session=self._session())
+
+    def _session(self) -> requests.Session:
+        session = getattr(self._local, "session", None)
+        if session is not None:
+            return session
+        session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=1,
+            pool_maxsize=1,
+            max_retries=0,
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        session.headers.update({"User-Agent": "anomaly-science-binance-vision-cache/1.0"})
+        self._local.session = session
+        with self._sessions_lock:
+            self._sessions.append(session)
+        return session
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,6 +440,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Deprecated no-op kept for compatibility; direct archive probing is now the default.",
     )
     parser.add_argument(
+        "--daily-fallback-for-missing-monthly",
+        action="store_true",
+        help=(
+            "Probe daily archives when a closed monthly kline archive is missing. "
+            "Disabled by default because missing historical monthly klines usually mean the symbol was not listed yet."
+        ),
+    )
+    parser.add_argument(
         "--refresh-archive-file-index",
         action="store_true",
         help="Refresh cached Binance Vision file listings before processing each symbol when --archive-file-index is enabled.",
@@ -410,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
         request_sleep_seconds=args.request_sleep,
         use_archive_file_index=bool(args.archive_file_index and not args.no_archive_file_index),
         refresh_archive_file_index=args.refresh_archive_file_index,
+        daily_fallback_for_missing_monthly=args.daily_fallback_for_missing_monthly,
     )
     build_binance_vision_cache(cfg)
     return 0
@@ -545,6 +608,38 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
     else:
         write_skipped_symbols(skipped_symbols_path, skipped_symbols)
 
+    if not config.use_archive_file_index and not config.refresh_archive_file_index:
+        cached_run_index = load_cached_run_klines_archive_index_if_scope_matches(
+            config=config,
+            symbols=symbols,
+            blocks=blocks,
+        )
+        if cached_run_index is not None:
+            log_cache_stage(
+                "archive preflight disabled; using cached local scoped kline metadata "
+                f"path={run_klines_archive_index_path(config.out_dir)}"
+            )
+            symbols, archive_file_indexes, range_skipped = filter_symbols_by_archive_range(
+                symbols=symbols,
+                config=config,
+                start_date=start,
+                end_date=end,
+                run_klines_index=cached_run_index,
+            )
+            skipped_symbols.extend(range_skipped)
+            write_skipped_symbols(skipped_symbols_path, skipped_symbols)
+            log_cache_stage(f"cached archive range filter kept={len(symbols)} skipped={len(range_skipped)}")
+            if not symbols:
+                write_manifest(
+                    metadata_dir / "manifest.json",
+                    config=config,
+                    stats=stats,
+                    start_date=start,
+                    end_date=end,
+                    skipped_symbols=skipped_symbols,
+                )
+                return stats
+
     if config.use_archive_file_index:
         log_cache_stage("archive preflight enabled; using scoped kline metadata before downloads")
     else:
@@ -581,76 +676,78 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
         dynamic_ncols=True,
     )
     try:
-        for symbol_index, symbol in enumerate(symbols, start=1):
-            symbol_block_units_before = completed_block_units
+        with ArchiveDownloadPool(config) as download_pool:
+            for symbol_index, symbol in enumerate(symbols, start=1):
+                symbol_block_units_before = completed_block_units
 
-            def on_block_progress(
-                progress_symbol: str,
-                block_label: str,
-                symbol_blocks_done: int,
-                symbol_blocks_total: int,
-                rows_written: int,
-            ) -> None:
-                nonlocal completed_block_units, estimated_block_units
-                completed_block_units += 1
-                remaining_symbols = max(0, len(symbols) - symbol_index)
-                remaining_current_symbol_blocks = max(0, symbol_blocks_total - symbol_blocks_done)
-                estimated_block_units = max(
-                    estimated_block_units,
-                    completed_block_units + remaining_current_symbol_blocks + remaining_symbols * base_blocks_per_symbol,
-                    completed_block_units,
-                )
-                if progress.total != estimated_block_units:
-                    progress.total = estimated_block_units
-                    progress.refresh()
-                progress.update(1)
-                progress.set_postfix(
-                    sym=progress_symbol,
-                    blk=f"{symbol_blocks_done}/{symbol_blocks_total}",
-                    cur=block_label,
-                    done=f"{completed_block_units}/{estimated_block_units}",
-                    rows=rows_written,
-                    disk=disk_usage.get(),
-                    eta=format_eta(started_at, completed_block_units, estimated_block_units),
-                    refresh=True,
-                )
+                def on_block_progress(
+                    progress_symbol: str,
+                    block_label: str,
+                    symbol_blocks_done: int,
+                    symbol_blocks_total: int,
+                    rows_written: int,
+                ) -> None:
+                    nonlocal completed_block_units, estimated_block_units
+                    completed_block_units += 1
+                    remaining_symbols = max(0, len(symbols) - symbol_index)
+                    remaining_current_symbol_blocks = max(0, symbol_blocks_total - symbol_blocks_done)
+                    estimated_block_units = max(
+                        estimated_block_units,
+                        completed_block_units + remaining_current_symbol_blocks + remaining_symbols * base_blocks_per_symbol,
+                        completed_block_units,
+                    )
+                    if progress.total != estimated_block_units:
+                        progress.total = estimated_block_units
+                        progress.refresh()
+                    progress.update(1)
+                    progress.set_postfix(
+                        sym=progress_symbol,
+                        blk=f"{symbol_blocks_done}/{symbol_blocks_total}",
+                        cur=block_label,
+                        done=f"{completed_block_units}/{estimated_block_units}",
+                        rows=rows_written,
+                        disk=disk_usage.get(),
+                        eta=format_eta(started_at, completed_block_units, estimated_block_units),
+                        refresh=True,
+                    )
 
-            progress.set_postfix(
-                sym=symbol,
-                blk=f"0/{len(blocks)}",
-                disk=disk_usage.get(),
-                eta=format_eta(started_at, completed_block_units, estimated_block_units),
-                refresh=True,
-            )
-            symbol_stats = build_symbol_cache(
-                symbol=symbol,
-                blocks=blocks,
-                config=config,
-                start_date=start,
-                end_date=end,
-                ledger=ledger,
-                ledger_path=ledger_path,
-                completions=completions,
-                completion_path=completion_path,
-                preloaded_archive_file_index=archive_file_indexes.get(symbol),
-                progress_callback=on_block_progress,
-            )
-            if completed_block_units == symbol_block_units_before:
-                # Already-completed symbols return before block iteration. Count their planned
-                # blocks so the block-level progress bar stays truthful on resume runs.
-                completed_block_units += base_blocks_per_symbol
-                progress.update(base_blocks_per_symbol)
                 progress.set_postfix(
                     sym=symbol,
-                    blk="cached-symbol",
-                    done=f"{completed_block_units}/{estimated_block_units}",
-                    rows=symbol_stats.rows_written,
+                    blk=f"0/{len(blocks)}",
                     disk=disk_usage.get(),
                     eta=format_eta(started_at, completed_block_units, estimated_block_units),
                     refresh=True,
                 )
-            stats.append(symbol_stats)
-            flush_run_metadata(force=False)
+                symbol_stats = build_symbol_cache(
+                    symbol=symbol,
+                    blocks=blocks,
+                    config=config,
+                    start_date=start,
+                    end_date=end,
+                    ledger=ledger,
+                    ledger_path=ledger_path,
+                    completions=completions,
+                    completion_path=completion_path,
+                    preloaded_archive_file_index=archive_file_indexes.get(symbol),
+                    download_pool=download_pool,
+                    progress_callback=on_block_progress,
+                )
+                if completed_block_units == symbol_block_units_before:
+                    # Already-completed symbols return before block iteration. Count their planned
+                    # blocks so the block-level progress bar stays truthful on resume runs.
+                    completed_block_units += base_blocks_per_symbol
+                    progress.update(base_blocks_per_symbol)
+                    progress.set_postfix(
+                        sym=symbol,
+                        blk="cached-symbol",
+                        done=f"{completed_block_units}/{estimated_block_units}",
+                        rows=symbol_stats.rows_written,
+                        disk=disk_usage.get(),
+                        eta=format_eta(started_at, completed_block_units, estimated_block_units),
+                        refresh=True,
+                    )
+                stats.append(symbol_stats)
+                flush_run_metadata(force=False)
     finally:
         progress.close()
     flush_run_metadata(force=True)
@@ -669,6 +766,7 @@ def build_symbol_cache(
     completions: dict[CompletionKey, SymbolCompletionRecord],
     completion_path: Path,
     preloaded_archive_file_index: ArchiveFileIndex | None = None,
+    download_pool: ArchiveDownloadPool | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> SymbolStats:
     final_path = config.out_dir / f"{symbol}.parquet"
@@ -806,7 +904,13 @@ def build_symbol_cache(
         if reuse_completed_block(block, actual_start, actual_end):
             return
 
-        files = download_block_files(symbol=symbol, block=block, config=config, archive_file_index=get_archive_file_index())
+        files = download_block_files(
+            symbol=symbol,
+            block=block,
+            config=config,
+            archive_file_index=get_archive_file_index(),
+            download_pool=download_pool,
+        )
         if files.missing_required_klines and block.is_monthly:
             write_ledger_record(
                 block=block,
@@ -822,6 +926,9 @@ def build_symbol_cache(
             notify_block(f"{block.period}:{block.label}:missing-monthly")
             del files
             gc.collect()
+            if not config.daily_fallback_for_missing_monthly:
+                maybe_sleep(config.request_sleep_seconds)
+                return
             fallback_days = daily_blocks(actual_start, actual_end)
             index = get_archive_file_index()
             if index is not None:
@@ -1489,6 +1596,7 @@ def download_block_files(
     block: VisionBlock,
     config: CacheConfig,
     archive_file_index: ArchiveFileIndex | None = None,
+    download_pool: ArchiveDownloadPool | None = None,
 ) -> DownloadedBlockFiles:
     if archive_file_index is not None and not archive_file_index.has(block=block, dataset="klines"):
         return DownloadedBlockFiles(
@@ -1511,8 +1619,14 @@ def download_block_files(
         "metrics_zip": None,
         "liquidations_zip": None,
     }
-    with ThreadPoolExecutor(max_workers=min(config.download_workers, max(1, len(urls)))) as executor:
-        future_to_name = {executor.submit(download_optional_bytes, url, config): name for name, url in urls.items()}
+    if download_pool is None:
+        with ThreadPoolExecutor(max_workers=min(config.download_workers, max(1, len(urls)))) as executor:
+            future_to_name = {executor.submit(download_optional_bytes, url, config): name for name, url in urls.items()}
+            for future in as_completed(future_to_name):
+                name = future_to_name[future]
+                results[name] = future.result()
+    else:
+        future_to_name = {download_pool.submit_download(url): name for name, url in urls.items()}
         for future in as_completed(future_to_name):
             name = future_to_name[future]
             results[name] = future.result()
@@ -1525,12 +1639,13 @@ def download_block_files(
     )
 
 
-def download_optional_bytes(url: str, config: CacheConfig) -> bytes | None:
+def download_optional_bytes(url: str, config: CacheConfig, *, session: requests.Session | None = None) -> bytes | None:
     timeout = (config.connect_timeout_seconds, config.timeout_seconds)
+    client = session if session is not None else requests
     last_error: Exception | None = None
     for attempt in range(config.retries + 1):
         try:
-            response = requests.get(url, timeout=timeout)
+            response = client.get(url, timeout=timeout)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
@@ -1560,6 +1675,28 @@ def make_archive_url(*, symbol: str, block: VisionBlock, dataset: Literal["kline
 
 
 RunKlinesIndexProgressCallback = Callable[[str, int, int, int], None]
+
+
+def load_cached_run_klines_archive_index_if_scope_matches(
+    *,
+    config: CacheConfig,
+    symbols: Iterable[str],
+    blocks: Iterable[VisionBlock],
+) -> RunKlinesArchiveIndex | None:
+    normalized_symbols = tuple(sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()}))
+    monthly_labels = monthly_archive_labels_from_blocks(blocks)
+    daily_labels = daily_archive_labels_from_blocks(blocks)
+    index_path = run_klines_archive_index_path(config.out_dir)
+    if not index_path.exists():
+        return None
+    if not run_klines_archive_index_scope_matches(
+        index_path,
+        symbols=normalized_symbols,
+        monthly_labels=monthly_labels,
+        daily_labels=daily_labels,
+    ):
+        return None
+    return read_run_klines_archive_index(index_path)
 
 
 def load_or_build_run_klines_archive_index(
@@ -2426,6 +2563,7 @@ def write_manifest(
         "oi_join_strategy": config.oi_join_strategy,
         "use_archive_file_index": config.use_archive_file_index,
         "refresh_archive_file_index": config.refresh_archive_file_index,
+        "daily_fallback_for_missing_monthly": config.daily_fallback_for_missing_monthly,
         "archive_file_index_dir": str(cache_metadata_dir(config.out_dir) / "archive_file_index"),
         "run_klines_archive_index": str(run_klines_archive_index_path(config.out_dir)),
         "output_columns": OUTPUT_COLUMNS,

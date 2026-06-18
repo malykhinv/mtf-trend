@@ -148,3 +148,42 @@ def test_project_cli_disables_archive_file_index_by_default() -> None:
     )
 
     assert not config.use_archive_file_index
+
+def test_cached_scoped_klines_index_can_be_reused_without_preflight(tmp_path: Path) -> None:
+    from anomaly_science.binance_vision_cache import (
+        load_cached_run_klines_archive_index_if_scope_matches,
+        run_klines_archive_index_path,
+        write_run_klines_archive_index,
+    )
+
+    config = CacheConfig(out_dir=tmp_path / "enriched_1m")
+    index = RunKlinesArchiveIndex(monthly_labels_by_symbol={"AAAUSDT": frozenset({"2026-05"})})
+    write_run_klines_archive_index(
+        run_klines_archive_index_path(config.out_dir),
+        index,
+        symbols=("AAAUSDT",),
+        monthly_labels=("2026-05",),
+        daily_labels=("2026-06-16",),
+    )
+
+    cached = load_cached_run_klines_archive_index_if_scope_matches(
+        config=config,
+        symbols=("AAAUSDT",),
+        blocks=[
+            VisionBlock(period="monthly", label="2026-05", start_date=date(2026, 5, 1), end_date=date(2026, 5, 31)),
+            VisionBlock(period="daily", label="2026-06-16", start_date=date(2026, 6, 16), end_date=date(2026, 6, 16)),
+        ],
+    )
+
+    assert cached is not None
+    assert cached.monthly_labels("AAAUSDT") == frozenset({"2026-05"})
+
+
+def test_missing_monthly_daily_fallback_is_explicit_opt_in() -> None:
+    from anomaly_science import cli
+
+    default_args = cli.build_parser().parse_args(["build-binance-vision-cache"])
+    opt_in_args = cli.build_parser().parse_args(["build-binance-vision-cache", "--daily-fallback-for-missing-monthly"])
+
+    assert not default_args.daily_fallback_for_missing_monthly
+    assert opt_in_args.daily_fallback_for_missing_monthly
