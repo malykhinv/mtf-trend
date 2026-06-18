@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import subprocess
 import sys
-from dataclasses import asdict
 from pathlib import Path
 
 from anomaly_science.artifacts import write_csv_artifact
@@ -18,6 +17,7 @@ from anomaly_science.decision import (
     expected_value_rows_to_artifact,
     load_anomaly_decision_timing_csv,
 )
+from anomaly_science.labels import outcome_label_rows_to_artifact
 from anomaly_science.prediction import oos_prediction_rows_to_artifact
 from anomaly_science.state import state_rows_to_artifact
 
@@ -53,7 +53,7 @@ def _label(state: AnomalyState1mRow) -> AnomalyOutcomeLabelRow:
     return AnomalyOutcomeLabelRow(
         label_schema_version="atr_outcome_labels_v1",
         atr_window_minutes=1440,
-        ATR_1d_asof_t=2.0,
+        core_atr_1440=2.0,
         k_continuation=1.5,
         k_fade=1.0,
         k_chop=0.25,
@@ -166,7 +166,7 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
     predictions_path = tmp_path / "anomaly_oos_predictions.csv"
     out_dir = tmp_path / "ev"
     write_csv_artifact(state_path, state_rows_to_artifact([state]), get_artifact_schema("anomaly_state_1m.csv"))
-    write_csv_artifact(labels_path, [asdict(label)], get_artifact_schema("anomaly_outcome_labels.csv"))
+    write_csv_artifact(labels_path, outcome_label_rows_to_artifact([label]), get_artifact_schema("anomaly_outcome_labels.csv"))
     write_csv_artifact(predictions_path, oos_prediction_rows_to_artifact([prediction]), get_artifact_schema("anomaly_oos_predictions.csv"))
 
     result = subprocess.run(

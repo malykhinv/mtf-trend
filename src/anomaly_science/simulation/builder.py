@@ -112,7 +112,14 @@ def build_trade_simulation_metric_rows(
 
 
 def trade_simulation_rows_to_artifact(rows: Sequence[TradeSimulationRow]) -> list[dict[str, object]]:
-    return [asdict(row) for row in rows]
+    result: list[dict[str, object]] = []
+    for row in rows:
+        result.append(_with_core_atr_csv_alias(asdict(row)))
+    return result
+
+
+def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
+    return {"ATR_1d_asof_t" if key == "core_atr_1440" else key: value for key, value in payload.items()}
 
 
 def trade_simulation_metric_rows_to_artifact(rows: Sequence[TradeSimulationMetricRow]) -> list[dict[str, object]]:
@@ -199,7 +206,7 @@ def _simulate_decision(
         entry_reference_time_ms=entry_candle.open_time_ms,
         entry_reference_open=entry_candle.open,
         entry_price=entry_price,
-        ATR_1d_asof_t=decision.ATR_1d_asof_t,
+        core_atr_1440=decision.core_atr_1440,
         stop_distance=decision.stop_distance,
         target_distance=decision.target_distance,
         stop_price=stop_price,
@@ -328,7 +335,7 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
         entry_reference_time_ms=_required_int(row, "entry_reference_time_ms"),
         entry_reference_open=_required_float(row, "entry_reference_open"),
         entry_price=_required_float(row, "entry_price"),
-        ATR_1d_asof_t=_required_float(row, "ATR_1d_asof_t"),
+        core_atr_1440=_required_float(row, "ATR_1d_asof_t"),
         stop_distance=_required_float(row, "stop_distance"),
         target_distance=_required_float(row, "target_distance"),
         stop_price=_required_float(row, "stop_price"),

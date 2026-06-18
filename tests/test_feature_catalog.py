@@ -47,6 +47,9 @@ def test_default_feature_catalog_enforces_relative_over_absolute() -> None:
         for row in rows
         if row.is_model_feature
     )
+    feature_names = {row.feature_name for row in rows}
+    assert "core_atr_1440" in feature_names
+    assert "ATR_1d_asof_t" not in feature_names
     assert {
         FeatureFamily.PRICE_PATH,
         FeatureFamily.SPEED_TIME,

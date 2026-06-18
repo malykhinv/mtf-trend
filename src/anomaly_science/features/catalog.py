@@ -94,7 +94,7 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             description="First candle after raw timestamp gap > 3m; detector/ML exclusion audit field.",
         ),
         _row(
-            name="ATR_1d_asof_t",
+            name="core_atr_1440",
             family=FeatureFamily.PRICE_PATH,
             source="anomaly_future_paths.csv",
             asof=ASOF_SNAPSHOT,
@@ -134,7 +134,7 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             model=True,
             audit=False,
             missing=FeatureMissingPolicy.NULL_IF_INSUFFICIENT_HISTORY,
-            description="Event high-low range divided by ATR_1d_asof_t.",
+            description="Event high-low range divided by core_atr_1440.",
         ),
         _row(
             name="distance_to_running_high_atr",
@@ -144,7 +144,7 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             norm=FeatureNormalization.ATR_NORMALIZED,
             model=True,
             missing=FeatureMissingPolicy.NULL_IF_INSUFFICIENT_HISTORY,
-            description="Distance from current close to running high divided by ATR_1d_asof_t.",
+            description="Distance from current close to running high divided by core_atr_1440.",
         ),
         _row(
             name="distance_to_running_low_atr",
@@ -154,7 +154,7 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             norm=FeatureNormalization.ATR_NORMALIZED,
             model=True,
             missing=FeatureMissingPolicy.NULL_IF_INSUFFICIENT_HISTORY,
-            description="Distance from current close to running low divided by ATR_1d_asof_t.",
+            description="Distance from current close to running low divided by core_atr_1440.",
         ),
         _row(
             name="retracement_from_high_atr",
@@ -164,7 +164,7 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             norm=FeatureNormalization.ATR_NORMALIZED,
             model=True,
             missing=FeatureMissingPolicy.NULL_IF_INSUFFICIENT_HISTORY,
-            description="Current retracement from running high divided by ATR_1d_asof_t.",
+            description="Current retracement from running high divided by core_atr_1440.",
         ),
         _row(
             name="price_speed_atr",

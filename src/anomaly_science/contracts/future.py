@@ -19,7 +19,7 @@ class FuturePathRow:
     feature_cutoff_time_ms: int
     future_start_time_ms: int
     atr_window_minutes: int = 1440
-    ATR_1d_asof_t: float | None = None
+    core_atr_1440: float | None = None
     ATR_1d_pct_asof_t: float | None = None
     double_barrier_k_continuation: float | None = None
     double_barrier_k_fade: float | None = None
@@ -85,10 +85,10 @@ class FuturePathRow:
         )
         if self.atr_window_minutes <= 0:
             raise MarketDataContractError("atr_window_minutes must be positive")
-        self._validate_optional_positive_float("ATR_1d_asof_t")
+        self._validate_optional_positive_float("core_atr_1440")
         self._validate_optional_positive_float("ATR_1d_pct_asof_t")
-        if (self.ATR_1d_asof_t is None) != (self.ATR_1d_pct_asof_t is None):
-            raise MarketDataContractError("ATR_1d_asof_t and ATR_1d_pct_asof_t must be present or missing together")
+        if (self.core_atr_1440 is None) != (self.ATR_1d_pct_asof_t is None):
+            raise MarketDataContractError("core_atr_1440 and ATR_1d_pct_asof_t must be present or missing together")
         self._validate_optional_positive_float("double_barrier_k_continuation")
         self._validate_optional_positive_float("double_barrier_k_fade")
         if (self.double_barrier_k_continuation is None) != (self.double_barrier_k_fade is None):

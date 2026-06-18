@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import subprocess
 import sys
-from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -15,6 +14,7 @@ from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT, AnomalyOut
 from anomaly_science.contracts.prediction import PREDICTION_TEMPORAL_CONTRACT
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.features import FEATURE_SCHEMA_VERSION, FeatureMatrixConfig, feature_matrix_rows_to_artifact
+from anomaly_science.labels import outcome_label_rows_to_artifact
 from anomaly_science.prediction import (
     PredictionArtifactError,
     WalkForwardPredictionConfig,
@@ -78,7 +78,7 @@ def _label_row(
     return AnomalyOutcomeLabelRow(
         label_schema_version="atr_outcome_labels_v1",
         atr_window_minutes=1440,
-        ATR_1d_asof_t=2.0,
+        core_atr_1440=2.0,
         k_continuation=1.0,
         k_fade=1.0,
         k_chop=0.25,
@@ -109,7 +109,7 @@ def _feature_row(*, state: AnomalyState1mRow) -> AnomalyFeatureMatrixRow:
         snapshot_time_ms=state.snapshot_time_ms,
         feature_cutoff_time_ms=state.feature_cutoff_time_ms,
         minutes_since_trigger=state.minutes_since_detection,
-        ATR_1d_asof_t=2.0,
+        core_atr_1440=2.0,
         ATR_1d_pct_asof_t=0.02,
         current_return_from_start=state.current_return_from_start,
         range_since_start_atr=1.2,
@@ -193,7 +193,7 @@ def _write_state(path: Path, rows: list[AnomalyState1mRow]) -> None:
 
 
 def _write_labels(path: Path, rows: list[AnomalyOutcomeLabelRow]) -> None:
-    write_csv_artifact(path, [asdict(row) for row in rows], get_artifact_schema("anomaly_outcome_labels.csv"))
+    write_csv_artifact(path, outcome_label_rows_to_artifact(rows), get_artifact_schema("anomaly_outcome_labels.csv"))
 
 
 def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:

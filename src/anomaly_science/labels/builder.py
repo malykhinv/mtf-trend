@@ -105,7 +105,7 @@ def build_anomaly_outcome_labels_from_inputs(
             AnomalyOutcomeLabelRow(
                 label_schema_version=cfg.label_schema_version,
                 atr_window_minutes=cfg.atr_window_minutes,
-                ATR_1d_asof_t=future.ATR_1d_asof_t,
+                core_atr_1440=future.core_atr_1440,
                 k_continuation=cfg.k_continuation,
                 k_fade=cfg.k_fade,
                 k_chop=cfg.k_chop,
@@ -154,7 +154,7 @@ def assign_future_nature_scenario(
     future_return_atr = _future_value(future=future, base_name="future_return_atr", horizon_minutes=horizon_minutes)
     future_max_atr = _future_value(future=future, base_name="future_max_atr", horizon_minutes=horizon_minutes)
     future_min_atr = _future_value(future=future, base_name="future_min_atr", horizon_minutes=horizon_minutes)
-    if future.ATR_1d_asof_t is None or future_return_atr is None or future_max_atr is None or future_min_atr is None:
+    if future.core_atr_1440 is None or future_return_atr is None or future_max_atr is None or future_min_atr is None:
         return MISSING_FUTURE_SCENARIO
     _enforce_double_barrier_threshold_schema(future=future, config=cfg, horizon_minutes=horizon_minutes)
 
@@ -197,7 +197,7 @@ def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLab
                 AnomalyOutcomeLabelRow(
                     label_schema_version=_required_str(row, "label_schema_version"),
                     atr_window_minutes=_required_int(row, "atr_window_minutes"),
-                    ATR_1d_asof_t=_optional_float(row, "ATR_1d_asof_t"),
+                    core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
                     k_continuation=_required_float(row, "k_continuation"),
                     k_fade=_required_float(row, "k_fade"),
                     k_chop=_required_float(row, "k_chop"),
@@ -226,9 +226,13 @@ def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLab
 def outcome_label_rows_to_artifact(rows: Sequence[AnomalyOutcomeLabelRow]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for row in rows:
-        payload = asdict(row)
+        payload = _with_core_atr_csv_alias(asdict(row))
         result.append({key: _csv_value(value) for key, value in payload.items()})
     return result
+
+
+def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
+    return {"ATR_1d_asof_t" if key == "core_atr_1440" else key: value for key, value in payload.items()}
 
 
 def _double_barrier_resolved_stop_first(*, future: FuturePathRow, horizon_minutes: int) -> bool:

@@ -23,7 +23,7 @@ class ExpectedValueRow:
     future_start_time_ms: int
     target_horizon_minutes: int
     entry_reference_price: float
-    ATR_1d_asof_t: float
+    core_atr_1440: float
     stop_distance: float
     target_distance: float
     fee_bps: float
@@ -70,7 +70,7 @@ class ExpectedValueRow:
         if self.target_horizon_minutes <= 0:
             raise MarketDataContractError("target_horizon_minutes must be positive")
         _require_positive_finite(self.entry_reference_price, "entry_reference_price")
-        _require_positive_finite(self.ATR_1d_asof_t, "ATR_1d_asof_t")
+        _require_positive_finite(self.core_atr_1440, "core_atr_1440")
         _require_positive_finite(self.stop_distance, "stop_distance")
         _require_positive_finite(self.target_distance, "target_distance")
         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:

@@ -22,7 +22,7 @@ ATR_LABEL_SOURCE = "atr_normalized_future_paths_only"
 class AnomalyOutcomeLabelRow:
     label_schema_version: str
     atr_window_minutes: int
-    ATR_1d_asof_t: float | None
+    core_atr_1440: float | None
     k_continuation: float
     k_fade: float
     k_chop: float
@@ -47,8 +47,8 @@ class AnomalyOutcomeLabelRow:
             raise MarketDataContractError("label_schema_version is required")
         if self.atr_window_minutes <= 0:
             raise MarketDataContractError("atr_window_minutes must be positive")
-        if self.ATR_1d_asof_t is not None and (not math.isfinite(self.ATR_1d_asof_t) or self.ATR_1d_asof_t <= 0):
-            raise MarketDataContractError("ATR_1d_asof_t must be positive and finite when present")
+        if self.core_atr_1440 is not None and (not math.isfinite(self.core_atr_1440) or self.core_atr_1440 <= 0):
+            raise MarketDataContractError("core_atr_1440 must be positive and finite when present")
         for field_name in ("k_continuation", "k_fade", "k_chop"):
             value = getattr(self, field_name)
             if not math.isfinite(value) or value <= 0:

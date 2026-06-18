@@ -120,7 +120,7 @@ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[Proto
         ProtocolAuditRow(
             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
             status=AuditStatus.PASS,
-            message="future path builder computes ATR_1d_asof_t from the last 1440 true ranges using closed 1m candles available <= snapshot_time_ms",
+            message="future path builder computes core_atr_1440 from the last 1440 true ranges using closed 1m candles available <= snapshot_time_ms; CSV alias is ATR_1d_asof_t",
             artifact="anomaly_future_paths.csv",
         ),
         ProtocolAuditRow(

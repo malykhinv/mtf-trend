@@ -17,7 +17,7 @@ class AtrComputationError(ValueError):
 class AtrAsOfResult:
     """Point-in-time ATR result computed from closed 1m candles only.
 
-    `atr_1d_asof_t` is the mean true range of the last `atr_window_minutes`
+    `core_atr_1440` is the mean true range of the last `atr_window_minutes`
     closed candles available at or before `snapshot_time_ms`. Computing the
     first true range also requires the previous closed candle, so the engine
     requires at least `atr_window_minutes + 1` as-of candles and does not invent
@@ -27,7 +27,7 @@ class AtrAsOfResult:
     symbol: str
     snapshot_time_ms: int
     atr_window_minutes: int
-    atr_1d_asof_t: float
+    core_atr_1440: float
     atr_1d_pct_asof_t: float
     source_candle_count: int
     first_candle_available_time_ms: int
@@ -40,7 +40,7 @@ class AtrAsOfResult:
             raise MarketDataContractError("atr_window_minutes must be positive")
         if self.source_candle_count != self.atr_window_minutes:
             raise MarketDataContractError("source_candle_count must equal atr_window_minutes")
-        for field_name in ("atr_1d_asof_t", "atr_1d_pct_asof_t"):
+        for field_name in ("core_atr_1440", "atr_1d_pct_asof_t"):
             value = getattr(self, field_name)
             if not math.isfinite(value) or value <= 0:
                 raise MarketDataContractError(f"{field_name} must be positive and finite")
@@ -108,7 +108,7 @@ def compute_atr_1d_asof(
         symbol=symbol,
         snapshot_time_ms=snapshot_time_ms,
         atr_window_minutes=atr_window_minutes,
-        atr_1d_asof_t=atr,
+        core_atr_1440=atr,
         atr_1d_pct_asof_t=atr / last_close,
         source_candle_count=len(true_ranges),
         first_candle_available_time_ms=first_source_candle.available_time_ms,

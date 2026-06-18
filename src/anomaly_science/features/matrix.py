@@ -196,9 +196,13 @@ def build_price_time_feature_matrix_from_source(
 def feature_matrix_rows_to_artifact(rows: Sequence[AnomalyFeatureMatrixRow]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for row in rows:
-        payload = asdict(row)
+        payload = _with_core_atr_csv_alias(asdict(row))
         result.append({key: _csv_value(value) for key, value in payload.items()})
     return result
+
+
+def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
+    return {"ATR_1d_asof_t" if key == "core_atr_1440" else key: value for key, value in payload.items()}
 
 
 class AnomalyFeatureMatrixArtifactError(ValueError):
@@ -240,7 +244,7 @@ def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> AnomalyFeatureMat
         snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
         feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
         minutes_since_trigger=_required_int(row, "minutes_since_trigger"),
-        ATR_1d_asof_t=_optional_float(row, "ATR_1d_asof_t"),
+        core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
         ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
         current_return_from_start=_required_float(row, "current_return_from_start"),
         range_since_start_atr=_optional_float(row, "range_since_start_atr"),
@@ -396,7 +400,7 @@ def _build_state_feature_row(
                 snapshot_time_ms=state.snapshot_time_ms,
                 atr_window_minutes=config.atr_window_minutes,
             )
-            atr_value = atr.atr_1d_asof_t
+            atr_value = atr.core_atr_1440
             atr_pct_value = atr.atr_1d_pct_asof_t
     except AtrComputationError:
         status = "insufficient_atr_history"
@@ -463,7 +467,7 @@ def _build_state_feature_row(
         snapshot_time_ms=state.snapshot_time_ms,
         feature_cutoff_time_ms=state.feature_cutoff_time_ms,
         minutes_since_trigger=state.minutes_since_detection,
-        ATR_1d_asof_t=atr_value,
+        core_atr_1440=atr_value,
         ATR_1d_pct_asof_t=atr_pct_value,
         current_return_from_start=state.current_return_from_start,
         range_since_start_atr=range_since_start_atr,
@@ -1345,7 +1349,7 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
         ProtocolAuditRow(
             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
             status=AuditStatus.PASS,
-            message="feature matrix computes ATR_1d_asof_t from closed 1m candles available <= snapshot_time_ms and leaves ATR features null when history is insufficient",
+            message="feature matrix computes core_atr_1440 from closed 1m candles available <= snapshot_time_ms and leaves ATR features null when history is insufficient; CSV alias is ATR_1d_asof_t",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(

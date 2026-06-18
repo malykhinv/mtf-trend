@@ -91,7 +91,7 @@ class AnomalyFeatureMatrixRow:
     snapshot_time_ms: int
     feature_cutoff_time_ms: int
     minutes_since_trigger: int
-    ATR_1d_asof_t: float | None
+    core_atr_1440: float | None
     ATR_1d_pct_asof_t: float | None
     current_return_from_start: float
     range_since_start_atr: float | None
@@ -165,7 +165,7 @@ class AnomalyFeatureMatrixRow:
         if self.minutes_since_trigger < 0:
             raise MarketDataContractError("minutes_since_trigger must be non-negative")
         for field_name in (
-            "ATR_1d_asof_t",
+            "core_atr_1440",
             "ATR_1d_pct_asof_t",
             "range_since_start_atr",
             "distance_to_running_high_atr",
@@ -209,8 +209,8 @@ class AnomalyFeatureMatrixRow:
             value = getattr(self, field_name)
             if value is not None and not math.isfinite(value):
                 raise MarketDataContractError(f"{field_name} must be finite when present")
-        if self.ATR_1d_asof_t is not None and self.ATR_1d_asof_t <= 0:
-            raise MarketDataContractError("ATR_1d_asof_t must be positive when present")
+        if self.core_atr_1440 is not None and self.core_atr_1440 <= 0:
+            raise MarketDataContractError("core_atr_1440 must be positive when present")
         if self.ATR_1d_pct_asof_t is not None and self.ATR_1d_pct_asof_t <= 0:
             raise MarketDataContractError("ATR_1d_pct_asof_t must be positive when present")
         for field_name in (

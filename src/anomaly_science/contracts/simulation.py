@@ -26,7 +26,7 @@ class TradeSimulationRow:
     entry_reference_time_ms: int
     entry_reference_open: float
     entry_price: float
-    ATR_1d_asof_t: float
+    core_atr_1440: float
     stop_distance: float
     target_distance: float
     stop_price: float
@@ -65,7 +65,7 @@ class TradeSimulationRow:
         for field_name in (
             "entry_reference_open",
             "entry_price",
-            "ATR_1d_asof_t",
+            "core_atr_1440",
             "stop_distance",
             "target_distance",
             "stop_price",

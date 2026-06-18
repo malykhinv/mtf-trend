@@ -122,7 +122,7 @@ def test_future_builder_uses_only_candles_after_snapshot_time() -> None:
     assert row.future_return_120m is None
     assert row.future_max_120m == pytest.approx((106.0 / 102.0) - 1.0)
     assert row.future_min_120m == pytest.approx((97.5 / 102.0) - 1.0)
-    assert row.ATR_1d_asof_t == pytest.approx(4.0)
+    assert row.core_atr_1440 == pytest.approx(4.0)
     assert row.ATR_1d_pct_asof_t == pytest.approx(4.0 / 102.0)
     assert row.future_return_atr_5m == pytest.approx((103.0 - 102.0) / 4.0)
     assert row.future_max_atr_5m == pytest.approx((106.0 - 102.0) / 4.0)
@@ -247,7 +247,7 @@ def test_future_builder_emits_missing_atr_fields_without_fallback_when_history_i
     row = build_anomaly_future_paths(candles_1m=candles, state_rows=[_state_row()])[0]
 
     assert row.atr_window_minutes == 1440
-    assert row.ATR_1d_asof_t is None
+    assert row.core_atr_1440 is None
     assert row.ATR_1d_pct_asof_t is None
     assert row.future_return_atr_5m is None
     assert row.future_max_atr_5m is None
@@ -279,7 +279,7 @@ def test_future_path_artifact_roundtrip_accepts_atr_normalized_schema(tmp_path: 
 
     assert len(loaded) == len(rows)
     assert loaded[0].event_id == rows[0].event_id
-    assert loaded[0].ATR_1d_asof_t == pytest.approx(rows[0].ATR_1d_asof_t)
+    assert loaded[0].core_atr_1440 == pytest.approx(rows[0].core_atr_1440)
     assert loaded[0].future_max_atr_5m == pytest.approx(rows[0].future_max_atr_5m)
     header = path.read_text(encoding="utf-8-sig").splitlines()[0].split(",")
     assert "ATR_1d_asof_t" in header

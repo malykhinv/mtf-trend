@@ -106,7 +106,7 @@ def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]
                     feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
                     future_start_time_ms=_required_int(row, "future_start_time_ms"),
                     atr_window_minutes=_required_int(row, "atr_window_minutes"),
-                    ATR_1d_asof_t=_optional_float(row, "ATR_1d_asof_t"),
+                    core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
                     ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
                     double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
                     double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
@@ -226,9 +226,13 @@ def build_anomaly_future_paths_from_source(
 def future_rows_to_artifact(rows: Sequence[FuturePathRow]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for row in rows:
-        payload = asdict(row)
+        payload = _with_core_atr_csv_alias(asdict(row))
         result.append({key: _csv_value(value) for key, value in payload.items()})
     return result
+
+
+def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
+    return {"ATR_1d_asof_t" if key == "core_atr_1440" else key: value for key, value in payload.items()}
 
 
 def _build_state_future_path(
@@ -257,7 +261,7 @@ def _build_state_future_path(
         candles=candles,
         atr_window_minutes=atr_window_minutes,
     )
-    atr_value = atr_result.atr_1d_asof_t if atr_result is not None else None
+    atr_value = atr_result.core_atr_1440 if atr_result is not None else None
     barrier_5m = _intracandle_double_barrier(
         state=state,
         candles=future_candles,
@@ -306,7 +310,7 @@ def _build_state_future_path(
         feature_cutoff_time_ms=state.feature_cutoff_time_ms,
         future_start_time_ms=future_start_time_ms,
         atr_window_minutes=atr_window_minutes,
-        ATR_1d_asof_t=atr_value,
+        core_atr_1440=atr_value,
         ATR_1d_pct_asof_t=atr_result.atr_1d_pct_asof_t if atr_result is not None else None,
         double_barrier_k_continuation=double_barrier_k_continuation if atr_value is not None else None,
         double_barrier_k_fade=double_barrier_k_fade if atr_value is not None else None,

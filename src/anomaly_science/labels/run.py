@@ -120,7 +120,7 @@ def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[Protoc
         ProtocolAuditRow(
             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
             status=AuditStatus.PASS,
-            message="labels consume ATR_1d_asof_t from future paths, which is computed strictly as-of snapshot_time_ms",
+            message="labels consume internal core_atr_1440 from future paths, which is computed strictly as-of snapshot_time_ms; CSV alias is ATR_1d_asof_t",
             artifact="anomaly_outcome_labels.csv",
         ),
         ProtocolAuditRow(

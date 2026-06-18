@@ -119,7 +119,7 @@ def _future_row(
         feature_cutoff_time_ms=snapshot_time_ms,
         future_start_time_ms=snapshot_time_ms + 60_000,
         atr_window_minutes=1440,
-        ATR_1d_asof_t=2.0,
+        core_atr_1440=2.0,
         ATR_1d_pct_asof_t=0.02,
         double_barrier_k_continuation=double_barrier_k_continuation,
         double_barrier_k_fade=double_barrier_k_fade,

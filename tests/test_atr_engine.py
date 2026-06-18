@@ -46,7 +46,7 @@ def test_atr_asof_uses_last_closed_candles_only() -> None:
 
     expected_true_ranges = [5.0, 4.0, 4.0]
     expected_atr = sum(expected_true_ranges) / 3.0
-    assert result.atr_1d_asof_t == pytest.approx(expected_atr)
+    assert result.core_atr_1440 == pytest.approx(expected_atr)
     assert result.atr_1d_pct_asof_t == pytest.approx(expected_atr / 103.0)
     assert result.source_candle_count == 3
     assert result.first_candle_available_time_ms == candles[1].available_time_ms

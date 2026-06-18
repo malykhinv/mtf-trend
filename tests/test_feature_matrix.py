@@ -52,11 +52,11 @@ def test_price_time_feature_matrix_is_atr_normalized_and_asof_only() -> None:
     row = rows[0]
     assert row.snapshot_time_ms == snapshot_time_ms
     assert row.feature_cutoff_time_ms == snapshot_time_ms
-    assert row.ATR_1d_asof_t is not None
+    assert row.core_atr_1440 is not None
     assert row.ATR_1d_pct_asof_t is not None
-    assert row.range_since_start_atr == (state.running_high_asof_t - state.running_low_asof_t) / row.ATR_1d_asof_t
-    assert row.distance_to_running_high_atr == (state.running_high_asof_t - state.current_close) / row.ATR_1d_asof_t
-    assert row.distance_to_running_low_atr == (state.current_close - state.running_low_asof_t) / row.ATR_1d_asof_t
+    assert row.range_since_start_atr == (state.running_high_asof_t - state.running_low_asof_t) / row.core_atr_1440
+    assert row.distance_to_running_high_atr == (state.running_high_asof_t - state.current_close) / row.core_atr_1440
+    assert row.distance_to_running_low_atr == (state.current_close - state.running_low_asof_t) / row.core_atr_1440
     assert row.retracement_from_high_atr == row.distance_to_running_high_atr
     assert row.price_speed_atr is not None
     assert abs(row.price_speed_atr) < 100.0
@@ -73,7 +73,7 @@ def test_feature_matrix_leaves_atr_features_null_without_fallback() -> None:
     rows = build_price_time_feature_matrix(candles_1m=candles, state_rows=[state])
 
     row = rows[0]
-    assert row.ATR_1d_asof_t is None
+    assert row.core_atr_1440 is None
     assert row.ATR_1d_pct_asof_t is None
     assert row.range_since_start_atr is None
     assert row.price_speed_atr is None

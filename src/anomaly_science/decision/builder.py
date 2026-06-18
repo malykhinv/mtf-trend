@@ -106,7 +106,14 @@ def build_expected_value_metric_rows(
 
 
 def expected_value_rows_to_artifact(rows: Sequence[ExpectedValueRow]) -> list[dict[str, object]]:
-    return [asdict(row) for row in rows]
+    result: list[dict[str, object]] = []
+    for row in rows:
+        result.append(_with_core_atr_csv_alias(asdict(row)))
+    return result
+
+
+def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
+    return {"ATR_1d_asof_t" if key == "core_atr_1440" else key: value for key, value in payload.items()}
 
 
 def expected_value_metric_rows_to_artifact(rows: Sequence[ExpectedValueMetricRow]) -> list[dict[str, object]]:
@@ -143,11 +150,11 @@ def _build_row(
     config: ExpectedValueConfig,
 ) -> ExpectedValueRow:
     _enforce_ev_input_temporal_contract(state=state, label=label, prediction=prediction)
-    if label.ATR_1d_asof_t is None:
-        raise ExpectedValueInputError(f"ATR_1d_asof_t is required for EV row {prediction.event_id}")
+    if label.core_atr_1440 is None:
+        raise ExpectedValueInputError(f"core_atr_1440 is required for EV row {prediction.event_id}")
     entry_reference_price = state.current_close
-    stop_distance = label.k_fade * label.ATR_1d_asof_t
-    target_distance = label.k_continuation * label.ATR_1d_asof_t
+    stop_distance = label.k_fade * label.core_atr_1440
+    target_distance = label.k_continuation * label.core_atr_1440
     cost_penalty = entry_reference_price * ((2.0 * config.fee_bps + config.slippage_bps) / 10_000.0)
     p_follow_long = prediction.p_long_continuation
     p_adverse_long = prediction.p_short_fade
@@ -172,7 +179,7 @@ def _build_row(
         future_start_time_ms=prediction.future_start_time_ms,
         target_horizon_minutes=prediction.target_horizon_minutes,
         entry_reference_price=entry_reference_price,
-        ATR_1d_asof_t=label.ATR_1d_asof_t,
+        core_atr_1440=label.core_atr_1440,
         stop_distance=stop_distance,
         target_distance=target_distance,
         fee_bps=config.fee_bps,
@@ -285,7 +292,7 @@ def _expected_value_from_mapping(row: Mapping[str, object]) -> ExpectedValueRow:
         future_start_time_ms=_required_int(row, "future_start_time_ms"),
         target_horizon_minutes=_required_int(row, "target_horizon_minutes"),
         entry_reference_price=_required_float(row, "entry_reference_price"),
-        ATR_1d_asof_t=_required_float(row, "ATR_1d_asof_t"),
+        core_atr_1440=_required_float(row, "ATR_1d_asof_t"),
         stop_distance=_required_float(row, "stop_distance"),
         target_distance=_required_float(row, "target_distance"),
         fee_bps=_required_float(row, "fee_bps"),
