@@ -3,6 +3,7 @@ from __future__ import annotations
 from .artifacts import ArtifactSchema, MVP1_ARTIFACT_SCHEMAS, get_artifact_schema
 from .atlas import AtlasContextSplitRow, AtlasMarketShockGroupRow, AtlasNatureRow, AtlasResponseSurfaceRow
 from .audit import AuditStatus, DataQualityRow, ProtocolAuditRow, RunConfigRow
+from .decision import ExpectedValueMetricRow, ExpectedValueRow
 from .events import AnomalyEvent
 from .features import AnomalyFeatureMatrixRow, FeatureCatalogRow, FeatureFamily, FeatureMissingPolicy, FeatureNormalization
 from .future import FuturePathRow
@@ -25,6 +26,8 @@ __all__ = [
     "Candle1m",
     "Candle5m",
     "DataQualityRow",
+    "ExpectedValueMetricRow",
+    "ExpectedValueRow",
     "FeatureCatalogRow",
     "FeatureFamily",
     "FeatureMissingPolicy",

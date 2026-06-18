@@ -470,10 +470,11 @@ anomaly_nature_atlas.csv        -> strategy_nature_atlas.csv where strategy_fami
 anomaly_oos_predictions.csv     -> strategy_oos_predictions.csv where strategy_family=anomaly
 anomaly_calibration.csv         -> strategy_calibration.csv where strategy_family=anomaly
 anomaly_decision_timing.csv     -> strategy_decision_timing.csv where strategy_family=anomaly
-anomaly_expected_utility.csv    -> strategy_expected_utility.csv where strategy_family=anomaly
 anomaly_trade_simulation.csv    -> strategy_trade_simulation.csv where strategy_family=anomaly
 anomaly_protocol_audit.csv      -> strategy_protocol_audit.csv where strategy_family=anomaly
 ```
+
+MVP1 expected utility / EV fields live inside `anomaly_decision_timing.csv`.
 
 Правило:
 

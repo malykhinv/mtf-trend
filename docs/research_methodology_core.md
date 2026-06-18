@@ -713,9 +713,10 @@ strategy_protocol_audit.csv
 strategy_oos_predictions.csv
 strategy_calibration.csv
 strategy_decision_timing.csv
-strategy_expected_utility.csv
 strategy_trade_simulation.csv
 ```
+
+MVP1 expected utility / EV fields are part of `strategy_decision_timing.csv`.
 
 Strategy-specific aliases допускаются для совместимости, но не должны становиться Core contract.
 

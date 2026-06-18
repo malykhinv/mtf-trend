@@ -8,6 +8,7 @@ from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
 from anomaly_science.data import run_mvp1_data_audit
+from anomaly_science.decision import ExpectedValueConfig, run_mvp1_expected_value
 from anomaly_science.events.run import run_mvp1_events
 from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
@@ -131,6 +132,26 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(15, 30, 60),
         help="Descriptive scenario horizon to control-test. Default: 30.",
     )
+
+    expected_value = subparsers.add_parser(
+        "run-mvp1-expected-value",
+        help="Run MVP1 pre-simulation expected-value analysis from OOS predictions.",
+    )
+    expected_value.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
+    expected_value.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
+    expected_value.add_argument("--predictions", required=True, help="Path to anomaly_oos_predictions.csv from run-mvp1-prediction.")
+    expected_value.add_argument("--out", required=True, help="Directory where expected-value artifacts will be written.")
+    expected_value.add_argument(
+        "--horizon-minutes",
+        type=int,
+        default=30,
+        choices=(15, 30, 60),
+        help="Descriptive scenario horizon to evaluate. Default: 30.",
+    )
+    expected_value.add_argument("--fee-bps", type=float, default=4.0, help="Per-side fee basis points. Default: 4.0.")
+    expected_value.add_argument("--slippage-bps", type=float, default=2.0, help="Slippage penalty basis points. Default: 2.0.")
+    expected_value.add_argument("--min-confidence", type=float, default=0.40, help="Minimum calibrated confidence flag. Default: 0.40.")
+    expected_value.add_argument("--min-rr", type=float, default=1.0, help="Minimum RR proxy flag. Default: 1.0.")
 
     cache = subparsers.add_parser(
         "build-binance-vision-cache",
@@ -283,6 +304,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=config,
         )
         print(f"mvp1 placebo/control artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-mvp1-expected-value":
+        config = ExpectedValueConfig(
+            target_horizon_minutes=args.horizon_minutes,
+            fee_bps=args.fee_bps,
+            slippage_bps=args.slippage_bps,
+            min_prediction_confidence=args.min_confidence,
+            min_rr=args.min_rr,
+        )
+        output_dir = run_mvp1_expected_value(
+            state_path=Path(args.state),
+            labels_path=Path(args.labels),
+            predictions_path=Path(args.predictions),
+            out_dir=Path(args.out),
+            config=config,
+        )
+        print(f"mvp1 expected-value artifacts written: {output_dir}")
         return 0
 
     if args.command == "build-binance-vision-cache":

@@ -29,6 +29,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "purge_rule_snapshot_time_plus_Hmax_before_test_start",
     "weekly_walk_forward_heavy_models_enforced",
     "frozen_weekly_model_used_for_daily_oos",
+    "expected_value_computed_before_trade_simulation",
 )
 
 
@@ -80,6 +81,9 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
         "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
         "fixed_percent_labels_forbidden",
         "purge_rule_snapshot_time_plus_Hmax_before_test_start",
+    ),
+    "mvp1_decision": (
+        "expected_value_computed_before_trade_simulation",
     ),
 }
 
