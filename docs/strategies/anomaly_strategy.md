@@ -51,6 +51,29 @@ post_pump_distribution_v1_h180
 Нельзя смешивать разные strategy_name/strategy_version в одном model_version без явного split.
 ```
 
+
+### 1.1. Implementation status and registry matrix
+
+`Strategy Spec` может описывать больше базовых variants, чем уже реализовано в registry. Это не permission на silent fallback.
+
+| Variant | Horizon | Registry status | Required streams | Simulation defaults |
+| :--- | ---: | :--- | :--- | :--- |
+| broad_anomaly_v1_h15 | 15 | implemented | OI optional, liquidations optional | TP 1.5 ATR / SL 1.0 ATR |
+| broad_anomaly_v1_h30 | 30 | implemented, primary MVP variant | OI optional, liquidations optional | TP 2.0 ATR / SL 1.1 ATR |
+| broad_anomaly_v1_h60 | 60 | implemented | OI optional, liquidations optional | TP 2.5 ATR / SL 1.2 ATR |
+| post_anomaly_extension_v1_h60 | 60 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 2.5 ATR / SL 1.3 ATR |
+| post_anomaly_extension_v1_h120 | 120 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 3.0 ATR / SL 1.5 ATR |
+| post_pump_distribution_v1_h60 | 60 | specified, not implemented until explicit patch | OI required, liquidations required | TP 2.0 ATR / SL 1.2 ATR |
+| post_pump_distribution_v1_h120 | 120 | specified, not implemented until explicit patch | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
+| post_pump_distribution_v1_h180 | 180 | specified, not implemented until explicit patch | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
+
+Правило:
+
+```text
+Если variant specified but not implemented, CLI/registry должен падать явной ошибкой.
+Запрещено запускать specified-only variant через broad/default factory.
+```
+
 ## 2. Что именно исследует anomaly strategy
 
 Гипотеза:
@@ -139,6 +162,39 @@ excluded_by_data_quality_gate
 detector_version
 ```
 
+
+### 3.1.1. Trigger frame semantics for anomaly variants
+
+Anomaly Strategy возвращает trigger frame в формате BaseStrategy contract. Для broad MVP один row соответствует моменту detection события; последующий поминутный lifecycle строится Core в `anomaly_state_1m.csv`.
+
+Минимальные contract columns:
+
+```text
+symbol
+state_time_ms
+is_trigger
+event_id
+event_start_time_ms
+```
+
+Anomaly-specific lifecycle mapping:
+
+```text
+state_time_ms = event_detection_time_ms для первичного detection row
+event_start_time_ms = физический старт импульса/полки
+minutes_since_start = floor((state_time_ms - event_start_time_ms) / 60_000)
+seed_time_ms >= event_start_time_ms
+```
+
+Запрещено:
+
+```text
+подменять event_start_time_ms временем будущего high/low
+пересоздавать event_id недетерминированно между повторными runs на одинаковых данных
+смешивать detection row и trade entry row
+считать anomaly_events.csv полным поминутным state artifact
+```
+
 ### 3.2. post_pump_distribution_v1_*
 
 Цель:
@@ -209,6 +265,33 @@ running_high_asof_t = max(high) from event_start_time to state_time only.
 ```text
 использовать final high всего будущего события
 использовать future reclaim/failure для текущего state
+```
+
+
+### 4.1. Artifact boundary: events vs online state
+
+```text
+anomaly_events.csv:
+  event/lifecycle seed rows returned by generate_triggers() and validated by Core.
+  It answers: what event exists, when it started, when it was detected, why it passed/rejected gates.
+
+anomaly_state_1m.csv:
+  per-minute online expansion after detection.
+  It answers: what was knowable at each state_time while the event was alive.
+```
+
+Правило:
+
+```text
+Если нужен поминутный lifecycle, читать anomaly_state_1m.csv, а не растягивать anomaly_events.csv вручную.
+```
+
+Запрещено:
+
+```text
+добавлять running_high_asof_t/running_low_asof_t в anomaly_events.csv как final event summary
+добавлять future_return/future_label/PnL в anomaly_events.csv
+использовать anomaly_events.csv как training matrix напрямую без state/features builders
 ```
 
 ## 5. Required Core feature families for anomaly
@@ -320,6 +403,33 @@ Ablation Runs:
 ```text
 no_oi_mode / no_liquidation_mode могут принудительно переключать required=false,
 но только как отдельный experiment с записью в EXPERIMENT_LOG/research ledger.
+```
+
+
+### 7.2. Optional stream flags are audit/debug, not alpha features
+
+Для `broad_anomaly_v1_*` отсутствие OI/liquidation не должно менять смысл гипотезы. Поэтому optional stream handling разделяется на два слоя:
+
+```text
+feature value fallback:
+  missing optional numeric stream -> neutral value required by feature schema, usually 0.0
+
+audit flag:
+  missing_oi_flag / missing_liquidation_flag -> system/debug field, not model feature by default
+```
+
+Правило:
+
+```text
+Если missing flag предлагается как model feature, это отдельный data-quality experiment, а не стандартный anomaly run.
+```
+
+Запрещено:
+
+```text
+давать модели exploit-ить наличие/отсутствие Binance stream как рыночный edge
+сравнивать train/OOS, если required_data_streams менялись без нового experiment id
+скрывать отсутствующий required stream под нулевым feature value
 ```
 
 ## 8. Strategy variants and horizons
@@ -439,6 +549,37 @@ market_frame
 а “какова будущая природа выбранного anomaly state”.
 ```
 
+
+### 10.1. Dataset row identity
+
+Одна обучающая строка anomaly model должна иметь стабильный identity:
+
+```text
+strategy_name
+strategy_version
+horizon_minutes
+symbol
+event_id
+snapshot_time_ms
+label_horizon_minutes
+feature_schema_version
+label_schema_version
+```
+
+Правило:
+
+```text
+Для одного model_version все rows должны иметь один horizon_minutes и один label_schema_version.
+```
+
+Запрещено:
+
+```text
+склеивать h15/h30/h60 rows в один CatBoost multiclass model
+учить модель на event-level rows, если prediction принимается на state-level rows
+дедуплицировать разные snapshot_time_ms одного event_id как будто это один пример
+```
+
 ## 11. Anomaly atlas
 
 Anomaly atlas строится только после корректных state/future path artifacts.
@@ -514,7 +655,7 @@ generic reject без reason_if_excluded
 
 ## 14. Anomaly events artifact lifecycle structure
 
-`anomaly_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Строки упорядочиваются по `state_time_ms`.
+`anomaly_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Это event/lifecycle seed artifact, а не полный поминутный state artifact. Строки упорядочиваются по `state_time_ms`.
 
 Обязательные системные поля Core:
 

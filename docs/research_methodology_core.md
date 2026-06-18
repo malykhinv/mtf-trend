@@ -179,6 +179,86 @@ Core не зависит от конкретного strategy module.
 использовать missing required data stream как model feature или market edge
 ```
 
+
+### 4.1. Strategy variant identity and registry invariants
+
+Единица регистрации в Core — не семейство стратегии, а конкретный strategy variant.
+
+Ключ identity variant-а:
+
+```text
+strategy_name
+strategy_version
+strategy_contract_version
+strategy_family
+horizon_minutes
+feature_schema_version
+label_schema_version
+take_profit_atr
+stop_loss_atr
+required_data_streams
+```
+
+Правило:
+
+```text
+Одинаковая пара strategy_name + strategy_version не может иметь разные horizon_minutes, feature_schema_version, label_schema_version или simulation defaults.
+```
+
+Strategy Registry обязан сохранять metadata variant-а в `strategy_run_config.csv` до запуска train/OOS/simulation. Если registry содержит variant, но factory ещё не реализована, Core должен явно завершаться ошибкой `strategy variant is specified but not implemented yet`, а не подменять его ближайшей реализованной стратегией.
+
+Запрещено:
+
+```text
+использовать один strategy_name для нескольких horizons
+автоматически выбирать default horizon при неизвестном suffix
+подменять неготовый strategy variant broad/default стратегией
+читать TP/SL из simulation config в обход StrategyMetadata
+```
+
+### 4.2. Trigger Frame validation contract
+
+`generate_triggers()` возвращает не торговый сигнал и не boolean mask, а lifecycle boundary между Strategy и Core.
+
+Минимальная schema trigger frame:
+
+| column | type | contract |
+| :--- | :--- | :--- |
+| symbol | string | instrument id from point-in-time universe |
+| state_time_ms | int64 | current as-of timestamp of trigger row |
+| is_trigger | bool | whether strategy allows this row into strategy-gated dataset |
+| event_id | string | stable event id; deterministic hash is preferred over random UUID for reproducibility |
+| event_start_time_ms | int64 | physical start of the event/lifecycle, must be `<= state_time_ms` |
+
+Core validation:
+
+```text
+1. required columns exist
+2. required columns are non-null for every returned row
+3. is_trigger is Boolean
+4. event_start_time_ms <= state_time_ms
+5. duplicate event_id rows are allowed only when they represent different state_time_ms of the same lifecycle
+6. event_id collision across different symbol/event_start_time_ms is forbidden
+```
+
+Core-derived lifecycle columns, when needed:
+
+```text
+minutes_since_start = floor((state_time_ms - event_start_time_ms) / 60_000)
+snapshot_time_ms = state_time_ms unless a stricter as-of timestamp is explicitly provided
+feature_cutoff_time_ms <= snapshot_time_ms
+future_start_time_ms > snapshot_time_ms
+```
+
+Запрещено:
+
+```text
+создавать event_id из future path/label
+делать event_start_time_ms позже state_time_ms
+считать is_trigger=false rows negative class для strategy-specific model
+прятать data-quality reject внутри is_trigger=false без reason_if_excluded/audit path
+```
+
 ## 5. Universal temporal contract
 
 Для каждой строки исследования:
@@ -413,9 +493,13 @@ Core строит online state rows для выбранной стратегии
 run_id
 strategy_name
 strategy_version
+strategy_contract_version
 symbol
+event_id
 state_time
 snapshot_time
+event_start_time
+minutes_since_start
 minutes_since_trigger
 is_trigger
 state_alive
@@ -423,12 +507,22 @@ feature_cutoff_time
 ```
 
 Core не определяет, что такое trigger семантически.
-Это обязанность Strategy Spec.
+Это обязанность Strategy Spec. Core только валидирует lifecycle timestamps из trigger frame и строит online state rows из данных, доступных на текущий `state_time`.
 
 Правило:
 
 ```text
 state row может использовать только market data <= state_time.
+state_time должен быть >= event_start_time.
+snapshot_time должен быть >= state_time или равен state_time для closed-candle research.
+```
+
+Граница артефактов:
+
+```text
+strategy_events.csv       = trigger/lifecycle seed rows from Strategy -> Core
+strategy_state_1m.csv     = per-minute online state expansion built by Core
+strategy_future_paths.csv = future-only path after snapshot_time, never fed back into state/features
 ```
 
 ## 12. Generic Future Path / Label Builder
@@ -722,6 +816,10 @@ calibrator not fitted on OOS
 double-barrier resolved as stop_loss_first
 strategy/core separation enforced
 BaseStrategy contract valid
+one strategy instance has exactly one horizon_minutes
+trigger frame schema valid and lifecycle timestamps ordered
+required_data_streams applied before trigger generation
+strategy simulation defaults present in StrategyMetadata
 is_trigger=false rows excluded from strategy-specific model
 no strategy-specific logic inside Core
 anti-binary feature relaxation enforced
@@ -741,6 +839,11 @@ config hash
 feature schema version
 label schema version
 strategy name/version/contract
+strategy_family
+horizon_minutes
+take_profit_atr
+stop_loss_atr
+required_data_streams
 model version
 random seed
 dependency versions
@@ -770,6 +873,38 @@ strategy_oos_predictions.csv
 strategy_calibration.csv
 strategy_decision_timing.csv
 strategy_trade_simulation.csv
+```
+
+
+### 24.1. Canonical `strategy_events.csv` boundary
+
+`strategy_events.csv` is the canonical strategy-neutral event/lifecycle seed artifact. Strategy-specific aliases such as `anomaly_events.csv` may point to it, but they must not change the Core contract.
+
+Minimum canonical columns:
+
+```text
+run_id
+strategy_name
+strategy_version
+strategy_contract_version
+strategy_family
+symbol
+event_id
+state_time_ms
+event_start_time_ms
+minutes_since_start
+is_trigger
+reason_if_excluded
+```
+
+Optional strategy audit columns are allowed only if declared in that strategy artifact schema. Core may store them, but Core must not branch on their strategy-specific meaning.
+
+Запрещено:
+
+```text
+использовать events artifact как замену state_1m artifact
+добавлять future outcome / label / PnL columns в strategy_events.csv
+делать alias более широким контрактом, чем canonical strategy_events.csv
 ```
 
 MVP1 expected utility / EV fields are part of `strategy_decision_timing.csv`.
