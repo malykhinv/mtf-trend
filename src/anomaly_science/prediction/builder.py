@@ -32,6 +32,7 @@ from anomaly_science.features.matrix import load_anomaly_feature_matrix_csv
 from anomaly_science.future import load_anomaly_state_1m_csv
 from anomaly_science.labels import load_anomaly_outcome_labels_csv
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
+from anomaly_science.strategy.registry import get_strategy
 
 ONE_MINUTE_MS = 60_000
 ONE_DAY_MS = 86_400_000
@@ -166,6 +167,7 @@ def build_walk_forward_prediction_result(
     config: WalkForwardPredictionConfig | None = None,
 ) -> WalkForwardPredictionResult:
     cfg = config or WalkForwardPredictionConfig()
+    _validate_strategy_horizon(config=cfg)
     usable_rows = [row for row in inputs if _target_for_horizon(row.label, cfg.target_horizon_minutes) != MISSING_FUTURE_SCENARIO]
     usable_rows.sort(key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id))
     rows_by_test_week: dict[str, list[PredictionInputRow]] = defaultdict(list)
@@ -668,6 +670,15 @@ def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> 
     if horizon_minutes == 120:
         return label.scenario_120m
     raise ValueError(f"unsupported prediction target horizon: {horizon_minutes}")
+
+
+def _validate_strategy_horizon(*, config: WalkForwardPredictionConfig) -> None:
+    strategy = get_strategy(config.strategy_version)
+    if strategy.metadata.horizon_minutes != config.target_horizon_minutes:
+        raise PredictionInputError(
+            f"prediction target_horizon_minutes={config.target_horizon_minutes} "
+            f"does not match strategy horizon {strategy.metadata.horizon_minutes}"
+        )
 
 
 def _unique_by_join_key(

@@ -24,6 +24,10 @@ from anomaly_science.validation import run_mvp1_holdout_governance
 _BOOTSTRAP_MESSAGE = "anomaly_science bootstrap ok"
 
 
+def _broad_strategy_version_for_horizon(horizon_minutes: int) -> str:
+    return f"broad_anomaly_v1_h{horizon_minutes}"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="anomaly-science",
@@ -345,7 +349,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "run-mvp1-prediction":
-        config = WalkForwardPredictionConfig(target_horizon_minutes=args.horizon_minutes)
+        config = WalkForwardPredictionConfig(
+            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            target_horizon_minutes=args.horizon_minutes,
+        )
         output_dir = run_mvp1_prediction(
             state_path=Path(args.state),
             labels_path=Path(args.labels),
@@ -357,7 +364,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "run-mvp1-controls":
-        config = ControlsConfig(target_horizon_minutes=args.horizon_minutes)
+        config = ControlsConfig(
+            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            target_horizon_minutes=args.horizon_minutes,
+        )
         output_dir = run_mvp1_controls(
             state_path=Path(args.state),
             labels_path=Path(args.labels),
@@ -370,6 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-expected-value":
         config = ExpectedValueConfig(
+            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
             fee_bps=args.fee_bps,
             slippage_bps=args.slippage_bps,
@@ -388,6 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-trade-simulation":
         config = TradeSimulationConfig(
+            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
             require_prediction_confident=not bool(args.allow_unconfident),
             require_rr_acceptable=not bool(args.allow_low_rr),

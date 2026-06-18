@@ -206,7 +206,7 @@ def _run_config_rows(
             extra_config={"command": "run-mvp1-trade-simulation", "stage": "mvp1_simulation"},
         ),
         RunConfigRow(key="stage", value="mvp1_simulation", source="runtime"),
-        *strategy_metadata_run_config_rows(),
+        *strategy_metadata_run_config_rows(strategy_name=config.strategy_version),
         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),

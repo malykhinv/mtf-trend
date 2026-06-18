@@ -12,6 +12,7 @@ class WalkForwardPredictionConfig:
     """
 
     prediction_version: str = "mvp1_weekly_walk_forward_catboost_isotonic_v1"
+    strategy_version: str = "broad_anomaly_v1_h30"
     target_horizon_minutes: int = 30
     purge_horizon_minutes: int = 60
     min_train_rows: int = 80
@@ -43,6 +44,8 @@ class WalkForwardPredictionConfig:
             raise ValueError("catboost_learning_rate must be positive")
         if not self.prediction_version:
             raise ValueError("prediction_version is required")
+        if not self.strategy_version:
+            raise ValueError("strategy_version is required")
         if not self.model_family:
             raise ValueError("model_family is required")
         if any(not item for item in self.excluded_model_feature_prefixes):

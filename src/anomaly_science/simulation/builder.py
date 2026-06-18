@@ -18,6 +18,7 @@ from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
 from anomaly_science.decision import load_anomaly_decision_timing_csv
 from anomaly_science.simulation.config import TradeSimulationConfig
+from anomaly_science.strategy.registry import get_strategy
 
 
 class TradeSimulationInputError(ValueError):
@@ -51,6 +52,7 @@ def build_trade_simulation_rows(
     config: TradeSimulationConfig | None = None,
 ) -> tuple[TradeSimulationRow, ...]:
     cfg = config or TradeSimulationConfig()
+    _validate_strategy_horizon(config=cfg)
     candles_by_symbol: dict[str, list[Candle1m]] = {}
     for candle in candles_1m:
         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
@@ -61,6 +63,8 @@ def build_trade_simulation_rows(
     active_until_by_strategy_symbol: dict[tuple[str, str, str], int] = {}
     for decision in sorted(decision_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
         if decision.target_horizon_minutes != cfg.target_horizon_minutes:
+            continue
+        if decision.strategy_version != cfg.strategy_version:
             continue
         if not _is_simulatable_decision(decision, config=cfg):
             continue
@@ -82,7 +86,12 @@ def build_trade_simulation_metric_rows(
     config: TradeSimulationConfig | None = None,
 ) -> tuple[TradeSimulationMetricRow, ...]:
     cfg = config or TradeSimulationConfig()
-    decisions = tuple(row for row in decision_rows if row.target_horizon_minutes == cfg.target_horizon_minutes)
+    _validate_strategy_horizon(config=cfg)
+    decisions = tuple(
+        row
+        for row in decision_rows
+        if row.target_horizon_minutes == cfg.target_horizon_minutes and row.strategy_version == cfg.strategy_version
+    )
     trades = tuple(simulation_rows)
     metrics: list[TradeSimulationMetricRow] = []
 
@@ -144,6 +153,15 @@ def _is_simulatable_decision(decision: ExpectedValueRow, *, config: TradeSimulat
     if config.require_rr_acceptable and not decision.is_RR_still_acceptable:
         return False
     return True
+
+
+def _validate_strategy_horizon(*, config: TradeSimulationConfig) -> None:
+    strategy = get_strategy(config.strategy_version)
+    if strategy.metadata.horizon_minutes != config.target_horizon_minutes:
+        raise TradeSimulationInputError(
+            f"simulation target_horizon_minutes={config.target_horizon_minutes} "
+            f"does not match strategy horizon {strategy.metadata.horizon_minutes}"
+        )
 
 
 def _simulate_decision(

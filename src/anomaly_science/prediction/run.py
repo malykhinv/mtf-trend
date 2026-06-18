@@ -277,7 +277,7 @@ def _run_config_rows(
             extra_config={"command": "run-mvp1-prediction", "stage": "mvp1_prediction"},
         ),
         RunConfigRow(key="stage", value="mvp1_prediction", source="runtime"),
-        *strategy_metadata_run_config_rows(),
+        *strategy_metadata_run_config_rows(strategy_name=config.strategy_version),
         RunConfigRow(key="prediction_version", value=config.prediction_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="purge_horizon_minutes", value=str(config.purge_horizon_minutes), source="runtime"),

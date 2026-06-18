@@ -15,6 +15,7 @@ from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTR
 from anomaly_science.decision import expected_value_rows_to_artifact
 from anomaly_science.simulation import (
     TradeSimulationConfig,
+    TradeSimulationInputError,
     build_trade_simulation_rows,
     load_anomaly_trade_simulation_csv,
     run_mvp1_trade_simulation,
@@ -120,6 +121,18 @@ def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant(
     )
 
     assert [row.event_id for row in rows] == ["first"]
+
+
+def test_trade_simulation_rejects_strategy_horizon_mismatch() -> None:
+    with pytest.raises(TradeSimulationInputError, match="does not match strategy horizon"):
+        build_trade_simulation_rows(
+            candles_1m=[],
+            decision_rows=[],
+            config=TradeSimulationConfig(
+                strategy_version="broad_anomaly_v1_h30",
+                target_horizon_minutes=60,
+            ),
+        )
 
 
 def test_trade_simulation_artifact_roundtrip(tmp_path: Path) -> None:

@@ -17,6 +17,7 @@ from anomaly_science.features import FEATURE_SCHEMA_VERSION, FeatureMatrixConfig
 from anomaly_science.labels import outcome_label_rows_to_artifact
 from anomaly_science.prediction import (
     PredictionArtifactError,
+    PredictionInputError,
     WalkForwardPredictionConfig,
     build_prediction_inputs,
     build_prediction_metric_rows,
@@ -239,6 +240,17 @@ def test_missing_future_is_excluded_from_prediction_metrics() -> None:
     assert excluded[0].metric_value == "1"
     assert "missing" not in {row.event_id for row in predictions}
     assert "test_long" in {row.event_id for row in predictions}
+
+
+def test_prediction_rejects_strategy_horizon_mismatch() -> None:
+    with pytest.raises(PredictionInputError, match="does not match strategy horizon"):
+        build_walk_forward_predictions(
+            inputs=[],
+            config=WalkForwardPredictionConfig(
+                strategy_version="broad_anomaly_v1_h30",
+                target_horizon_minutes=60,
+            ),
+        )
 
 
 def test_oos_prediction_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
