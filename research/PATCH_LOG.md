@@ -148,3 +148,19 @@ Validation for this proposed patch:
 - `python main.py run-mvp1-labels --state tmp/check_patch10/state/anomaly_state_1m.csv --future tmp/check_patch10/future/anomaly_future_paths.csv --out tmp/check_patch10/labels`
 - `python main.py run-mvp1-prediction --state tmp/check_patch10/state/anomaly_state_1m.csv --labels tmp/check_patch10/labels/anomaly_outcome_labels.csv --out tmp/check_patch10/prediction`
 - `python main.py run-mvp1-controls --state tmp/check_patch10/state/anomaly_state_1m.csv --labels tmp/check_patch10/labels/anomaly_outcome_labels.csv --out tmp/check_patch10/controls`
+
+## perf: remove Binance Vision cache per-block IO amplification
+
+Status: PROPOSED; patch generated from uploaded snapshot `project_20260618_115220.zip`; GitHub head not checked in this environment.
+
+Intent:
+- Fix the corrupt previous patch by regenerating a clean unified diff from the current uploaded project snapshot.
+- Stop rewriting the full Binance Vision block ledger on every processed block; append block records and keep last-record-wins resume semantics.
+- Sample disk usage in progress output instead of recursively walking `.output/market` on every progress tick.
+- Avoid expanding a missing monthly archive into daily fallback probes when the S3 archive file index already proves no daily kline archives exist.
+- Keep tqdm output shorter and terminal-width aware.
+- Exclude top-level `tmp/` generated run artifacts from `zip_project.py` output so project zips stay small.
+
+Validation for this proposed patch:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_zip_project.py tests/test_binance_vision_cache.py`

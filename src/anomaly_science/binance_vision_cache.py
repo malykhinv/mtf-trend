@@ -126,6 +126,25 @@ LIQ_QTY_CANDIDATES = (
 
 ProgressCallback = Callable[[str, str, int, int, int], None]
 
+
+LEDGER_FIELDNAMES = [
+    "symbol",
+    "timeframe",
+    "block_type",
+    "block_label",
+    "start_date",
+    "end_date",
+    "klines_status",
+    "metrics_status",
+    "liquidations_status",
+    "rows_written",
+    "part_path",
+    "last_open_interest",
+    "error",
+    "completed_at",
+]
+
+
 @dataclass(frozen=True, slots=True)
 class CacheConfig:
     out_dir: Path
@@ -338,8 +357,9 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
     started_at = time.monotonic()
     completed_block_units = 0
     estimated_block_units = max(1, len(symbols) * max(1, len(blocks)))
+    disk_usage = DirectorySizeSampler(DEFAULT_MARKET_CACHE_ROOT, sample_interval_seconds=30.0)
 
-    progress = tqdm(symbols, desc="Binance Vision cache", unit="symbol", mininterval=1.0)
+    progress = tqdm(symbols, desc="Binance Vision cache", unit="symbol", mininterval=1.0, dynamic_ncols=True)
     for symbol_index, symbol in enumerate(progress, start=1):
 
         def on_block_progress(
@@ -357,20 +377,20 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
                 completed_block_units,
             )
             progress.set_postfix(
-                symbol=progress_symbol,
-                block=f"{symbol_blocks_done}/{symbol_blocks_total}",
-                current=block_label,
-                blocks=f"{completed_block_units}/{estimated_block_units}",
+                sym=progress_symbol,
+                blk=f"{symbol_blocks_done}/{symbol_blocks_total}",
+                cur=block_label,
+                done=f"{completed_block_units}/{estimated_block_units}",
                 rows=rows_written,
-                disk=human_bytes(directory_size(DEFAULT_MARKET_CACHE_ROOT)),
+                disk=disk_usage.get(),
                 eta=format_eta(started_at, completed_block_units, estimated_block_units),
                 refresh=True,
             )
 
         progress.set_postfix(
-            symbol=symbol,
-            block=f"0/{len(blocks)}",
-            disk=human_bytes(directory_size(DEFAULT_MARKET_CACHE_ROOT)),
+            sym=symbol,
+            blk=f"0/{len(blocks)}",
+            disk=disk_usage.get(),
             eta=format_eta(started_at, completed_block_units, estimated_block_units),
             refresh=True,
         )
@@ -463,7 +483,7 @@ def build_symbol_cache(
         block_last_oi: float | None,
         error: str = "",
     ) -> None:
-        ledger[ledger_key(symbol, block)] = BlockLedgerRecord(
+        record = BlockLedgerRecord(
             symbol=symbol,
             timeframe=TIMEFRAME_NAME,
             block_type=block.period,
@@ -479,7 +499,8 @@ def build_symbol_cache(
             error=error,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
-        write_block_ledger(ledger_path, ledger)
+        ledger[ledger_key(symbol, block)] = record
+        append_block_ledger_record(ledger_path, record)
 
     def reuse_completed_block(block: VisionBlock, actual_start: date, actual_end: date) -> bool:
         nonlocal rows_written, blocks_written, missing_kline_blocks, missing_metric_blocks, missing_liquidation_blocks, last_oi
@@ -538,7 +559,10 @@ def build_symbol_cache(
             notify_block(f"{block.period}:{block.label}:missing-monthly")
             del files
             gc.collect()
-            fallback_days = daily_blocks(block.start_date, min(block.end_date, end_date))
+            fallback_days = daily_blocks(actual_start, actual_end)
+            index = get_archive_file_index()
+            if index is not None:
+                fallback_days = [daily_block for daily_block in fallback_days if index.has(block=daily_block, dataset="klines")]
             symbol_blocks_total += len(fallback_days)
             for daily_block in fallback_days:
                 process_data_block(daily_block)
@@ -1525,47 +1549,43 @@ def read_block_ledger(path: Path) -> dict[LedgerKey, BlockLedgerRecord]:
     return records
 
 
+def block_ledger_row(record: BlockLedgerRecord) -> dict[str, object]:
+    return {
+        "symbol": record.symbol,
+        "timeframe": record.timeframe,
+        "block_type": record.block_type,
+        "block_label": record.block_label,
+        "start_date": record.start_date,
+        "end_date": record.end_date,
+        "klines_status": record.klines_status,
+        "metrics_status": record.metrics_status,
+        "liquidations_status": record.liquidations_status,
+        "rows_written": record.rows_written,
+        "part_path": record.part_path,
+        "last_open_interest": "" if record.last_open_interest is None else record.last_open_interest,
+        "error": record.error,
+        "completed_at": record.completed_at,
+    }
+
+
+def append_block_ledger_record(path: Path, record: BlockLedgerRecord) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    needs_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", encoding="utf-8", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=LEDGER_FIELDNAMES)
+        if needs_header:
+            writer.writeheader()
+        writer.writerow(block_ledger_row(record))
+
+
 def write_block_ledger(path: Path, ledger: dict[LedgerKey, BlockLedgerRecord]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "symbol",
-        "timeframe",
-        "block_type",
-        "block_label",
-        "start_date",
-        "end_date",
-        "klines_status",
-        "metrics_status",
-        "liquidations_status",
-        "rows_written",
-        "part_path",
-        "last_open_interest",
-        "error",
-        "completed_at",
-    ]
     with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+        writer = csv.DictWriter(file_obj, fieldnames=LEDGER_FIELDNAMES)
         writer.writeheader()
         for record in sorted(ledger.values(), key=lambda item: (item.symbol, item.start_date, item.block_type, item.block_label)):
-            writer.writerow(
-                {
-                    "symbol": record.symbol,
-                    "timeframe": record.timeframe,
-                    "block_type": record.block_type,
-                    "block_label": record.block_label,
-                    "start_date": record.start_date,
-                    "end_date": record.end_date,
-                    "klines_status": record.klines_status,
-                    "metrics_status": record.metrics_status,
-                    "liquidations_status": record.liquidations_status,
-                    "rows_written": record.rows_written,
-                    "part_path": record.part_path,
-                    "last_open_interest": "" if record.last_open_interest is None else record.last_open_interest,
-                    "error": record.error,
-                    "completed_at": record.completed_at,
-                }
-            )
+            writer.writerow(block_ledger_row(record))
     os.replace(tmp_path, path)
 
 
@@ -1637,6 +1657,21 @@ def write_manifest(
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp_path, path)
+
+
+class DirectorySizeSampler:
+    def __init__(self, path: Path, *, sample_interval_seconds: float) -> None:
+        self._path = path
+        self._sample_interval_seconds = sample_interval_seconds
+        self._last_sample_at = 0.0
+        self._last_value = "unknown"
+
+    def get(self) -> str:
+        now = time.monotonic()
+        if now - self._last_sample_at >= self._sample_interval_seconds:
+            self._last_value = human_bytes(directory_size(self._path))
+            self._last_sample_at = now
+        return self._last_value
 
 
 def directory_size(path: Path) -> int:

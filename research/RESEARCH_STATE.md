@@ -20,3 +20,10 @@ Last local validation on 2026-06-18:
 - `.venv\Scripts\python.exe -m compileall main.py src tests`
 - `.venv\Scripts\python.exe -m pytest tests`
 - full MVP1 fixture pipeline through data audit, events, state, future, features, feature matrix, atlas, labels, prediction, and controls.
+
+
+Pending local patch from uploaded snapshot `project_20260618_115220.zip`:
+- `perf: remove Binance Vision cache per-block IO amplification`
+- Fixes Binance Vision cache per-block ledger/disk-scan IO amplification.
+- Excludes top-level `tmp/` generated artifacts from project zip creation.
+- Patch status: PROPOSED until applied and verified locally.

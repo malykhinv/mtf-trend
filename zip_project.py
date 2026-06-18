@@ -5,6 +5,7 @@ Rules:
 - skip any file or directory whose name starts with "." or "_";
 - except required Python package marker files: __init__.py;
 - skip existing .zip files unless --include-existing-zip-files is passed;
+- always skip top-level generated run artifacts such as tmp/;
 - optionally skip legacy_quarantine;
 - do not follow symlinks.
 """
@@ -19,6 +20,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 
 ALLOWED_DUNDER_FILES = {"__init__.py"}
+GENERATED_TOP_LEVEL_DIRS = {"tmp"}
 
 
 def _allowed_name(name: str) -> bool:
@@ -42,6 +44,7 @@ def _iter_project_files(
         "skipped_files_by_name": 0,
         "skipped_zip_files": 0,
         "skipped_legacy_quarantine": 0,
+        "skipped_generated_dirs": 0,
         "skipped_symlinks": 0,
     }
 
@@ -52,6 +55,9 @@ def _iter_project_files(
         for dirname in dirnames:
             if not _allowed_name(dirname):
                 counters["skipped_dirs_by_name"] += 1
+                continue
+            if current == root and dirname in GENERATED_TOP_LEVEL_DIRS:
+                counters["skipped_generated_dirs"] += 1
                 continue
             if exclude_legacy_quarantine and current == root and dirname == "legacy_quarantine":
                 counters["skipped_legacy_quarantine"] += 1
@@ -134,6 +140,7 @@ def build_zip(
     print(f"Skipped dirs by .* or _*:  {counters['skipped_dirs_by_name']}")
     print(f"Skipped files by .* or _*: {counters['skipped_files_by_name']}")
     print(f"Skipped existing zip files: {counters['skipped_zip_files']}")
+    print(f"Skipped generated dirs: {counters['skipped_generated_dirs']}")
     print(f"Skipped symlinks: {counters['skipped_symlinks']}")
     if exclude_legacy_quarantine:
         print(f"Skipped legacy_quarantine: {counters['skipped_legacy_quarantine']}")
