@@ -123,8 +123,6 @@ def load_anomaly_decision_timing_csv(path: str | Path) -> tuple[ExpectedValueRow
     )
 
 
-def load_anomaly_expected_value_csv(path: str | Path) -> tuple[ExpectedValueRow, ...]:
-    return load_anomaly_decision_timing_csv(path)
 
 
 def load_anomaly_ev_metrics_csv(path: str | Path) -> tuple[ExpectedValueMetricRow, ...]:

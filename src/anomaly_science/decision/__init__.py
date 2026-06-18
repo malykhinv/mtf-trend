@@ -9,7 +9,6 @@ from anomaly_science.decision.builder import (
     expected_value_rows_to_artifact,
     load_anomaly_ev_metrics_csv,
     load_anomaly_decision_timing_csv,
-    load_anomaly_expected_value_csv,
     load_expected_value_inputs,
 )
 from anomaly_science.decision.config import ExpectedValueConfig
@@ -25,7 +24,6 @@ __all__ = [
     "expected_value_rows_to_artifact",
     "load_anomaly_ev_metrics_csv",
     "load_anomaly_decision_timing_csv",
-    "load_anomaly_expected_value_csv",
     "load_expected_value_inputs",
     "run_mvp1_expected_value",
 ]
