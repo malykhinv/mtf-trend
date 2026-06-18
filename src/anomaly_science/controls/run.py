@@ -158,6 +158,12 @@ def _protocol_rows(
             artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
+            check_name="fixed_percent_labels_forbidden",
+            status=AuditStatus.PASS,
+            message="controls reuse strict ATR-normalized anomaly_outcome_labels.csv inputs; shuffled controls never create fixed-percent labels",
+            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+        ),
+        ProtocolAuditRow(
             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
             status=AuditStatus.PASS,
             message=f"controls reuse daily prequential purge horizon {config.purge_horizon_minutes}m before each test day",

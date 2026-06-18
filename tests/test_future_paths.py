@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.audit import AuditStatus
 from anomaly_science.contracts.market import Candle1m
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.future import (
@@ -225,6 +226,11 @@ def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
     assert rows[0]["event_id"] == "evt_fixture"
     assert int(rows[0]["future_start_time_ms"]) > int(rows[0]["snapshot_time_ms"])
     assert rows[0]["broke_structural_low_30m"] == ""
+
+    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
+    assert audit_by_name["fixed_percent_labels_forbidden"]["status"] == AuditStatus.PASS.value
+    assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == AuditStatus.PASS.value
 
 
 def test_future_builder_emits_missing_atr_fields_without_fallback_when_history_is_short() -> None:

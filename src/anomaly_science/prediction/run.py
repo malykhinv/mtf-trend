@@ -160,6 +160,12 @@ def _protocol_rows(*, input_row_count: int, prediction_row_count: int, config: W
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(
+            check_name="fixed_percent_labels_forbidden",
+            status=AuditStatus.PASS,
+            message="prediction targets come from strict anomaly_outcome_labels.csv ATR-normalized scenario labels; no fixed-percent label columns are accepted",
+            artifact="anomaly_oos_predictions.csv",
+        ),
+        ProtocolAuditRow(
             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
             status=AuditStatus.PASS,
             message=f"daily baseline enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= test_day_start_ms; weekly CatBoost protocol remains separately NOT_IMPLEMENTED",

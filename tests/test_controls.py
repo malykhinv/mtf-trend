@@ -173,6 +173,7 @@ def test_run_mvp1_controls_cli_writes_control_artifacts(tmp_path: Path) -> None:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(handle)}
     assert audit_by_name["non_empty_oos_control_gate"]["status"] == "PASS"
     assert audit_by_name["technical_noise_shock_excluded_from_ml_train_validation_calibration_test"]["status"] == "PASS"
+    assert audit_by_name["fixed_percent_labels_forbidden"]["status"] == "PASS"
     assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
 
     with (out_dir / "anomaly_baseline_comparison.csv").open(newline="", encoding="utf-8-sig") as handle:

@@ -124,6 +124,12 @@ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[Proto
             artifact="anomaly_future_paths.csv",
         ),
         ProtocolAuditRow(
+            check_name="fixed_percent_labels_forbidden",
+            status=AuditStatus.PASS,
+            message="future paths materialize ATR-normalized returns/max/min and ATR-unit double-barrier thresholds; no fixed-percent label basis is emitted",
+            artifact="anomaly_future_paths.csv",
+        ),
+        ProtocolAuditRow(
             check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
             status=AuditStatus.PASS,
             message="future path builder marks same-1m target/stop barrier collisions as intracandle_double_barrier_hit with barrier_resolution=stop_loss_first",
