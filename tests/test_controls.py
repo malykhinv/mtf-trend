@@ -81,10 +81,10 @@ def _label_row(*, state: AnomalyState1mRow, scenario_30m: str) -> AnomalyOutcome
 
 def _control_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutcomeLabelRow]]:
     states = [
-        _state_row(event_id="aaa_train_1", day_offset=0, minute_of_day=10, symbol="AAA/USDT:USDT", current_return_from_start=0.025, distance_to_running_high=-0.0005),
-        _state_row(event_id="aaa_train_2", day_offset=0, minute_of_day=20, symbol="AAA/USDT:USDT", current_return_from_start=0.022, distance_to_running_high=-0.0004),
-        _state_row(event_id="bbb_train_1", day_offset=0, minute_of_day=30, symbol="BBB/USDT:USDT", current_return_from_start=-0.02, distance_to_running_high=-0.04),
-        _state_row(event_id="bbb_train_2", day_offset=0, minute_of_day=40, symbol="BBB/USDT:USDT", current_return_from_start=-0.018, distance_to_running_high=-0.035),
+        _state_row(event_id="aaa_train_1", day_offset=-1, minute_of_day=10, symbol="AAA/USDT:USDT", current_return_from_start=0.025, distance_to_running_high=-0.0005),
+        _state_row(event_id="aaa_train_2", day_offset=-1, minute_of_day=20, symbol="AAA/USDT:USDT", current_return_from_start=0.022, distance_to_running_high=-0.0004),
+        _state_row(event_id="bbb_train_1", day_offset=-1, minute_of_day=30, symbol="BBB/USDT:USDT", current_return_from_start=-0.02, distance_to_running_high=-0.04),
+        _state_row(event_id="bbb_train_2", day_offset=-1, minute_of_day=40, symbol="BBB/USDT:USDT", current_return_from_start=-0.018, distance_to_running_high=-0.035),
         _state_row(event_id="aaa_test_1", day_offset=1, minute_of_day=70, symbol="AAA/USDT:USDT", current_return_from_start=0.024, distance_to_running_high=-0.0006),
         _state_row(event_id="bbb_test_1", day_offset=1, minute_of_day=80, symbol="BBB/USDT:USDT", current_return_from_start=-0.021, distance_to_running_high=-0.045),
         _state_row(event_id="aaa_test_2", day_offset=2, minute_of_day=60, symbol="AAA/USDT:USDT", current_return_from_start=0.023, distance_to_running_high=-0.0007),

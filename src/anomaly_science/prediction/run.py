@@ -107,15 +107,15 @@ def _protocol_rows(*, input_row_count: int, prediction_row_count: int, config: W
             artifact="anomaly_outcome_labels.csv",
         ),
         ProtocolAuditRow(
-            check_name="daily_prequential_walk_forward",
+            check_name="weekly_walk_forward_prediction",
             status=AuditStatus.PASS,
-            message="each evaluated day is predicted from earlier rows only; no same-day or future-day fitting",
+            message="each evaluated ISO week is predicted with one model frozen before the week; no intra-week refit",
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(
             check_name="purge_rule_enforced",
             status=AuditStatus.PASS,
-            message=f"train rows must satisfy train_snapshot_time_ms + {config.purge_horizon_minutes}m <= test_day_start_ms",
+            message=f"train rows must satisfy train_snapshot_time_ms + {config.purge_horizon_minutes}m <= weekly_model_freeze_time_ms",
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(
@@ -168,7 +168,19 @@ def _protocol_rows(*, input_row_count: int, prediction_row_count: int, config: W
         ProtocolAuditRow(
             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
             status=AuditStatus.PASS,
-            message=f"daily baseline enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= test_day_start_ms; weekly CatBoost protocol remains separately NOT_IMPLEMENTED",
+            message=f"weekly baseline enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= weekly_model_freeze_time_ms",
+            artifact="anomaly_oos_predictions.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="weekly_walk_forward_heavy_models_enforced",
+            status=AuditStatus.PASS,
+            message="prediction stage trains at most one frozen model per ISO week; no daily retraining path exists in MVP1 baseline",
+            artifact="anomaly_oos_predictions.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="frozen_weekly_model_used_for_daily_oos",
+            status=AuditStatus.PASS,
+            message="all OOS days inside an ISO week share the same weekly_freeze model identifier and train_cutoff_time_ms",
             artifact="anomaly_oos_predictions.csv",
         ),
     ]
@@ -208,6 +220,7 @@ def _run_config_rows(
         RunConfigRow(key="min_group_rows", value=str(config.min_group_rows), source="runtime"),
         RunConfigRow(key="smoothing_strength", value=str(config.smoothing_strength), source="runtime"),
         RunConfigRow(key="model_family", value=config.model_family, source="runtime"),
+        RunConfigRow(key="model_freeze_cadence", value="iso_weekly", source="runtime"),
         RunConfigRow(key="prediction_scope", value="calibrated_probabilities_not_decisions", source="runtime"),
     ]
 

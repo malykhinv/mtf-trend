@@ -114,10 +114,10 @@ def build_baseline_comparison_rows(
     target_by_key = {_row_key(row): _target_for_horizon(row.label, cfg.target_horizon_minutes) for row in rows}
 
     baseline_specs: tuple[tuple[str, str, Callable[[AnomalyState1mRow], str], str], ...] = (
-        ("global_prior_only", "global_label_prior", _global_feature_key, "daily walk-forward global class-prior baseline"),
-        ("session_only", "snapshot_utc_session", _session_feature_key, "daily walk-forward baseline using only UTC session/time buckets"),
-        ("event_time_only", "event_clock", _event_time_feature_key, "daily walk-forward baseline using only minutes since detection/event start"),
-        ("price_path_only", "state_price_path", _price_path_feature_key, "daily walk-forward baseline using only online price-path state bins"),
+        ("global_prior_only", "global_label_prior", _global_feature_key, "weekly frozen-model global class-prior baseline"),
+        ("session_only", "snapshot_utc_session", _session_feature_key, "weekly frozen-model baseline using only UTC session/time buckets"),
+        ("event_time_only", "event_clock", _event_time_feature_key, "weekly frozen-model baseline using only minutes since detection/event start"),
+        ("price_path_only", "state_price_path", _price_path_feature_key, "weekly frozen-model baseline using only online price-path state bins"),
     )
     result: list[BaselineComparisonRow] = []
     for baseline_name, feature_family, feature_key_fn, notes in baseline_specs:
@@ -208,14 +208,14 @@ def _evaluate_feature_family_model(
     if not rows:
         return ControlEvaluation(available_label_rows=0, oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0)
 
-    rows_by_test_day: dict[str, list[PredictionInputRow]] = defaultdict(list)
+    rows_by_test_week: dict[str, list[PredictionInputRow]] = defaultdict(list)
     for row in rows:
-        rows_by_test_day[_utc_day(row.state.snapshot_time_ms)].append(row)
+        rows_by_test_week[_utc_week(row.state.snapshot_time_ms)].append(row)
 
     evaluated: list[tuple[str, dict[str, float], str]] = []
-    for test_day in sorted(rows_by_test_day):
-        test_day_start_ms = _day_start_ms(test_day)
-        train_cutoff_time_ms = test_day_start_ms - config.purge_horizon_minutes * ONE_MINUTE_MS
+    for test_week in sorted(rows_by_test_week):
+        weekly_model_freeze_time_ms = _week_start_ms(test_week)
+        train_cutoff_time_ms = weekly_model_freeze_time_ms - config.purge_horizon_minutes * ONE_MINUTE_MS
         train_rows = [row for row in rows if row.state.snapshot_time_ms <= train_cutoff_time_ms]
         if len(train_rows) < config.min_train_rows:
             continue
@@ -225,7 +225,7 @@ def _evaluate_feature_family_model(
             feature_key_fn=feature_key_fn,
             config=config,
         )
-        for test_row in sorted(rows_by_test_day[test_day], key=lambda row: (row.state.snapshot_time_ms, row.state.symbol, row.state.event_id)):
+        for test_row in sorted(rows_by_test_week[test_week], key=lambda row: (row.state.snapshot_time_ms, row.state.symbol, row.state.event_id)):
             target = target_by_key[_row_key(test_row)]
             probabilities = model.predict(test_row.state)
             predicted = _predicted_scenario(probabilities)
@@ -518,5 +518,11 @@ def _utc_day(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-def _day_start_ms(day: str) -> int:
-    return int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+def _utc_week(timestamp_ms: int) -> str:
+    parsed = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+    iso_year, iso_week, _ = parsed.isocalendar()
+    return f"{iso_year:04d}-W{iso_week:02d}"
+
+
+def _week_start_ms(week: str) -> int:
+    return int(datetime.strptime(f"{week}-1", "%G-W%V-%u").replace(tzinfo=timezone.utc).timestamp() * 1000)

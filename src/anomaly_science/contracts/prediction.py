@@ -7,7 +7,7 @@ from .market import MarketDataContractError
 from .time import validate_timestamp_ms
 
 PREDICTED_SCENARIOS = PREDICTABLE_OUTCOME_SCENARIOS
-PREDICTION_TEMPORAL_CONTRACT = "train_snapshot_time_ms_plus_horizon<=test_day_start_ms;features<=snapshot_time<label_future_start"
+PREDICTION_TEMPORAL_CONTRACT = "train_snapshot_time_ms_plus_horizon<=weekly_model_freeze_time_ms;features<=snapshot_time<label_future_start"
 
 
 @dataclass(frozen=True, slots=True)

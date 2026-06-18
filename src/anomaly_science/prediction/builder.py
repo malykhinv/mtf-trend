@@ -109,24 +109,25 @@ def build_walk_forward_predictions(
     cfg = config or WalkForwardPredictionConfig()
     usable_rows = [row for row in inputs if _target_for_horizon(row.label, cfg.target_horizon_minutes) != MISSING_FUTURE_SCENARIO]
     usable_rows.sort(key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id))
-    rows_by_test_day: dict[str, list[PredictionInputRow]] = defaultdict(list)
+    rows_by_test_week: dict[str, list[PredictionInputRow]] = defaultdict(list)
     for row in usable_rows:
-        rows_by_test_day[_utc_day(row.state.snapshot_time_ms)].append(row)
+        rows_by_test_week[_utc_week(row.state.snapshot_time_ms)].append(row)
 
     predictions: list[OosPredictionRow] = []
-    for test_day in sorted(rows_by_test_day):
-        test_day_start_ms = _day_start_ms(test_day)
-        train_cutoff_time_ms = test_day_start_ms - cfg.purge_horizon_minutes * ONE_MINUTE_MS
+    for test_week in sorted(rows_by_test_week):
+        weekly_model_freeze_time_ms = _week_start_ms(test_week)
+        train_cutoff_time_ms = weekly_model_freeze_time_ms - cfg.purge_horizon_minutes * ONE_MINUTE_MS
         train_rows = [row for row in usable_rows if row.state.snapshot_time_ms <= train_cutoff_time_ms]
         if len(train_rows) < cfg.min_train_rows:
             continue
         model = _EmpiricalStateBinModel.fit(rows=train_rows, config=cfg)
-        for test_row in sorted(rows_by_test_day[test_day], key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id)):
+        for test_row in sorted(rows_by_test_week[test_week], key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id)):
             target_scenario = _target_for_horizon(test_row.label, cfg.target_horizon_minutes)
             if target_scenario == MISSING_FUTURE_SCENARIO:
                 continue
             probabilities, model_key, group_count = model.predict(test_row.state)
             predicted_scenario, confidence = _predicted_scenario(probabilities)
+            test_day = _utc_day(test_row.state.snapshot_time_ms)
             predictions.append(
                 OosPredictionRow(
                     prediction_version=cfg.prediction_version,
@@ -140,7 +141,7 @@ def build_walk_forward_predictions(
                     test_day=test_day,
                     train_cutoff_time_ms=train_cutoff_time_ms,
                     model_family=cfg.model_family,
-                    model_key=model_key,
+                    model_key=f"weekly_freeze={test_week}:{weekly_model_freeze_time_ms}|{model_key}",
                     model_train_row_count=model.train_row_count,
                     model_group_row_count=group_count,
                     p_long_continuation=probabilities["long_continuation"],
@@ -192,8 +193,8 @@ def build_prediction_metric_rows(
     input_rows = tuple(inputs)
     prediction_rows = tuple(predictions)
     available_rows = [row for row in input_rows if _target_for_horizon(row.label, cfg.target_horizon_minutes) != MISSING_FUTURE_SCENARIO]
-    test_days = sorted({_utc_day(row.state.snapshot_time_ms) for row in available_rows})
-    trainless_test_rows = _count_trainless_test_rows(available_rows=available_rows, test_days=test_days, config=cfg)
+    test_weeks = sorted({_utc_week(row.state.snapshot_time_ms) for row in available_rows})
+    trainless_test_rows = _count_trainless_test_rows(available_rows=available_rows, test_weeks=test_weeks, config=cfg)
     metrics: list[PredictionMetricRow] = []
 
     def add(name: str, value: str | float | int, row_count: int, notes: str) -> None:
@@ -225,9 +226,15 @@ def build_prediction_metric_rows(
         "oos_prediction_rows",
         len(prediction_rows),
         len(prediction_rows),
-        "daily prequential OOS rows emitted after train-size and purge checks",
+        "weekly frozen-model OOS rows emitted after train-size and purge checks",
     )
     add("test_day_count", len({row.test_day for row in prediction_rows}), len(prediction_rows), "unique evaluated OOS days")
+    add(
+        "weekly_model_count",
+        len({row.model_key.split("|", 1)[0] for row in prediction_rows}),
+        len(prediction_rows),
+        "unique frozen weekly model identifiers used for OOS rows",
+    )
     add("trainless_test_rows_skipped", trainless_test_rows, trainless_test_rows, "test rows skipped because earlier purged train set was too small")
     if prediction_rows:
         add("overall_accuracy", _mean(1.0 if row.predicted_scenario == row.target_scenario else 0.0 for row in prediction_rows), len(prediction_rows), "argmax scenario accuracy; not a trading metric")
@@ -539,16 +546,16 @@ def _mean(values: Iterable[float]) -> float:
 def _count_trainless_test_rows(
     *,
     available_rows: Sequence[PredictionInputRow],
-    test_days: Sequence[str],
+    test_weeks: Sequence[str],
     config: WalkForwardPredictionConfig,
 ) -> int:
     skipped = 0
-    for test_day in test_days:
-        test_day_start_ms = _day_start_ms(test_day)
-        train_cutoff_time_ms = test_day_start_ms - config.purge_horizon_minutes * ONE_MINUTE_MS
+    for test_week in test_weeks:
+        weekly_model_freeze_time_ms = _week_start_ms(test_week)
+        train_cutoff_time_ms = weekly_model_freeze_time_ms - config.purge_horizon_minutes * ONE_MINUTE_MS
         train_count = sum(1 for row in available_rows if row.state.snapshot_time_ms <= train_cutoff_time_ms)
         if train_count < config.min_train_rows:
-            skipped += sum(1 for row in available_rows if _utc_day(row.state.snapshot_time_ms) == test_day)
+            skipped += sum(1 for row in available_rows if _utc_week(row.state.snapshot_time_ms) == test_week)
     return skipped
 
 
@@ -570,8 +577,14 @@ def _utc_day(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-def _day_start_ms(day: str) -> int:
-    parsed = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+def _utc_week(timestamp_ms: int) -> str:
+    parsed = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+    iso_year, iso_week, _ = parsed.isocalendar()
+    return f"{iso_year:04d}-W{iso_week:02d}"
+
+
+def _week_start_ms(week: str) -> int:
+    parsed = datetime.strptime(f"{week}-1", "%G-W%V-%u").replace(tzinfo=timezone.utc)
     return int(parsed.timestamp() * 1000)
 
 

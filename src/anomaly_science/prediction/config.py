@@ -11,7 +11,7 @@ class WalkForwardPredictionConfig:
     only estimates OOS probabilities of descriptive future-nature scenarios.
     """
 
-    prediction_version: str = "mvp1_walk_forward_calibrated_baseline_v1"
+    prediction_version: str = "mvp1_weekly_walk_forward_calibrated_baseline_v1"
     target_horizon_minutes: int = 30
     purge_horizon_minutes: int = 60
     min_train_rows: int = 3

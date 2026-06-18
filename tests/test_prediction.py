@@ -100,13 +100,14 @@ def _label_row(
 
 def _training_and_test_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutcomeLabelRow]]:
     states = [
-        _state_row(event_id="train_long_1", day_offset=0, minute_of_day=10),
-        _state_row(event_id="train_long_2", day_offset=0, minute_of_day=20),
-        _state_row(event_id="train_long_3", day_offset=0, minute_of_day=30),
+        _state_row(event_id="train_long_1", day_offset=-1, minute_of_day=10),
+        _state_row(event_id="train_long_2", day_offset=-1, minute_of_day=20),
+        _state_row(event_id="train_long_3", day_offset=-1, minute_of_day=30),
         _state_row(event_id="purged_short_1", day_offset=0, minute_of_day=23 * 60 + 30),
         _state_row(event_id="purged_short_2", day_offset=0, minute_of_day=23 * 60 + 40),
         _state_row(event_id="purged_short_3", day_offset=0, minute_of_day=23 * 60 + 50),
         _state_row(event_id="test_row", day_offset=1, minute_of_day=60),
+        _state_row(event_id="test_row_2", day_offset=2, minute_of_day=60),
     ]
     labels = [
         _label_row(state=states[0], scenario_30m="long_continuation"),
@@ -116,6 +117,7 @@ def _training_and_test_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutc
         _label_row(state=states[4], scenario_30m="short_fade"),
         _label_row(state=states[5], scenario_30m="short_fade"),
         _label_row(state=states[6], scenario_30m="long_continuation"),
+        _label_row(state=states[7], scenario_30m="long_continuation"),
     ]
     return states, labels
 
@@ -128,7 +130,7 @@ def _write_labels(path: Path, rows: list[AnomalyOutcomeLabelRow]) -> None:
     write_csv_artifact(path, [asdict(row) for row in rows], get_artifact_schema("anomaly_outcome_labels.csv"))
 
 
-def test_walk_forward_prediction_enforces_purge_before_test_day() -> None:
+def test_walk_forward_prediction_uses_one_frozen_model_per_iso_week() -> None:
     states, labels = _training_and_test_rows()
     inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
     predictions = build_walk_forward_predictions(
@@ -136,18 +138,23 @@ def test_walk_forward_prediction_enforces_purge_before_test_day() -> None:
         config=WalkForwardPredictionConfig(min_train_rows=1, min_group_rows=1, smoothing_strength=1.0),
     )
 
-    assert len(predictions) == 1
-    row = predictions[0]
-    assert row.event_id == "test_row"
-    assert row.train_cutoff_time_ms == BASE_DAY_MS + ONE_DAY_MS - 60 * ONE_MINUTE_MS
-    assert row.model_train_row_count == 3
-    assert row.p_long_continuation > row.p_short_fade
-    assert row.predicted_scenario == "long_continuation"
-    assert row.temporal_contract == PREDICTION_TEMPORAL_CONTRACT
+    assert [row.event_id for row in predictions] == [
+        "purged_short_1",
+        "purged_short_2",
+        "purged_short_3",
+        "test_row",
+        "test_row_2",
+    ]
+    assert {row.train_cutoff_time_ms for row in predictions} == {BASE_DAY_MS - 60 * ONE_MINUTE_MS}
+    assert {row.model_key.split("|", 1)[0] for row in predictions} == {f"weekly_freeze=2024-W01:{BASE_DAY_MS}"}
+    assert all(row.model_train_row_count == 3 for row in predictions)
+    assert all(row.p_long_continuation > row.p_short_fade for row in predictions)
+    assert all(row.predicted_scenario == "long_continuation" for row in predictions)
+    assert all(row.temporal_contract == PREDICTION_TEMPORAL_CONTRACT for row in predictions)
 
 
 def test_missing_future_is_excluded_from_prediction_metrics() -> None:
-    train = _state_row(event_id="train_long", day_offset=0, minute_of_day=10)
+    train = _state_row(event_id="train_long", day_offset=-1, minute_of_day=10)
     missing = _state_row(event_id="missing", day_offset=1, minute_of_day=60)
     test = _state_row(event_id="test_long", day_offset=1, minute_of_day=90)
     states = [train, missing, test]
@@ -233,7 +240,9 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert audit_by_name["technical_noise_shock_excluded_from_ml_train_validation_calibration_test"]["status"] == "PASS"
     assert audit_by_name["fixed_percent_labels_forbidden"]["status"] == "PASS"
     assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
+    assert audit_by_name["weekly_walk_forward_heavy_models_enforced"]["status"] == "PASS"
+    assert audit_by_name["frozen_weekly_model_used_for_daily_oos"]["status"] == "PASS"
 
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
-    assert rows[0]["event_id"] == "test_row"
+    assert {row["event_id"] for row in rows} >= {"test_row", "test_row_2"}
