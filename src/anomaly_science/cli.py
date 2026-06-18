@@ -6,6 +6,7 @@ from pathlib import Path
 
 from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
+from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.events.run import run_mvp1_events
 from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matrix, run_mvp1_features
@@ -171,6 +172,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refresh cached Binance Vision file listings before processing each symbol.",
     )
 
+    export_cache = subparsers.add_parser(
+        "export-cache-mvp1-csv",
+        help="Export Binance Vision enriched parquet cache into the explicit MVP1 CSV data boundary.",
+    )
+    export_cache.add_argument("--cache-dir", required=True, help="Directory containing {symbol}.parquet cache files.")
+    export_cache.add_argument("--symbols", required=True, help="Comma-separated symbols to export.")
+    export_cache.add_argument("--out", required=True, help="Directory where MVP1 CSV files will be written.")
+
 
     return parser
 
@@ -285,6 +294,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         written = sum(1 for item in stats if item.rows_written > 0)
         skipped_existing = sum(1 for item in stats if item.rows_written == -1)
         print(f"binance vision cache done: written={written}, skipped_existing={skipped_existing}, out={config.out_dir}")
+        return 0
+
+    if args.command == "export-cache-mvp1-csv":
+        symbols = tuple(symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip())
+        output_dir = export_cache_to_mvp1_csv(
+            CacheMvp1CsvExportConfig(cache_dir=Path(args.cache_dir), out_dir=Path(args.out), symbols=symbols)
+        )
+        print(f"mvp1 csv export written: {output_dir}")
         return 0
 
     parser.print_help()

@@ -113,6 +113,8 @@ def test_process_block_outputs_memory_bounded_schema() -> None:
         "low",
         "close",
         "volume",
+        "quote_volume",
+        "trade_count",
         "taker_buy_base_volume",
         "taker_buy_quote_volume",
         "open_interest",
