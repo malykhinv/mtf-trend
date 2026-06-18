@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from anomaly_science.contracts.audit import RunConfigRow
+from anomaly_science.contracts.methodology import MAX_FEATURE_LOOKBACK_MINUTES
 
 
 DEPENDENCY_NAMES = ("pandas", "polars", "pyarrow", "requests", "tqdm")
 INTERNAL_TIME_TYPE = "pl.Datetime[ms, UTC]"
-MAX_FEATURE_LOOKBACK_MINUTES = 1440
 TRIGGER_DEDUPLICATION_POLICY = "same_symbol_detection_time_within_strategy_horizon_suppressed"
 
 

@@ -6,13 +6,14 @@ import pandas as pd
 
 from anomaly_science.contracts.audit import AuditStatus, DataQualityRow
 from anomaly_science.contracts.market import FIVE_MINUTES_MS, ONE_MINUTE_MS
+from anomaly_science.contracts.methodology import MAX_FEATURE_LOOKBACK_MINUTES
 from anomaly_science.data.source import DATASET_SPECS
 
 
 CRITICAL = "critical"
 WARNING = "warning"
 INFO = "info"
-WARMUP_WINDOW_MINUTES = 1440
+WARMUP_WINDOW_MINUTES = MAX_FEATURE_LOOKBACK_MINUTES
 
 
 def rows_to_artifact(rows: list[DataQualityRow]) -> list[dict[str, object]]:

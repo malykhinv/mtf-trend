@@ -10,8 +10,9 @@ import pandas as pd
 import pytest
 
 from anomaly_science.contracts.audit import AuditStatus
+from anomaly_science.contracts.methodology import MAX_FEATURE_LOOKBACK_MINUTES
 from anomaly_science.data import CsvDataSourceError, CsvDirectoryDataSource, run_data_quality, run_mvp1_data_audit
-from anomaly_science.data.quality import filter_warmup_window_rows
+from anomaly_science.data.quality import WARMUP_WINDOW_MINUTES, filter_warmup_window_rows
 from anomaly_science.universe import build_symbol_universe_by_day
 
 
@@ -122,6 +123,7 @@ def test_data_quality_marks_first_1m_candle_after_gap_as_technical_noise_shock()
 
 
 def test_warmup_filter_removes_rows_inside_1440m_window_after_gap() -> None:
+    assert WARMUP_WINDOW_MINUTES == MAX_FEATURE_LOOKBACK_MINUTES
     frame = pd.DataFrame([
         {"symbol": "AAA/USDT:USDT", "open_time_ms": 0},
         {"symbol": "AAA/USDT:USDT", "open_time_ms": 4 * 60_000},
