@@ -98,11 +98,38 @@ def test_trigger_frame_rejects_internal_unix_ms_time_columns() -> None:
         "symbol": ["AAA"],
         "state_time_ms": [BASE_TS],
         "event_start_time_ms": [BASE_TS],
+        "event_detection_time_ms": [BASE_TS],
         "is_trigger": [True],
         "event_id": ["evt"],
     })
 
     with pytest.raises(StrategyContractError, match="native datetime"):
+        validate_trigger_frame(frame)
+
+
+def test_trigger_frame_requires_optional_lifecycle_times_to_be_native_datetime() -> None:
+    frame = pl.DataFrame(
+        {
+            "symbol": ["AAA"],
+            "state_time": [_dt(BASE_TS)],
+            "event_start_time": [_dt(BASE_TS)],
+            "event_detection_time": [BASE_TS],
+            "minutes_since_start": [0],
+            "is_trigger": [True],
+            "event_id": ["evt"],
+        },
+        schema={
+            "symbol": pl.String,
+            "state_time": pl.Datetime("ms", "UTC"),
+            "event_start_time": pl.Datetime("ms", "UTC"),
+            "event_detection_time": pl.Int64,
+            "minutes_since_start": pl.Int64,
+            "is_trigger": pl.Boolean,
+            "event_id": pl.String,
+        },
+    )
+
+    with pytest.raises(StrategyContractError, match="event_detection_time"):
         validate_trigger_frame(frame)
 
 

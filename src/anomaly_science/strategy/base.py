@@ -23,9 +23,11 @@ REQUIRED_TRIGGER_FRAME_COLUMNS: tuple[str, ...] = (
     "minutes_since_start",
 )
 
-_FORBIDDEN_INTERNAL_TIME_COLUMNS: tuple[str, ...] = (
-    "state_time_ms",
-    "event_start_time_ms",
+_INTERNAL_DATETIME_COLUMNS: tuple[str, ...] = (
+    "state_time",
+    "event_start_time",
+    "event_detection_time",
+    "seed_time",
 )
 
 
@@ -120,7 +122,7 @@ def validate_required_data_streams(streams: Mapping[str, bool]) -> None:
 
 
 def validate_trigger_frame(trigger_frame: pl.DataFrame) -> None:
-    forbidden = [name for name in _FORBIDDEN_INTERNAL_TIME_COLUMNS if name in trigger_frame.columns]
+    forbidden = [name for name in trigger_frame.columns if name.endswith("_ms")]
     if forbidden:
         raise StrategyContractError(f"trigger frame must use native datetime time columns, not: {forbidden}")
     missing = [name for name in REQUIRED_TRIGGER_FRAME_COLUMNS if name not in trigger_frame.columns]
@@ -136,8 +138,11 @@ def validate_trigger_frame(trigger_frame: pl.DataFrame) -> None:
         raise StrategyContractError("trigger frame state_time must not be null")
     if trigger_frame["event_start_time"].null_count() > 0:
         raise StrategyContractError("trigger frame event_start_time must not be null")
-    _validate_datetime_column(trigger_frame, "state_time")
-    _validate_datetime_column(trigger_frame, "event_start_time")
+    for column_name in _INTERNAL_DATETIME_COLUMNS:
+        if column_name in trigger_frame.columns:
+            if trigger_frame[column_name].null_count() > 0:
+                raise StrategyContractError(f"trigger frame {column_name} must not be null")
+            _validate_datetime_column(trigger_frame, column_name)
     if trigger_frame["is_trigger"].dtype != pl.Boolean:
         raise StrategyContractError("trigger frame is_trigger must be boolean")
     if not trigger_frame["minutes_since_start"].dtype.is_integer():
