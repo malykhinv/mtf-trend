@@ -20,6 +20,8 @@ from anomaly_science.decision.config import ExpectedValueConfig
 from anomaly_science.future import load_anomaly_state_1m_csv
 from anomaly_science.labels import load_anomaly_outcome_labels_csv
 from anomaly_science.prediction import load_anomaly_oos_predictions_csv
+from anomaly_science.strategy.base import StrategyMetadata
+from anomaly_science.strategy.registry import get_strategy
 
 
 class ExpectedValueInputError(ValueError):
@@ -53,6 +55,11 @@ def build_expected_value_rows(
     config: ExpectedValueConfig | None = None,
 ) -> tuple[ExpectedValueRow, ...]:
     cfg = config or ExpectedValueConfig()
+    strategy = get_strategy(cfg.strategy_version)
+    if strategy.metadata.horizon_minutes != cfg.target_horizon_minutes:
+        raise ExpectedValueInputError(
+            f"EV target_horizon_minutes={cfg.target_horizon_minutes} does not match strategy horizon {strategy.metadata.horizon_minutes}"
+        )
     state_by_key = _unique_by_join_key(state_rows, artifact_name="anomaly_state_1m.csv")
     label_by_key = _unique_by_join_key(label_rows, artifact_name="anomaly_outcome_labels.csv")
     rows: list[ExpectedValueRow] = []
@@ -65,7 +72,7 @@ def build_expected_value_rows(
             label = label_by_key[key]
         except KeyError as exc:
             raise ExpectedValueInputError(f"prediction EV join key is missing from state or labels: {key}") from exc
-        rows.append(_build_row(state=state, label=label, prediction=prediction, config=cfg))
+        rows.append(_build_row(state=state, label=label, prediction=prediction, config=cfg, strategy_metadata=strategy.metadata))
     return tuple(rows)
 
 
@@ -148,13 +155,14 @@ def _build_row(
     label: AnomalyOutcomeLabelRow,
     prediction: OosPredictionRow,
     config: ExpectedValueConfig,
+    strategy_metadata: StrategyMetadata,
 ) -> ExpectedValueRow:
     _enforce_ev_input_temporal_contract(state=state, label=label, prediction=prediction)
     if label.core_atr_1440 is None:
         raise ExpectedValueInputError(f"core_atr_1440 is required for EV row {prediction.event_id}")
     entry_reference_price = state.current_close
-    stop_distance = label.k_fade * label.core_atr_1440
-    target_distance = label.k_continuation * label.core_atr_1440
+    stop_distance = strategy_metadata.stop_loss_atr_1440 * label.core_atr_1440
+    target_distance = strategy_metadata.take_profit_atr_1440 * label.core_atr_1440
     cost_penalty = entry_reference_price * ((2.0 * config.fee_bps + config.slippage_bps) / 10_000.0)
     p_follow_long = prediction.p_long_continuation
     p_adverse_long = prediction.p_short_fade

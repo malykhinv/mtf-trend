@@ -214,6 +214,7 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["trade_simulation_after_calibration_and_decision_timing"]["status"] == "PASS"
     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
+    assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
     with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:

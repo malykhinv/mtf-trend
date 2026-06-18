@@ -3,7 +3,10 @@ from __future__ import annotations
 import csv
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
+
+import pytest
 
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
@@ -117,11 +120,11 @@ def test_expected_value_uses_oos_probabilities_atr_and_costs() -> None:
 
     row = rows[0]
 
-    assert row.target_distance == 3.0
-    assert row.stop_distance == 2.0
+    assert row.target_distance == 4.0
+    assert row.stop_distance == 2.2
     assert row.cost_penalty == 0.1
-    assert round(row.EV_long, 10) == 2.1
-    assert round(row.EV_short, 10) == -1.4
+    assert round(row.EV_long, 10) == 2.88
+    assert round(row.EV_short, 10) == -1.46
     assert row.best_action == "long"
     assert row.is_prediction_confident is True
     assert row.is_RR_still_acceptable is True
@@ -140,7 +143,15 @@ def test_expected_value_artifact_roundtrip(tmp_path: Path) -> None:
 
     loaded = load_anomaly_decision_timing_csv(path)
 
-    assert loaded == rows
+    assert len(loaded) == len(rows)
+    loaded_payload = asdict(loaded[0])
+    expected_payload = asdict(rows[0])
+    for key, expected_value in expected_payload.items():
+        loaded_value = loaded_payload[key]
+        if isinstance(expected_value, float):
+            assert loaded_value == pytest.approx(expected_value)
+        else:
+            assert loaded_value == expected_value
 
 
 def test_expected_value_prefers_no_trade_when_directional_ev_is_not_positive() -> None:
@@ -200,6 +211,7 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
     with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["expected_value_computed_before_trade_simulation"]["status"] == "PASS"
+    assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
     with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:

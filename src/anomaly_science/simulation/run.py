@@ -145,6 +145,12 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int) -> lis
             message="if target and stop are both reachable in the same 1m candle, simulation exits at stop_loss",
             artifact="anomaly_trade_simulation.csv",
         ),
+        ProtocolAuditRow(
+            check_name="fixed_percent_stop_target_forbidden",
+            status=AuditStatus.PASS,
+            message="simulation consumes EV stop/target distances derived from StrategyMetadata ATR defaults and core_atr_1440; no fixed-percent universal stop/target path exists",
+            artifact="anomaly_trade_simulation.csv",
+        ),
     ]
     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_simulation", implemented=implemented_methodology_rows)
 

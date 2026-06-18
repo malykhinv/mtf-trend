@@ -24,6 +24,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
     "ATR_1d_asof_t_computed_from_closed_past_candles",
     "fixed_percent_labels_forbidden",
+    "fixed_percent_stop_target_forbidden",
     "intracandle_double_barrier_resolved_as_stop_loss_first",
     "relative_over_absolute_feature_contract_enforced",
     "custom_features_causality_gate_enforced",
@@ -100,12 +101,14 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     ),
     "mvp1_decision": (
         "expected_value_computed_before_trade_simulation",
+        "fixed_percent_stop_target_forbidden",
     ),
     "mvp1_simulation": (
         "trade_simulation_after_calibration_and_decision_timing",
         "pessimistic_entry_price_includes_slippage_penalty",
     "anti_pyramiding_one_open_position_per_symbol_strategy",
         "intracandle_double_barrier_resolved_as_stop_loss_first",
+        "fixed_percent_stop_target_forbidden",
     ),
     "mvp1_governance": (
         "final_holdout_not_accessed_before_protocol_freeze",
