@@ -246,3 +246,94 @@ def test_archive_file_index_roundtrip(tmp_path: Path) -> None:
     loaded = read_archive_file_index(path)
 
     assert loaded == index
+
+
+def test_archive_range_filter_skips_symbols_without_klines_in_requested_window(monkeypatch, tmp_path: Path) -> None:
+    from anomaly_science import binance_vision_cache as cache
+    from anomaly_science.binance_vision_cache import ArchiveFileIndex, filter_symbols_by_archive_range
+
+    indexes = {
+        "OLDUSDT": ArchiveFileIndex(
+            symbol="OLDUSDT",
+            labels={
+                ("monthly", "klines"): frozenset({"2022-12"}),
+                ("monthly", "metrics"): frozenset(),
+                ("monthly", "liquidationSnapshot"): frozenset(),
+                ("daily", "klines"): frozenset(),
+                ("daily", "metrics"): frozenset(),
+                ("daily", "liquidationSnapshot"): frozenset(),
+            },
+        ),
+        "LIVEUSDT": ArchiveFileIndex(
+            symbol="LIVEUSDT",
+            labels={
+                ("monthly", "klines"): frozenset({"2026-06"}),
+                ("monthly", "metrics"): frozenset(),
+                ("monthly", "liquidationSnapshot"): frozenset(),
+                ("daily", "klines"): frozenset(),
+                ("daily", "metrics"): frozenset(),
+                ("daily", "liquidationSnapshot"): frozenset(),
+            },
+        ),
+    }
+
+    def fake_load_or_build_archive_file_index(*, symbol: str, config: CacheConfig) -> ArchiveFileIndex:
+        return indexes[symbol]
+
+    monkeypatch.setattr(cache, "load_or_build_archive_file_index", fake_load_or_build_archive_file_index)
+
+    symbols, loaded_indexes, skipped = filter_symbols_by_archive_range(
+        symbols=["OLDUSDT", "LIVEUSDT"],
+        config=CacheConfig(out_dir=tmp_path),
+        start_date=date(2025, 6, 2),
+        end_date=date(2026, 6, 16),
+    )
+
+    assert symbols == ["LIVEUSDT"]
+    assert sorted(loaded_indexes) == ["LIVEUSDT"]
+    assert [(item.symbol, item.reason) for item in skipped] == [
+        ("OLDUSDT", "no_klines_archive_in_requested_range")
+    ]
+
+
+def test_symbol_completion_ledger_allows_final_parquet_to_replace_parts(tmp_path: Path) -> None:
+    from anomaly_science.binance_vision_cache import (
+        SymbolCompletionRecord,
+        read_symbol_completion_ledger,
+        remove_symbol_parts_dir,
+        symbol_completed_for_range,
+        write_symbol_completion_record,
+    )
+
+    completion_path = tmp_path / "metadata" / "symbol_completion.csv"
+    parts_dir = tmp_path / "parts" / "AAAUSDT"
+    parts_dir.mkdir(parents=True)
+    (parts_dir / "monthly_2026_06.parquet").write_bytes(b"part")
+    final_path = tmp_path / "enriched_1m" / "AAAUSDT.parquet"
+    final_path.parent.mkdir(parents=True)
+    final_path.write_bytes(b"final")
+
+    completions = {}
+    write_symbol_completion_record(
+        completion_path,
+        completions,
+        SymbolCompletionRecord(
+            symbol="AAAUSDT",
+            timeframe="enriched_1m",
+            start_date="2025-06-02",
+            end_date="2026-06-16",
+            rows_written=123,
+            blocks_written=2,
+            output_path=str(final_path),
+            parts_dir_removed=False,
+            completed_at="2026-06-18T00:00:00+00:00",
+        ),
+    )
+    loaded = read_symbol_completion_ledger(completion_path)
+
+    assert symbol_completed_for_range(loaded, "AAAUSDT", date(2025, 6, 2), date(2026, 6, 16))
+
+    remove_symbol_parts_dir(parts_dir)
+
+    assert final_path.exists()
+    assert not parts_dir.exists()

@@ -164,3 +164,19 @@ Intent:
 Validation for this proposed patch:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest -q tests/test_zip_project.py tests/test_binance_vision_cache.py`
+
+## perf: prune Binance Vision cache work by requested date range
+
+Status: PROPOSED; patch generated on top of `perf: remove Binance Vision cache per-block IO amplification`; GitHub head not checked in this environment.
+
+Intent:
+- Skip symbols whose Binance Vision kline archives do not intersect the requested cache date range.
+- Reuse the preloaded archive file index during per-symbol processing instead of rebuilding it after filtering.
+- Write `metadata/skipped_symbols.csv` and record skipped no-klines symbols in `manifest.json`.
+- Add a `symbol_completion.csv` ledger so a completed final per-symbol parquet can safely replace block parts on subsequent runs.
+- Remove `{out_dir}_parts/{symbol}` after final parquet compaction succeeds to keep SSD usage bounded.
+- Preserve block-level resume while a symbol is still in progress; parts are deleted only after final parquet and completion ledger are written.
+
+Validation for this proposed patch:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_binance_vision_cache.py tests/test_zip_project.py`

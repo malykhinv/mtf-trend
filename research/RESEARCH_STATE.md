@@ -22,8 +22,12 @@ Last local validation on 2026-06-18:
 - full MVP1 fixture pipeline through data audit, events, state, future, features, feature matrix, atlas, labels, prediction, and controls.
 
 
-Pending local patch from uploaded snapshot `project_20260618_115220.zip`:
+Pending local patches from uploaded snapshot `project_20260618_115220.zip`:
 - `perf: remove Binance Vision cache per-block IO amplification`
-- Fixes Binance Vision cache per-block ledger/disk-scan IO amplification.
-- Excludes top-level `tmp/` generated artifacts from project zip creation.
+  - Fixes Binance Vision cache per-block ledger/disk-scan IO amplification.
+  - Excludes top-level `tmp/` generated artifacts from project zip creation.
+- `perf: prune Binance Vision cache work by requested date range`
+  - Skips symbols without kline archives in the requested date range.
+  - Writes `metadata/skipped_symbols.csv`.
+  - Adds `metadata/symbol_completion.csv` and deletes completed per-symbol parts after final parquet compaction.
 - Patch status: PROPOSED until applied and verified locally.

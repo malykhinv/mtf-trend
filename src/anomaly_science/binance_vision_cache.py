@@ -144,6 +144,26 @@ LEDGER_FIELDNAMES = [
     "completed_at",
 ]
 
+COMPLETION_FIELDNAMES = [
+    "symbol",
+    "timeframe",
+    "start_date",
+    "end_date",
+    "rows_written",
+    "blocks_written",
+    "output_path",
+    "parts_dir_removed",
+    "completed_at",
+]
+
+SKIPPED_SYMBOL_FIELDNAMES = [
+    "symbol",
+    "start_date",
+    "end_date",
+    "reason",
+    "skipped_at",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class CacheConfig:
@@ -242,7 +262,30 @@ class BlockLedgerRecord:
     completed_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class SymbolCompletionRecord:
+    symbol: str
+    timeframe: str
+    start_date: str
+    end_date: str
+    rows_written: int
+    blocks_written: int
+    output_path: str
+    parts_dir_removed: bool
+    completed_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedSymbolRecord:
+    symbol: str
+    start_date: str
+    end_date: str
+    reason: str
+    skipped_at: str
+
+
 LedgerKey = tuple[str, str, str, str]
+CompletionKey = tuple[str, str, str, str]
 TIMEFRAME_NAME = "enriched_1m"
 
 
@@ -339,6 +382,17 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
     start = end - timedelta(days=config.days - 1)
     blocks = plan_blocks(start, end)
 
+    config.out_dir.mkdir(parents=True, exist_ok=True)
+    cache_parts_dir(config.out_dir).mkdir(parents=True, exist_ok=True)
+    metadata_dir = cache_metadata_dir(config.out_dir)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = metadata_dir / "block_ledger.csv"
+    completion_path = metadata_dir / "symbol_completion.csv"
+    skipped_symbols_path = metadata_dir / "skipped_symbols.csv"
+    ledger = read_block_ledger(ledger_path)
+    completions = read_symbol_completion_ledger(completion_path)
+    stats: list[SymbolStats] = []
+
     symbols = list(config.symbols) if config.symbols else discover_um_futures_symbols(config)
     symbols = sorted(dict.fromkeys(symbol.upper().strip() for symbol in symbols if symbol.strip()))
     if config.max_symbols is not None:
@@ -346,13 +400,26 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
     if not symbols:
         raise RuntimeError("No symbols to process. Discovery returned empty set and no --symbols were provided.")
 
-    config.out_dir.mkdir(parents=True, exist_ok=True)
-    cache_parts_dir(config.out_dir).mkdir(parents=True, exist_ok=True)
-    metadata_dir = cache_metadata_dir(config.out_dir)
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    ledger_path = metadata_dir / "block_ledger.csv"
-    ledger = read_block_ledger(ledger_path)
-    stats: list[SymbolStats] = []
+    archive_file_indexes: dict[str, ArchiveFileIndex] = {}
+    skipped_symbols: list[SkippedSymbolRecord] = []
+    if config.use_archive_file_index:
+        symbols, archive_file_indexes, skipped_symbols = filter_symbols_by_archive_range(
+            symbols=symbols,
+            config=config,
+            start_date=start,
+            end_date=end,
+        )
+        write_skipped_symbols(skipped_symbols_path, skipped_symbols)
+        if not symbols:
+            write_manifest(
+                metadata_dir / "manifest.json",
+                config=config,
+                stats=stats,
+                start_date=start,
+                end_date=end,
+                skipped_symbols=skipped_symbols,
+            )
+            return stats
 
     started_at = time.monotonic()
     completed_block_units = 0
@@ -402,11 +469,21 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
             end_date=end,
             ledger=ledger,
             ledger_path=ledger_path,
+            completions=completions,
+            completion_path=completion_path,
+            preloaded_archive_file_index=archive_file_indexes.get(symbol),
             progress_callback=on_block_progress,
         )
         stats.append(symbol_stats)
         write_stats(metadata_dir / "cache_stats.csv", stats)
-        write_manifest(metadata_dir / "manifest.json", config=config, stats=stats, start_date=start, end_date=end)
+        write_manifest(
+            metadata_dir / "manifest.json",
+            config=config,
+            stats=stats,
+            start_date=start,
+            end_date=end,
+            skipped_symbols=skipped_symbols,
+        )
     return stats
 
 
@@ -419,6 +496,9 @@ def build_symbol_cache(
     end_date: date,
     ledger: dict[LedgerKey, BlockLedgerRecord],
     ledger_path: Path,
+    completions: dict[CompletionKey, SymbolCompletionRecord],
+    completion_path: Path,
+    preloaded_archive_file_index: ArchiveFileIndex | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> SymbolStats:
     final_path = config.out_dir / f"{symbol}.parquet"
@@ -430,7 +510,20 @@ def build_symbol_cache(
         if symbol_parts_dir.exists():
             shutil.rmtree(symbol_parts_dir)
         remove_symbol_from_ledger(ledger, symbol)
+        remove_symbol_from_completion_ledger(completions, symbol)
         write_block_ledger(ledger_path, ledger)
+        write_symbol_completion_ledger(completion_path, completions)
+    elif final_path.exists() and symbol_completed_for_range(completions, symbol, start_date, end_date):
+        remove_symbol_parts_dir(symbol_parts_dir)
+        return SymbolStats(
+            symbol=symbol,
+            rows_written=-1,
+            blocks_written=0,
+            missing_kline_blocks=0,
+            missing_metric_blocks=0,
+            missing_liquidation_blocks=0,
+            output_path=final_path,
+        )
     elif final_path.exists() and not symbol_has_ledger_rows(ledger, symbol):
         # Backward-compatible path for old monolithic cache files built before block-level resume existed.
         return SymbolStats(
@@ -453,7 +546,7 @@ def build_symbol_cache(
     symbol_blocks_total = max(1, len(blocks))
     new_or_changed_parts = False
     completed_part_paths: list[Path] = []
-    archive_file_index: ArchiveFileIndex | None = None
+    archive_file_index: ArchiveFileIndex | None = preloaded_archive_file_index
 
     def get_archive_file_index() -> ArchiveFileIndex | None:
         nonlocal archive_file_index
@@ -674,6 +767,24 @@ def build_symbol_cache(
 
     if new_or_changed_parts or not final_path.exists() or config.overwrite:
         compact_symbol_parts(part_paths=unique_part_paths, final_path=final_path, compression=config.compression)
+
+    if final_path.exists():
+        remove_symbol_parts_dir(symbol_parts_dir)
+        write_symbol_completion_record(
+            completion_path,
+            completions,
+            SymbolCompletionRecord(
+                symbol=symbol,
+                timeframe=TIMEFRAME_NAME,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                rows_written=rows_written,
+                blocks_written=blocks_written,
+                output_path=str(final_path),
+                parts_dir_removed=not symbol_parts_dir.exists(),
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
 
     return SymbolStats(
         symbol=symbol,
@@ -1350,6 +1461,57 @@ def extract_archive_label_from_key(*, symbol: str, dataset: ArchiveDataset, key:
     return match.group("label") if match else ""
 
 
+def filter_symbols_by_archive_range(
+    *,
+    symbols: list[str],
+    config: CacheConfig,
+    start_date: date,
+    end_date: date,
+) -> tuple[list[str], dict[str, ArchiveFileIndex], list[SkippedSymbolRecord]]:
+    eligible: list[str] = []
+    indexes: dict[str, ArchiveFileIndex] = {}
+    skipped: list[SkippedSymbolRecord] = []
+    skipped_at = datetime.now(timezone.utc).isoformat()
+    for symbol in symbols:
+        index = load_or_build_archive_file_index(symbol=symbol, config=config)
+        if archive_index_has_klines_in_range(index=index, start_date=start_date, end_date=end_date):
+            eligible.append(symbol)
+            indexes[symbol] = index
+        else:
+            skipped.append(
+                SkippedSymbolRecord(
+                    symbol=symbol,
+                    start_date=start_date.isoformat(),
+                    end_date=end_date.isoformat(),
+                    reason="no_klines_archive_in_requested_range",
+                    skipped_at=skipped_at,
+                )
+            )
+    return eligible, indexes, skipped
+
+
+def archive_index_has_klines_in_range(*, index: ArchiveFileIndex, start_date: date, end_date: date) -> bool:
+    for period in ("monthly", "daily"):
+        period_typed: ArchivePeriod = period  # type: ignore[assignment]
+        for label in index.labels.get((period_typed, "klines"), frozenset()):
+            if archive_label_overlaps_range(period=period_typed, label=label, start_date=start_date, end_date=end_date):
+                return True
+    return False
+
+
+def archive_label_overlaps_range(*, period: ArchivePeriod, label: str, start_date: date, end_date: date) -> bool:
+    try:
+        if period == "monthly":
+            block_start = datetime.strptime(label, "%Y-%m").date().replace(day=1)
+            block_end = month_last_day(block_start)
+        else:
+            block_start = datetime.strptime(label, "%Y-%m-%d").date()
+            block_end = block_start
+    except ValueError:
+        return False
+    return block_start <= end_date and block_end >= start_date
+
+
 def discover_um_futures_symbols(config: CacheConfig) -> list[str]:
     prefixes = set()
     for root_prefix in ("data/futures/um/monthly/klines/", "data/futures/um/daily/klines/"):
@@ -1589,6 +1751,128 @@ def write_block_ledger(path: Path, ledger: dict[LedgerKey, BlockLedgerRecord]) -
     os.replace(tmp_path, path)
 
 
+def completion_key(record: SymbolCompletionRecord) -> CompletionKey:
+    return (record.symbol, record.timeframe, record.start_date, record.end_date)
+
+
+def symbol_completion_key(symbol: str, start_date: date, end_date: date) -> CompletionKey:
+    return (symbol.upper(), TIMEFRAME_NAME, start_date.isoformat(), end_date.isoformat())
+
+
+def read_symbol_completion_ledger(path: Path) -> dict[CompletionKey, SymbolCompletionRecord]:
+    if not path.exists():
+        return {}
+    records: dict[CompletionKey, SymbolCompletionRecord] = {}
+    with path.open("r", encoding="utf-8", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        for row in reader:
+            symbol = (row.get("symbol") or "").strip().upper()
+            timeframe = row.get("timeframe") or TIMEFRAME_NAME
+            start_date_raw = row.get("start_date") or ""
+            end_date_raw = row.get("end_date") or ""
+            if not symbol or not start_date_raw or not end_date_raw:
+                continue
+            record = SymbolCompletionRecord(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_date=start_date_raw,
+                end_date=end_date_raw,
+                rows_written=int(row.get("rows_written") or 0),
+                blocks_written=int(row.get("blocks_written") or 0),
+                output_path=row.get("output_path") or "",
+                parts_dir_removed=(row.get("parts_dir_removed") or "").strip().lower() == "true",
+                completed_at=row.get("completed_at") or "",
+            )
+            records[completion_key(record)] = record
+    return records
+
+
+def symbol_completed_for_range(
+    completions: dict[CompletionKey, SymbolCompletionRecord],
+    symbol: str,
+    start_date: date,
+    end_date: date,
+) -> bool:
+    record = completions.get(symbol_completion_key(symbol, start_date, end_date))
+    return record is not None and record.rows_written > 0
+
+
+def remove_symbol_from_completion_ledger(completions: dict[CompletionKey, SymbolCompletionRecord], symbol: str) -> None:
+    normalized = symbol.upper()
+    for key in [item for item in completions if item[0] == normalized]:
+        del completions[key]
+
+
+def symbol_completion_row(record: SymbolCompletionRecord) -> dict[str, object]:
+    return {
+        "symbol": record.symbol,
+        "timeframe": record.timeframe,
+        "start_date": record.start_date,
+        "end_date": record.end_date,
+        "rows_written": record.rows_written,
+        "blocks_written": record.blocks_written,
+        "output_path": record.output_path,
+        "parts_dir_removed": str(record.parts_dir_removed).lower(),
+        "completed_at": record.completed_at,
+    }
+
+
+def append_symbol_completion_record(path: Path, record: SymbolCompletionRecord) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    needs_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", encoding="utf-8", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=COMPLETION_FIELDNAMES)
+        if needs_header:
+            writer.writeheader()
+        writer.writerow(symbol_completion_row(record))
+
+
+def write_symbol_completion_record(
+    path: Path,
+    completions: dict[CompletionKey, SymbolCompletionRecord],
+    record: SymbolCompletionRecord,
+) -> None:
+    completions[completion_key(record)] = record
+    append_symbol_completion_record(path, record)
+
+
+def write_symbol_completion_ledger(path: Path, completions: dict[CompletionKey, SymbolCompletionRecord]) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=COMPLETION_FIELDNAMES)
+        writer.writeheader()
+        for record in sorted(completions.values(), key=lambda item: (item.symbol, item.start_date, item.end_date)):
+            writer.writerow(symbol_completion_row(record))
+    os.replace(tmp_path, path)
+
+
+def remove_symbol_parts_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def skipped_symbol_row(record: SkippedSymbolRecord) -> dict[str, object]:
+    return {
+        "symbol": record.symbol,
+        "start_date": record.start_date,
+        "end_date": record.end_date,
+        "reason": record.reason,
+        "skipped_at": record.skipped_at,
+    }
+
+
+def write_skipped_symbols(path: Path, skipped: list[SkippedSymbolRecord]) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=SKIPPED_SYMBOL_FIELDNAMES)
+        writer.writeheader()
+        for record in sorted(skipped, key=lambda item: item.symbol):
+            writer.writerow(skipped_symbol_row(record))
+    os.replace(tmp_path, path)
+
+
 def write_stats(path: Path, stats: list[SymbolStats]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1628,6 +1912,7 @@ def write_manifest(
     stats: list[SymbolStats],
     start_date: date,
     end_date: date,
+    skipped_symbols: list[SkippedSymbolRecord],
 ) -> None:
     payload = {
         "source": "binance_vision",
@@ -1637,6 +1922,8 @@ def write_manifest(
         "parts_dir": str(cache_parts_dir(config.out_dir)),
         "metadata_dir": str(path.parent),
         "block_ledger": str(path.parent / "block_ledger.csv"),
+        "symbol_completion_ledger": str(path.parent / "symbol_completion.csv"),
+        "skipped_symbols": str(path.parent / "skipped_symbols.csv"),
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "days": config.days,
@@ -1644,6 +1931,7 @@ def write_manifest(
         "symbols_seen": [item.symbol for item in stats],
         "symbols_written": [item.symbol for item in stats if item.rows_written > 0],
         "symbols_skipped_existing": [item.symbol for item in stats if item.rows_written == -1],
+        "symbols_skipped_no_klines_in_range": [item.symbol for item in skipped_symbols],
         "rows_written": sum(max(0, item.rows_written) for item in stats),
         "blocks_written": sum(item.blocks_written for item in stats),
         "compression": config.compression,
