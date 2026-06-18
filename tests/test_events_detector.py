@@ -173,3 +173,7 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
         "excluded_by_data_quality_gate",
         "detector_version",
     ]
+
+    with (output_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
+    assert audit_by_name["base_strategy_contract_valid"]["status"] == "PASS"

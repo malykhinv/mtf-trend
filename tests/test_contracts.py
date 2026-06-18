@@ -373,6 +373,49 @@ def test_methodology_v2_audit_rows_emit_not_implemented_for_missing_checks() -> 
     assert by_name["protocol_interpretation_gate"].status == AuditStatus.WARN
 
 
+def test_methodology_v2_audit_rows_are_stage_scoped_for_known_stages() -> None:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+    from anomaly_science.contracts.audit import ProtocolAuditRow
+
+    rows = build_methodology_v2_audit_rows(
+        stage="mvp1_future",
+        implemented=[
+            ProtocolAuditRow(
+                check_name="fixed_percent_labels_forbidden",
+                status=AuditStatus.PASS,
+                message="fixed-percent labels are not emitted",
+            )
+        ],
+    )
+
+    by_name = {row.check_name: row for row in rows}
+    assert tuple(name for name in by_name if name != "protocol_interpretation_gate") == (
+        "ATR_1d_asof_t_computed_from_closed_past_candles",
+        "fixed_percent_labels_forbidden",
+        "intracandle_double_barrier_resolved_as_stop_loss_first",
+    )
+    assert by_name["fixed_percent_labels_forbidden"].status == AuditStatus.PASS
+    assert "weekly_walk_forward_heavy_models_enforced" not in by_name
+    assert by_name["protocol_interpretation_gate"].status == AuditStatus.WARN
+
+
+def test_methodology_v2_audit_rejects_out_of_scope_known_check() -> None:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+    from anomaly_science.contracts.audit import ProtocolAuditRow
+
+    with pytest.raises(ValueError, match="not required for stage mvp1_future"):
+        build_methodology_v2_audit_rows(
+            stage="mvp1_future",
+            implemented=[
+                ProtocolAuditRow(
+                    check_name="weekly_walk_forward_heavy_models_enforced",
+                    status=AuditStatus.PASS,
+                    message="wrong stage",
+                )
+            ],
+        )
+
+
 def test_methodology_v2_audit_rejects_unknown_check_name() -> None:
     from anomaly_science.audit import build_methodology_v2_audit_rows
     from anomaly_science.contracts.audit import ProtocolAuditRow

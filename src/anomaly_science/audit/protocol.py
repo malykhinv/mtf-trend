@@ -35,6 +35,55 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
 METHODOLOGY_V2_CHECK_SET = frozenset(METHODOLOGY_V2_REQUIRED_CHECKS)
 
 
+METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
+    "mvp1_data_audit": (
+        "technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
+    ),
+    "mvp1_events": (
+        "technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
+        "technical_noise_shock_excluded_from_broad_detector",
+        "base_strategy_contract_valid",
+    ),
+    "mvp1_state": (
+        "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+    ),
+    "mvp1_future": (
+        "ATR_1d_asof_t_computed_from_closed_past_candles",
+        "fixed_percent_labels_forbidden",
+        "intracandle_double_barrier_resolved_as_stop_loss_first",
+    ),
+    "mvp1_feature_catalog": (
+        "relative_over_absolute_feature_contract_enforced",
+    ),
+    "mvp1_feature_matrix": (
+        "ATR_1d_asof_t_computed_from_closed_past_candles",
+        "relative_over_absolute_feature_contract_enforced",
+        "market_shock_id_assigned",
+        "simultaneous_anomalies_count_1m_point_in_time",
+    ),
+    "mvp1_atlas": (
+        "market_shock_id_assigned",
+    ),
+    "mvp1_labels": (
+        "ATR_1d_asof_t_computed_from_closed_past_candles",
+        "fixed_percent_labels_forbidden",
+        "intracandle_double_barrier_resolved_as_stop_loss_first",
+    ),
+    "mvp1_prediction": (
+        "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+        "fixed_percent_labels_forbidden",
+        "purge_rule_snapshot_time_plus_Hmax_before_test_start",
+        "weekly_walk_forward_heavy_models_enforced",
+        "frozen_weekly_model_used_for_daily_oos",
+    ),
+    "mvp1_controls": (
+        "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+        "fixed_percent_labels_forbidden",
+        "purge_rule_snapshot_time_plus_Hmax_before_test_start",
+    ),
+}
+
+
 def audit_temporal_contract(rows: list[TemporalAuditInput]) -> list[ProtocolAuditRow]:
     """Audit no-lookahead timing for a collection of rows."""
     results: list[ProtocolAuditRow] = []
@@ -68,26 +117,37 @@ def build_methodology_v2_audit_rows(
     *,
     stage: str,
     implemented: Iterable[ProtocolAuditRow] = (),
+    required_checks: Iterable[str] | None = None,
 ) -> list[ProtocolAuditRow]:
-    """Return one explicit methodology-v2 audit row for every required invariant.
+    """Return explicit methodology-v2 audit rows for checks relevant to a stage.
 
-    Stages may mark only checks they truly enforce as PASS/FAIL/WARN. Every other
-    required methodology-v2 invariant is emitted as NOT_IMPLEMENTED, so a run
-    cannot look protocol-complete simply because a check is absent.
+    The methodology has one global check catalog, but individual stages own only
+    the subset they can prove directly. Unknown stages default to the full set so
+    new stages cannot accidentally hide missing protocol gates.
     """
     if not stage:
         raise ValueError("stage is required")
+    stage_required_checks = tuple(
+        required_checks
+        if required_checks is not None
+        else METHODOLOGY_V2_STAGE_REQUIRED_CHECKS.get(stage, METHODOLOGY_V2_REQUIRED_CHECKS)
+    )
+    for check_name in stage_required_checks:
+        if check_name not in METHODOLOGY_V2_CHECK_SET:
+            raise ValueError(f"unknown methodology-v2 check: {check_name}")
 
     implemented_by_name: dict[str, ProtocolAuditRow] = {}
     for row in implemented:
         if row.check_name not in METHODOLOGY_V2_CHECK_SET:
             raise ValueError(f"unknown methodology-v2 check: {row.check_name}")
+        if row.check_name not in stage_required_checks:
+            raise ValueError(f"methodology-v2 check {row.check_name} is not required for stage {stage}")
         if row.check_name in implemented_by_name:
             raise ValueError(f"duplicate methodology-v2 check: {row.check_name}")
         implemented_by_name[row.check_name] = row
 
     rows: list[ProtocolAuditRow] = []
-    for check_name in METHODOLOGY_V2_REQUIRED_CHECKS:
+    for check_name in stage_required_checks:
         if check_name in implemented_by_name:
             rows.append(implemented_by_name[check_name])
             continue

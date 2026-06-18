@@ -2110,10 +2110,12 @@ def filter_symbols_by_archive_range(
     indexes: dict[str, ArchiveFileIndex] = {}
     skipped: list[SkippedSymbolRecord] = []
     skipped_at = datetime.now(timezone.utc).isoformat()
-    if run_klines_index is None:
-        run_klines_index = load_or_build_run_klines_archive_index(config=config)
     for symbol in symbols:
-        index = archive_index_from_run_klines_index(symbol=symbol, run_index=run_klines_index)
+        index = (
+            load_or_build_archive_file_index(symbol=symbol, config=config)
+            if run_klines_index is None
+            else archive_index_from_run_klines_index(symbol=symbol, run_index=run_klines_index)
+        )
         if archive_index_has_klines_in_range(index=index, start_date=start_date, end_date=end_date):
             eligible.append(symbol)
             indexes[symbol] = index

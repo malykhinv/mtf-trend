@@ -167,7 +167,22 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int, featu
             message="mvp1 atlas uses anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
-    return base_rows + build_methodology_v2_audit_rows(stage="mvp1_atlas")
+    implemented_methodology_rows = [
+        ProtocolAuditRow(
+            check_name="market_shock_id_assigned",
+            status=AuditStatus.PASS if feature_matrix_joined else AuditStatus.NOT_IMPLEMENTED,
+            message=(
+                f"atlas joined anomaly_feature_matrix.csv market_shock_id/systemic_cluster_regime and wrote {market_shock_group_count} market-shock groups"
+                if feature_matrix_joined
+                else "feature matrix was not provided; atlas cannot prove point-in-time market_shock_id assignment"
+            ),
+            artifact="anomaly_market_shock_groups.csv",
+        )
+    ]
+    return base_rows + build_methodology_v2_audit_rows(
+        stage="mvp1_atlas",
+        implemented=implemented_methodology_rows,
+    )
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:
