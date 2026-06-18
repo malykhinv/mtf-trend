@@ -130,6 +130,30 @@ def test_trigger_frame_requires_consistent_minutes_since_start() -> None:
         validate_trigger_frame(frame)
 
 
+def test_trigger_frame_rejects_event_id_collision_across_lifecycle_identity() -> None:
+    frame = pl.DataFrame(
+        {
+            "symbol": ["AAA", "BBB"],
+            "state_time": [_dt(BASE_TS), _dt(BASE_TS)],
+            "event_start_time": [_dt(BASE_TS), _dt(BASE_TS)],
+            "minutes_since_start": [0, 0],
+            "is_trigger": [True, True],
+            "event_id": ["evt", "evt"],
+        },
+        schema={
+            "symbol": pl.String,
+            "state_time": pl.Datetime("ms", "UTC"),
+            "event_start_time": pl.Datetime("ms", "UTC"),
+            "minutes_since_start": pl.Int64,
+            "is_trigger": pl.Boolean,
+            "event_id": pl.String,
+        },
+    )
+
+    with pytest.raises(StrategyContractError, match="event_id collision"):
+        validate_trigger_frame(frame)
+
+
 def test_strategy_registry_exposes_broad_anomaly_by_contract_name() -> None:
     entries = available_strategies()
     strategy = get_strategy("broad_anomaly_v1_h30")

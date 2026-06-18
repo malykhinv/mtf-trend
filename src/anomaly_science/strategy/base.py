@@ -148,6 +148,7 @@ def validate_trigger_frame(trigger_frame: pl.DataFrame) -> None:
     if invalid_time_order.height:
         raise StrategyContractError("trigger frame event_start_time must be <= state_time")
     _validate_minutes_since_start(trigger_frame)
+    _validate_event_id_collision(trigger_frame)
 
 
 def validate_point_in_time_feature_equivalence(
@@ -226,6 +227,22 @@ def _validate_minutes_since_start(trigger_frame: pl.DataFrame) -> None:
             )
         if minutes_since_start < 0:
             raise StrategyContractError("trigger frame minutes_since_start must be non-negative")
+
+
+def _validate_event_id_collision(trigger_frame: pl.DataFrame) -> None:
+    seen: dict[str, tuple[str, datetime]] = {}
+    for event_id, symbol, event_start_time in zip(
+        trigger_frame["event_id"].to_list(),
+        trigger_frame["symbol"].to_list(),
+        trigger_frame["event_start_time"].to_list(),
+    ):
+        identity = (symbol, event_start_time)
+        previous = seen.get(event_id)
+        if previous is not None and previous != identity:
+            raise StrategyContractError(
+                "trigger frame event_id collision across different symbol/event_start_time is forbidden"
+            )
+        seen[event_id] = identity
 
 
 def _is_datetime_ms(dtype: object) -> bool:
