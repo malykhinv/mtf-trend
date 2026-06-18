@@ -101,4 +101,31 @@ def build_methodology_v2_audit_rows(
                 ),
             )
         )
+    rows.append(build_protocol_gate_row(stage=stage, rows=rows))
     return rows
+
+
+def build_protocol_gate_row(*, stage: str, rows: Iterable[ProtocolAuditRow]) -> ProtocolAuditRow:
+    items = tuple(rows)
+    fail_count = sum(1 for row in items if row.status is AuditStatus.FAIL)
+    not_implemented_count = sum(1 for row in items if row.status is AuditStatus.NOT_IMPLEMENTED)
+    if fail_count:
+        return ProtocolAuditRow(
+            check_name="protocol_interpretation_gate",
+            status=AuditStatus.FAIL,
+            message=f"{stage} has {fail_count} FAIL audit rows; downstream results must not be interpreted",
+        )
+    if not_implemented_count:
+        return ProtocolAuditRow(
+            check_name="protocol_interpretation_gate",
+            status=AuditStatus.WARN,
+            message=(
+                f"{stage} has {not_implemented_count} NOT_IMPLEMENTED methodology rows; "
+                "results are valid only for the implemented MVP scope"
+            ),
+        )
+    return ProtocolAuditRow(
+        check_name="protocol_interpretation_gate",
+        status=AuditStatus.PASS,
+        message=f"{stage} has no FAIL or NOT_IMPLEMENTED methodology rows",
+    )

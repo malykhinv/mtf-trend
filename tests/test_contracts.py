@@ -366,10 +366,11 @@ def test_methodology_v2_audit_rows_emit_not_implemented_for_missing_checks() -> 
     )
 
     by_name = {row.check_name: row for row in rows}
-    assert tuple(by_name) == METHODOLOGY_V2_REQUIRED_CHECKS
+    assert tuple(name for name in by_name if name != "protocol_interpretation_gate") == METHODOLOGY_V2_REQUIRED_CHECKS
     assert by_name["fixed_percent_labels_forbidden"].status == AuditStatus.PASS
     assert by_name["weekly_walk_forward_heavy_models_enforced"].status == AuditStatus.NOT_IMPLEMENTED
     assert "unit_test_stage" in by_name["weekly_walk_forward_heavy_models_enforced"].message
+    assert by_name["protocol_interpretation_gate"].status == AuditStatus.WARN
 
 
 def test_methodology_v2_audit_rejects_unknown_check_name() -> None:
