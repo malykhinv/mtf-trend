@@ -306,6 +306,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert (out_dir / "anomaly_prediction_metrics.csv").is_file()
     assert (out_dir / "strategy_model_metadata.csv").is_file()
     assert (out_dir / "strategy_feature_importance.csv").is_file()
+    assert (out_dir / "strategy_model_training_diagnostics.csv").is_file()
     assert (out_dir / "anomaly_protocol_audit.csv").is_file()
     assert (out_dir / "anomaly_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
@@ -335,3 +336,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
         importance_rows = list(csv.DictReader(file_obj))
     assert {row["feature_name"] for row in importance_rows} >= {"minutes_since_detection", "current_return_from_start"}
     assert "feature_matrix.volume_zscore" in {row["feature_name"] for row in importance_rows}
+
+    with (out_dir / "strategy_model_training_diagnostics.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        diagnostic_rows = list(csv.DictReader(file_obj))
+    assert any(row["status"] == "TRAINED" and row["reason"] == "trained" for row in diagnostic_rows)

@@ -354,6 +354,27 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         ),
         description="CatBoost feature importance by frozen weekly model.",
     ),
+    "strategy_model_training_diagnostics.csv": ArtifactSchema(
+        name="strategy_model_training_diagnostics.csv",
+        stage="mvp1_prediction",
+        required_columns=(
+            "prediction_version",
+            "model_key",
+            "test_week",
+            "weekly_model_freeze_time_ms",
+            "train_cutoff_time_ms",
+            "train_row_count",
+            "fit_row_count",
+            "validation_row_count",
+            "calibration_row_count",
+            "fit_class_count",
+            "validation_class_count",
+            "calibration_class_count",
+            "status",
+            "reason",
+        ),
+        description="Weekly model training diagnostics and explicit skip reasons for non-silent empty OOS output.",
+    ),
 
     "anomaly_decision_timing.csv": ArtifactSchema(
         name="anomaly_decision_timing.csv",

@@ -178,6 +178,49 @@ class ModelMetadataRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelTrainingDiagnosticRow:
+    prediction_version: str
+    model_key: str
+    test_week: str
+    weekly_model_freeze_time_ms: int
+    train_cutoff_time_ms: int
+    train_row_count: int
+    fit_row_count: int
+    validation_row_count: int
+    calibration_row_count: int
+    fit_class_count: int
+    validation_class_count: int
+    calibration_class_count: int
+    status: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.prediction_version:
+            raise MarketDataContractError("prediction_version is required")
+        if not self.model_key:
+            raise MarketDataContractError("model_key is required")
+        if not self.test_week:
+            raise MarketDataContractError("test_week is required")
+        validate_timestamp_ms(self.weekly_model_freeze_time_ms, field_name="weekly_model_freeze_time_ms")
+        validate_timestamp_ms(self.train_cutoff_time_ms, field_name="train_cutoff_time_ms")
+        for field_name in (
+            "train_row_count",
+            "fit_row_count",
+            "validation_row_count",
+            "calibration_row_count",
+            "fit_class_count",
+            "validation_class_count",
+            "calibration_class_count",
+        ):
+            if getattr(self, field_name) < 0:
+                raise MarketDataContractError(f"{field_name} must be non-negative")
+        if self.status not in {"TRAINED", "SKIPPED"}:
+            raise MarketDataContractError("model training diagnostic status must be TRAINED or SKIPPED")
+        if not self.reason:
+            raise MarketDataContractError("model training diagnostic reason is required")
+
+
+@dataclass(frozen=True, slots=True)
 class FeatureImportanceRow:
     prediction_version: str
     model_key: str

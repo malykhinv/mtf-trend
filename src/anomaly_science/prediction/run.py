@@ -16,6 +16,7 @@ from anomaly_science.prediction.builder import (
     feature_importance_rows_to_artifact,
     load_prediction_inputs,
     model_metadata_rows_to_artifact,
+    model_training_diagnostic_rows_to_artifact,
     oos_prediction_rows_to_artifact,
     prediction_metric_rows_to_artifact,
 )
@@ -95,6 +96,13 @@ def run_mvp1_prediction(
             output_path / "strategy_feature_importance.csv",
             feature_importance_rows_to_artifact(prediction_result.feature_importance),
             get_artifact_schema("strategy_feature_importance.csv"),
+        )
+    )
+    written.append(
+        write_csv_artifact(
+            output_path / "strategy_model_training_diagnostics.csv",
+            model_training_diagnostic_rows_to_artifact(prediction_result.model_training_diagnostics),
+            get_artifact_schema("strategy_model_training_diagnostics.csv"),
         )
     )
     written.extend(

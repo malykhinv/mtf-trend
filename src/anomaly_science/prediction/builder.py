@@ -22,6 +22,7 @@ from anomaly_science.contracts.prediction import (
     CalibrationRow,
     FeatureImportanceRow,
     ModelMetadataRow,
+    ModelTrainingDiagnosticRow,
     OosPredictionRow,
     PredictionMetricRow,
 )
@@ -69,6 +70,7 @@ class WalkForwardPredictionResult:
     predictions: tuple[OosPredictionRow, ...]
     model_metadata: tuple[ModelMetadataRow, ...]
     feature_importance: tuple[FeatureImportanceRow, ...]
+    model_training_diagnostics: tuple[ModelTrainingDiagnosticRow, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,17 +175,28 @@ def build_walk_forward_prediction_result(
     predictions: list[OosPredictionRow] = []
     metadata_rows: list[ModelMetadataRow] = []
     importance_rows: list[FeatureImportanceRow] = []
+    diagnostic_rows: list[ModelTrainingDiagnosticRow] = []
     for test_week in sorted(rows_by_test_week):
         weekly_model_freeze_time_ms = _week_start_ms(test_week)
         train_cutoff_time_ms = weekly_model_freeze_time_ms - cfg.purge_horizon_minutes * ONE_MINUTE_MS
         train_rows = [row for row in usable_rows if row.state.snapshot_time_ms <= train_cutoff_time_ms]
-        if len(train_rows) < cfg.min_train_rows:
+        weekly_model_prefix = f"weekly_freeze={test_week}:{weekly_model_freeze_time_ms}"
+        frozen_model_key = f"{weekly_model_prefix}|catboost_isotonic"
+        diagnostic = _weekly_training_diagnostic(
+            rows=train_rows,
+            config=cfg,
+            prediction_version=cfg.prediction_version,
+            model_key=frozen_model_key,
+            test_week=test_week,
+            weekly_model_freeze_time_ms=weekly_model_freeze_time_ms,
+            train_cutoff_time_ms=train_cutoff_time_ms,
+        )
+        diagnostic_rows.append(diagnostic)
+        if diagnostic.status != "TRAINED":
             continue
         model = _CatBoostIsotonicModel.fit(rows=train_rows, config=cfg)
         if model is None:
             continue
-        weekly_model_prefix = f"weekly_freeze={test_week}:{weekly_model_freeze_time_ms}"
-        frozen_model_key = f"{weekly_model_prefix}|catboost_isotonic"
         metadata_rows.append(
             model.metadata_row(
                 prediction_version=cfg.prediction_version,
@@ -238,6 +251,7 @@ def build_walk_forward_prediction_result(
         predictions=tuple(predictions),
         model_metadata=tuple(metadata_rows),
         feature_importance=tuple(importance_rows),
+        model_training_diagnostics=tuple(diagnostic_rows),
     )
 
 
@@ -355,6 +369,10 @@ def model_metadata_rows_to_artifact(rows: Sequence[ModelMetadataRow]) -> list[di
 
 
 def feature_importance_rows_to_artifact(rows: Sequence[FeatureImportanceRow]) -> list[dict[str, object]]:
+    return [asdict(row) for row in rows]
+
+
+def model_training_diagnostic_rows_to_artifact(rows: Sequence[ModelTrainingDiagnosticRow]) -> list[dict[str, object]]:
     return [asdict(row) for row in rows]
 
 
@@ -714,6 +732,62 @@ def _train_validation_calibration_split(
     second_cut = max(first_cut + 1, int(len(rows) * 0.80))
     second_cut = min(second_cut, len(rows) - 1)
     return tuple(rows[:first_cut]), tuple(rows[first_cut:second_cut]), tuple(rows[second_cut:])
+
+
+def _weekly_training_diagnostic(
+    *,
+    rows: Sequence[PredictionInputRow],
+    config: WalkForwardPredictionConfig,
+    prediction_version: str,
+    model_key: str,
+    test_week: str,
+    weekly_model_freeze_time_ms: int,
+    train_cutoff_time_ms: int,
+) -> ModelTrainingDiagnosticRow:
+    fit_rows: tuple[PredictionInputRow, ...] = ()
+    validation_rows: tuple[PredictionInputRow, ...] = ()
+    calibration_rows: tuple[PredictionInputRow, ...] = ()
+    fit_targets: list[str] = []
+    validation_targets: list[str] = []
+    calibration_targets: list[str] = []
+    reason = "trained"
+    status = "TRAINED"
+    if len(rows) < config.min_train_rows:
+        status = "SKIPPED"
+        reason = "insufficient_train_rows"
+    else:
+        fit_rows, validation_rows, calibration_rows = _train_validation_calibration_split(rows)
+        fit_targets = _targets(fit_rows, config)
+        validation_targets = _targets(validation_rows, config)
+        calibration_targets = _targets(calibration_rows, config)
+        if len(set(fit_targets)) < 2:
+            status = "SKIPPED"
+            reason = "fit_split_has_less_than_two_classes"
+        elif len(set(validation_targets)) < 2:
+            status = "SKIPPED"
+            reason = "validation_split_has_less_than_two_classes"
+        elif len(calibration_rows) < len(PREDICTED_SCENARIOS):
+            status = "SKIPPED"
+            reason = "calibration_split_has_too_few_rows"
+        elif set(calibration_targets) != set(PREDICTED_SCENARIOS):
+            status = "SKIPPED"
+            reason = "calibration_split_missing_target_class"
+    return ModelTrainingDiagnosticRow(
+        prediction_version=prediction_version,
+        model_key=model_key,
+        test_week=test_week,
+        weekly_model_freeze_time_ms=weekly_model_freeze_time_ms,
+        train_cutoff_time_ms=train_cutoff_time_ms,
+        train_row_count=len(rows),
+        fit_row_count=len(fit_rows),
+        validation_row_count=len(validation_rows),
+        calibration_row_count=len(calibration_rows),
+        fit_class_count=len(set(fit_targets)),
+        validation_class_count=len(set(validation_targets)),
+        calibration_class_count=len(set(calibration_targets)),
+        status=status,
+        reason=reason,
+    )
 
 
 def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionConfig) -> list[str]:
