@@ -936,6 +936,8 @@ def read_klines(zip_bytes: bytes):
         pl.col("low").cast(pl.Float64, strict=False),
         pl.col("close").cast(pl.Float64, strict=False),
         pl.col("volume").cast(pl.Float64, strict=False),
+        pl.col("quote_volume").cast(pl.Float64, strict=False),
+        pl.col("trade_count").cast(pl.Float64, strict=False),
         pl.col(taker_buy_base_column).cast(pl.Float64, strict=False).alias("taker_buy_base_volume"),
         pl.col(taker_buy_quote_column).cast(pl.Float64, strict=False).alias("taker_buy_quote_volume"),
     ).drop_nulls(subset=["timestamp", "open", "high", "low", "close"])
@@ -1029,6 +1031,8 @@ def empty_output_frame():
             "low": pl.Float32,
             "close": pl.Float32,
             "volume": pl.Float32,
+            "quote_volume": pl.Float32,
+            "trade_count": pl.Float32,
             "taker_buy_base_volume": pl.Float32,
             "taker_buy_quote_volume": pl.Float32,
             "open_interest": pl.Float32,
