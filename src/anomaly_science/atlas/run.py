@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.atlas.builder import (
     OUTCOME_COORDINATE_ATR,
     build_atlas_artifacts_from_inputs,
@@ -193,7 +193,7 @@ def _run_config_rows(
         RunConfigRow(key="future_path", value=str(future_path), source="cli"),
         RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
+        *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_atlas", source="runtime"),
         RunConfigRow(key="atlas_version", value=config.atlas_version, source="runtime"),
         RunConfigRow(key="outcome_coordinate", value=OUTCOME_COORDINATE_ATR, source="runtime"),

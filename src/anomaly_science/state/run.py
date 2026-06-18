@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
@@ -135,7 +135,7 @@ def _run_config_rows(
         RunConfigRow(key="events_path", value=str(events_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
-        RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
+        *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_state", source="runtime"),
         RunConfigRow(key="state_builder_version", value=config.state_builder_version, source="runtime"),
         RunConfigRow(

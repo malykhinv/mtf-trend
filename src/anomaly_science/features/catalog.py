@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
@@ -784,7 +784,7 @@ def _run_config_rows(*, output_path: Path) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-features", source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
+        *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_feature_catalog", source="runtime"),
         RunConfigRow(key="feature_schema_version", value=FEATURE_SCHEMA_VERSION, source="runtime"),
     ]

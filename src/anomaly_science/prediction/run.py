@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
@@ -177,7 +177,7 @@ def _run_config_rows(
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="labels_path", value=str(labels_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
+        *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_prediction", source="runtime"),
         RunConfigRow(key="prediction_version", value=config.prediction_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),

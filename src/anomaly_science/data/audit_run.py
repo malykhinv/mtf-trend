@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
@@ -148,7 +148,7 @@ def _run_config_rows(*, input_path: Path, output_path: Path) -> list[RunConfigRo
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
-        RunConfigRow(key="git_commit", value="UNKNOWN", source="runtime"),
+        *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_data_audit", source="runtime"),
     ]
 
