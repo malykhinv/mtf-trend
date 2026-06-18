@@ -8,13 +8,13 @@ import pandas as pd
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.decision import ExpectedValueRow
-from anomaly_science.contracts.market import Candle1m, MarketDataContractError, ONE_MINUTE_MS
+from anomaly_science.contracts.market import Candle1m, FundingRate, MarketDataContractError, ONE_MINUTE_MS
 from anomaly_science.contracts.simulation import (
     TRADE_SIMULATION_TEMPORAL_CONTRACT,
     TradeSimulationMetricRow,
     TradeSimulationRow,
 )
-from anomaly_science.data.normalized import normalize_candles_1m
+from anomaly_science.data.normalized import normalize_candles_1m, normalize_funding_rates
 from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
 from anomaly_science.decision import load_anomaly_decision_timing_csv
 from anomaly_science.simulation.config import TradeSimulationConfig
@@ -38,8 +38,10 @@ def build_trade_simulation_from_source(
     frame = source.read_frame("candles_1m", required=True)
     if frame is None:
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    funding_frame = source.read_frame("funding_rate", required=False)
     return build_trade_simulation_rows(
         candles_1m=normalize_candles_1m(frame),
+        funding_rates=normalize_funding_rates(funding_frame),
         decision_rows=load_anomaly_decision_timing_csv(decision_timing_path),
         config=config,
     )
@@ -49,6 +51,7 @@ def build_trade_simulation_rows(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
     decision_rows: Sequence[ExpectedValueRow] | Iterable[ExpectedValueRow],
+    funding_rates: Sequence[FundingRate] | Iterable[FundingRate] = (),
     config: TradeSimulationConfig | None = None,
 ) -> tuple[TradeSimulationRow, ...]:
     cfg = config or TradeSimulationConfig()
@@ -58,6 +61,11 @@ def build_trade_simulation_rows(
         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
     for candles in candles_by_symbol.values():
         candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    funding_by_symbol: dict[str, list[FundingRate]] = {}
+    for funding_rate in funding_rates:
+        funding_by_symbol.setdefault(funding_rate.symbol, []).append(funding_rate)
+    for rates in funding_by_symbol.values():
+        rates.sort(key=lambda item: item.timestamp_ms)
 
     rows: list[TradeSimulationRow] = []
     active_until_by_strategy_symbol: dict[tuple[str, str, str], int] = {}
@@ -73,7 +81,12 @@ def build_trade_simulation_rows(
         if active_until_ms is not None and decision.snapshot_time_ms <= active_until_ms:
             continue
         symbol_candles = candles_by_symbol.get(decision.symbol, [])
-        row = _simulate_decision(decision=decision, candles=symbol_candles, config=cfg)
+        row = _simulate_decision(
+            decision=decision,
+            candles=symbol_candles,
+            funding_rates=funding_by_symbol.get(decision.symbol, []),
+            config=cfg,
+        )
         rows.append(row)
         active_until_by_strategy_symbol[key] = row.exit_time_ms
     return tuple(rows)
@@ -168,6 +181,7 @@ def _simulate_decision(
     *,
     decision: ExpectedValueRow,
     candles: Sequence[Candle1m],
+    funding_rates: Sequence[FundingRate],
     config: TradeSimulationConfig,
 ) -> TradeSimulationRow:
     entry_candle = _entry_candle(decision=decision, candles=candles)
@@ -209,7 +223,14 @@ def _simulate_decision(
     )
     gross_pnl = (exit_price - entry_price) if side == "long" else (entry_price - exit_price)
     total_cost = (entry_price + exit_price) * (decision.fee_bps / 10_000.0)
-    net_pnl = gross_pnl - total_cost
+    funding_cost = _funding_cost(
+        side=side,
+        entry_price=entry_price,
+        entry_time_ms=entry_candle.open_time_ms,
+        exit_time_ms=exit_candle.open_time_ms,
+        funding_rates=funding_rates,
+    )
+    net_pnl = gross_pnl - total_cost - funding_cost
     return TradeSimulationRow(
         simulation_version=config.simulation_version,
         strategy_name=decision.strategy_name,
@@ -232,6 +253,7 @@ def _simulate_decision(
         fee_bps=decision.fee_bps,
         slippage_bps=decision.slippage_bps,
         total_cost=total_cost,
+        funding_cost=funding_cost,
         exit_time_ms=exit_candle.open_time_ms,
         exit_price=exit_price,
         exit_reason=exit_reason,
@@ -249,6 +271,23 @@ def _entry_candle(*, decision: ExpectedValueRow, candles: Sequence[Candle1m]) ->
         if candle.open_time_ms > decision.snapshot_time_ms and candle.available_time_ms > decision.snapshot_time_ms:
             return candle
     raise TradeSimulationInputError(f"next 1m open is missing for decision {decision.event_id}")
+
+
+def _funding_cost(
+    *,
+    side: str,
+    entry_price: float,
+    entry_time_ms: int,
+    exit_time_ms: int,
+    funding_rates: Sequence[FundingRate],
+) -> float:
+    rate_sum = sum(
+        item.funding_rate
+        for item in funding_rates
+        if entry_time_ms <= item.timestamp_ms <= exit_time_ms
+    )
+    signed_long_cost = entry_price * rate_sum
+    return signed_long_cost if side == "long" else -signed_long_cost
 
 
 def _entry_price(*, side: str, entry_open: float, slippage_bps: float, toxic_entry_penalty: float) -> float:
@@ -361,6 +400,7 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
         fee_bps=_required_float(row, "fee_bps"),
         slippage_bps=_required_float(row, "slippage_bps"),
         total_cost=_required_float(row, "total_cost"),
+        funding_cost=_required_float(row, "funding_cost"),
         exit_time_ms=_required_int(row, "exit_time_ms"),
         exit_price=_required_float(row, "exit_price"),
         exit_reason=_required_str(row, "exit_reason"),

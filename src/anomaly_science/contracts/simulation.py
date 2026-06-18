@@ -34,6 +34,7 @@ class TradeSimulationRow:
     fee_bps: float
     slippage_bps: float
     total_cost: float
+    funding_cost: float
     exit_time_ms: int
     exit_price: float
     exit_reason: str
@@ -77,6 +78,8 @@ class TradeSimulationRow:
             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
         if self.total_cost < 0.0 or not math.isfinite(self.total_cost):
             raise MarketDataContractError("total_cost must be finite and non-negative")
+        if not math.isfinite(self.funding_cost):
+            raise MarketDataContractError("funding_cost must be finite")
         for field_name in ("gross_pnl", "net_pnl", "net_pnl_r", "net_return"):
             if not math.isfinite(getattr(self, field_name)):
                 raise MarketDataContractError(f"{field_name} must be finite")

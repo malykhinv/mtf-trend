@@ -188,6 +188,18 @@ class LiquidationEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class FundingRate:
+    symbol: str
+    timestamp_ms: int
+    funding_rate: float
+
+    def __post_init__(self) -> None:
+        _validate_symbol(self.symbol)
+        validate_timestamp_ms(self.timestamp_ms, field_name="timestamp_ms")
+        _validate_finite_number(self.funding_rate, field_name="funding_rate")
+
+
+@dataclass(frozen=True, slots=True)
 class SymbolDayUniverseRow:
     trade_date: str
     symbol: str

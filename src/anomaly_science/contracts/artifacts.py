@@ -456,6 +456,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "fee_bps",
             "slippage_bps",
             "total_cost",
+            "funding_cost",
             "exit_time_ms",
             "exit_price",
             "exit_reason",

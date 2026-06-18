@@ -64,6 +64,11 @@ DATASET_SPECS: dict[str, CsvDatasetSpec] = {
             "source",
         ),
     ),
+    "funding_rate": CsvDatasetSpec(
+        name="funding_rate",
+        file_name="funding_rate.csv",
+        required_columns=("symbol", "timestamp_ms", "funding_rate"),
+    ),
     "symbol_universe_by_day": CsvDatasetSpec(
         name="symbol_universe_by_day",
         file_name="symbol_universe_by_day.csv",

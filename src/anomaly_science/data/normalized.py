@@ -5,7 +5,7 @@ from typing import TypeVar
 
 import pandas as pd
 
-from anomaly_science.contracts.market import Candle1m, Candle5m, LiquidationEvent, OpenInterest5m, SymbolDayUniverseRow
+from anomaly_science.contracts.market import Candle1m, Candle5m, FundingRate, LiquidationEvent, OpenInterest5m, SymbolDayUniverseRow
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +95,19 @@ def normalize_liquidations(frame: pd.DataFrame | None) -> tuple[LiquidationEvent
             quantity=float(row["quantity"]),
             quote_quantity=float(row["quote_quantity"]),
             source=str(row["source"]),
+        )
+        for row in _records(frame)
+    )
+
+
+def normalize_funding_rates(frame: pd.DataFrame | None) -> tuple[FundingRate, ...]:
+    if frame is None:
+        return ()
+    return tuple(
+        FundingRate(
+            symbol=str(row["symbol"]),
+            timestamp_ms=int(row["timestamp_ms"]),
+            funding_rate=float(row["funding_rate"]),
         )
         for row in _records(frame)
     )

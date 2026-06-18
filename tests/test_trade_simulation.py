@@ -10,7 +10,7 @@ import pytest
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT, ExpectedValueRow
-from anomaly_science.contracts.market import Candle1m
+from anomaly_science.contracts.market import Candle1m, FundingRate
 from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
 from anomaly_science.decision import expected_value_rows_to_artifact
 from anomaly_science.simulation import (
@@ -99,6 +99,28 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
     assert row.barrier_resolution == "stop_loss_first"
     assert row.net_pnl < 0.0
     assert row.temporal_contract == TRADE_SIMULATION_TEMPORAL_CONTRACT
+
+
+def test_trade_simulation_debits_funding_inside_hold() -> None:
+    rows = build_trade_simulation_rows(
+        candles_1m=[
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=104.5, low=100.5, close=103.0),
+        ],
+        decision_rows=[_decision("funding")],
+        funding_rates=[
+            FundingRate(
+                symbol="AAA/USDT:USDT",
+                timestamp_ms=BASE_MS + ONE_MINUTE_MS,
+                funding_rate=0.01,
+            )
+        ],
+        config=TradeSimulationConfig(target_horizon_minutes=30),
+    )
+
+    row = rows[0]
+    assert row.funding_cost > 0.0
+    assert row.net_pnl == row.gross_pnl - row.total_cost - row.funding_cost
 
 
 def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant() -> None:
@@ -240,14 +262,66 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert run_config["stop_loss_atr_1440"] == "1.1"
 
 
-def test_run_mvp1_trade_simulation_rejects_present_funding_rate_until_fees_are_supported(tmp_path: Path) -> None:
+def test_run_mvp1_trade_simulation_debits_present_funding_rate_stream(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    (input_dir / "funding_rate.csv").write_text("symbol,timestamp_ms,funding_rate\nAAA/USDT:USDT,1,0.0001\n", encoding="utf-8")
+    decision_path = tmp_path / "anomaly_decision_timing.csv"
+    out_dir = tmp_path / "simulation"
+    candle_schema = (
+        "symbol",
+        "open_time_ms",
+        "available_time_ms",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "number_of_trades",
+        "taker_buy_quote_volume",
+    )
+    with (input_dir / "candles_1m.csv").open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=candle_schema)
+        writer.writeheader()
+        for candle in [
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=104.5, low=100.5, close=103.0),
+        ]:
+            writer.writerow(
+                {
+                    "symbol": candle.symbol,
+                    "open_time_ms": candle.open_time_ms,
+                    "available_time_ms": candle.available_time_ms,
+                    "open": candle.open,
+                    "high": candle.high,
+                    "low": candle.low,
+                    "close": candle.close,
+                    "volume": candle.volume,
+                    "quote_volume": candle.quote_volume,
+                    "number_of_trades": candle.number_of_trades,
+                    "taker_buy_quote_volume": candle.taker_buy_quote_volume,
+                }
+            )
+    (input_dir / "funding_rate.csv").write_text(
+        f"symbol,timestamp_ms,funding_rate\nAAA/USDT:USDT,{BASE_MS + ONE_MINUTE_MS},0.01\n",
+        encoding="utf-8",
+    )
+    write_csv_artifact(
+        decision_path,
+        expected_value_rows_to_artifact([_decision("funding_cli")]),
+        get_artifact_schema("anomaly_decision_timing.csv"),
+    )
 
-    with pytest.raises(NotImplementedError, match="funding_rate.csv is present"):
-        run_mvp1_trade_simulation(
-            input_dir=input_dir,
-            decision_timing_path=tmp_path / "missing_decision.csv",
-            out_dir=tmp_path / "simulation",
-        )
+    run_mvp1_trade_simulation(
+        input_dir=input_dir,
+        decision_timing_path=decision_path,
+        out_dir=out_dir,
+    )
+
+    with (out_dir / "anomaly_trade_simulation.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        rows = list(csv.DictReader(file_obj))
+    assert float(rows[0]["funding_cost"]) > 0.0
+
+    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
+    assert audit_by_name["funding_rate_boundary"]["status"] == "PASS"
