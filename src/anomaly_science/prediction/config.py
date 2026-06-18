@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class WalkForwardPredictionConfig:
-    """Configuration for MVP1 walk-forward calibrated baseline prediction.
+    """Configuration for MVP1 weekly CatBoost+Isotonic prediction.
 
     This module intentionally avoids trade thresholds and PnL optimization. It
     only estimates OOS probabilities of descriptive future-nature scenarios.
