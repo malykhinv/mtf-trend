@@ -90,6 +90,8 @@ def build_online_anomaly_state_1m(
 
     rows: list[AnomalyState1mRow] = []
     for event in sorted(events, key=lambda item: (item.symbol, item.event_detection_time_ms, item.event_id)):
+        if event.technical_noise_shock or event.excluded_by_data_quality_gate:
+            continue
         symbol_candles = candles_by_symbol.get(event.symbol, [])
         if not symbol_candles:
             continue

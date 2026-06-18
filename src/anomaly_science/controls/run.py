@@ -150,7 +150,24 @@ def _protocol_rows(
             message="mvp1 controls use anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
-    return base_rows + build_methodology_v2_audit_rows(stage="mvp1_controls")
+    implemented_methodology_rows = [
+        ProtocolAuditRow(
+            check_name="technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+            status=AuditStatus.PASS,
+            message="controls reuse strict state/label prediction inputs; technical-noise events are excluded before state rows are materialized",
+            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
+            status=AuditStatus.PASS,
+            message=f"controls reuse daily prequential purge horizon {config.purge_horizon_minutes}m before each test day",
+            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+        ),
+    ]
+    return base_rows + build_methodology_v2_audit_rows(
+        stage="mvp1_controls",
+        implemented=implemented_methodology_rows,
+    )
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

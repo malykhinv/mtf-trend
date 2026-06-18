@@ -38,7 +38,12 @@ def run_mvp1_state(
         events_path=events_artifact_path,
         config=cfg,
     )
-    protocol_rows = _protocol_rows(event_count=len(events), state_row_count=len(state_rows))
+    excluded_event_count = sum(1 for event in events if event.technical_noise_shock or event.excluded_by_data_quality_gate)
+    protocol_rows = _protocol_rows(
+        event_count=len(events),
+        state_row_count=len(state_rows),
+        excluded_event_count=excluded_event_count,
+    )
     run_config_rows = _run_config_rows(
         input_path=input_path,
         events_path=events_artifact_path,
@@ -73,7 +78,7 @@ def run_mvp1_state(
     return output_path
 
 
-def _protocol_rows(*, event_count: int, state_row_count: int) -> list[ProtocolAuditRow]:
+def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_count: int) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_state_scope",
@@ -110,7 +115,21 @@ def _protocol_rows(*, event_count: int, state_row_count: int) -> list[ProtocolAu
             message="mvp1 state uses anomaly_science modules only; legacy_quarantine is reference-only",
         ),
     ]
-    return base_rows + build_methodology_v2_audit_rows(stage="mvp1_state")
+    implemented_methodology_rows = [
+        ProtocolAuditRow(
+            check_name="technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+            status=AuditStatus.PASS,
+            message=(
+                f"state builder excluded {excluded_event_count} technical-noise/data-quality-gated events before "
+                "state/label/prediction/control artifacts can be built"
+            ),
+            artifact="anomaly_state_1m.csv",
+        ),
+    ]
+    return base_rows + build_methodology_v2_audit_rows(
+        stage="mvp1_state",
+        implemented=implemented_methodology_rows,
+    )
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

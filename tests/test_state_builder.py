@@ -39,9 +39,14 @@ def _candle(index: int, *, open_price: float, high: float, low: float, close: fl
     )
 
 
-def _event() -> AnomalyEvent:
+def _event(
+    *,
+    event_id: str = "evt_state_test",
+    technical_noise_shock: bool = False,
+    excluded_by_data_quality_gate: bool = False,
+) -> AnomalyEvent:
     return AnomalyEvent(
-        event_id="evt_state_test",
+        event_id=event_id,
         symbol="AAA/USDT:USDT",
         event_start_time_ms=BASE_TS + 60_000,
         event_detection_time_ms=BASE_TS + 120_000,
@@ -55,6 +60,9 @@ def _event() -> AnomalyEvent:
         initial_quote_volume_zscore=None,
         initial_trade_count_zscore=None,
         detector_version="test_detector",
+        technical_noise_shock=technical_noise_shock,
+        raw_candle_gap_minutes=6.0 if technical_noise_shock else None,
+        excluded_by_data_quality_gate=excluded_by_data_quality_gate,
     )
 
 
@@ -126,6 +134,25 @@ def test_mutating_future_candles_does_not_change_already_built_past_state_rows()
     assert past_rows == mutated_past_rows
 
 
+def test_state_builder_excludes_technical_noise_events_before_ml_inputs() -> None:
+    candles = [
+        _candle(0, open_price=99.0, high=100.0, low=98.0, close=99.5),
+        _candle(1, open_price=100.0, high=103.0, low=99.0, close=102.0),
+        _candle(2, open_price=102.0, high=104.0, low=101.0, close=103.0),
+    ]
+    normal_event = _event(event_id="normal_event")
+    noise_event = _event(
+        event_id="noise_event",
+        technical_noise_shock=True,
+        excluded_by_data_quality_gate=True,
+    )
+
+    rows = build_online_anomaly_state_1m(candles_1m=candles, events=[noise_event, normal_event])
+
+    assert rows
+    assert {row.event_id for row in rows} == {"normal_event"}
+
+
 def test_events_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
     path = tmp_path / "anomaly_events.csv"
     path.write_text(
@@ -173,3 +200,7 @@ def test_run_mvp1_state_cli_writes_state_artifacts(tmp_path: Path) -> None:
     assert rows[0]["state_time_ms"] == "1704067260000"
     assert rows[0]["running_high_asof_t"] == "101.0"
     assert rows[1]["running_high_asof_t"] == "102.0"
+
+    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
+    assert audit_by_name["technical_noise_shock_excluded_from_ml_train_validation_calibration_test"]["status"] == "PASS"

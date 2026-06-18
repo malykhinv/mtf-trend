@@ -154,6 +154,12 @@ def _protocol_rows(*, input_row_count: int, prediction_row_count: int, config: W
     ]
     implemented_methodology_rows = [
         ProtocolAuditRow(
+            check_name="technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+            status=AuditStatus.PASS,
+            message="prediction train/test/calibration inputs are strict state/label joins; technical-noise events are excluded before state rows are materialized",
+            artifact="anomaly_oos_predictions.csv",
+        ),
+        ProtocolAuditRow(
             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
             status=AuditStatus.PASS,
             message=f"daily baseline enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= test_day_start_ms; weekly CatBoost protocol remains separately NOT_IMPLEMENTED",
