@@ -164,7 +164,11 @@ def _run_config_rows(
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(input_path, state_path),
+            config=config,
+            extra_config={"command": "run-mvp1-future", "stage": "mvp1_future"},
+        ),
         RunConfigRow(key="stage", value="mvp1_future", source="runtime"),
         RunConfigRow(key="future_path_builder_version", value=config.future_path_builder_version, source="runtime"),
         RunConfigRow(

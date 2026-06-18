@@ -208,7 +208,11 @@ def _run_config_rows(
         RunConfigRow(key="future_path", value=str(future_path), source="cli"),
         RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(state_path, future_path, feature_matrix_path),
+            config=config,
+            extra_config={"command": "run-mvp1-atlas", "stage": "mvp1_atlas"},
+        ),
         RunConfigRow(key="stage", value="mvp1_atlas", source="runtime"),
         RunConfigRow(key="atlas_version", value=config.atlas_version, source="runtime"),
         RunConfigRow(key="outcome_coordinate", value=OUTCOME_COORDINATE_ATR, source="runtime"),

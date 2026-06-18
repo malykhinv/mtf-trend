@@ -8,6 +8,7 @@ import pytest
 from anomaly_science.artifacts import (
     ArtifactWriteError,
     build_manifest,
+    runtime_reproducibility_rows,
     write_csv_artifact,
     write_csv_artifact_with_aliases,
     write_manifest,
@@ -94,6 +95,23 @@ def test_csv_writer_requires_declared_schema_columns(tmp_path: Path) -> None:
             rows=[{"key": "x", "value": "y", "source": "test", "extra": "forbidden"}],
             schema=schema,
         )
+
+
+def test_runtime_reproducibility_rows_include_methodology_keys(tmp_path: Path) -> None:
+    input_file = tmp_path / "input.csv"
+    input_file.write_text("symbol,value\nBTCUSDT,1\n", encoding="utf-8")
+
+    rows = runtime_reproducibility_rows(
+        data_paths=(input_file,),
+        extra_config={"command": "test-command", "stage": "test-stage"},
+    )
+    by_key = {row.key: row.value for row in rows}
+
+    assert len(by_key["data_snapshot_hash"]) == 64
+    assert len(by_key["config_hash"]) == 64
+    assert by_key["internal_time_type"] == "pl.Datetime[ms, UTC]"
+    assert by_key["git_commit"]
+    assert by_key["dependency_versions"]
 
 
 def test_strategy_artifact_aliases_keep_source_columns() -> None:

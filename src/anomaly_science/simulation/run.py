@@ -171,7 +171,11 @@ def _run_config_rows(
         RunConfigRow(key="decision_timing_path", value=str(decision_timing_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(input_path, decision_timing_path),
+            config=config,
+            extra_config={"command": "run-mvp1-trade-simulation", "stage": "mvp1_simulation"},
+        ),
         RunConfigRow(key="stage", value="mvp1_simulation", source="runtime"),
         *strategy_metadata_run_config_rows(),
         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),

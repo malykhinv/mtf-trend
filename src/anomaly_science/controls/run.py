@@ -213,7 +213,11 @@ def _run_config_rows(
         RunConfigRow(key="labels_path", value=str(labels_path), source="cli"),
         RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(state_path, labels_path, feature_matrix_path),
+            config=config,
+            extra_config={"command": "run-mvp1-controls", "stage": "mvp1_controls"},
+        ),
         RunConfigRow(key="stage", value="mvp1_controls", source="runtime"),
         *strategy_metadata_run_config_rows(),
         RunConfigRow(key="control_version", value=config.control_version, source="runtime"),

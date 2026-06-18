@@ -155,7 +155,11 @@ def _run_config_rows(
         RunConfigRow(key="labels_path", value=str(labels_path), source="cli"),
         RunConfigRow(key="predictions_path", value=str(predictions_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(state_path, labels_path, predictions_path),
+            config=config,
+            extra_config={"command": "run-mvp1-expected-value", "stage": "mvp1_decision"},
+        ),
         RunConfigRow(key="stage", value="mvp1_decision", source="runtime"),
         *strategy_metadata_run_config_rows(strategy_name=config.strategy_version),
         RunConfigRow(key="ev_version", value=config.ev_version, source="runtime"),

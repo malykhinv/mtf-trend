@@ -1388,7 +1388,11 @@ def _run_config_rows(
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(input_path, state_path),
+            config=config,
+            extra_config={"command": "run-mvp1-feature-matrix", "stage": "mvp1_feature_matrix"},
+        ),
         RunConfigRow(key="stage", value="mvp1_feature_matrix", source="runtime"),
         RunConfigRow(key="feature_schema_version", value=FEATURE_SCHEMA_VERSION, source="runtime"),
         RunConfigRow(key="feature_matrix_version", value=config.feature_matrix_version, source="runtime"),

@@ -127,7 +127,9 @@ def _run_config_rows(*, output_path: Path) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-strategy-registry", source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            extra_config={"command": "run-mvp1-strategy-registry", "stage": "mvp1_strategy_registry"},
+        ),
         RunConfigRow(key="stage", value="mvp1_strategy_registry", source="runtime"),
     ]
 

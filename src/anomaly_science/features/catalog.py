@@ -797,7 +797,13 @@ def _run_config_rows(*, output_path: Path) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-features", source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            extra_config={
+                "command": "run-mvp1-features",
+                "stage": "mvp1_feature_catalog",
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            },
+        ),
         RunConfigRow(key="stage", value="mvp1_feature_catalog", source="runtime"),
         RunConfigRow(key="feature_schema_version", value=FEATURE_SCHEMA_VERSION, source="runtime"),
     ]

@@ -302,7 +302,11 @@ def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[R
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(input_path,),
+            config=config,
+            extra_config={"command": "run-mvp1-events", "stage": "mvp1_events", "strategy_name": strategy.metadata.strategy_name},
+        ),
         RunConfigRow(key="stage", value="mvp1_events", source="runtime"),
         *strategy_metadata_run_config_rows(strategy),
         RunConfigRow(key="detector_version", value=config.detector_version, source="runtime"),

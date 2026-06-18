@@ -163,7 +163,11 @@ def _run_config_rows(
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="future_path", value=str(future_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            data_paths=(state_path, future_path),
+            config=config,
+            extra_config={"command": "run-mvp1-labels", "stage": "mvp1_labels"},
+        ),
         RunConfigRow(key="stage", value="mvp1_labels", source="runtime"),
         RunConfigRow(key="label_schema_version", value=config.label_schema_version, source="runtime"),
         RunConfigRow(key="horizons_minutes", value="15|30|60|120", source="runtime"),

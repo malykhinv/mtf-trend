@@ -132,7 +132,16 @@ def _run_config_rows(
     return [
         RunConfigRow(key="command", value="run-mvp1-holdout-governance", source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
-        *runtime_reproducibility_rows(),
+        *runtime_reproducibility_rows(
+            extra_config={
+                "command": "run-mvp1-holdout-governance",
+                "stage": "mvp1_governance",
+                "protocol_freeze_id": protocol_freeze_id,
+                "research_start_date": start_date.isoformat(),
+                "research_end_date": end_date.isoformat(),
+                "holdout_days": holdout_days,
+            },
+        ),
         RunConfigRow(key="stage", value="mvp1_governance", source="runtime"),
         RunConfigRow(key="protocol_freeze_id", value=protocol_freeze_id, source="cli"),
         RunConfigRow(key="research_start_date", value=start_date.isoformat(), source="cli"),
