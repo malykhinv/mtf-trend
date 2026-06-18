@@ -116,9 +116,10 @@ def test_placebo_controls_emit_negative_control_rows() -> None:
     inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
     rows = build_placebo_test_rows(inputs=inputs, config=ControlsConfig(min_train_rows=2, min_group_rows=1, smoothing_strength=1.0))
 
-    assert {row.control_name for row in rows} == {"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"}
-    assert all(row.status == CONTROL_STATUS_OK for row in rows)
-    assert all(row.oos_prediction_rows > 0 for row in rows)
+    assert {row.control_name for row in rows} == {"random_labels", "time_shuffled_labels", "symbol_shuffled_labels", "random_entry_times"}
+    assert {row.control_name for row in rows if row.status == CONTROL_STATUS_OK} == {"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"}
+    assert {row.control_name for row in rows if row.status == CONTROL_STATUS_DEFERRED} == {"random_entry_times"}
+    assert all(row.oos_prediction_rows > 0 for row in rows if row.status == CONTROL_STATUS_OK)
     assert all(row.reference_real_brier >= 0.0 for row in rows)
 
 
@@ -128,8 +129,20 @@ def test_baseline_comparison_defers_volume_without_proxy_fields() -> None:
     rows = build_baseline_comparison_rows(inputs=inputs, config=ControlsConfig(min_train_rows=2, min_group_rows=1, smoothing_strength=1.0))
 
     by_name = {row.baseline_name: row for row in rows}
-    assert set(by_name) == {"global_prior_only", "session_only", "event_time_only", "price_path_only", "volume_only"}
+    assert set(by_name) == {
+        "global_prior_only",
+        "session_only",
+        "event_time_only",
+        "price_path_only",
+        "volume_only",
+        "btc_eth_only",
+        "always_no_trade",
+        "strategy_specific_heuristic",
+    }
     assert by_name["volume_only"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["btc_eth_only"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["always_no_trade"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["strategy_specific_heuristic"].status == CONTROL_STATUS_DEFERRED
     assert "no proxy volume baseline" in by_name["volume_only"].notes
     assert by_name["price_path_only"].oos_prediction_rows > 0
 

@@ -58,7 +58,7 @@ def build_placebo_test_rows(
                 status=CONTROL_STATUS_SKIPPED,
                 notes="not enough non-missing labels for placebo shuffling",
             )
-            for name in ("random_labels", "time_shuffled_labels", "symbol_shuffled_labels")
+            for name in ("random_labels", "time_shuffled_labels", "symbol_shuffled_labels", "random_entry_times")
         )
 
     placebo_maps: list[tuple[str, dict[tuple[str, str, int, int], str], str]] = [
@@ -96,6 +96,16 @@ def build_placebo_test_rows(
             reference_brier=reference_brier,
             status=symbol_status if symbol_evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
             notes=symbol_notes if symbol_evaluation.oos_prediction_rows > 0 else symbol_notes,
+        )
+    )
+    result.append(
+        _placebo_row(
+            cfg=cfg,
+            control_name="random_entry_times",
+            evaluation=ControlEvaluation(len(rows), 0, 0.0, 0.0, 0.0),
+            reference_brier=reference_brier,
+            status=CONTROL_STATUS_DEFERRED,
+            notes="deferred cleanly: random entry-time controls belong to trade simulation and require simulated entry artifacts",
         )
     )
     return tuple(result)
@@ -139,17 +149,24 @@ def build_baseline_comparison_rows(
             )
         )
 
-    result.append(
-        _baseline_row(
-            cfg=cfg,
-            baseline_name="volume_only",
-            feature_family="volume",
-            evaluation=ControlEvaluation(available_label_rows=len(rows), oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0),
-            reference_brier=reference_brier,
-            status=CONTROL_STATUS_DEFERRED,
-            notes="deferred cleanly: anomaly_state_1m.csv currently has no volume feature columns, so no proxy volume baseline is emitted",
-        )
+    deferred_specs = (
+        ("volume_only", "volume", "deferred cleanly: anomaly_state_1m.csv currently has no volume feature columns, so no proxy volume baseline is emitted"),
+        ("btc_eth_only", "market_anchor", "deferred cleanly: BTC/ETH anchor features are not in anomaly_state_1m.csv, so no proxy market-anchor baseline is emitted"),
+        ("always_no_trade", "decision_baseline", "deferred cleanly: always no-trade baseline belongs to decision/simulation artifacts, not scenario prediction probabilities"),
+        ("strategy_specific_heuristic", "strategy_heuristic", "deferred cleanly: no pre-registered strategy-specific heuristic baseline exists for MVP1 controls"),
     )
+    for baseline_name, feature_family, notes in deferred_specs:
+        result.append(
+            _baseline_row(
+                cfg=cfg,
+                baseline_name=baseline_name,
+                feature_family=feature_family,
+                evaluation=ControlEvaluation(available_label_rows=len(rows), oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0),
+                reference_brier=reference_brier,
+                status=CONTROL_STATUS_DEFERRED,
+                notes=notes,
+            )
+        )
     return tuple(result)
 
 

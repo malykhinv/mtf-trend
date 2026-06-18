@@ -9,8 +9,19 @@ CONTROL_STATUS_SKIPPED = "SKIPPED"
 CONTROL_STATUS_DEFERRED = "DEFERRED"
 VALID_CONTROL_STATUSES = frozenset({CONTROL_STATUS_OK, CONTROL_STATUS_SKIPPED, CONTROL_STATUS_DEFERRED})
 
-PLACEBO_CONTROL_NAMES = frozenset({"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"})
-BASELINE_NAMES = frozenset({"global_prior_only", "session_only", "event_time_only", "price_path_only", "volume_only"})
+PLACEBO_CONTROL_NAMES = frozenset({"random_labels", "time_shuffled_labels", "symbol_shuffled_labels", "random_entry_times"})
+BASELINE_NAMES = frozenset(
+    {
+        "global_prior_only",
+        "session_only",
+        "event_time_only",
+        "price_path_only",
+        "volume_only",
+        "btc_eth_only",
+        "always_no_trade",
+        "strategy_specific_heuristic",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
