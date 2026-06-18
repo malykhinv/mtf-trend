@@ -116,7 +116,7 @@ def build_baseline_comparison_rows(
     inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow],
     config: ControlsConfig | None = None,
 ) -> tuple[BaselineComparisonRow, ...]:
-    """Build simple baseline comparisons without trading thresholds or PnL."""
+    """Build baseline, rule, subset, and feature-ablation comparisons without trading thresholds or PnL."""
     cfg = config or ControlsConfig()
     rows = _available_rows(inputs, cfg)
     reference = _evaluate_reference_model(rows=rows, config=cfg)

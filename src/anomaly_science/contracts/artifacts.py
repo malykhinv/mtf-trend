@@ -521,7 +521,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "status",
             "notes",
         ),
-        description="Simple baseline comparison for MVP1 prediction; no EV, PnL, thresholds, or trade simulation.",
+        description="Placebo, simple baseline, anomaly rule, and feature-ablation comparisons for MVP1 prediction; no EV, PnL, thresholds, or trade simulation.",
     ),
 
     "anomaly_feature_catalog.csv": ArtifactSchema(

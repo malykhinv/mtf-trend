@@ -58,20 +58,23 @@ def filter_warmup_window_rows(
     keep = pd.Series(True, index=frame.index)
     warmup_ms = warmup_minutes * ONE_MINUTE_MS
     for _, group in frame.sort_values(["symbol", time_column]).groupby("symbol", sort=False):
-        times = group[time_column].astype("int64")
-        previous_times = times.shift(1)
-        gaps_ms = times - previous_times
-        gap_indices = group.index[(gaps_ms > 3 * ONE_MINUTE_MS).fillna(False)]
-        for gap_index in gap_indices:
-            start_ms = int(frame.at[gap_index, time_column])
-            end_ms = start_ms + warmup_ms
-            symbol = frame.at[gap_index, "symbol"]
-            in_window = (
-                (frame["symbol"] == symbol)
-                & (frame[time_column].astype("int64") >= start_ms)
-                & (frame[time_column].astype("int64") < end_ms)
-            )
-            keep &= ~in_window
+        previous_time_ms: int | None = None
+        active_warmup_end_ms: int | None = None
+        for index in group.index:
+            current_time_ms = int(frame.at[index, time_column])
+            if active_warmup_end_ms is not None:
+                if current_time_ms < active_warmup_end_ms:
+                    keep.at[index] = False
+                    continue
+                active_warmup_end_ms = None
+                previous_time_ms = current_time_ms
+                continue
+            if previous_time_ms is not None and current_time_ms - previous_time_ms > 3 * ONE_MINUTE_MS:
+                keep.at[index] = False
+                active_warmup_end_ms = current_time_ms + warmup_ms
+                previous_time_ms = current_time_ms
+                continue
+            previous_time_ms = current_time_ms
     return frame.loc[keep].copy()
 
 

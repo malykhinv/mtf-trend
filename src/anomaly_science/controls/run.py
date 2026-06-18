@@ -47,6 +47,7 @@ def run_mvp1_controls(
         placebo_count=len(placebo_rows),
         baseline_count=len(baseline_rows),
         ok_control_count=ok_control_count,
+        feature_matrix_joined=feature_artifact_path is not None,
         config=cfg,
     )
     run_config_rows = _run_config_rows(
@@ -97,6 +98,7 @@ def _protocol_rows(
     placebo_count: int,
     baseline_count: int,
     ok_control_count: int,
+    feature_matrix_joined: bool,
     config: ControlsConfig,
 ) -> list[ProtocolAuditRow]:
     base_rows = [
@@ -130,9 +132,13 @@ def _protocol_rows(
             artifact="anomaly_placebo_tests.csv",
         ),
         ProtocolAuditRow(
-            check_name="no_proxy_volume_baseline",
+            check_name="feature_matrix_control_baselines",
             status=AuditStatus.PASS,
-            message="volume_only baseline is deferred when volume columns are absent from anomaly_state_1m.csv; no proxy volume fallback is used",
+            message=(
+                "feature-aware volume/BTC and anomaly ablation baselines use anomaly_feature_matrix.csv through a strict join"
+                if feature_matrix_joined
+                else "feature-aware baselines are explicitly deferred because anomaly_feature_matrix.csv was not supplied; no proxy fallback is used"
+            ),
             artifact="anomaly_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
