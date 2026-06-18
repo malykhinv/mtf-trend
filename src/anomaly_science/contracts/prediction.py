@@ -137,3 +137,59 @@ class PredictionMetricRow:
             raise MarketDataContractError("metric_name is required")
         if self.row_count < 0:
             raise MarketDataContractError("row_count must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelMetadataRow:
+    prediction_version: str
+    model_key: str
+    model_family: str
+    weekly_model_freeze_time_ms: int
+    train_cutoff_time_ms: int
+    train_row_count: int
+    fit_row_count: int
+    validation_row_count: int
+    calibration_row_count: int
+    class_order: str
+    model_feature_names: str
+    calibration_method: str
+
+    def __post_init__(self) -> None:
+        if not self.prediction_version:
+            raise MarketDataContractError("prediction_version is required")
+        if not self.model_key:
+            raise MarketDataContractError("model_key is required")
+        if not self.model_family:
+            raise MarketDataContractError("model_family is required")
+        validate_timestamp_ms(self.weekly_model_freeze_time_ms, field_name="weekly_model_freeze_time_ms")
+        validate_timestamp_ms(self.train_cutoff_time_ms, field_name="train_cutoff_time_ms")
+        for field_name in ("train_row_count", "fit_row_count", "validation_row_count", "calibration_row_count"):
+            if getattr(self, field_name) <= 0:
+                raise MarketDataContractError(f"{field_name} must be positive")
+        if not self.class_order:
+            raise MarketDataContractError("class_order is required")
+        if not self.model_feature_names:
+            raise MarketDataContractError("model_feature_names is required")
+        if not self.calibration_method:
+            raise MarketDataContractError("calibration_method is required")
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureImportanceRow:
+    prediction_version: str
+    model_key: str
+    feature_name: str
+    feature_importance: float
+    rank: int
+
+    def __post_init__(self) -> None:
+        if not self.prediction_version:
+            raise MarketDataContractError("prediction_version is required")
+        if not self.model_key:
+            raise MarketDataContractError("model_key is required")
+        if not self.feature_name:
+            raise MarketDataContractError("feature_name is required")
+        if self.feature_importance < 0.0:
+            raise MarketDataContractError("feature_importance must be non-negative")
+        if self.rank <= 0:
+            raise MarketDataContractError("rank must be positive")

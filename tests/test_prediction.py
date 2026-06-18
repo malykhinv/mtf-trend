@@ -234,6 +234,8 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert (out_dir / "anomaly_oos_predictions.csv").is_file()
     assert (out_dir / "anomaly_calibration.csv").is_file()
     assert (out_dir / "anomaly_prediction_metrics.csv").is_file()
+    assert (out_dir / "strategy_model_metadata.csv").is_file()
+    assert (out_dir / "strategy_feature_importance.csv").is_file()
     assert (out_dir / "anomaly_protocol_audit.csv").is_file()
     assert (out_dir / "anomaly_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
@@ -250,3 +252,12 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert {row["event_id"] for row in rows} >= {"test_row", "test_row_2"}
+    assert "raw_p_long_continuation" in rows[0]
+
+    with (out_dir / "strategy_model_metadata.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        metadata_rows = list(csv.DictReader(file_obj))
+    assert metadata_rows[0]["class_order"] == "long_continuation,short_fade,static_or_chop,unclear"
+
+    with (out_dir / "strategy_feature_importance.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        importance_rows = list(csv.DictReader(file_obj))
+    assert {row["feature_name"] for row in importance_rows} >= {"minutes_since_detection", "current_return_from_start"}

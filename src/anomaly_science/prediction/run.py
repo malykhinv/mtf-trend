@@ -11,9 +11,11 @@ from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.prediction.builder import (
     build_calibration_rows,
     build_prediction_metric_rows,
-    build_walk_forward_predictions,
+    build_walk_forward_prediction_result,
     calibration_rows_to_artifact,
+    feature_importance_rows_to_artifact,
     load_prediction_inputs,
+    model_metadata_rows_to_artifact,
     oos_prediction_rows_to_artifact,
     prediction_metric_rows_to_artifact,
 )
@@ -35,7 +37,8 @@ def run_mvp1_prediction(
     cfg = config or WalkForwardPredictionConfig()
 
     inputs = load_prediction_inputs(state_path=state_artifact_path, labels_path=labels_artifact_path)
-    predictions = build_walk_forward_predictions(inputs=inputs, config=cfg)
+    prediction_result = build_walk_forward_prediction_result(inputs=inputs, config=cfg)
+    predictions = prediction_result.predictions
     calibration_rows = build_calibration_rows(predictions=predictions)
     metric_rows = build_prediction_metric_rows(inputs=inputs, predictions=predictions, config=cfg)
     protocol_rows = _protocol_rows(input_row_count=len(inputs), prediction_row_count=len(predictions), config=cfg)
@@ -66,6 +69,20 @@ def run_mvp1_prediction(
             output_path / "anomaly_prediction_metrics.csv",
             prediction_metric_rows_to_artifact(metric_rows),
             get_artifact_schema("anomaly_prediction_metrics.csv"),
+        )
+    )
+    written.append(
+        write_csv_artifact(
+            output_path / "strategy_model_metadata.csv",
+            model_metadata_rows_to_artifact(prediction_result.model_metadata),
+            get_artifact_schema("strategy_model_metadata.csv"),
+        )
+    )
+    written.append(
+        write_csv_artifact(
+            output_path / "strategy_feature_importance.csv",
+            feature_importance_rows_to_artifact(prediction_result.feature_importance),
+            get_artifact_schema("strategy_feature_importance.csv"),
         )
     )
     written.extend(

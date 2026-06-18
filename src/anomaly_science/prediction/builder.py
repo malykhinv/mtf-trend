@@ -19,6 +19,8 @@ from anomaly_science.contracts.prediction import (
     PREDICTED_SCENARIOS,
     PREDICTION_TEMPORAL_CONTRACT,
     CalibrationRow,
+    FeatureImportanceRow,
+    ModelMetadataRow,
     OosPredictionRow,
     PredictionMetricRow,
 )
@@ -30,6 +32,19 @@ from anomaly_science.prediction.config import WalkForwardPredictionConfig
 ONE_MINUTE_MS = 60_000
 ONE_DAY_MS = 86_400_000
 _EPS = 1e-15
+MODEL_FEATURE_NAMES = (
+    "minutes_since_event_start",
+    "minutes_since_detection",
+    "event_alive",
+    "time_since_running_high_minutes",
+    "current_return_from_start",
+    "distance_to_running_high",
+    "distance_to_running_low",
+    "distance_to_structural_low",
+    "distance_to_structural_high",
+    "missing_structural_low",
+    "missing_structural_high",
+)
 
 
 class PredictionInputError(ValueError):
@@ -38,6 +53,13 @@ class PredictionInputError(ValueError):
 
 class PredictionArtifactError(ValueError):
     """Raised when prediction artifacts violate strict schemas."""
+
+
+@dataclass(frozen=True, slots=True)
+class WalkForwardPredictionResult:
+    predictions: tuple[OosPredictionRow, ...]
+    model_metadata: tuple[ModelMetadataRow, ...]
+    feature_importance: tuple[FeatureImportanceRow, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +131,14 @@ def build_walk_forward_predictions(
     inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow],
     config: WalkForwardPredictionConfig | None = None,
 ) -> tuple[OosPredictionRow, ...]:
+    return build_walk_forward_prediction_result(inputs=inputs, config=config).predictions
+
+
+def build_walk_forward_prediction_result(
+    *,
+    inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow],
+    config: WalkForwardPredictionConfig | None = None,
+) -> WalkForwardPredictionResult:
     cfg = config or WalkForwardPredictionConfig()
     usable_rows = [row for row in inputs if _target_for_horizon(row.label, cfg.target_horizon_minutes) != MISSING_FUTURE_SCENARIO]
     usable_rows.sort(key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id))
@@ -117,6 +147,8 @@ def build_walk_forward_predictions(
         rows_by_test_week[_utc_week(row.state.snapshot_time_ms)].append(row)
 
     predictions: list[OosPredictionRow] = []
+    metadata_rows: list[ModelMetadataRow] = []
+    importance_rows: list[FeatureImportanceRow] = []
     for test_week in sorted(rows_by_test_week):
         weekly_model_freeze_time_ms = _week_start_ms(test_week)
         train_cutoff_time_ms = weekly_model_freeze_time_ms - cfg.purge_horizon_minutes * ONE_MINUTE_MS
@@ -126,6 +158,22 @@ def build_walk_forward_predictions(
         model = _CatBoostIsotonicModel.fit(rows=train_rows, config=cfg)
         if model is None:
             continue
+        weekly_model_prefix = f"weekly_freeze={test_week}:{weekly_model_freeze_time_ms}"
+        frozen_model_key = f"{weekly_model_prefix}|catboost_isotonic"
+        metadata_rows.append(
+            model.metadata_row(
+                prediction_version=cfg.prediction_version,
+                model_key=frozen_model_key,
+                weekly_model_freeze_time_ms=weekly_model_freeze_time_ms,
+                train_cutoff_time_ms=train_cutoff_time_ms,
+            )
+        )
+        importance_rows.extend(
+            model.feature_importance_rows(
+                prediction_version=cfg.prediction_version,
+                model_key=frozen_model_key,
+            )
+        )
         for test_row in sorted(rows_by_test_week[test_week], key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id)):
             target_scenario = _target_for_horizon(test_row.label, cfg.target_horizon_minutes)
             if target_scenario == MISSING_FUTURE_SCENARIO:
@@ -146,7 +194,7 @@ def build_walk_forward_predictions(
                     test_day=test_day,
                     train_cutoff_time_ms=train_cutoff_time_ms,
                     model_family=cfg.model_family,
-                    model_key=f"weekly_freeze={test_week}:{weekly_model_freeze_time_ms}|{model_key}",
+                    model_key=f"{weekly_model_prefix}|{model_key}",
                     model_train_row_count=model.train_row_count,
                     model_group_row_count=group_count,
                     raw_p_long_continuation=raw_probabilities["long_continuation"],
@@ -162,7 +210,11 @@ def build_walk_forward_predictions(
                     temporal_contract=PREDICTION_TEMPORAL_CONTRACT,
                 )
             )
-    return tuple(predictions)
+    return WalkForwardPredictionResult(
+        predictions=tuple(predictions),
+        model_metadata=tuple(metadata_rows),
+        feature_importance=tuple(importance_rows),
+    )
 
 
 def build_calibration_rows(
@@ -274,6 +326,14 @@ def prediction_metric_rows_to_artifact(rows: Sequence[PredictionMetricRow]) -> l
     return [asdict(row) for row in rows]
 
 
+def model_metadata_rows_to_artifact(rows: Sequence[ModelMetadataRow]) -> list[dict[str, object]]:
+    return [asdict(row) for row in rows]
+
+
+def feature_importance_rows_to_artifact(rows: Sequence[FeatureImportanceRow]) -> list[dict[str, object]]:
+    return [asdict(row) for row in rows]
+
+
 def load_anomaly_oos_predictions_csv(path: str | Path) -> tuple[OosPredictionRow, ...]:
     return tuple(_load_prediction_artifact(path=path, schema_name="anomaly_oos_predictions.csv", row_builder=_oos_prediction_from_mapping))
 
@@ -355,11 +415,17 @@ class _CatBoostIsotonicModel:
         model: CatBoostClassifier,
         calibrators: dict[str, IsotonicRegression],
         train_row_count: int,
+        fit_row_count: int,
+        validation_row_count: int,
+        calibration_row_count: int,
     ) -> None:
         self._config = config
         self._model = model
         self._calibrators = calibrators
         self.train_row_count = train_row_count
+        self.fit_row_count = fit_row_count
+        self.validation_row_count = validation_row_count
+        self.calibration_row_count = calibration_row_count
 
     @classmethod
     def fit(cls, *, rows: Sequence[PredictionInputRow], config: WalkForwardPredictionConfig) -> _CatBoostIsotonicModel | None:
@@ -400,7 +466,15 @@ class _CatBoostIsotonicModel:
             calibrator = IsotonicRegression(out_of_bounds="clip")
             calibrator.fit(raw_calibration[:, scenario_index], binary_targets)
             calibrators[scenario] = calibrator
-        return cls(config=config, model=model, calibrators=calibrators, train_row_count=len(ordered))
+        return cls(
+            config=config,
+            model=model,
+            calibrators=calibrators,
+            train_row_count=len(ordered),
+            fit_row_count=len(fit_rows),
+            validation_row_count=len(validation_rows),
+            calibration_row_count=len(calibration_rows),
+        )
 
     def predict(self, state: AnomalyState1mRow) -> tuple[dict[str, float], dict[str, float], str, int]:
         raw_vector = self._model.predict_proba(_feature_matrix_from_states([state]))[0]
@@ -411,6 +485,43 @@ class _CatBoostIsotonicModel:
         )
         calibrated = _probability_dict(_normalize_probability_array(calibrated_vector))
         return raw, calibrated, "catboost_isotonic", self.train_row_count
+
+    def metadata_row(
+        self,
+        *,
+        prediction_version: str,
+        model_key: str,
+        weekly_model_freeze_time_ms: int,
+        train_cutoff_time_ms: int,
+    ) -> ModelMetadataRow:
+        return ModelMetadataRow(
+            prediction_version=prediction_version,
+            model_key=model_key,
+            model_family=self._config.model_family,
+            weekly_model_freeze_time_ms=weekly_model_freeze_time_ms,
+            train_cutoff_time_ms=train_cutoff_time_ms,
+            train_row_count=self.train_row_count,
+            fit_row_count=self.fit_row_count,
+            validation_row_count=self.validation_row_count,
+            calibration_row_count=self.calibration_row_count,
+            class_order=",".join(PREDICTED_SCENARIOS),
+            model_feature_names=",".join(MODEL_FEATURE_NAMES),
+            calibration_method="one_vs_rest_isotonic_regression_on_train_calibration_split",
+        )
+
+    def feature_importance_rows(self, *, prediction_version: str, model_key: str) -> tuple[FeatureImportanceRow, ...]:
+        importances = [float(value) for value in self._model.get_feature_importance()]
+        ranked = sorted(zip(MODEL_FEATURE_NAMES, importances, strict=True), key=lambda item: item[1], reverse=True)
+        return tuple(
+            FeatureImportanceRow(
+                prediction_version=prediction_version,
+                model_key=model_key,
+                feature_name=feature_name,
+                feature_importance=importance,
+                rank=index + 1,
+            )
+            for index, (feature_name, importance) in enumerate(ranked)
+        )
 
 
 def _load_prediction_artifact(*, path: str | Path, schema_name: str, row_builder: object) -> tuple[object, ...]:

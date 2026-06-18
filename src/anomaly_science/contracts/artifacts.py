@@ -322,6 +322,37 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         ),
         description="Aggregate OOS prediction metrics and protocol counters; not PnL or trading evaluation.",
     ),
+    "strategy_model_metadata.csv": ArtifactSchema(
+        name="strategy_model_metadata.csv",
+        stage="mvp1_prediction",
+        required_columns=(
+            "prediction_version",
+            "model_key",
+            "model_family",
+            "weekly_model_freeze_time_ms",
+            "train_cutoff_time_ms",
+            "train_row_count",
+            "fit_row_count",
+            "validation_row_count",
+            "calibration_row_count",
+            "class_order",
+            "model_feature_names",
+            "calibration_method",
+        ),
+        description="Frozen weekly model metadata including class order, feature names, and calibration method.",
+    ),
+    "strategy_feature_importance.csv": ArtifactSchema(
+        name="strategy_feature_importance.csv",
+        stage="mvp1_prediction",
+        required_columns=(
+            "prediction_version",
+            "model_key",
+            "feature_name",
+            "feature_importance",
+            "rank",
+        ),
+        description="CatBoost feature importance by frozen weekly model.",
+    ),
 
     "anomaly_decision_timing.csv": ArtifactSchema(
         name="anomaly_decision_timing.csv",

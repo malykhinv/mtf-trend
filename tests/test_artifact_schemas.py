@@ -23,6 +23,8 @@ REQUIRED_MVP1 = {
     "anomaly_oos_predictions.csv",
     "anomaly_calibration.csv",
     "anomaly_prediction_metrics.csv",
+    "strategy_model_metadata.csv",
+    "strategy_feature_importance.csv",
     "anomaly_decision_timing.csv",
     "anomaly_ev_metrics.csv",
     "anomaly_trade_simulation.csv",
