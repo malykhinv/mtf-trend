@@ -149,11 +149,36 @@ def build_baseline_comparison_rows(
             )
         )
 
+    rule_specs: tuple[tuple[str, str, Callable[[AnomalyState1mRow], str], str], ...] = (
+        ("always_follow_anomaly", "anomaly_direction_rule", _always_follow_anomaly, "anomaly-specific rule baseline: always predict follow-through"),
+        ("always_fade_anomaly", "anomaly_direction_rule", _always_fade_anomaly, "anomaly-specific rule baseline: always predict fade"),
+        ("fade_only_after_extension", "anomaly_extension_rule", _fade_only_after_extension, "anomaly-specific rule baseline: fade only after online extension"),
+        ("follow_only_early_squeeze", "anomaly_early_squeeze_rule", _follow_only_early_squeeze, "anomaly-specific rule baseline: follow only early online squeeze state"),
+    )
+    for baseline_name, feature_family, rule_fn, notes in rule_specs:
+        evaluation = _evaluate_static_rule_model(rows=rows, target_by_key=target_by_key, rule_fn=rule_fn)
+        result.append(
+            _baseline_row(
+                cfg=cfg,
+                baseline_name=baseline_name,
+                feature_family=feature_family,
+                evaluation=evaluation,
+                reference_brier=reference_brier,
+                status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                notes=notes if evaluation.oos_prediction_rows > 0 else "rule baseline produced no rows with available labels",
+            )
+        )
+
     deferred_specs = (
         ("volume_only", "volume", "deferred cleanly: anomaly_state_1m.csv currently has no volume feature columns, so no proxy volume baseline is emitted"),
         ("btc_eth_only", "market_anchor", "deferred cleanly: BTC/ETH anchor features are not in anomaly_state_1m.csv, so no proxy market-anchor baseline is emitted"),
         ("always_no_trade", "decision_baseline", "deferred cleanly: always no-trade baseline belongs to decision/simulation artifacts, not scenario prediction probabilities"),
         ("strategy_specific_heuristic", "strategy_heuristic", "deferred cleanly: no pre-registered strategy-specific heuristic baseline exists for MVP1 controls"),
+        ("no_cvd_features_ablation", "flow_ablation", "deferred cleanly: anomaly_state_1m.csv has no CVD features, so no proxy CVD ablation is emitted"),
+        ("no_oi_features_ablation", "open_interest_ablation", "deferred cleanly: anomaly_state_1m.csv has no OI features, so no proxy OI ablation is emitted"),
+        ("no_liquidation_features_ablation", "liquidation_ablation", "deferred cleanly: anomaly_state_1m.csv has no liquidation features, so no proxy liquidation ablation is emitted"),
+        ("idiosyncratic_only_subset", "market_shock_subset", "deferred cleanly: anomaly_state_1m.csv has no systemic cluster flag, so no proxy idiosyncratic subset is emitted"),
+        ("systemic_cluster_only_subset", "market_shock_subset", "deferred cleanly: anomaly_state_1m.csv has no systemic cluster flag, so no proxy systemic subset is emitted"),
     )
     for baseline_name, feature_family, notes in deferred_specs:
         result.append(
@@ -250,6 +275,30 @@ def _evaluate_feature_family_model(
 
     if not evaluated:
         return ControlEvaluation(available_label_rows=len(rows), oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0)
+    return ControlEvaluation(
+        available_label_rows=len(rows),
+        oos_prediction_rows=len(evaluated),
+        accuracy=_mean(1.0 if predicted == target else 0.0 for target, _, predicted in evaluated),
+        multiclass_brier=_mean(_brier_for_distribution(target=target, probabilities=probabilities) for target, probabilities, _ in evaluated),
+        log_loss=_mean(-math.log(max(probabilities[target], _EPS)) for target, probabilities, _ in evaluated),
+    )
+
+
+def _evaluate_static_rule_model(
+    *,
+    rows: Sequence[PredictionInputRow],
+    target_by_key: Mapping[tuple[str, str, int, int], str],
+    rule_fn: Callable[[AnomalyState1mRow], str],
+) -> ControlEvaluation:
+    evaluated: list[tuple[str, dict[str, float], str]] = []
+    for row in rows:
+        target = target_by_key[_row_key(row)]
+        predicted = rule_fn(row.state)
+        probabilities = {scenario: 0.0 for scenario in PREDICTED_SCENARIOS}
+        probabilities[predicted] = 1.0
+        evaluated.append((target, probabilities, predicted))
+    if not evaluated:
+        return ControlEvaluation(available_label_rows=0, oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0)
     return ControlEvaluation(
         available_label_rows=len(rows),
         oos_prediction_rows=len(evaluated),
@@ -457,6 +506,26 @@ def _price_path_feature_key(state: AnomalyState1mRow) -> str:
     low_bucket = _float_bucket(state.distance_to_running_low, ((0.001, "at_low"), (0.01, "near_low"), (0.03, "above_low")), "far_above_low")
     high_age = _integer_bucket(state.time_since_running_high_minutes, ((0, 0, "just_made_high"), (1, 3, "high_1_3m_ago"), (4, 10, "high_4_10m_ago")), "high_11m_plus_ago")
     return f"price_path|{return_bucket}|{high_bucket}|{low_bucket}|{high_age}"
+
+
+def _always_follow_anomaly(state: AnomalyState1mRow) -> str:
+    return "long_continuation"
+
+
+def _always_fade_anomaly(state: AnomalyState1mRow) -> str:
+    return "short_fade"
+
+
+def _fade_only_after_extension(state: AnomalyState1mRow) -> str:
+    if state.current_return_from_start >= 0.02 or state.distance_to_running_high >= -0.001:
+        return "short_fade"
+    return "static_or_chop"
+
+
+def _follow_only_early_squeeze(state: AnomalyState1mRow) -> str:
+    if state.minutes_since_detection <= 3 and state.distance_to_running_high >= -0.001:
+        return "long_continuation"
+    return "static_or_chop"
 
 
 def _smoothed_distribution(counts: Counter[str], *, prior: Mapping[str, float] | None, smoothing_strength: float) -> dict[str, float]:

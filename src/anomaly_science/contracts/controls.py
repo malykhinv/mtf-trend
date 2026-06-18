@@ -16,10 +16,19 @@ BASELINE_NAMES = frozenset(
         "session_only",
         "event_time_only",
         "price_path_only",
+        "always_follow_anomaly",
+        "always_fade_anomaly",
+        "fade_only_after_extension",
+        "follow_only_early_squeeze",
         "volume_only",
         "btc_eth_only",
         "always_no_trade",
         "strategy_specific_heuristic",
+        "no_cvd_features_ablation",
+        "no_oi_features_ablation",
+        "no_liquidation_features_ablation",
+        "idiosyncratic_only_subset",
+        "systemic_cluster_only_subset",
     }
 )
 

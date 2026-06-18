@@ -149,15 +149,33 @@ def test_baseline_comparison_defers_volume_without_proxy_fields() -> None:
         "session_only",
         "event_time_only",
         "price_path_only",
+        "always_follow_anomaly",
+        "always_fade_anomaly",
+        "fade_only_after_extension",
+        "follow_only_early_squeeze",
         "volume_only",
         "btc_eth_only",
         "always_no_trade",
         "strategy_specific_heuristic",
+        "no_cvd_features_ablation",
+        "no_oi_features_ablation",
+        "no_liquidation_features_ablation",
+        "idiosyncratic_only_subset",
+        "systemic_cluster_only_subset",
     }
+    assert by_name["always_follow_anomaly"].status == CONTROL_STATUS_OK
+    assert by_name["always_fade_anomaly"].status == CONTROL_STATUS_OK
+    assert by_name["fade_only_after_extension"].status == CONTROL_STATUS_OK
+    assert by_name["follow_only_early_squeeze"].status == CONTROL_STATUS_OK
     assert by_name["volume_only"].status == CONTROL_STATUS_DEFERRED
     assert by_name["btc_eth_only"].status == CONTROL_STATUS_DEFERRED
     assert by_name["always_no_trade"].status == CONTROL_STATUS_DEFERRED
     assert by_name["strategy_specific_heuristic"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["no_cvd_features_ablation"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["no_oi_features_ablation"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["no_liquidation_features_ablation"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["idiosyncratic_only_subset"].status == CONTROL_STATUS_DEFERRED
+    assert by_name["systemic_cluster_only_subset"].status == CONTROL_STATUS_DEFERRED
     assert "no proxy volume baseline" in by_name["volume_only"].notes
     assert by_name["price_path_only"].oos_prediction_rows > 0
 
@@ -207,3 +225,4 @@ def test_run_mvp1_controls_cli_writes_control_artifacts(tmp_path: Path) -> None:
     with (out_dir / "anomaly_baseline_comparison.csv").open(newline="", encoding="utf-8-sig") as handle:
         baseline_rows = list(csv.DictReader(handle))
     assert any(row["baseline_name"] == "volume_only" and row["status"] == CONTROL_STATUS_DEFERRED for row in baseline_rows)
+    assert any(row["baseline_name"] == "always_follow_anomaly" and row["status"] == CONTROL_STATUS_OK for row in baseline_rows)
