@@ -186,7 +186,7 @@ class CacheConfig:
     compression: str = "zstd"
     oi_join_strategy: Literal["backward"] = "backward"
     request_sleep_seconds: float = 0.0
-    use_archive_file_index: bool = True
+    use_archive_file_index: bool = False
     refresh_archive_file_index: bool = False
 
     def __post_init__(self) -> None:
@@ -368,15 +368,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Optional sleep after each block to be gentle to the public archive.",
     )
-    parser.add_argument(
+    archive_index_group = parser.add_mutually_exclusive_group()
+    archive_index_group.add_argument(
+        "--archive-file-index",
+        action="store_true",
+        help=(
+            "Opt into S3 archive preflight before processing. This can skip symbols/blocks with no klines, "
+            "but adds hundreds of metadata requests and is intentionally disabled by default."
+        ),
+    )
+    archive_index_group.add_argument(
         "--no-archive-file-index",
         action="store_true",
-        help="Disable S3 file-index preflight and probe archives directly. Slower, but useful for diagnostics.",
+        help="Deprecated no-op kept for compatibility; direct archive probing is now the default.",
     )
     parser.add_argument(
         "--refresh-archive-file-index",
         action="store_true",
-        help="Refresh cached Binance Vision file listings before processing each symbol.",
+        help="Refresh cached Binance Vision file listings before processing each symbol when --archive-file-index is enabled.",
     )
     return parser
 
@@ -396,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
         overwrite=args.overwrite,
         oi_join_strategy=args.oi_join_strategy,
         request_sleep_seconds=args.request_sleep,
-        use_archive_file_index=not args.no_archive_file_index,
+        use_archive_file_index=bool(args.archive_file_index and not args.no_archive_file_index),
         refresh_archive_file_index=args.refresh_archive_file_index,
     )
     build_binance_vision_cache(cfg)
@@ -533,69 +542,105 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
     else:
         write_skipped_symbols(skipped_symbols_path, skipped_symbols)
 
+    if config.use_archive_file_index:
+        log_cache_stage("archive preflight enabled; using scoped kline metadata before downloads")
+    else:
+        log_cache_stage("archive preflight disabled; direct archive probing starts immediately")
+
     started_at = time.monotonic()
     completed_block_units = 0
-    estimated_block_units = max(1, len(symbols) * max(1, len(blocks)))
+    base_blocks_per_symbol = max(1, len(blocks))
+    estimated_block_units = max(1, len(symbols) * base_blocks_per_symbol)
     disk_usage = DirectorySizeSampler(DEFAULT_MARKET_CACHE_ROOT, sample_interval_seconds=30.0)
 
-    progress = tqdm(symbols, desc="Binance Vision cache", unit="symbol", mininterval=1.0, dynamic_ncols=True)
-    for symbol_index, symbol in enumerate(progress, start=1):
+    progress = tqdm(
+        total=estimated_block_units,
+        desc="Binance Vision cache",
+        unit="block",
+        mininterval=1.0,
+        dynamic_ncols=True,
+    )
+    try:
+        for symbol_index, symbol in enumerate(symbols, start=1):
+            symbol_block_units_before = completed_block_units
 
-        def on_block_progress(
-            progress_symbol: str,
-            block_label: str,
-            symbol_blocks_done: int,
-            symbol_blocks_total: int,
-            rows_written: int,
-        ) -> None:
-            nonlocal completed_block_units, estimated_block_units
-            completed_block_units += 1
-            estimated_block_units = max(
-                estimated_block_units,
-                (symbol_index - 1) * max(1, len(blocks)) + symbol_blocks_total,
-                completed_block_units,
-            )
+            def on_block_progress(
+                progress_symbol: str,
+                block_label: str,
+                symbol_blocks_done: int,
+                symbol_blocks_total: int,
+                rows_written: int,
+            ) -> None:
+                nonlocal completed_block_units, estimated_block_units
+                completed_block_units += 1
+                remaining_symbols = max(0, len(symbols) - symbol_index)
+                remaining_current_symbol_blocks = max(0, symbol_blocks_total - symbol_blocks_done)
+                estimated_block_units = max(
+                    estimated_block_units,
+                    completed_block_units + remaining_current_symbol_blocks + remaining_symbols * base_blocks_per_symbol,
+                    completed_block_units,
+                )
+                if progress.total != estimated_block_units:
+                    progress.total = estimated_block_units
+                    progress.refresh()
+                progress.update(1)
+                progress.set_postfix(
+                    sym=progress_symbol,
+                    blk=f"{symbol_blocks_done}/{symbol_blocks_total}",
+                    cur=block_label,
+                    done=f"{completed_block_units}/{estimated_block_units}",
+                    rows=rows_written,
+                    disk=disk_usage.get(),
+                    eta=format_eta(started_at, completed_block_units, estimated_block_units),
+                    refresh=True,
+                )
+
             progress.set_postfix(
-                sym=progress_symbol,
-                blk=f"{symbol_blocks_done}/{symbol_blocks_total}",
-                cur=block_label,
-                done=f"{completed_block_units}/{estimated_block_units}",
-                rows=rows_written,
+                sym=symbol,
+                blk=f"0/{len(blocks)}",
                 disk=disk_usage.get(),
                 eta=format_eta(started_at, completed_block_units, estimated_block_units),
                 refresh=True,
             )
-
-        progress.set_postfix(
-            sym=symbol,
-            blk=f"0/{len(blocks)}",
-            disk=disk_usage.get(),
-            eta=format_eta(started_at, completed_block_units, estimated_block_units),
-            refresh=True,
-        )
-        symbol_stats = build_symbol_cache(
-            symbol=symbol,
-            blocks=blocks,
-            config=config,
-            start_date=start,
-            end_date=end,
-            ledger=ledger,
-            ledger_path=ledger_path,
-            completions=completions,
-            completion_path=completion_path,
-            preloaded_archive_file_index=archive_file_indexes.get(symbol),
-            progress_callback=on_block_progress,
-        )
-        stats.append(symbol_stats)
-        write_stats(metadata_dir / "cache_stats.csv", stats)
-        write_manifest(
-            metadata_dir / "manifest.json",
-            config=config,
-            stats=stats,
-            start_date=start,
-            end_date=end,
-            skipped_symbols=skipped_symbols,
-        )
+            symbol_stats = build_symbol_cache(
+                symbol=symbol,
+                blocks=blocks,
+                config=config,
+                start_date=start,
+                end_date=end,
+                ledger=ledger,
+                ledger_path=ledger_path,
+                completions=completions,
+                completion_path=completion_path,
+                preloaded_archive_file_index=archive_file_indexes.get(symbol),
+                progress_callback=on_block_progress,
+            )
+            if completed_block_units == symbol_block_units_before:
+                # Already-completed symbols return before block iteration. Count their planned
+                # blocks so the block-level progress bar stays truthful on resume runs.
+                completed_block_units += base_blocks_per_symbol
+                progress.update(base_blocks_per_symbol)
+                progress.set_postfix(
+                    sym=symbol,
+                    blk="cached-symbol",
+                    done=f"{completed_block_units}/{estimated_block_units}",
+                    rows=symbol_stats.rows_written,
+                    disk=disk_usage.get(),
+                    eta=format_eta(started_at, completed_block_units, estimated_block_units),
+                    refresh=True,
+                )
+            stats.append(symbol_stats)
+            write_stats(metadata_dir / "cache_stats.csv", stats)
+            write_manifest(
+                metadata_dir / "manifest.json",
+                config=config,
+                stats=stats,
+                start_date=start,
+                end_date=end,
+                skipped_symbols=skipped_symbols,
+            )
+    finally:
+        progress.close()
     return stats
 
 

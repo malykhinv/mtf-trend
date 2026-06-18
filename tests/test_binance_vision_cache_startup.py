@@ -23,6 +23,17 @@ def test_compact_command_uses_optimized_network_defaults() -> None:
     assert config.timeout_seconds == DEFAULT_TIMEOUT_SECONDS == 45.0
     assert config.connect_timeout_seconds == DEFAULT_CONNECT_TIMEOUT_SECONDS == 8.0
     assert config.retries == DEFAULT_RETRIES == 2
+    assert not config.use_archive_file_index
+
+
+def test_archive_file_index_is_explicit_opt_in() -> None:
+    args = cache.build_arg_parser().parse_args(["--archive-file-index"])
+    config = CacheConfig(
+        out_dir=Path(".cache"),
+        use_archive_file_index=bool(args.archive_file_index and not args.no_archive_file_index),
+    )
+
+    assert config.use_archive_file_index
 
 
 def test_archive_range_filter_uses_run_level_monthly_klines_index(monkeypatch, tmp_path: Path) -> None:
