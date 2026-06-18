@@ -5,8 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from anomaly_science.contracts.events import AnomalyEvent
 from anomaly_science.contracts.market import Candle1m
-from anomaly_science.events import BroadAnomalyDetectorConfig, detect_broad_anomaly_events
+from anomaly_science.events import BroadAnomalyDetectorConfig, detect_broad_anomaly_events, events_to_artifact
 
 
 BASE_TS = 1_704_067_200_000
@@ -29,6 +30,27 @@ def _candle(index: int, *, close: float, quote_volume: float = 100.0) -> Candle1
         quote_volume=quote_volume,
         number_of_trades=10.0,
         taker_buy_quote_volume=quote_volume * 0.5,
+    )
+
+
+def _event(*, event_id: str, symbol: str, detection_offset_minutes: int) -> AnomalyEvent:
+    detection_time_ms = BASE_TS + detection_offset_minutes * 60_000
+    start_time_ms = detection_time_ms - 60_000
+    return AnomalyEvent(
+        event_id=event_id,
+        symbol=symbol,
+        event_start_time_ms=start_time_ms,
+        event_detection_time_ms=detection_time_ms,
+        seed_time_ms=start_time_ms,
+        seed_open=100.0,
+        seed_high=101.0,
+        seed_low=99.0,
+        seed_close=100.5,
+        initial_move_pct=0.005,
+        initial_volume_zscore=None,
+        initial_quote_volume_zscore=None,
+        initial_trade_count_zscore=None,
+        detector_version="test",
     )
 
 
@@ -64,6 +86,19 @@ def test_broad_detector_uses_current_closed_candle_and_past_baseline_only() -> N
     assert events[0].seed_time_ms == events[0].event_start_time_ms
     assert events[0].initial_move_pct > 0.03
     assert events[0] == mutated_events[0]
+
+
+def test_events_to_artifact_orders_rows_by_state_time() -> None:
+    rows = events_to_artifact(
+        [
+            _event(event_id="late", symbol="BBB/USDT:USDT", detection_offset_minutes=3),
+            _event(event_id="early", symbol="AAA/USDT:USDT", detection_offset_minutes=1),
+            _event(event_id="same_time", symbol="CCC/USDT:USDT", detection_offset_minutes=1),
+        ]
+    )
+
+    assert [row["event_id"] for row in rows] == ["early", "same_time", "late"]
+    assert [row["state_time_ms"] for row in rows] == sorted(row["state_time_ms"] for row in rows)
 
 
 def test_broad_detector_can_detect_volume_anomaly_without_return_threshold() -> None:

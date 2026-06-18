@@ -79,7 +79,7 @@ def detect_broad_anomaly_events(
 
 def events_to_artifact(events: Sequence[AnomalyEvent]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for event in events:
+    for event in sorted(events, key=lambda item: (item.event_detection_time_ms, item.symbol, item.event_id)):
         state_time_ms = event.event_detection_time_ms
         rows.append(
             {
