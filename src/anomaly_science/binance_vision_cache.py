@@ -929,6 +929,9 @@ def read_klines(zip_bytes: bytes):
         raise ValueError(f"kline CSV has no taker buy base volume column: {frame.columns}")
     if taker_buy_quote_column is None:
         raise ValueError(f"kline CSV has no taker buy quote volume column: {frame.columns}")
+    trade_count_column = first_existing_column(frame.columns, ("trade_count", "count", "number_of_trades"))
+    if trade_count_column is None:
+        raise ValueError(f"kline CSV has no trade count column: {frame.columns}")
     selected = frame.select(
         normalize_timestamp_expr("open_time").alias("timestamp"),
         pl.col("open").cast(pl.Float64, strict=False),
@@ -937,7 +940,7 @@ def read_klines(zip_bytes: bytes):
         pl.col("close").cast(pl.Float64, strict=False),
         pl.col("volume").cast(pl.Float64, strict=False),
         pl.col("quote_volume").cast(pl.Float64, strict=False),
-        pl.col("trade_count").cast(pl.Float64, strict=False),
+        pl.col(trade_count_column).cast(pl.Float64, strict=False).alias("trade_count"),
         pl.col(taker_buy_base_column).cast(pl.Float64, strict=False).alias("taker_buy_base_volume"),
         pl.col(taker_buy_quote_column).cast(pl.Float64, strict=False).alias("taker_buy_quote_volume"),
     ).drop_nulls(subset=["timestamp", "open", "high", "low", "close"])

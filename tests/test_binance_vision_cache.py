@@ -126,6 +126,25 @@ def test_process_block_outputs_memory_bounded_schema() -> None:
         assert frame.schema[column] == pl.Boolean
 
 
+def test_kline_reader_accepts_binance_count_column() -> None:
+    from anomaly_science.binance_vision_cache import read_klines
+
+    payload = _zip_csv(
+        "klines.csv",
+        "\n".join(
+            [
+                "open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore",
+                "1704067200000,10,11,9,10.5,100,1704067259999,1000,10,40,400,0",
+            ]
+        ),
+    )
+
+    frame = read_klines(payload)
+
+    assert frame["trade_count"].to_list() == [10.0]
+    assert frame["quote_volume"].to_list() == [1000.0]
+
+
 def test_present_metrics_with_unknown_schema_fail_instead_of_silent_empty_fallback() -> None:
     bad_metrics_zip = _zip_csv("metrics.csv", "bad_time,bad_value\n1,2\n")
 
