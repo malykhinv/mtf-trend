@@ -227,4 +227,19 @@ Intent:
 Validation for this proposed patch:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest -q tests/test_binance_vision_cache.py tests/test_binance_vision_cache_delivery_symbols.py tests/test_binance_vision_cache_startup.py tests/test_zip_project.py`
+## perf: replace Binance Vision root archive scan with scoped preflight
 
+Status: PROPOSED; patch generated from uploaded snapshot `project_20260618_124949.zip`; GitHub branch `codex/pno-anomaly-continuation-lab` head checked as `e1a4e19a14a6a735a650aaec50f0f41f65da57eb`, but uploaded snapshot contains newer local changes not present at that head.
+
+Intent:
+- Stop building the run-level kline preflight by recursively listing the whole `data/futures/um/monthly/klines/` S3 tree.
+- Build a scoped kline index only for requested symbols and requested monthly labels, with visible `Binance Vision archive index` progress.
+- Probe current-month daily klines only for symbols that have no monthly archive in the requested window, preserving daily-only newly listed symbols without exploding probes for active symbols.
+- Cache the scoped index only when its symbol/month/day scope exactly matches the current run.
+- Make the top-level `main.py build-binance-vision-cache` CLI use the optimized network defaults: timeout 45s, connect-timeout 8s, retries 2.
+
+Validation for this proposed patch:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `PYTHONPATH=. pytest -q tests/test_binance_vision_cache_startup.py tests/test_binance_vision_cache.py tests/test_binance_vision_cache_delivery_symbols.py tests/test_zip_project.py`
+- Full `PYTHONPATH=. pytest -q` was attempted, but this container lacks `pyarrow`/`fastparquet`, so `tests/test_cache_export.py::test_export_cache_to_mvp1_csv_writes_explicit_boundary` fails before exercising this patch.
+- GitHub combined status for `e1a4e19a14a6a735a650aaec50f0f41f65da57eb`: no status checks returned.

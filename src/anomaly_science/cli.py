@@ -150,9 +150,9 @@ def build_parser() -> argparse.ArgumentParser:
     cache.add_argument("--symbols-file", default="", help="Optional text file with one symbol per line.")
     cache.add_argument("--max-symbols", type=int, default=None, help="Optional cap for smoke tests.")
     cache.add_argument("--download-workers", type=int, default=3, help="Concurrent downloads per block; valid range: 1..3.")
-    cache.add_argument("--timeout", type=float, default=60.0, help="Per-request read timeout in seconds.")
-    cache.add_argument("--connect-timeout", type=float, default=10.0, help="Per-request connect timeout in seconds.")
-    cache.add_argument("--retries", type=int, default=3, help="Retries per file download.")
+    cache.add_argument("--timeout", type=float, default=45.0, help="Per-request read timeout in seconds.")
+    cache.add_argument("--connect-timeout", type=float, default=8.0, help="Per-request connect timeout in seconds.")
+    cache.add_argument("--retries", type=int, default=2, help="Retries per file download.")
     cache.add_argument("--overwrite", action="store_true", help="Rebuild symbols even if {symbol}.parquet already exists.")
     cache.add_argument(
         "--oi-join-strategy",

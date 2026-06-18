@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gc
+import hashlib
 import json
 import io
 import os
@@ -12,7 +13,7 @@ import sys
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Literal
@@ -29,6 +30,7 @@ ONE_DAY_MS = 86_400_000
 DEFAULT_TIMEOUT_SECONDS = 45.0
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 8.0
 DEFAULT_RETRIES = 2
+ARCHIVE_PREFLIGHT_WORKERS = 16
 
 
 OUTPUT_COLUMNS = [
@@ -237,12 +239,16 @@ class ArchiveFileIndex:
 @dataclass(frozen=True, slots=True)
 class RunKlinesArchiveIndex:
     monthly_labels_by_symbol: dict[str, frozenset[str]]
+    daily_labels_by_symbol: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def monthly_labels(self, symbol: str) -> frozenset[str]:
         return self.monthly_labels_by_symbol.get(symbol.upper(), frozenset())
 
+    def daily_labels(self, symbol: str) -> frozenset[str]:
+        return self.daily_labels_by_symbol.get(symbol.upper(), frozenset())
+
     def symbols(self) -> frozenset[str]:
-        return frozenset(self.monthly_labels_by_symbol)
+        return frozenset(self.monthly_labels_by_symbol) | frozenset(self.daily_labels_by_symbol)
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,9 +464,51 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
         raise RuntimeError("No perpetual symbols to process after delivery-contract/date-range filtering.")
 
     if config.use_archive_file_index:
-        log_cache_stage("loading run-level monthly klines archive index")
-        run_klines_index = load_or_build_run_klines_archive_index(config=config)
-        log_cache_stage(f"run-level monthly klines index symbols={len(run_klines_index.symbols())}")
+        monthly_index_labels = monthly_archive_labels_from_blocks(blocks)
+        daily_index_labels = daily_archive_labels_from_blocks(blocks)
+        log_cache_stage(
+            "loading scoped klines archive index "
+            f"symbols={len(symbols)} monthly_labels={len(monthly_index_labels)} daily_labels={len(daily_index_labels)}"
+        )
+        run_index_path = run_klines_archive_index_path(config.out_dir)
+        if (
+            run_index_path.exists()
+            and not config.refresh_archive_file_index
+            and run_klines_archive_index_scope_matches(
+                run_index_path,
+                symbols=tuple(symbols),
+                monthly_labels=monthly_index_labels,
+                daily_labels=daily_index_labels,
+            )
+        ):
+            log_cache_stage(f"using cached scoped klines archive index path={run_index_path}")
+            run_klines_index = read_run_klines_archive_index(run_index_path)
+        else:
+            with tqdm(
+                total=len(symbols),
+                desc="Binance Vision archive index",
+                unit="symbol",
+                mininterval=1.0,
+                dynamic_ncols=True,
+            ) as index_progress:
+
+                def on_index_progress(index_symbol: str, done: int, total: int, found_labels: int) -> None:
+                    index_progress.update(1)
+                    index_progress.set_postfix(
+                        sym=index_symbol,
+                        done=f"{done}/{total}",
+                        labels=found_labels,
+                        refresh=True,
+                    )
+
+                run_klines_index = load_or_build_run_klines_archive_index(
+                    config=config,
+                    symbols=symbols,
+                    monthly_labels=monthly_index_labels,
+                    daily_labels=daily_index_labels,
+                    progress_callback=on_index_progress,
+                )
+        log_cache_stage(f"scoped klines index symbols={len(run_klines_index.symbols())}")
         log_cache_stage(f"checking archive range availability symbols={len(symbols)}")
         symbols, archive_file_indexes, range_skipped = filter_symbols_by_archive_range(
             symbols=symbols,
@@ -1453,34 +1501,181 @@ def make_archive_url(*, symbol: str, block: VisionBlock, dataset: Literal["kline
 
 
 
-def load_or_build_run_klines_archive_index(*, config: CacheConfig) -> RunKlinesArchiveIndex:
+RunKlinesIndexProgressCallback = Callable[[str, int, int, int], None]
+
+
+def load_or_build_run_klines_archive_index(
+    *,
+    config: CacheConfig,
+    symbols: Iterable[str],
+    monthly_labels: Iterable[str],
+    daily_labels: Iterable[str] = (),
+    progress_callback: RunKlinesIndexProgressCallback | None = None,
+) -> RunKlinesArchiveIndex:
+    normalized_symbols = tuple(sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()}))
+    normalized_monthly_labels = tuple(sorted({label for label in monthly_labels if label}))
+    normalized_daily_labels = tuple(sorted({label for label in daily_labels if label}))
     index_path = run_klines_archive_index_path(config.out_dir)
-    if index_path.exists() and not config.refresh_archive_file_index:
+    if (
+        index_path.exists()
+        and not config.refresh_archive_file_index
+        and run_klines_archive_index_scope_matches(
+            index_path,
+            symbols=normalized_symbols,
+            monthly_labels=normalized_monthly_labels,
+            daily_labels=normalized_daily_labels,
+        )
+    ):
         return read_run_klines_archive_index(index_path)
-    index = build_run_klines_archive_index(config=config)
-    write_run_klines_archive_index(index_path, index)
+    index = build_run_klines_archive_index(
+        config=config,
+        symbols=normalized_symbols,
+        monthly_labels=normalized_monthly_labels,
+        daily_labels=normalized_daily_labels,
+        progress_callback=progress_callback,
+    )
+    write_run_klines_archive_index(
+        index_path,
+        index,
+        symbols=normalized_symbols,
+        monthly_labels=normalized_monthly_labels,
+        daily_labels=normalized_daily_labels,
+    )
     return index
 
 
 def run_klines_archive_index_path(out_dir: Path) -> Path:
-    return cache_metadata_dir(out_dir) / "archive_file_index" / "run_monthly_klines.json"
+    return cache_metadata_dir(out_dir) / "archive_file_index" / "run_scoped_klines.json"
 
 
-def build_run_klines_archive_index(*, config: CacheConfig) -> RunKlinesArchiveIndex:
-    labels_by_symbol: dict[str, set[str]] = {}
-    keys = list_s3_object_keys(prefix="data/futures/um/monthly/klines/", config=config)
-    for key in keys:
+def run_klines_archive_index_scope_matches(
+    path: Path,
+    *,
+    symbols: tuple[str, ...],
+    monthly_labels: tuple[str, ...],
+    daily_labels: tuple[str, ...],
+) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    scope = payload.get("scope") or {}
+    return (
+        scope.get("version") == 1
+        and tuple(scope.get("symbols") or ()) == symbols
+        and tuple(scope.get("monthly_labels") or ()) == monthly_labels
+        and tuple(scope.get("daily_labels") or ()) == daily_labels
+    )
+
+
+def build_run_klines_archive_index(
+    *,
+    config: CacheConfig,
+    symbols: Iterable[str],
+    monthly_labels: Iterable[str],
+    daily_labels: Iterable[str] = (),
+    progress_callback: RunKlinesIndexProgressCallback | None = None,
+) -> RunKlinesArchiveIndex:
+    normalized_symbols = tuple(sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()}))
+    wanted_monthly = frozenset(label for label in monthly_labels if label)
+    wanted_daily = frozenset(label for label in daily_labels if label)
+    monthly_by_symbol: dict[str, frozenset[str]] = {}
+    daily_by_symbol: dict[str, frozenset[str]] = {}
+    completed = 0
+    total = len(normalized_symbols)
+
+    if not normalized_symbols:
+        return RunKlinesArchiveIndex(monthly_labels_by_symbol={}, daily_labels_by_symbol={})
+
+    workers = min(ARCHIVE_PREFLIGHT_WORKERS, max(1, total))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                build_symbol_klines_index_entry,
+                symbol=symbol,
+                monthly_labels=wanted_monthly,
+                daily_labels=wanted_daily,
+                config=config,
+            ): symbol
+            for symbol in normalized_symbols
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            monthly, daily = future.result()
+            if monthly:
+                monthly_by_symbol[symbol] = monthly
+            if daily:
+                daily_by_symbol[symbol] = daily
+            completed += 1
+            if progress_callback is not None:
+                progress_callback(symbol, completed, total, len(monthly) + len(daily))
+
+    return RunKlinesArchiveIndex(
+        monthly_labels_by_symbol=dict(sorted(monthly_by_symbol.items())),
+        daily_labels_by_symbol=dict(sorted(daily_by_symbol.items())),
+    )
+
+
+def build_symbol_klines_index_entry(
+    *,
+    symbol: str,
+    monthly_labels: frozenset[str],
+    daily_labels: frozenset[str],
+    config: CacheConfig,
+) -> tuple[frozenset[str], frozenset[str]]:
+    monthly = list_symbol_monthly_kline_labels(symbol=symbol, wanted_labels=monthly_labels, config=config)
+    # Current-month daily archives matter only for symbols that have no monthly archive in the requested window.
+    # Checking them for every active symbol would add thousands of redundant archive probes.
+    daily = (
+        probe_symbol_daily_kline_labels(symbol=symbol, wanted_labels=daily_labels, config=config)
+        if daily_labels and not monthly
+        else frozenset()
+    )
+    return monthly, daily
+
+
+def list_symbol_monthly_kline_labels(*, symbol: str, wanted_labels: frozenset[str], config: CacheConfig) -> frozenset[str]:
+    if not wanted_labels:
+        return frozenset()
+    labels: set[str] = set()
+    prefix = archive_dataset_prefix(symbol=symbol, period="monthly", dataset="klines")
+    for key in list_s3_object_keys(prefix=prefix, config=config):
         parsed = parse_monthly_kline_archive_key(key)
         if parsed is None:
             continue
-        symbol, label = parsed
-        labels_by_symbol.setdefault(symbol, set()).add(label)
-    return RunKlinesArchiveIndex(
-        monthly_labels_by_symbol={
-            symbol: frozenset(labels)
-            for symbol, labels in sorted(labels_by_symbol.items())
-        }
-    )
+        parsed_symbol, label = parsed
+        if parsed_symbol == symbol.upper() and label in wanted_labels:
+            labels.add(label)
+    return frozenset(labels)
+
+
+def probe_symbol_daily_kline_labels(*, symbol: str, wanted_labels: frozenset[str], config: CacheConfig) -> frozenset[str]:
+    labels: set[str] = set()
+    for label in sorted(wanted_labels):
+        block = VisionBlock(period="daily", label=label, start_date=datetime.strptime(label, "%Y-%m-%d").date(), end_date=datetime.strptime(label, "%Y-%m-%d").date())
+        if archive_url_exists(make_archive_url(symbol=symbol, block=block, dataset="klines"), config=config):
+            labels.add(label)
+    return frozenset(labels)
+
+
+def archive_url_exists(url: str, *, config: CacheConfig) -> bool:
+    timeout = (config.connect_timeout_seconds, config.timeout_seconds)
+    last_error: Exception | None = None
+    for attempt in range(config.retries + 1):
+        try:
+            response = requests.head(url, allow_redirects=True, timeout=timeout)
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt >= config.retries:
+                raise RuntimeError(f"failed to probe {url}: {exc}") from exc
+            time.sleep(min(2.0 * (attempt + 1), 10.0))
+    if last_error is not None:
+        raise RuntimeError(f"failed to probe {url}: {last_error}") from last_error
+    return False
 
 
 def parse_monthly_kline_archive_key(key: str) -> tuple[str, str] | None:
@@ -1493,13 +1688,44 @@ def parse_monthly_kline_archive_key(key: str) -> tuple[str, str] | None:
     return match.group("symbol"), match.group("label")
 
 
-def write_run_klines_archive_index(path: Path, index: RunKlinesArchiveIndex) -> None:
+def write_run_klines_archive_index(
+    path: Path,
+    index: RunKlinesArchiveIndex,
+    *,
+    symbols: Iterable[str],
+    monthly_labels: Iterable[str],
+    daily_labels: Iterable[str] = (),
+) -> None:
+    scope_symbols = tuple(sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()}))
+    scope_monthly_labels = tuple(sorted({label for label in monthly_labels if label}))
+    scope_daily_labels = tuple(sorted({label for label in daily_labels if label}))
+    scope_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "symbols": scope_symbols,
+                "monthly_labels": scope_monthly_labels,
+                "daily_labels": scope_daily_labels,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
     payload = {
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "source": "monthly_klines",
-        "labels_by_symbol": {
+        "source": "scoped_klines",
+        "scope": {
+            "version": 1,
+            "hash": scope_hash,
+            "symbols": list(scope_symbols),
+            "monthly_labels": list(scope_monthly_labels),
+            "daily_labels": list(scope_daily_labels),
+        },
+        "monthly_labels_by_symbol": {
             symbol: sorted(labels)
             for symbol, labels in sorted(index.monthly_labels_by_symbol.items())
+        },
+        "daily_labels_by_symbol": {
+            symbol: sorted(labels)
+            for symbol, labels in sorted(index.daily_labels_by_symbol.items())
         },
     }
     tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -1510,21 +1736,30 @@ def write_run_klines_archive_index(path: Path, index: RunKlinesArchiveIndex) -> 
 
 def read_run_klines_archive_index(path: Path) -> RunKlinesArchiveIndex:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    raw = payload.get("labels_by_symbol") or {}
+    raw_monthly = payload.get("monthly_labels_by_symbol") or payload.get("labels_by_symbol") or {}
+    raw_daily = payload.get("daily_labels_by_symbol") or {}
     return RunKlinesArchiveIndex(
         monthly_labels_by_symbol={
             str(symbol).upper(): frozenset(str(label) for label in labels)
-            for symbol, labels in raw.items()
-        }
+            for symbol, labels in raw_monthly.items()
+        },
+        daily_labels_by_symbol={
+            str(symbol).upper(): frozenset(str(label) for label in labels)
+            for symbol, labels in raw_daily.items()
+        },
     )
 
 
 def archive_index_from_run_klines_index(*, symbol: str, run_index: RunKlinesArchiveIndex) -> ArchiveFileIndex:
+    labels: dict[tuple[ArchivePeriod, ArchiveDataset], frozenset[str]] = {
+        ("monthly", "klines"): run_index.monthly_labels(symbol),
+    }
+    daily_labels = run_index.daily_labels(symbol)
+    if daily_labels:
+        labels[("daily", "klines")] = daily_labels
     return ArchiveFileIndex(
         symbol=symbol.upper(),
-        labels={
-            ("monthly", "klines"): run_index.monthly_labels(symbol),
-        },
+        labels=labels,
     )
 
 
@@ -1797,6 +2032,14 @@ def daily_blocks(start: date, end: date) -> list[VisionBlock]:
         blocks.append(VisionBlock(period="daily", label=cursor.isoformat(), start_date=cursor, end_date=cursor))
         cursor += timedelta(days=1)
     return blocks
+
+
+def monthly_archive_labels_from_blocks(blocks: Iterable[VisionBlock]) -> tuple[str, ...]:
+    return tuple(sorted({block.label for block in blocks if block.period == "monthly"}))
+
+
+def daily_archive_labels_from_blocks(blocks: Iterable[VisionBlock]) -> tuple[str, ...]:
+    return tuple(sorted({block.label for block in blocks if block.period == "daily"}))
 
 
 def add_month(value: date) -> date:

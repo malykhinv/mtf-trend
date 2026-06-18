@@ -42,3 +42,16 @@ Pending local patches from uploaded snapshot `project_20260618_115220.zip`:
   - Avoids 873× symbol-index S3 listing during startup.
   - Keeps the cache command unchanged.
 - Patch status: PROPOSED until applied and verified locally.
+Current GitHub branch check on 2026-06-18:
+- Branch: `codex/pno-anomaly-continuation-lab`.
+- Head: `e1a4e19a14a6a735a650aaec50f0f41f65da57eb`.
+- Combined status: no status checks returned.
+- Uploaded snapshot `project_20260618_124949.zip` contains newer local Binance Vision cache startup changes than that GitHub head; this patch is generated against the uploaded snapshot, not directly against GitHub head.
+
+New pending patch from uploaded snapshot `project_20260618_124949.zip`:
+- `perf: replace Binance Vision root archive scan with scoped preflight`
+  - Replaces the silent recursive S3 root scan with scoped per-symbol/month kline preflight.
+  - Adds visible archive-index progress before symbol block processing starts.
+  - Preserves current-month daily-only symbols via bounded daily HEAD probes only when monthly overlap is absent.
+  - Keeps optional metrics/liquidation archive probing behavior unchanged.
+  - Patch status: PROPOSED until applied and verified locally.

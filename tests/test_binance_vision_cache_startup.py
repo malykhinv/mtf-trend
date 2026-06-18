@@ -10,6 +10,7 @@ from anomaly_science.binance_vision_cache import (
     DEFAULT_TIMEOUT_SECONDS,
     CacheConfig,
     RunKlinesArchiveIndex,
+    VisionBlock,
     build_run_klines_archive_index,
     filter_symbols_by_archive_range,
     parse_monthly_kline_archive_key,
@@ -54,24 +55,35 @@ def test_archive_range_filter_uses_run_level_monthly_klines_index(monkeypatch, t
     ]
 
 
-def test_run_level_monthly_klines_index_is_built_from_one_root_listing(monkeypatch, tmp_path: Path) -> None:
+def test_run_level_klines_index_is_scoped_to_requested_symbols_and_months(monkeypatch, tmp_path: Path) -> None:
     prefixes: list[str] = []
 
     def fake_list_s3_object_keys(*, prefix: str, config: CacheConfig) -> list[str]:
         prefixes.append(prefix)
-        return [
-            "data/futures/um/monthly/klines/AAAUSDT/1m/AAAUSDT-1m-2026-06.zip",
-            "data/futures/um/monthly/klines/BBBUSDT/1m/BBBUSDT-1m-2025-12.zip",
-            "data/futures/um/monthly/klines/BAD/3m/BAD-3m-2026-06.zip",
-        ]
+        if "AAAUSDT" in prefix:
+            return [
+                "data/futures/um/monthly/klines/AAAUSDT/1m/AAAUSDT-1m-2026-06.zip",
+                "data/futures/um/monthly/klines/AAAUSDT/1m/AAAUSDT-1m-2022-01.zip",
+            ]
+        if "BBBUSDT" in prefix:
+            return ["data/futures/um/monthly/klines/BBBUSDT/1m/BBBUSDT-1m-2025-12.zip"]
+        return ["data/futures/um/monthly/klines/BAD/3m/BAD-3m-2026-06.zip"]
 
     monkeypatch.setattr(cache, "list_s3_object_keys", fake_list_s3_object_keys)
 
-    index = build_run_klines_archive_index(config=CacheConfig(out_dir=tmp_path))
+    index = build_run_klines_archive_index(
+        config=CacheConfig(out_dir=tmp_path),
+        symbols=("AAAUSDT", "BBBUSDT", "BAD"),
+        monthly_labels=("2026-06",),
+    )
 
-    assert prefixes == ["data/futures/um/monthly/klines/"]
+    assert sorted(prefixes) == [
+        "data/futures/um/monthly/klines/AAAUSDT/1m/",
+        "data/futures/um/monthly/klines/BAD/1m/",
+        "data/futures/um/monthly/klines/BBBUSDT/1m/",
+    ]
     assert index.monthly_labels("AAAUSDT") == frozenset({"2026-06"})
-    assert index.monthly_labels("BBBUSDT") == frozenset({"2025-12"})
+    assert index.monthly_labels("BBBUSDT") == frozenset()
     assert index.monthly_labels("BAD") == frozenset()
 
 
@@ -82,3 +94,34 @@ def test_monthly_kline_archive_key_parser_requires_matching_symbol() -> None:
     assert parse_monthly_kline_archive_key(
         "data/futures/um/monthly/klines/AAAUSDT/1m/BBBUSDT-1m-2026-06.zip"
     ) is None
+
+
+def test_scoped_klines_index_can_keep_daily_only_current_month_symbol(monkeypatch, tmp_path: Path) -> None:
+    def fake_list_s3_object_keys(*, prefix: str, config: CacheConfig) -> list[str]:
+        return []
+
+    def fake_archive_url_exists(url: str, *, config: CacheConfig) -> bool:
+        return url.endswith("NEWUSDT-1m-2026-06-16.zip")
+
+    monkeypatch.setattr(cache, "list_s3_object_keys", fake_list_s3_object_keys)
+    monkeypatch.setattr(cache, "archive_url_exists", fake_archive_url_exists)
+
+    index = build_run_klines_archive_index(
+        config=CacheConfig(out_dir=tmp_path),
+        symbols=("NEWUSDT",),
+        monthly_labels=("2026-05",),
+        daily_labels=("2026-06-15", "2026-06-16"),
+    )
+
+    symbol_index = cache.archive_index_from_run_klines_index(symbol="NEWUSDT", run_index=index)
+
+    assert index.monthly_labels("NEWUSDT") == frozenset()
+    assert index.daily_labels("NEWUSDT") == frozenset({"2026-06-16"})
+    assert symbol_index.has(
+        block=VisionBlock(period="daily", label="2026-06-16", start_date=date(2026, 6, 16), end_date=date(2026, 6, 16)),
+        dataset="klines",
+    )
+    assert not symbol_index.has(
+        block=VisionBlock(period="daily", label="2026-06-15", start_date=date(2026, 6, 15), end_date=date(2026, 6, 15)),
+        dataset="klines",
+    )
