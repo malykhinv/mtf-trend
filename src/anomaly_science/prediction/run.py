@@ -21,6 +21,7 @@ from anomaly_science.prediction.builder import (
     prediction_metric_rows_to_artifact,
 )
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
+from anomaly_science.strategy.metadata import strategy_metadata_run_config_rows
 
 
 def run_mvp1_prediction(
@@ -272,6 +273,7 @@ def _run_config_rows(
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_prediction", source="runtime"),
+        *strategy_metadata_run_config_rows(),
         RunConfigRow(key="prediction_version", value=config.prediction_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="purge_horizon_minutes", value=str(config.purge_horizon_minutes), source="runtime"),

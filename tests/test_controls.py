@@ -270,6 +270,11 @@ def test_run_mvp1_controls_cli_writes_control_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
     assert audit_by_name["feature_matrix_control_baselines"]["status"] == "PASS"
 
+    with (out_dir / "anomaly_run_config.csv").open(newline="", encoding="utf-8-sig") as handle:
+        run_config = {row["key"]: row["value"] for row in csv.DictReader(handle)}
+    assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+    assert run_config["required_data_streams"] == "liquidations=false;open_interest=false"
+
     with (out_dir / "anomaly_baseline_comparison.csv").open(newline="", encoding="utf-8-sig") as handle:
         baseline_rows = list(csv.DictReader(handle))
     assert any(row["baseline_name"] == "volume_only" and row["status"] == CONTROL_STATUS_DEFERRED for row in baseline_rows)

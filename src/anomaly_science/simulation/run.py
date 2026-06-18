@@ -17,6 +17,7 @@ from anomaly_science.simulation.builder import (
     trade_simulation_rows_to_artifact,
 )
 from anomaly_science.simulation.config import TradeSimulationConfig
+from anomaly_science.strategy.metadata import strategy_metadata_run_config_rows
 
 
 def run_mvp1_trade_simulation(
@@ -172,6 +173,7 @@ def _run_config_rows(
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_simulation", source="runtime"),
+        *strategy_metadata_run_config_rows(),
         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),

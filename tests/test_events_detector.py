@@ -180,3 +180,9 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
     with (output_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["base_strategy_contract_valid"]["status"] == "PASS"
+    assert audit_by_name["required_data_streams_applied_before_trigger_generation"]["status"] == "PASS"
+
+    with (output_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
+    assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+    assert run_config["required_data_streams"] == "liquidations=false;open_interest=false"

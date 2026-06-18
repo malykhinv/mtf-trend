@@ -215,3 +215,8 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
+
+    with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
+    assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+    assert run_config["stop_loss_atr_1440"] == "1.1"

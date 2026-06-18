@@ -321,6 +321,12 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert audit_by_name["frozen_weekly_model_used_for_daily_oos"]["status"] == "PASS"
     assert audit_by_name["feature_matrix_artifact_schema_boundary"]["status"] == "PASS"
 
+    with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
+    assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+    assert run_config["strategy_horizon_minutes"] == "30"
+    assert run_config["feature_schema_version"] == "feature_schema_v1_relative_asof"
+
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert {row["event_id"] for row in rows} >= {"test_row", "test_row_2"}

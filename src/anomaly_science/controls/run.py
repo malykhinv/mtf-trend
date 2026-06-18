@@ -16,6 +16,7 @@ from anomaly_science.controls.builder import (
 )
 from anomaly_science.controls.config import ControlsConfig
 from anomaly_science.prediction import load_prediction_inputs
+from anomaly_science.strategy.metadata import strategy_metadata_run_config_rows
 
 
 def run_mvp1_controls(
@@ -214,6 +215,7 @@ def _run_config_rows(
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_controls", source="runtime"),
+        *strategy_metadata_run_config_rows(),
         RunConfigRow(key="control_version", value=config.control_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="purge_horizon_minutes", value=str(config.purge_horizon_minutes), source="runtime"),

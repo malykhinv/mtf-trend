@@ -8,6 +8,7 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.strategy.metadata import format_required_data_streams
 from anomaly_science.strategy.reject_reasons import anomaly_reject_reasons
 from anomaly_science.strategy.registry import available_strategies
 
@@ -64,18 +65,12 @@ def _strategy_registry_rows() -> list[dict[str, object]]:
                 "stop_loss_atr_1440": metadata.stop_loss_atr_1440,
                 "feature_schema_version": metadata.feature_schema_version,
                 "label_schema_version": metadata.label_schema_version,
-                "required_data_streams": _format_required_data_streams(strategy.required_data_streams),
+                "required_data_streams": format_required_data_streams(strategy.required_data_streams),
                 "active_research_strategy": True,
                 "live_trading_strategy": False,
             }
         )
     return rows
-
-
-def _format_required_data_streams(streams: object) -> str:
-    if not isinstance(streams, dict):
-        streams = dict(streams)  # type: ignore[arg-type]
-    return ";".join(f"{name}={str(required).lower()}" for name, required in sorted(streams.items()))
 
 
 def _strategy_reject_reason_rows() -> list[dict[str, object]]:

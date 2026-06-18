@@ -18,6 +18,7 @@ from anomaly_science.events.config import BroadAnomalyDetectorConfig
 from anomaly_science.events.deduplication import suppress_event_cascade
 from anomaly_science.events.detector import events_to_artifact
 from anomaly_science.strategy.base import validate_trigger_frame
+from anomaly_science.strategy.metadata import format_required_data_streams, strategy_metadata_run_config_rows
 from anomaly_science.strategy.registry import get_broad_anomaly_strategy
 
 
@@ -47,7 +48,13 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     raw_event_count = 0
     cascade_suppressed_count = 0
     event_error: str | None = None
-    if frames.get("candles_1m") is not None and not has_critical_fail(data_quality):
+    required_stream_reject_count = _required_stream_reject_count(
+        universe_rows=universe_rows,
+        required_streams=strategy.required_data_streams,
+    )
+    if required_stream_reject_count:
+        event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
+    if frames.get("candles_1m") is not None and not has_critical_fail(data_quality) and not required_stream_reject_count:
         try:
             gated_candles_1m = filter_warmup_window_rows(frames["candles_1m"])
             market_frame = pl.DataFrame(gated_candles_1m.to_dict(orient="list"))
@@ -76,6 +83,8 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
         technical_noise_shock_count=_technical_noise_shock_count(data_quality),
         warmup_window_count=_warmup_window_count(data_quality),
         strategy_name=strategy.metadata.strategy_name,
+        required_stream_reject_count=required_stream_reject_count,
+        required_data_streams=format_required_data_streams(strategy.required_data_streams),
     )
     run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, strategy=strategy)
 
@@ -144,6 +153,8 @@ def _protocol_rows(
     technical_noise_shock_count: int,
     warmup_window_count: int,
     strategy_name: str,
+    required_stream_reject_count: int,
+    required_data_streams: str,
 ) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
@@ -205,6 +216,16 @@ def _protocol_rows(
             artifact="anomaly_data_quality.csv",
         ),
         ProtocolAuditRow(
+            check_name="required_data_streams_applied_before_trigger_generation",
+            status=AuditStatus.PASS if required_stream_reject_count == 0 else AuditStatus.FAIL,
+            message=(
+                f"strategy.required_data_streams applied before strategy.generate_triggers; required_streams={required_data_streams}; no required stream rejects"
+                if required_stream_reject_count == 0
+                else f"strategy.required_data_streams applied before strategy.generate_triggers; required_stream_reject_count={required_stream_reject_count}"
+            ),
+            artifact="symbol_universe_by_day.csv;anomaly_events.csv",
+        ),
+        ProtocolAuditRow(
             check_name="trigger_cascade_suppressed_before_dataset_and_simulation",
             status=AuditStatus.PASS,
             message=f"suppressed {cascade_suppressed_count} repeated same-symbol triggers inside the strategy horizon before writing anomaly_events.csv",
@@ -237,6 +258,26 @@ def _warmup_window_count(rows: list) -> int:
     return sum(1 for row in rows if getattr(row, "check_name", "") == "candles_1m_warmup_window")
 
 
+def _required_stream_reject_count(*, universe_rows: list, required_streams: object) -> int:
+    stream_columns = {
+        "open_interest": "has_oi_data",
+        "liquidations": "has_liquidation_data",
+    }
+    reject_count = 0
+    for stream_name, required in dict(required_streams).items():  # type: ignore[arg-type]
+        if not required:
+            continue
+        column_name = stream_columns.get(stream_name)
+        if column_name is None:
+            raise ValueError(f"unknown required data stream: {stream_name}")
+        reject_count += sum(
+            1
+            for row in universe_rows
+            if getattr(row, "tradable_on_day", False) and getattr(row, column_name, False) is False
+        )
+    return reject_count
+
+
 def _enforce_trigger_frame_matches_events(*, trigger_frame: pl.DataFrame, events: tuple) -> None:
     trigger_event_ids = set(trigger_frame["event_id"].to_list()) if "event_id" in trigger_frame.columns else set()
     event_ids = {event.event_id for event in events}
@@ -256,7 +297,6 @@ def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, o
 
 def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[RunConfigRow]:
     config = strategy.config
-    metadata = strategy.metadata
     return [
         RunConfigRow(key="command", value="run-mvp1-events", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
@@ -264,13 +304,7 @@ def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[R
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_events", source="runtime"),
-        RunConfigRow(key="strategy_name", value=metadata.strategy_name, source="runtime"),
-        RunConfigRow(key="strategy_version", value=metadata.strategy_version, source="runtime"),
-        RunConfigRow(key="strategy_contract_version", value=metadata.strategy_contract_version, source="runtime"),
-        RunConfigRow(key="strategy_family", value=metadata.strategy_family, source="runtime"),
-        RunConfigRow(key="strategy_horizon_minutes", value=str(metadata.horizon_minutes), source="runtime"),
-        RunConfigRow(key="take_profit_atr_1440", value=str(metadata.take_profit_atr_1440), source="runtime"),
-        RunConfigRow(key="stop_loss_atr_1440", value=str(metadata.stop_loss_atr_1440), source="runtime"),
+        *strategy_metadata_run_config_rows(strategy),
         RunConfigRow(key="detector_version", value=config.detector_version, source="runtime"),
         RunConfigRow(key="detector_baseline_bars", value=str(config.baseline_bars), source="runtime"),
         RunConfigRow(key="detector_min_baseline_bars", value=str(config.min_baseline_bars), source="runtime"),

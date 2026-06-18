@@ -15,6 +15,7 @@ from anomaly_science.decision.builder import (
     load_expected_value_inputs,
 )
 from anomaly_science.decision.config import ExpectedValueConfig
+from anomaly_science.strategy.metadata import strategy_metadata_run_config_rows
 
 
 def run_mvp1_expected_value(
@@ -156,9 +157,8 @@ def _run_config_rows(
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_decision", source="runtime"),
+        *strategy_metadata_run_config_rows(strategy_name=config.strategy_version),
         RunConfigRow(key="ev_version", value=config.ev_version, source="runtime"),
-        RunConfigRow(key="strategy_name", value=config.strategy_name, source="runtime"),
-        RunConfigRow(key="strategy_version", value=config.strategy_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="fee_bps", value=str(config.fee_bps), source="runtime"),
         RunConfigRow(key="slippage_bps", value=str(config.slippage_bps), source="runtime"),
