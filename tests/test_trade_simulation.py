@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT, ExpectedValueRow
@@ -15,6 +17,7 @@ from anomaly_science.simulation import (
     TradeSimulationConfig,
     build_trade_simulation_rows,
     load_anomaly_trade_simulation_csv,
+    run_mvp1_trade_simulation,
     trade_simulation_rows_to_artifact,
 )
 
@@ -215,9 +218,23 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
+    assert audit_by_name["funding_rate_boundary"]["status"] == "WARN"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
     with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
     assert run_config["stop_loss_atr_1440"] == "1.1"
+
+
+def test_run_mvp1_trade_simulation_rejects_present_funding_rate_until_fees_are_supported(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "funding_rate.csv").write_text("symbol,timestamp_ms,funding_rate\nAAA/USDT:USDT,1,0.0001\n", encoding="utf-8")
+
+    with pytest.raises(NotImplementedError, match="funding_rate.csv is present"):
+        run_mvp1_trade_simulation(
+            input_dir=input_dir,
+            decision_timing_path=tmp_path / "missing_decision.csv",
+            out_dir=tmp_path / "simulation",
+        )

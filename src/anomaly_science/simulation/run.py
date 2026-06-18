@@ -32,6 +32,11 @@ def run_mvp1_trade_simulation(
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or TradeSimulationConfig()
+    funding_rate_present = _funding_rate_stream_present(input_path)
+    if funding_rate_present:
+        raise NotImplementedError(
+            "funding_rate.csv is present, but funding-fee debiting is not implemented; refusing to run zero-cost simulation"
+        )
 
     source = CsvDirectoryDataSource(input_path)
     decision_rows = load_anomaly_decision_timing_csv(decision_artifact_path)
@@ -41,7 +46,11 @@ def run_mvp1_trade_simulation(
         config=cfg,
     )
     metric_rows = build_trade_simulation_metric_rows(decision_rows=decision_rows, simulation_rows=simulation_rows, config=cfg)
-    protocol_rows = _protocol_rows(decision_row_count=len(decision_rows), simulation_row_count=len(simulation_rows))
+    protocol_rows = _protocol_rows(
+        decision_row_count=len(decision_rows),
+        simulation_row_count=len(simulation_rows),
+        funding_rate_present=funding_rate_present,
+    )
     run_config_rows = _run_config_rows(
         input_path=input_path,
         decision_timing_path=decision_artifact_path,
@@ -83,7 +92,7 @@ def run_mvp1_trade_simulation(
     return output_path
 
 
-def _protocol_rows(*, decision_row_count: int, simulation_row_count: int) -> list[ProtocolAuditRow]:
+def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, funding_rate_present: bool) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_trade_simulation_scope",
@@ -105,7 +114,17 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int) -> lis
         ProtocolAuditRow(
             check_name="stop_target_are_atr_normalized",
             status=AuditStatus.PASS,
-            message="stop and target distances are read from decision timing rows derived from ATR-normalized label thresholds",
+            message="stop and target distances are read from decision timing rows derived from StrategyMetadata ATR defaults and core_atr_1440",
+            artifact="anomaly_trade_simulation.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="funding_rate_boundary",
+            status=AuditStatus.FAIL if funding_rate_present else AuditStatus.WARN,
+            message=(
+                "funding_rate.csv is present; funding-fee debiting must be implemented before simulation can be interpreted"
+                if funding_rate_present
+                else "funding_rate stream absent; short-distribution conclusions are audit-limited, not zero-cost funding proof"
+            ),
             artifact="anomaly_trade_simulation.csv",
         ),
         ProtocolAuditRow(
@@ -153,6 +172,10 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int) -> lis
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_simulation", implemented=implemented_methodology_rows)
+
+
+def _funding_rate_stream_present(input_path: Path) -> bool:
+    return (input_path / "funding_rate.csv").is_file()
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:
