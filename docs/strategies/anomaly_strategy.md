@@ -171,25 +171,32 @@ Anomaly Strategy возвращает trigger frame в формате BaseStrate
 
 ```text
 symbol
-state_time_ms
+state_time
 is_trigger
 event_id
-event_start_time_ms
+event_start_time
+```
+
+Внутренний тип времени:
+
+```text
+state_time, event_start_time, event_detection_time и seed_time имеют тип pl.Datetime[ms].
+Unix timestamp Int64 допускается только при внешнем import/export, не внутри BaseStrategy contract.
 ```
 
 Anomaly-specific lifecycle mapping:
 
 ```text
-state_time_ms = event_detection_time_ms для первичного detection row
-event_start_time_ms = физический старт импульса/полки
-minutes_since_start = floor((state_time_ms - event_start_time_ms) / 60_000)
-seed_time_ms >= event_start_time_ms
+state_time = event_detection_time для первичного detection row
+event_start_time = физический старт импульса/полки
+minutes_since_start = floor((state_time - event_start_time) in minutes)
+seed_time >= event_start_time
 ```
 
 Запрещено:
 
 ```text
-подменять event_start_time_ms временем будущего high/low
+подменять event_start_time временем будущего high/low
 пересоздавать event_id недетерминированно между повторными runs на одинаковых данных
 смешивать detection row и trade entry row
 считать anomaly_events.csv полным поминутным state artifact
@@ -344,6 +351,7 @@ liq_intensity_during_sweep
 
 ```text
 Эти фичи должны быть рассчитаны только из данных <= state_time.
+Расчет должен проходить point-in-time equivalence audit Core: добавление будущих свечей не должно менять feature values прошлых rows.
 ```
 
 Запрещено:
@@ -352,6 +360,7 @@ liq_intensity_during_sweep
 подавать hard binary is_liquidity_sweep / is_perfect_shelf / is_false_breakout как основной model feature
 отбрасывать неидеальные setups до ML только потому, что они не совпали с ручным шаблоном
 использовать future reclaim для вычисления shelf/sweep feature на state_time
+использовать backward_fill, shift(-N), centered rolling или future extrema для anomaly geometry features
 ```
 
 Binary flags разрешены только как audit/debug fields.
@@ -560,7 +569,7 @@ strategy_version
 horizon_minutes
 symbol
 event_id
-snapshot_time_ms
+snapshot_time
 label_horizon_minutes
 feature_schema_version
 label_schema_version
@@ -570,6 +579,8 @@ label_schema_version
 
 ```text
 Для одного model_version все rows должны иметь один horizon_minutes и один label_schema_version.
+Для одного strategy variant + symbol первый accepted trigger блокирует новые dataset rows до state_time + horizon_minutes.
+Последующие минуты того же сигнального каскада получают reason_if_excluded = cascade_suppressed и используются только для audit/debug, не для train/simulation.
 ```
 
 Запрещено:
@@ -577,7 +588,8 @@ label_schema_version
 ```text
 склеивать h15/h30/h60 rows в один CatBoost multiclass model
 учить модель на event-level rows, если prediction принимается на state-level rows
-дедуплицировать разные snapshot_time_ms одного event_id как будто это один пример
+дедуплицировать разные snapshot_time одного event_id как будто это один пример
+считать каждую минуту одного пампа независимой обучающей строкой
 ```
 
 ## 11. Anomaly atlas
@@ -631,6 +643,7 @@ Strategy-specific reject reasons должны быть явными и не ма
 ```text
 not_triggered
 technical_noise_shock
+warmup_after_data_gap
 data_quality_fail
 insufficient_history_for_ATR
 insufficient_cross_section
@@ -640,6 +653,7 @@ horizon_not_available
 future_path_incomplete
 anti_binary_rule_failed
 outside_strategy_lifecycle
+cascade_suppressed
 RR_unacceptable
 calibrated_confidence_too_low
 systemic_cluster_guardrail
@@ -655,24 +669,25 @@ generic reject без reason_if_excluded
 
 ## 14. Anomaly events artifact lifecycle structure
 
-`anomaly_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Это event/lifecycle seed artifact, а не полный поминутный state artifact. Строки упорядочиваются по `state_time_ms`.
+`anomaly_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Это event/lifecycle seed artifact, а не полный поминутный state artifact. Строки упорядочиваются по `state_time`.
 
 Обязательные системные поля Core:
 
 ```text
 event_id: str
 symbol: str
-state_time_ms: int              # минута/момент калькуляции t_0 в canonical ms timestamp
-event_start_time_ms: int        # физическое начало импульса/полки
-minutes_since_start: int        # возраст события: state_time_ms - event_start_time_ms
+state_time: pl.Datetime[ms]  # минута/момент калькуляции t_0 во внутреннем формате Core
+event_start_time: pl.Datetime[ms]  # физическое начало импульса/полки
+minutes_since_start: int        # возраст события: state_time - event_start_time в минутах
 is_trigger: bool                # активен ли сигнал lifecycle trigger прямо сейчас
+reason_if_excluded: str | null   # например cascade_suppressed / warmup_after_data_gap
 ```
 
 Кастомные audit fields anomaly family, сохраняемые по declared artifact schema:
 
 ```text
-event_detection_time_ms
-seed_time_ms
+event_detection_time
+seed_time
 seed_open
 seed_high
 seed_low
@@ -692,6 +707,7 @@ detector_version
 ```text
 Core не выводит семантику стратегии из audit fields.
 Audit fields нужны для диагностики trigger/lifecycle, а не для обхода BaseStrategy contract.
+Rows с cascade_suppressed или warmup_after_data_gap не имеют права попадать в model train/OOS/simulation entry set.
 ```
 
 ## 15. Artifact aliases for anomaly family

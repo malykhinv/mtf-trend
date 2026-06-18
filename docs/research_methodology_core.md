@@ -144,10 +144,10 @@ class BaseStrategy(ABC):
 
         Required columns:
             symbol: pl.String
-            state_time_ms: pl.Int64
+            state_time: pl.Datetime(time_unit="ms")
             is_trigger: pl.Boolean
             event_id: pl.String
-            event_start_time_ms: pl.Int64
+            event_start_time: pl.Datetime(time_unit="ms")
 
         Strategy may add custom audit fields. Core does not parse their semantics;
         it stores only columns declared by the artifact schema.
@@ -157,8 +157,10 @@ class BaseStrategy(ABC):
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         """
         Возвращает только strategy-specific фичи.
+        Фичи должны быть строго causal/as-of: каждая строка использует только данные <= state_time.
         Не fit-ит модели, scaler, calibrator или thresholds.
         Не читает future labels.
+        Не использует отрицательные сдвиги, backward-fill, centered rolling windows или future extrema.
         """
 ```
 
@@ -179,8 +181,33 @@ Core не зависит от конкретного strategy module.
 использовать missing required data stream как model feature или market edge
 ```
 
+### 4.1. Internal time type standard
 
-### 4.1. Strategy variant identity and registry invariants
+Внутри расчетного движка Core и в BaseStrategy contract все timestamp-поля используют нативный Polars type:
+
+```text
+pl.Datetime(time_unit="ms")
+```
+
+Правило:
+
+```text
+state_time, snapshot_time, feature_cutoff_time, future_start_time, event_start_time, event_detection_time и все lifecycle timestamps внутри Core являются pl.Datetime[ms].
+Суффикс `_ms` запрещён для внутренних contract/artifact columns, чтобы не смешивать нативное время Polars с Unix timestamp serialization.
+Unix timestamp Int64 в миллисекундах разрешён только на внешней границе: import/export legacy CSV/Parquet или API payload normalization.
+```
+
+Запрещено:
+
+```text
+держать разные внутренние timestamp-типы для разных builders
+делать повторные cast Int64 <-> Datetime внутри hot path feature/state/future builders
+использовать join_asof между колонками времени разных типов
+сохранять `_ms` columns как canonical research contract
+```
+
+
+### 4.2. Strategy variant identity and registry invariants
 
 Единица регистрации в Core — не семейство стратегии, а конкретный strategy variant.
 
@@ -216,7 +243,7 @@ Strategy Registry обязан сохранять metadata variant-а в `strate
 читать TP/SL из simulation config в обход StrategyMetadata
 ```
 
-### 4.2. Trigger Frame validation contract
+### 4.3. Trigger Frame validation contract
 
 `generate_triggers()` возвращает не торговый сигнал и не boolean mask, а lifecycle boundary между Strategy и Core.
 
@@ -225,10 +252,10 @@ Strategy Registry обязан сохранять metadata variant-а в `strate
 | column | type | contract |
 | :--- | :--- | :--- |
 | symbol | string | instrument id from point-in-time universe |
-| state_time_ms | int64 | current as-of timestamp of trigger row |
+| state_time | datetime[ms] | current as-of timestamp of trigger row |
 | is_trigger | bool | whether strategy allows this row into strategy-gated dataset |
 | event_id | string | stable event id; deterministic hash is preferred over random UUID for reproducibility |
-| event_start_time_ms | int64 | physical start of the event/lifecycle, must be `<= state_time_ms` |
+| event_start_time | datetime[ms] | physical start of the event/lifecycle, must be `<= state_time` |
 
 Core validation:
 
@@ -236,28 +263,62 @@ Core validation:
 1. required columns exist
 2. required columns are non-null for every returned row
 3. is_trigger is Boolean
-4. event_start_time_ms <= state_time_ms
-5. duplicate event_id rows are allowed only when they represent different state_time_ms of the same lifecycle
-6. event_id collision across different symbol/event_start_time_ms is forbidden
+4. event_start_time <= state_time
+5. duplicate event_id rows are allowed only when they represent different state_time of the same lifecycle
+6. event_id collision across different symbol/event_start_time is forbidden
 ```
 
 Core-derived lifecycle columns, when needed:
 
 ```text
-minutes_since_start = floor((state_time_ms - event_start_time_ms) / 60_000)
-snapshot_time_ms = state_time_ms unless a stricter as-of timestamp is explicitly provided
-feature_cutoff_time_ms <= snapshot_time_ms
-future_start_time_ms > snapshot_time_ms
+minutes_since_start = floor((state_time - event_start_time) in minutes)
+snapshot_time = state_time unless a stricter as-of timestamp is explicitly provided
+feature_cutoff_time <= snapshot_time
+future_start_time > snapshot_time
 ```
 
 Запрещено:
 
 ```text
 создавать event_id из future path/label
-делать event_start_time_ms позже state_time_ms
+делать event_start_time позже state_time
 считать is_trigger=false rows negative class для strategy-specific model
 прятать data-quality reject внутри is_trigger=false без reason_if_excluded/audit path
 ```
+
+### 4.4. Causal strategy feature contract
+
+`generate_custom_features()` обязан быть детерминированной causal/as-of трансформацией входного `market_frame_asof`. Для каждой строки feature values должны совпадать с values, которые были бы получены, если бы Core передал стратегии только данные, доступные на момент этой строки.
+
+Разрешено:
+
+```text
+rolling/expanding windows только по прошлым и текущей closed row внутри symbol/group
+положительные lag/shift, которые обращаются к прошлому
+asof joins, где правая сторона имеет timestamp <= left timestamp
+forward-fill только после явной data-quality проверки и только из прошлого в будущее
+```
+
+Запрещено:
+
+```text
+shift(-N), lead, negative lag
+backward_fill / bfill для model features
+centered rolling windows
+rolling extrema, которые используют будущие строки относительно state_time
+глобальные per-run min/max/percentile/normalization, если они fit-ятся на full period
+любая feature, меняющая значение прошлой строки после добавления будущих candles
+```
+
+Core имеет право запускать point-in-time equivalence audit:
+
+```text
+features_full = strategy.generate_custom_features(full_frame)
+features_truncated_T = strategy.generate_custom_features(frame where timestamp <= T)
+Для всех rows с state_time <= T значения model features должны совпадать.
+```
+
+Если audit FAIL, run получает protocol FAIL; PnL/metrics такого run-а нельзя интерпретировать.
 
 ## 5. Universal temporal contract
 
@@ -361,6 +422,23 @@ technical_noise_shock candles after data restoration
 ```text
 Если timestamp_current - timestamp_previous > 3m,
 то первая свеча после восстановления потока данных помечается technical_noise_shock = true.
+```
+
+Правило Warm-up Window после технического гэпа:
+
+```text
+После гэпа Δt > 3m Core обязан включить warmup_after_data_gap для затронутого symbol или market-wide stream.
+Длительность warm-up = max_feature_lookback_minutes активного run-а.
+max_feature_lookback_minutes берётся из Feature Registry / Feature Schema до запуска strategy trigger.
+Внутри warm-up окна запрещены trigger generation, train/validation/calibration/OOS rows и trade simulation entries.
+Строки warm-up сохраняются только как data-quality/audit rows с reason_if_excluded = warmup_after_data_gap.
+```
+
+Смысл:
+
+```text
+Одна свеча technical_noise_shock не лечит искаженные rolling context features.
+Все rolling/percentile/ATR/market-relative features считаются недостоверными, пока не накоплена новая непрерывная история длиной max lookback.
 ```
 
 Запрещено:
@@ -523,6 +601,43 @@ snapshot_time должен быть >= state_time или равен state_time �
 strategy_events.csv       = trigger/lifecycle seed rows from Strategy -> Core
 strategy_state_1m.csv     = per-minute online state expansion built by Core
 strategy_future_paths.csv = future-only path after snapshot_time, never fed back into state/features
+```
+
+### 11.1. Trigger de-duplication / episodic dataset rule
+
+Core обязан подавлять сигнальные каскады, чтобы один затяжной market impulse не превращался в десятки почти одинаковых train/simulation rows.
+
+Единица de-duplication:
+
+```text
+strategy_name
+strategy_version
+horizon_minutes
+symbol
+```
+
+Правило для dataset builders:
+
+```text
+Если trigger по symbol X принят в момент t_anchor, то следующие triggers того же strategy variant и symbol X в интервале (t_anchor, t_anchor + horizon_minutes] не создают новые training/calibration/OOS prediction rows.
+Они сохраняются только как audit/suppressed rows с reason_if_excluded = cascade_suppressed.
+```
+
+Правило для Simplified Trade Simulation:
+
+```text
+Если по symbol X уже открыта simulated position для данного strategy variant, новые triggers по X не открывают параллельные позиции.
+Unlock наступает после физического закрытия simulated position и после strategy cooldown, если cooldown задан.
+При отсутствии simulation close-time в upstream stage используется conservative lock до t_anchor + horizon_minutes.
+```
+
+Запрещено:
+
+```text
+открывать несколько параллельных virtual trades по одному symbol/strategy variant из одного сигнального каскада
+считать каждую минуту одного импульса независимым supervised example
+удалять suppressed rows без audit trail
+дедуплицировать между разными horizon variants: h15/h30/h60 являются разными model populations
 ```
 
 ## 12. Generic Future Path / Label Builder
@@ -729,6 +844,7 @@ entry_price must include pessimistic slippage penalty
 stop/target must be ATR-normalized or structure-based ATR-normalized
 fees must be included at least roughly
 intracandle double barrier resolves as stop_loss_first
+one open simulated position per symbol/strategy variant unless an explicit pyramiding experiment is registered
 ```
 
 Запрещено:
@@ -806,6 +922,7 @@ train < test
 purge/embargo applied
 point-in-time universe enforced
 technical_noise_shock excluded
+warmup_after_data_gap rows excluded until max_feature_lookback_minutes is restored
 relative-over-absolute feature contract enforced
 ATR as-of computed from closed past candles
 fixed-percent labels forbidden
@@ -818,11 +935,14 @@ strategy/core separation enforced
 BaseStrategy contract valid
 one strategy instance has exactly one horizon_minutes
 trigger frame schema valid and lifecycle timestamps ordered
+internal timestamp columns are pl.Datetime[ms], not Int64 `_ms` columns
+trigger cascade suppression applied before dataset/simulation rows
 required_data_streams applied before trigger generation
 strategy simulation defaults present in StrategyMetadata
 is_trigger=false rows excluded from strategy-specific model
 no strategy-specific logic inside Core
 anti-binary feature relaxation enforced
+causal feature point-in-time equivalence audit passed
 final holdout not accessed before protocol freeze
 ```
 
@@ -844,6 +964,9 @@ horizon_minutes
 take_profit_atr
 stop_loss_atr
 required_data_streams
+max_feature_lookback_minutes
+trigger_deduplication_policy
+internal_time_type
 model version
 random seed
 dependency versions
@@ -890,8 +1013,8 @@ strategy_contract_version
 strategy_family
 symbol
 event_id
-state_time_ms
-event_start_time_ms
+state_time
+event_start_time
 minutes_since_start
 is_trigger
 reason_if_excluded
