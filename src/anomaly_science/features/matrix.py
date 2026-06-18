@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import math
 import statistics
+from bisect import bisect_left, bisect_right
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,80 @@ from anomaly_science.future.builder import load_anomaly_state_1m_csv
 EPS = 1e-12
 
 
+class _CandleSeries:
+    def __init__(self, rows: Sequence[Candle1m]) -> None:
+        self._rows = tuple(sorted(rows, key=lambda item: (item.available_time_ms, item.open_time_ms)))
+        self._available_times = tuple(item.available_time_ms for item in self._rows)
+        self._open_times = tuple(item.open_time_ms for item in self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def __getitem__(self, index):
+        return self._rows[index]
+
+    def asof(self, snapshot_time_ms: int) -> tuple[Candle1m, ...]:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        return self._rows[:end]
+
+    def current(self, snapshot_time_ms: int) -> Candle1m | None:
+        index = bisect_right(self._available_times, snapshot_time_ms) - 1
+        if index < 0:
+            return None
+        current = self._rows[index]
+        if current.available_time_ms != snapshot_time_ms:
+            return None
+        return current
+
+    def history_before(self, available_time_ms: int, count: int) -> tuple[Candle1m, ...]:
+        end = bisect_left(self._available_times, available_time_ms)
+        return self._rows[max(0, end - count) : end]
+
+    def window(self, snapshot_time_ms: int, window_minutes: int) -> tuple[Candle1m, ...]:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        rows = self._rows[max(0, end - window_minutes) : end]
+        if len(rows) < window_minutes:
+            return ()
+        if rows[-1].available_time_ms != snapshot_time_ms:
+            return ()
+        window_start_ms = snapshot_time_ms - window_minutes * ONE_MINUTE_MS
+        if rows[0].open_time_ms < window_start_ms:
+            return ()
+        return rows
+
+    def event_window(self, *, event_start_time_ms: int, snapshot_time_ms: int) -> tuple[Candle1m, ...]:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        start = bisect_left(self._open_times, event_start_time_ms, 0, end)
+        return self._rows[start:end]
+
+    def atr_asof(self, *, symbol: str, snapshot_time_ms: int, atr_window_minutes: int):
+        asof_rows = self.asof(snapshot_time_ms)
+        required_candle_count = atr_window_minutes + 1
+        if len(asof_rows) < required_candle_count:
+            raise AtrComputationError(
+                "insufficient as-of 1m candle history for ATR: "
+                f"need {required_candle_count} closed candles for {atr_window_minutes} true ranges, "
+                f"got {len(asof_rows)} for {symbol} at {snapshot_time_ms}"
+            )
+        source_slice = asof_rows[-required_candle_count:]
+        true_ranges = [
+            max(
+                candle.high - candle.low,
+                abs(candle.high - previous_candle.close),
+                abs(candle.low - previous_candle.close),
+            )
+            for previous_candle, candle in zip(source_slice, source_slice[1:])
+        ]
+        atr = sum(true_ranges) / atr_window_minutes
+        last_close = source_slice[-1].close
+        if last_close <= 0 or not math.isfinite(atr) or atr <= 0:
+            raise AtrComputationError("computed ATR must be positive and finite")
+        return atr, atr / last_close
+
+
 def build_price_time_feature_matrix(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
@@ -44,11 +119,13 @@ def build_price_time_feature_matrix(
     """
     cfg = config or FeatureMatrixConfig()
     state_rows = tuple(state_rows)
-    candles_by_symbol: dict[str, list[Candle1m]] = {}
+    raw_candles_by_symbol: dict[str, list[Candle1m]] = {}
     for candle in candles_1m:
-        candles_by_symbol.setdefault(candle.symbol, []).append(candle)
-    for symbol in candles_by_symbol:
-        candles_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+        raw_candles_by_symbol.setdefault(candle.symbol, []).append(candle)
+    candles_by_symbol: dict[str, _CandleSeries] = {
+        symbol: _CandleSeries(rows)
+        for symbol, rows in raw_candles_by_symbol.items()
+    }
 
     oi_by_symbol: dict[str, list[OpenInterest5m]] | None = None
     if open_interest_5m is not None:
@@ -306,14 +383,21 @@ def _build_state_feature_row(
     status = "ok"
 
     try:
-        atr = compute_atr_1d_asof(
-            candles_1m=candles,
-            symbol=state.symbol,
-            snapshot_time_ms=state.snapshot_time_ms,
-            atr_window_minutes=config.atr_window_minutes,
-        )
-        atr_value = atr.atr_1d_asof_t
-        atr_pct_value = atr.atr_1d_pct_asof_t
+        if isinstance(candles, _CandleSeries):
+            atr_value, atr_pct_value = candles.atr_asof(
+                symbol=state.symbol,
+                snapshot_time_ms=state.snapshot_time_ms,
+                atr_window_minutes=config.atr_window_minutes,
+            )
+        else:
+            atr = compute_atr_1d_asof(
+                candles_1m=candles,
+                symbol=state.symbol,
+                snapshot_time_ms=state.snapshot_time_ms,
+                atr_window_minutes=config.atr_window_minutes,
+            )
+            atr_value = atr.atr_1d_asof_t
+            atr_pct_value = atr.atr_1d_pct_asof_t
     except AtrComputationError:
         status = "insufficient_atr_history"
 
@@ -490,9 +574,12 @@ def _volume_features(*, candles: Sequence[Candle1m], state: AnomalyState1mRow, c
     current = _current_candle(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
     if current is None:
         return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
-    history = [candle for candle in candles if candle.available_time_ms < current.available_time_ms]
-    history.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
-    history = history[-config.volume_baseline_window_minutes :]
+    if isinstance(candles, _CandleSeries):
+        history = candles.history_before(current.available_time_ms, config.volume_baseline_window_minutes)
+    else:
+        history = [candle for candle in candles if candle.available_time_ms < current.available_time_ms]
+        history.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+        history = history[-config.volume_baseline_window_minutes :]
     if len(history) < config.volume_baseline_window_minutes:
         return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
 
@@ -600,11 +687,17 @@ def _liquidation_features(
     cumulative_liq_quote = sum(
         item.quote_quantity for item in asof_rows if event_start_time_ms <= item.event_time_ms < state.snapshot_time_ms
     )
-    cumulative_quote_volume = sum(
-        candle.quote_volume
-        for candle in candles
-        if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
-    )
+    if isinstance(candles, _CandleSeries):
+        cumulative_quote_volume = sum(
+            candle.quote_volume
+            for candle in candles.event_window(event_start_time_ms=event_start_time_ms, snapshot_time_ms=state.snapshot_time_ms)
+        )
+    else:
+        cumulative_quote_volume = sum(
+            candle.quote_volume
+            for candle in candles
+            if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
+        )
     return _LiquidationFeatures(
         short_liq_intensity=short_quote / quote_volume,
         long_liq_intensity=long_quote / quote_volume,
@@ -664,12 +757,15 @@ def _cvd_features(
     if current is None:
         return missing
     event_start_time_ms = _event_start_time_ms(state)
-    event_candles = [
-        candle
-        for candle in candles
-        if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
-    ]
-    event_candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    if isinstance(candles, _CandleSeries):
+        event_candles = candles.event_window(event_start_time_ms=event_start_time_ms, snapshot_time_ms=state.snapshot_time_ms)
+    else:
+        event_candles = [
+            candle
+            for candle in candles
+            if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
+        ]
+        event_candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
     if not event_candles or any(candle.taker_buy_quote_volume is None for candle in event_candles):
         return missing
     cumulative_quote = sum(candle.quote_volume for candle in event_candles)
@@ -705,12 +801,16 @@ def _cvd_features(
 
 
 def _asof_candles(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> list[Candle1m]:
+    if isinstance(candles, _CandleSeries):
+        return list(candles.asof(snapshot_time_ms))
     rows = [candle for candle in candles if candle.available_time_ms <= snapshot_time_ms]
     rows.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
     return rows
 
 
 def _current_candle(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> Candle1m | None:
+    if isinstance(candles, _CandleSeries):
+        return candles.current(snapshot_time_ms)
     asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
     if not asof_rows:
         return None
@@ -749,6 +849,8 @@ def _candle_delta_quote(candle: Candle1m) -> float:
 
 
 def _window_candles(*, candles: Sequence[Candle1m], snapshot_time_ms: int, window_minutes: int) -> list[Candle1m]:
+    if isinstance(candles, _CandleSeries):
+        return list(candles.window(snapshot_time_ms, window_minutes))
     window_start_ms = snapshot_time_ms - window_minutes * ONE_MINUTE_MS
     rows = [candle for candle in candles if window_start_ms <= candle.open_time_ms and candle.available_time_ms <= snapshot_time_ms]
     rows.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
