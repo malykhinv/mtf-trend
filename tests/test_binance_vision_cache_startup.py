@@ -136,3 +136,15 @@ def test_scoped_klines_index_can_keep_daily_only_current_month_symbol(monkeypatc
         block=VisionBlock(period="daily", label="2026-06-15", start_date=date(2026, 6, 15), end_date=date(2026, 6, 15)),
         dataset="klines",
     )
+
+
+def test_project_cli_disables_archive_file_index_by_default() -> None:
+    from anomaly_science import cli
+
+    args = cli.build_parser().parse_args(["build-binance-vision-cache"])
+    config = CacheConfig(
+        out_dir=Path(".cache"),
+        use_archive_file_index=bool(args.archive_file_index and not args.no_archive_file_index),
+    )
+
+    assert not config.use_archive_file_index

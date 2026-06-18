@@ -30,6 +30,9 @@ ONE_DAY_MS = 86_400_000
 DEFAULT_TIMEOUT_SECONDS = 45.0
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 8.0
 DEFAULT_RETRIES = 2
+METADATA_FLUSH_INTERVAL_SECONDS = 10.0
+WINDOWS_ATOMIC_REPLACE_RETRIES = 12
+WINDOWS_ATOMIC_REPLACE_SLEEP_SECONDS = 0.25
 ARCHIVE_PREFLIGHT_WORKERS = 16
 
 
@@ -548,10 +551,27 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
         log_cache_stage("archive preflight disabled; direct archive probing starts immediately")
 
     started_at = time.monotonic()
+    last_metadata_flush_at = 0.0
     completed_block_units = 0
     base_blocks_per_symbol = max(1, len(blocks))
     estimated_block_units = max(1, len(symbols) * base_blocks_per_symbol)
     disk_usage = DirectorySizeSampler(DEFAULT_MARKET_CACHE_ROOT, sample_interval_seconds=30.0)
+
+    def flush_run_metadata(*, force: bool) -> None:
+        nonlocal last_metadata_flush_at
+        now = time.monotonic()
+        if not force and now - last_metadata_flush_at < METADATA_FLUSH_INTERVAL_SECONDS:
+            return
+        write_stats(metadata_dir / "cache_stats.csv", stats)
+        write_manifest(
+            metadata_dir / "manifest.json",
+            config=config,
+            stats=stats,
+            start_date=start,
+            end_date=end,
+            skipped_symbols=skipped_symbols,
+        )
+        last_metadata_flush_at = now
 
     progress = tqdm(
         total=estimated_block_units,
@@ -630,17 +650,10 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
                     refresh=True,
                 )
             stats.append(symbol_stats)
-            write_stats(metadata_dir / "cache_stats.csv", stats)
-            write_manifest(
-                metadata_dir / "manifest.json",
-                config=config,
-                stats=stats,
-                start_date=start,
-                end_date=end,
-                skipped_symbols=skipped_symbols,
-            )
+            flush_run_metadata(force=False)
     finally:
         progress.close()
+    flush_run_metadata(force=True)
     return stats
 
 
@@ -1773,10 +1786,10 @@ def write_run_klines_archive_index(
             for symbol, labels in sorted(index.daily_labels_by_symbol.items())
         },
     }
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = atomic_metadata_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    replace_metadata_file(tmp_path, path, label="run klines archive index")
 
 
 def read_run_klines_archive_index(path: Path) -> RunKlinesArchiveIndex:
@@ -1848,10 +1861,10 @@ def write_archive_file_index(path: Path, index: ArchiveFileIndex) -> None:
             for (period, dataset), values in index.labels.items()
         },
     }
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = atomic_metadata_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    replace_metadata_file(tmp_path, path, label="archive file index")
 
 
 def read_archive_file_index(path: Path) -> ArchiveFileIndex:
@@ -2212,14 +2225,14 @@ def append_block_ledger_record(path: Path, record: BlockLedgerRecord) -> None:
 
 
 def write_block_ledger(path: Path, ledger: dict[LedgerKey, BlockLedgerRecord]) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = atomic_metadata_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=LEDGER_FIELDNAMES)
         writer.writeheader()
         for record in sorted(ledger.values(), key=lambda item: (item.symbol, item.start_date, item.block_type, item.block_label)):
             writer.writerow(block_ledger_row(record))
-    os.replace(tmp_path, path)
+    replace_metadata_file(tmp_path, path, label="block ledger")
 
 
 def completion_key(record: SymbolCompletionRecord) -> CompletionKey:
@@ -2308,14 +2321,14 @@ def write_symbol_completion_record(
 
 
 def write_symbol_completion_ledger(path: Path, completions: dict[CompletionKey, SymbolCompletionRecord]) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = atomic_metadata_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=COMPLETION_FIELDNAMES)
         writer.writeheader()
         for record in sorted(completions.values(), key=lambda item: (item.symbol, item.start_date, item.end_date)):
             writer.writerow(symbol_completion_row(record))
-    os.replace(tmp_path, path)
+    replace_metadata_file(tmp_path, path, label="symbol completion ledger")
 
 
 def remove_symbol_parts_dir(path: Path) -> None:
@@ -2334,18 +2347,18 @@ def skipped_symbol_row(record: SkippedSymbolRecord) -> dict[str, object]:
 
 
 def write_skipped_symbols(path: Path, skipped: list[SkippedSymbolRecord]) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = atomic_metadata_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=SKIPPED_SYMBOL_FIELDNAMES)
         writer.writeheader()
         for record in sorted(skipped, key=lambda item: item.symbol):
             writer.writerow(skipped_symbol_row(record))
-    os.replace(tmp_path, path)
+    replace_metadata_file(tmp_path, path, label="skipped symbols")
 
 
 def write_stats(path: Path, stats: list[SymbolStats]) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = atomic_metadata_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with tmp_path.open("w", encoding="utf-8", newline="") as file_obj:
         writer = csv.DictWriter(
@@ -2373,7 +2386,7 @@ def write_stats(path: Path, stats: list[SymbolStats]) -> None:
                     "output_path": str(item.output_path) if item.output_path is not None else "",
                 }
             )
-    os.replace(tmp_path, path)
+    replace_metadata_file(tmp_path, path, label="cache stats")
 
 
 def write_manifest(
@@ -2417,15 +2430,39 @@ def write_manifest(
         "run_klines_archive_index": str(run_klines_archive_index_path(config.out_dir)),
         "output_columns": OUTPUT_COLUMNS,
     }
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = atomic_metadata_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    replace_metadata_file(tmp_path, path, label="manifest")
 
 
 def log_cache_stage(message: str) -> None:
     timestamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
     print(f"Binance Vision cache [{timestamp} UTC] {message}", file=sys.stderr, flush=True)
+
+
+def atomic_metadata_tmp_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
+
+
+def replace_metadata_file(tmp_path: Path, path: Path, *, label: str) -> None:
+    attempts = WINDOWS_ATOMIC_REPLACE_RETRIES if os.name == "nt" else 1
+    last_error: PermissionError | None = None
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                break
+            time.sleep(WINDOWS_ATOMIC_REPLACE_SLEEP_SECONDS)
+    if last_error is not None:
+        raise PermissionError(
+            f"Could not atomically replace {label} metadata file at {path} after {attempts} attempts. "
+            "Close any program that is reading the .output\\market metadata directory "
+            "or disable live sync/antivirus scanning for that output directory."
+        ) from last_error
 
 
 class DirectorySizeSampler:

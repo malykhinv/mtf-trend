@@ -161,15 +161,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Align sparse metrics/OI using only closed samples at or before each candle timestamp.",
     )
     cache.add_argument("--request-sleep", type=float, default=0.0, help="Optional sleep after each processed block.")
-    cache.add_argument(
+    archive_index_group = cache.add_mutually_exclusive_group()
+    archive_index_group.add_argument(
+        "--archive-file-index",
+        action="store_true",
+        help=(
+            "Opt into S3 archive preflight before processing. This can skip symbols/blocks with no klines, "
+            "but adds hundreds of metadata requests and is intentionally disabled by default."
+        ),
+    )
+    archive_index_group.add_argument(
         "--no-archive-file-index",
         action="store_true",
-        help="Disable S3 file-index preflight and probe archives directly. Slower, but useful for diagnostics.",
+        help="Deprecated no-op kept for compatibility; direct archive probing is now the default.",
     )
     cache.add_argument(
         "--refresh-archive-file-index",
         action="store_true",
-        help="Refresh cached Binance Vision file listings before processing each symbol.",
+        help="Refresh cached Binance Vision file listings before processing each symbol when --archive-file-index is enabled.",
     )
 
     export_cache = subparsers.add_parser(
@@ -287,7 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             overwrite=args.overwrite,
             oi_join_strategy=args.oi_join_strategy,
             request_sleep_seconds=args.request_sleep,
-            use_archive_file_index=not args.no_archive_file_index,
+            use_archive_file_index=bool(args.archive_file_index and not args.no_archive_file_index),
             refresh_archive_file_index=args.refresh_archive_file_index,
         )
         stats = build_binance_vision_cache(config)
