@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
+from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.atlas.builder import (
     OUTCOME_COORDINATE_ATR,
     build_atlas_artifacts_from_inputs,
@@ -57,8 +57,8 @@ def run_mvp1_atlas(
     )
 
     written: list[Path] = []
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_nature_atlas.csv",
             nature_rows_to_artifact(artifacts.nature_atlas_rows),
             get_artifact_schema("anomaly_nature_atlas.csv"),
@@ -85,15 +85,15 @@ def run_mvp1_atlas(
             get_artifact_schema("anomaly_market_shock_groups.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
             get_artifact_schema("anomaly_protocol_audit.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_run_config.csv",
             [asdict(row) for row in run_config_rows],
             get_artifact_schema("anomaly_run_config.csv"),

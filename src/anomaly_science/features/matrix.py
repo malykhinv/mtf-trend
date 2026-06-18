@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
+from anomaly_science.artifacts import build_manifest, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
@@ -250,29 +250,29 @@ def run_mvp1_feature_matrix(
     )
 
     written: list[Path] = []
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_feature_matrix.csv",
             feature_matrix_rows_to_artifact(matrix_rows),
             get_artifact_schema("anomaly_feature_matrix.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_feature_catalog.csv",
             feature_rows_to_artifact(build_default_feature_catalog()),
             get_artifact_schema("anomaly_feature_catalog.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
             get_artifact_schema("anomaly_protocol_audit.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_run_config.csv",
             [asdict(row) for row in run_config_rows],
             get_artifact_schema("anomaly_run_config.csv"),

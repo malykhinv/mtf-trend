@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
+from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
@@ -38,7 +38,7 @@ def run_mvp1_data_audit(*, input_dir: str | Path, out_dir: str | Path) -> Path:
     run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path)
 
     written: list[Path] = []
-    written.append(write_csv_artifact(
+    written.extend(write_csv_artifact_with_aliases(
         output_path / "anomaly_data_quality.csv",
         rows_to_artifact(data_quality),
         get_artifact_schema("anomaly_data_quality.csv"),
@@ -48,12 +48,12 @@ def run_mvp1_data_audit(*, input_dir: str | Path, out_dir: str | Path) -> Path:
         universe_rows_to_artifact(universe_rows),
         get_artifact_schema("symbol_universe_by_day.csv"),
     ))
-    written.append(write_csv_artifact(
+    written.extend(write_csv_artifact_with_aliases(
         output_path / "anomaly_protocol_audit.csv",
         _protocol_rows_to_artifact(protocol_rows),
         get_artifact_schema("anomaly_protocol_audit.csv"),
     ))
-    written.append(write_csv_artifact(
+    written.extend(write_csv_artifact_with_aliases(
         output_path / "anomaly_run_config.csv",
         [asdict(row) for row in run_config_rows],
         get_artifact_schema("anomaly_run_config.csv"),

@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, write_csv_artifact, write_manifest
+from anomaly_science.artifacts import build_manifest, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
@@ -47,22 +47,22 @@ def run_mvp1_future(
     )
 
     written: list[Path] = []
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_future_paths.csv",
             future_rows_to_artifact(future_rows),
             get_artifact_schema("anomaly_future_paths.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
             get_artifact_schema("anomaly_protocol_audit.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
+    written.extend(
+        write_csv_artifact_with_aliases(
             output_path / "anomaly_run_config.csv",
             [asdict(row) for row in run_config_rows],
             get_artifact_schema("anomaly_run_config.csv"),
