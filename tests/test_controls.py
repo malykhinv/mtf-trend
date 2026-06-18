@@ -9,9 +9,11 @@ from pathlib import Path
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.controls import ControlsConfig, build_baseline_comparison_rows, build_placebo_test_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
 from anomaly_science.contracts.controls import CONTROL_STATUS_DEFERRED, CONTROL_STATUS_OK
 from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT, AnomalyOutcomeLabelRow
 from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.features import FEATURE_SCHEMA_VERSION, FeatureMatrixConfig, feature_matrix_rows_to_artifact
 from anomaly_science.prediction import build_prediction_inputs
 from anomaly_science.state import state_rows_to_artifact
 
@@ -79,6 +81,47 @@ def _label_row(*, state: AnomalyState1mRow, scenario_30m: str) -> AnomalyOutcome
     )
 
 
+def _feature_row(*, state: AnomalyState1mRow) -> AnomalyFeatureMatrixRow:
+    return AnomalyFeatureMatrixRow(
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
+        feature_matrix_version=FeatureMatrixConfig().feature_matrix_version,
+        event_id=state.event_id,
+        symbol=state.symbol,
+        snapshot_time_ms=state.snapshot_time_ms,
+        feature_cutoff_time_ms=state.feature_cutoff_time_ms,
+        minutes_since_trigger=state.minutes_since_detection,
+        ATR_1d_asof_t=2.0,
+        ATR_1d_pct_asof_t=0.02,
+        current_return_from_start=state.current_return_from_start,
+        range_since_start_atr=1.0,
+        distance_to_running_high_atr=abs(state.distance_to_running_high),
+        distance_to_running_low_atr=state.distance_to_running_low,
+        retracement_from_high_atr=abs(state.distance_to_running_high),
+        price_speed_atr=0.1,
+        clock_maturity=0.5,
+        event_age_ratio=0.1,
+        alpha_decay_bucket="3-5m",
+        feature_source_status="complete",
+        volume_zscore=2.0,
+        quote_volume_zscore=2.5,
+        oi_change_5m_pct_of_oi=0.01,
+        short_liq_intensity=0.02,
+        long_liq_intensity=0.01,
+        liquidation_imbalance=0.2,
+        cvd_change_3m=0.03,
+        cvd_change_5m=0.04,
+        cvd_price_divergence_5m=0.02,
+        volume_market_percentile=0.8,
+        quote_volume_market_percentile=0.8,
+        corr_with_btc_30m=0.3,
+        symbol_return_minus_btc_return_15m=0.01,
+        cross_section_available=True,
+        cross_section_symbol_count=10,
+        systemic_cluster_regime="idiosyncratic",
+        market_shock_id="shock_1",
+    )
+
+
 def _control_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutcomeLabelRow]]:
     scenarios = ("long_continuation", "short_fade", "static_or_chop", "unclear")
     states: list[AnomalyState1mRow] = []
@@ -124,6 +167,10 @@ def _write_state(path: Path, rows: list[AnomalyState1mRow]) -> None:
 
 def _write_labels(path: Path, rows: list[AnomalyOutcomeLabelRow]) -> None:
     write_csv_artifact(path, [asdict(row) for row in rows], get_artifact_schema("anomaly_outcome_labels.csv"))
+
+
+def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:
+    write_csv_artifact(path, feature_matrix_rows_to_artifact(rows), get_artifact_schema("anomaly_feature_matrix.csv"))
 
 
 def test_placebo_controls_emit_negative_control_rows() -> None:
@@ -226,3 +273,45 @@ def test_run_mvp1_controls_cli_writes_control_artifacts(tmp_path: Path) -> None:
         baseline_rows = list(csv.DictReader(handle))
     assert any(row["baseline_name"] == "volume_only" and row["status"] == CONTROL_STATUS_DEFERRED for row in baseline_rows)
     assert any(row["baseline_name"] == "always_follow_anomaly" and row["status"] == CONTROL_STATUS_OK for row in baseline_rows)
+
+
+def test_run_mvp1_controls_cli_uses_feature_matrix_for_ablation_baselines(tmp_path: Path) -> None:
+    states, labels = _control_rows()
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    labels_path = tmp_path / "anomaly_outcome_labels.csv"
+    features_path = tmp_path / "anomaly_feature_matrix.csv"
+    out_dir = tmp_path / "controls_with_features"
+    _write_state(state_path, states)
+    _write_labels(labels_path, labels)
+    _write_features(features_path, [_feature_row(state=state) for state in states])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "main.py",
+            "run-mvp1-controls",
+            "--state",
+            str(state_path),
+            "--labels",
+            str(labels_path),
+            "--features",
+            str(features_path),
+            "--out",
+            str(out_dir),
+            "--horizon-minutes",
+            "30",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    with (out_dir / "anomaly_baseline_comparison.csv").open(newline="", encoding="utf-8-sig") as handle:
+        by_name = {row["baseline_name"]: row for row in csv.DictReader(handle)}
+
+    assert by_name["volume_only"]["status"] == CONTROL_STATUS_OK
+    assert by_name["btc_eth_only"]["status"] == CONTROL_STATUS_OK
+    assert by_name["no_cvd_features_ablation"]["status"] == CONTROL_STATUS_OK
+    assert by_name["no_oi_features_ablation"]["status"] == CONTROL_STATUS_OK
+    assert by_name["no_liquidation_features_ablation"]["status"] == CONTROL_STATUS_OK

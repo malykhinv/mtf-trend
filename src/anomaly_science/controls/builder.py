@@ -123,7 +123,8 @@ def build_baseline_comparison_rows(
     reference_brier = reference.multiclass_brier
     target_by_key = {_row_key(row): _target_for_horizon(row.label, cfg.target_horizon_minutes) for row in rows}
 
-    baseline_specs: tuple[tuple[str, str, Callable[[AnomalyState1mRow], str], str], ...] = (
+    has_feature_matrix = any(row.features is not None for row in rows)
+    baseline_specs: tuple[tuple[str, str, Callable[[PredictionInputRow], str], str], ...] = (
         ("global_prior_only", "global_label_prior", _global_feature_key, "weekly frozen-model global class-prior baseline"),
         ("session_only", "snapshot_utc_session", _session_feature_key, "weekly frozen-model baseline using only UTC session/time buckets"),
         ("event_time_only", "event_clock", _event_time_feature_key, "weekly frozen-model baseline using only minutes since detection/event start"),
@@ -149,6 +150,30 @@ def build_baseline_comparison_rows(
             )
         )
 
+    if has_feature_matrix:
+        feature_matrix_specs: tuple[tuple[str, str, Callable[[PredictionInputRow], str], str], ...] = (
+            ("volume_only", "volume", _volume_feature_key, "weekly frozen-model baseline using only volume-relative feature bins"),
+            ("btc_eth_only", "market_anchor", _btc_relative_feature_key, "weekly frozen-model baseline using only BTC-relative context bins"),
+        )
+        for baseline_name, feature_family, feature_key_fn, notes in feature_matrix_specs:
+            evaluation = _evaluate_feature_family_model(
+                rows=rows,
+                target_by_key=target_by_key,
+                feature_key_fn=feature_key_fn,
+                config=cfg,
+            )
+            result.append(
+                _baseline_row(
+                    cfg=cfg,
+                    baseline_name=baseline_name,
+                    feature_family=feature_family,
+                    evaluation=evaluation,
+                    reference_brier=reference_brier,
+                    status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                    notes=notes if evaluation.oos_prediction_rows > 0 else "feature-matrix baseline produced no OOS rows after train-size and purge checks",
+                )
+            )
+
     rule_specs: tuple[tuple[str, str, Callable[[AnomalyState1mRow], str], str], ...] = (
         ("always_follow_anomaly", "anomaly_direction_rule", _always_follow_anomaly, "anomaly-specific rule baseline: always predict follow-through"),
         ("always_fade_anomaly", "anomaly_direction_rule", _always_fade_anomaly, "anomaly-specific rule baseline: always predict fade"),
@@ -169,16 +194,56 @@ def build_baseline_comparison_rows(
             )
         )
 
+    if has_feature_matrix:
+        ablation_specs = (
+            ("no_cvd_features_ablation", "flow_ablation", ("feature_matrix.cvd_", "feature_matrix.price_up_cvd", "feature_matrix.price_down_cvd"), "CatBoost ablation excluding CVD divergence feature prefixes"),
+            ("no_oi_features_ablation", "open_interest_ablation", ("feature_matrix.oi_", "feature_matrix.closed_5m_oi"), "CatBoost ablation excluding open-interest feature prefixes"),
+            ("no_liquidation_features_ablation", "liquidation_ablation", ("feature_matrix.short_liq", "feature_matrix.long_liq", "feature_matrix.liquidation_", "feature_matrix.cumulative_liq", "feature_matrix.liq_intensity"), "CatBoost ablation excluding liquidation feature prefixes"),
+        )
+        for baseline_name, feature_family, excluded_prefixes, notes in ablation_specs:
+            evaluation = _evaluate_reference_model_with_exclusions(rows=rows, config=cfg, excluded_prefixes=excluded_prefixes)
+            result.append(
+                _baseline_row(
+                    cfg=cfg,
+                    baseline_name=baseline_name,
+                    feature_family=feature_family,
+                    evaluation=evaluation,
+                    reference_brier=reference_brier,
+                    status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                    notes=notes if evaluation.oos_prediction_rows > 0 else "ablation produced no OOS rows after train-size, class-coverage, and purge checks",
+                )
+            )
+        subset_specs = (
+            ("idiosyncratic_only_subset", "market_shock_subset", "idiosyncratic", "CatBoost evaluated only on idiosyncratic anomaly subset"),
+            ("systemic_cluster_only_subset", "market_shock_subset", "systemic_beta_shock", "CatBoost evaluated only on systemic beta shock anomaly subset"),
+        )
+        for baseline_name, feature_family, regime, notes in subset_specs:
+            subset_rows = tuple(row for row in rows if row.features is not None and row.features.systemic_cluster_regime == regime)
+            evaluation = _evaluate_reference_model(rows=subset_rows, config=cfg)
+            result.append(
+                _baseline_row(
+                    cfg=cfg,
+                    baseline_name=baseline_name,
+                    feature_family=feature_family,
+                    evaluation=evaluation,
+                    reference_brier=reference_brier,
+                    status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                    notes=notes if evaluation.oos_prediction_rows > 0 else f"subset {regime} produced no OOS rows after train-size, class-coverage, and purge checks",
+                )
+            )
+
     deferred_specs = (
-        ("volume_only", "volume", "deferred cleanly: anomaly_state_1m.csv currently has no volume feature columns, so no proxy volume baseline is emitted"),
-        ("btc_eth_only", "market_anchor", "deferred cleanly: BTC/ETH anchor features are not in anomaly_state_1m.csv, so no proxy market-anchor baseline is emitted"),
+        *(() if has_feature_matrix else (
+            ("volume_only", "volume", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy volume baseline is emitted"),
+            ("btc_eth_only", "market_anchor", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy market-anchor baseline is emitted"),
+            ("no_cvd_features_ablation", "flow_ablation", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy CVD ablation is emitted"),
+            ("no_oi_features_ablation", "open_interest_ablation", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy OI ablation is emitted"),
+            ("no_liquidation_features_ablation", "liquidation_ablation", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy liquidation ablation is emitted"),
+            ("idiosyncratic_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy idiosyncratic subset is emitted"),
+            ("systemic_cluster_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy systemic subset is emitted"),
+        )),
         ("always_no_trade", "decision_baseline", "deferred cleanly: always no-trade baseline belongs to decision/simulation artifacts, not scenario prediction probabilities"),
         ("strategy_specific_heuristic", "strategy_heuristic", "deferred cleanly: no pre-registered strategy-specific heuristic baseline exists for MVP1 controls"),
-        ("no_cvd_features_ablation", "flow_ablation", "deferred cleanly: anomaly_state_1m.csv has no CVD features, so no proxy CVD ablation is emitted"),
-        ("no_oi_features_ablation", "open_interest_ablation", "deferred cleanly: anomaly_state_1m.csv has no OI features, so no proxy OI ablation is emitted"),
-        ("no_liquidation_features_ablation", "liquidation_ablation", "deferred cleanly: anomaly_state_1m.csv has no liquidation features, so no proxy liquidation ablation is emitted"),
-        ("idiosyncratic_only_subset", "market_shock_subset", "deferred cleanly: anomaly_state_1m.csv has no systemic cluster flag, so no proxy idiosyncratic subset is emitted"),
-        ("systemic_cluster_only_subset", "market_shock_subset", "deferred cleanly: anomaly_state_1m.csv has no systemic cluster flag, so no proxy systemic subset is emitted"),
     )
     for baseline_name, feature_family, notes in deferred_specs:
         result.append(
@@ -222,6 +287,24 @@ def _evaluate_reference_model(*, rows: Sequence[PredictionInputRow], config: Con
     return _evaluate_oos_predictions(available_label_rows=len(rows), predictions=predictions)
 
 
+def _evaluate_reference_model_with_exclusions(
+    *,
+    rows: Sequence[PredictionInputRow],
+    config: ControlsConfig,
+    excluded_prefixes: Sequence[str],
+) -> ControlEvaluation:
+    prediction_config = WalkForwardPredictionConfig(
+        target_horizon_minutes=config.target_horizon_minutes,
+        purge_horizon_minutes=config.purge_horizon_minutes,
+        min_train_rows=config.min_train_rows,
+        min_group_rows=config.min_group_rows,
+        smoothing_strength=config.smoothing_strength,
+        excluded_model_feature_prefixes=tuple(excluded_prefixes),
+    )
+    predictions = build_walk_forward_predictions(inputs=rows, config=prediction_config)
+    return _evaluate_oos_predictions(available_label_rows=len(rows), predictions=predictions)
+
+
 def _evaluate_oos_predictions(*, available_label_rows: int, predictions: Sequence[OosPredictionRow]) -> ControlEvaluation:
     if not predictions:
         return ControlEvaluation(
@@ -244,7 +327,7 @@ def _evaluate_feature_family_model(
     *,
     rows: Sequence[PredictionInputRow],
     target_by_key: Mapping[tuple[str, str, int, int], str],
-    feature_key_fn: Callable[[AnomalyState1mRow], str],
+    feature_key_fn: Callable[[PredictionInputRow], str],
     config: ControlsConfig,
 ) -> ControlEvaluation:
     if not rows:
@@ -269,7 +352,7 @@ def _evaluate_feature_family_model(
         )
         for test_row in sorted(rows_by_test_week[test_week], key=lambda row: (row.state.snapshot_time_ms, row.state.symbol, row.state.event_id)):
             target = target_by_key[_row_key(test_row)]
-            probabilities = model.predict(test_row.state)
+            probabilities = model.predict(test_row)
             predicted = _predicted_scenario(probabilities)
             evaluated.append((target, probabilities, predicted))
 
@@ -314,7 +397,7 @@ class _FeatureFamilyEmpiricalModel:
         *,
         group_counts: Mapping[str, Counter[str]],
         global_counts: Counter[str],
-        feature_key_fn: Callable[[AnomalyState1mRow], str],
+        feature_key_fn: Callable[[PredictionInputRow], str],
         config: ControlsConfig,
     ) -> None:
         self._group_counts = dict(group_counts)
@@ -329,19 +412,19 @@ class _FeatureFamilyEmpiricalModel:
         *,
         rows: Sequence[PredictionInputRow],
         target_by_key: Mapping[tuple[str, str, int, int], str],
-        feature_key_fn: Callable[[AnomalyState1mRow], str],
+        feature_key_fn: Callable[[PredictionInputRow], str],
         config: ControlsConfig,
     ) -> _FeatureFamilyEmpiricalModel:
         group_counts: dict[str, Counter[str]] = defaultdict(Counter)
         global_counts: Counter[str] = Counter()
         for row in rows:
             target = target_by_key[_row_key(row)]
-            group_counts[feature_key_fn(row.state)][target] += 1
+            group_counts[feature_key_fn(row)][target] += 1
             global_counts[target] += 1
         return cls(group_counts=group_counts, global_counts=global_counts, feature_key_fn=feature_key_fn, config=config)
 
-    def predict(self, state: AnomalyState1mRow) -> dict[str, float]:
-        key = self._feature_key_fn(state)
+    def predict(self, row: PredictionInputRow) -> dict[str, float]:
+        key = self._feature_key_fn(row)
         group = self._group_counts.get(key)
         if group is not None and sum(group.values()) >= self._config.min_group_rows:
             return _smoothed_distribution(group, prior=self._global_prior, smoothing_strength=self._config.smoothing_strength)
@@ -411,7 +494,7 @@ def _replace_targets(
     for row in rows:
         target = target_by_key[_row_key(row)]
         label = _label_with_target(label=row.label, horizon_minutes=cfg.target_horizon_minutes, target=target)
-        result.append(PredictionInputRow(state=row.state, label=label))
+        result.append(PredictionInputRow(state=row.state, label=label, features=row.features))
     return tuple(result)
 
 
@@ -483,29 +566,48 @@ def _row_key(row: PredictionInputRow) -> tuple[str, str, int, int]:
     return (row.state.event_id, row.state.symbol, row.state.snapshot_time_ms, row.state.feature_cutoff_time_ms)
 
 
-def _global_feature_key(state: AnomalyState1mRow) -> str:
+def _global_feature_key(row: PredictionInputRow) -> str:
     return "global_prior_only"
 
 
-def _session_feature_key(state: AnomalyState1mRow) -> str:
+def _session_feature_key(row: PredictionInputRow) -> str:
+    state = row.state
     moment = datetime.fromtimestamp(state.snapshot_time_ms / 1000.0, tz=timezone.utc)
     hour_bucket = _integer_bucket(moment.hour, ((0, 5, "utc_00_05"), (6, 11, "utc_06_11"), (12, 17, "utc_12_17")), "utc_18_23")
     weekday = "weekday" if moment.weekday() < 5 else "weekend"
     return f"session|hour={hour_bucket}|day={weekday}"
 
 
-def _event_time_feature_key(state: AnomalyState1mRow) -> str:
+def _event_time_feature_key(row: PredictionInputRow) -> str:
+    state = row.state
     detection = _integer_bucket(state.minutes_since_detection, ((0, 2, "detect_0_2m"), (3, 5, "detect_3_5m"), (6, 10, "detect_6_10m")), "detect_11m_plus")
     event_age = _integer_bucket(state.minutes_since_event_start, ((0, 5, "age_0_5m"), (6, 15, "age_6_15m"), (16, 30, "age_16_30m")), "age_31m_plus")
     return f"event_time|{detection}|{event_age}"
 
 
-def _price_path_feature_key(state: AnomalyState1mRow) -> str:
+def _price_path_feature_key(row: PredictionInputRow) -> str:
+    state = row.state
     return_bucket = _float_bucket(state.current_return_from_start, ((-0.02, "return_deep_negative"), (-0.005, "return_negative"), (0.005, "return_flat"), (0.02, "return_positive")), "return_strong_positive")
     high_bucket = _float_bucket(state.distance_to_running_high, ((-0.03, "far_below_high"), (-0.01, "below_high"), (-0.001, "near_high"), (0.001, "at_high")), "above_high")
     low_bucket = _float_bucket(state.distance_to_running_low, ((0.001, "at_low"), (0.01, "near_low"), (0.03, "above_low")), "far_above_low")
     high_age = _integer_bucket(state.time_since_running_high_minutes, ((0, 0, "just_made_high"), (1, 3, "high_1_3m_ago"), (4, 10, "high_4_10m_ago")), "high_11m_plus_ago")
     return f"price_path|{return_bucket}|{high_bucket}|{low_bucket}|{high_age}"
+
+
+def _volume_feature_key(row: PredictionInputRow) -> str:
+    if row.features is None:
+        return "volume|missing_feature_matrix"
+    volume = _nullable_float_bucket(row.features.volume_zscore, ((-1.0, "vol_low"), (1.0, "vol_mid"), (3.0, "vol_high")), "vol_extreme")
+    quote = _nullable_float_bucket(row.features.quote_volume_market_percentile, ((0.25, "qvol_p25"), (0.50, "qvol_p50"), (0.75, "qvol_p75")), "qvol_p100")
+    return f"volume|{volume}|{quote}"
+
+
+def _btc_relative_feature_key(row: PredictionInputRow) -> str:
+    if row.features is None:
+        return "btc_relative|missing_feature_matrix"
+    corr = _nullable_float_bucket(row.features.corr_with_btc_30m, ((-0.25, "corr_negative"), (0.25, "corr_low"), (0.60, "corr_mid")), "corr_high")
+    rel_return = _nullable_float_bucket(row.features.symbol_return_minus_btc_return_15m, ((-0.01, "underperform"), (0.01, "inline"), (0.03, "outperform")), "strong_outperform")
+    return f"btc_relative|{corr}|{rel_return}"
 
 
 def _always_follow_anomaly(state: AnomalyState1mRow) -> str:
@@ -598,6 +700,12 @@ def _float_bucket(value: float, upper_bounds: Sequence[tuple[float, str]], defau
         if value <= upper_bound:
             return label
     return default
+
+
+def _nullable_float_bucket(value: float | None, upper_bounds: Sequence[tuple[float, str]], default: str) -> str:
+    if value is None:
+        return "missing"
+    return _float_bucket(value, upper_bounds, default)
 
 
 def _utc_day(timestamp_ms: int) -> str:

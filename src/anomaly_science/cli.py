@@ -139,6 +139,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     controls.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
     controls.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
+    controls.add_argument(
+        "--features",
+        default="",
+        help="Optional path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for feature-aware baselines and ablations.",
+    )
     controls.add_argument("--out", required=True, help="Directory where control artifacts will be written.")
     controls.add_argument(
         "--horizon-minutes",
@@ -356,6 +361,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_mvp1_controls(
             state_path=Path(args.state),
             labels_path=Path(args.labels),
+            feature_matrix_path=None if not args.features else Path(args.features),
             out_dir=Path(args.out),
             config=config,
         )

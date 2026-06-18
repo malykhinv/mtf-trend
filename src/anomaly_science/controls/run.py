@@ -22,17 +22,23 @@ def run_mvp1_controls(
     *,
     state_path: str | Path,
     labels_path: str | Path,
+    feature_matrix_path: str | Path | None = None,
     out_dir: str | Path,
     config: ControlsConfig | None = None,
 ) -> Path:
     """Run MVP1 placebo/control checks and write control artifacts."""
     state_artifact_path = Path(state_path)
     labels_artifact_path = Path(labels_path)
+    feature_artifact_path = None if feature_matrix_path is None else Path(feature_matrix_path)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or ControlsConfig()
 
-    inputs = load_prediction_inputs(state_path=state_artifact_path, labels_path=labels_artifact_path)
+    inputs = load_prediction_inputs(
+        state_path=state_artifact_path,
+        labels_path=labels_artifact_path,
+        feature_matrix_path=feature_artifact_path,
+    )
     placebo_rows = build_placebo_test_rows(inputs=inputs, config=cfg)
     baseline_rows = build_baseline_comparison_rows(inputs=inputs, config=cfg)
     ok_control_count = sum(1 for row in (*placebo_rows, *baseline_rows) if row.status == "OK")
@@ -46,6 +52,7 @@ def run_mvp1_controls(
     run_config_rows = _run_config_rows(
         state_path=state_artifact_path,
         labels_path=labels_artifact_path,
+        feature_matrix_path=feature_artifact_path,
         output_path=output_path,
         config=cfg,
     )
@@ -185,11 +192,19 @@ def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, o
     return result
 
 
-def _run_config_rows(*, state_path: Path, labels_path: Path, output_path: Path, config: ControlsConfig) -> list[RunConfigRow]:
+def _run_config_rows(
+    *,
+    state_path: Path,
+    labels_path: Path,
+    feature_matrix_path: Path | None,
+    output_path: Path,
+    config: ControlsConfig,
+) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-controls", source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="labels_path", value=str(labels_path), source="cli"),
+        RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         *runtime_reproducibility_rows(),
         RunConfigRow(key="stage", value="mvp1_controls", source="runtime"),

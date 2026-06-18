@@ -22,6 +22,7 @@ class WalkForwardPredictionConfig:
     catboost_depth: int = 4
     catboost_learning_rate: float = 0.05
     random_seed: int = 20260618
+    excluded_model_feature_prefixes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.target_horizon_minutes not in (15, 30, 60, 120):
@@ -44,3 +45,5 @@ class WalkForwardPredictionConfig:
             raise ValueError("prediction_version is required")
         if not self.model_family:
             raise ValueError("model_family is required")
+        if any(not item for item in self.excluded_model_feature_prefixes):
+            raise ValueError("excluded_model_feature_prefixes must not contain empty values")

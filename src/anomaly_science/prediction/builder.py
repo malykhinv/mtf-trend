@@ -488,7 +488,7 @@ class _CatBoostIsotonicModel:
             return None
         if set(calibration_targets) != set(PREDICTED_SCENARIOS):
             return None
-        feature_names = _input_feature_names(ordered)
+        feature_names = _input_feature_names(ordered, config=config)
 
         model = CatBoostClassifier(
             loss_function="MultiClass",
@@ -794,13 +794,23 @@ def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionCo
     return [_target_for_horizon(row.label, config.target_horizon_minutes) for row in rows]
 
 
-def _input_feature_names(rows: Sequence[PredictionInputRow]) -> tuple[str, ...]:
+def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> tuple[str, ...]:
     has_feature_matrix = {row.features is not None for row in rows}
     if has_feature_matrix == {True}:
-        return (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES)
+        names = (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES)
     if has_feature_matrix == {False}:
-        return STATE_MODEL_FEATURE_NAMES
-    raise PredictionInputError("prediction rows must not mix feature-matrix and state-only inputs")
+        names = STATE_MODEL_FEATURE_NAMES
+    if has_feature_matrix not in ({True}, {False}):
+        raise PredictionInputError("prediction rows must not mix feature-matrix and state-only inputs")
+    if config.excluded_model_feature_prefixes:
+        names = tuple(
+            name
+            for name in names
+            if not any(name.startswith(prefix) for prefix in config.excluded_model_feature_prefixes)
+        )
+    if not names:
+        raise PredictionInputError("model feature set is empty after exclusions")
+    return names
 
 
 def _feature_matrix(rows: Sequence[PredictionInputRow], *, feature_names: tuple[str, ...]) -> np.ndarray:
