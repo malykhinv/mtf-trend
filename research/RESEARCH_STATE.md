@@ -37,4 +37,8 @@ Pending local patches from uploaded snapshot `project_20260618_115220.zip`:
 - `perf: make Binance Vision cache startup visible`
   - Adds immediate startup stage logs and preflight progress for archive range filtering.
   - Bakes optimized network defaults into the compact cache command: timeout 45s, connect timeout 8s, retries 2.
+- `perf: replace per-symbol Binance Vision preflight with run-level klines index`
+  - Replaces per-symbol archive range preflight with one run-level monthly klines index.
+  - Avoids 873× symbol-index S3 listing during startup.
+  - Keeps the cache command unchanged.
 - Patch status: PROPOSED until applied and verified locally.

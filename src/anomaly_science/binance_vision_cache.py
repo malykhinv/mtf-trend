@@ -226,7 +226,23 @@ class ArchiveFileIndex:
     labels: dict[tuple[ArchivePeriod, ArchiveDataset], frozenset[str]]
 
     def has(self, *, block: VisionBlock, dataset: ArchiveDataset) -> bool:
-        return block.label in self.labels.get((block.period, dataset), frozenset())
+        key = (block.period, dataset)
+        if key not in self.labels:
+            # Partial run-level indexes may know only klines. Unknown optional datasets
+            # must be probed directly instead of being silently treated as missing.
+            return True
+        return block.label in self.labels[key]
+
+
+@dataclass(frozen=True, slots=True)
+class RunKlinesArchiveIndex:
+    monthly_labels_by_symbol: dict[str, frozenset[str]]
+
+    def monthly_labels(self, symbol: str) -> frozenset[str]:
+        return self.monthly_labels_by_symbol.get(symbol.upper(), frozenset())
+
+    def symbols(self) -> frozenset[str]:
+        return frozenset(self.monthly_labels_by_symbol)
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,19 +458,16 @@ def build_binance_vision_cache(config: CacheConfig) -> list[SymbolStats]:
         raise RuntimeError("No perpetual symbols to process after delivery-contract/date-range filtering.")
 
     if config.use_archive_file_index:
+        log_cache_stage("loading run-level monthly klines archive index")
+        run_klines_index = load_or_build_run_klines_archive_index(config=config)
+        log_cache_stage(f"run-level monthly klines index symbols={len(run_klines_index.symbols())}")
         log_cache_stage(f"checking archive range availability symbols={len(symbols)}")
         symbols, archive_file_indexes, range_skipped = filter_symbols_by_archive_range(
             symbols=symbols,
             config=config,
             start_date=start,
             end_date=end,
-            progress_factory=lambda items: tqdm(
-                items,
-                desc="Binance Vision preflight",
-                unit="symbol",
-                mininterval=1.0,
-                dynamic_ncols=True,
-            ),
+            run_klines_index=run_klines_index,
         )
         skipped_symbols.extend(range_skipped)
         write_skipped_symbols(skipped_symbols_path, skipped_symbols)
@@ -706,7 +719,14 @@ def build_symbol_cache(
             fallback_days = daily_blocks(actual_start, actual_end)
             index = get_archive_file_index()
             if index is not None:
-                fallback_days = [daily_block for daily_block in fallback_days if index.has(block=daily_block, dataset="klines")]
+                if archive_index_knows_dataset(index=index, period="daily", dataset="klines"):
+                    fallback_days = [
+                        daily_block for daily_block in fallback_days if index.has(block=daily_block, dataset="klines")
+                    ]
+                elif archive_index_knows_dataset(index=index, period="monthly", dataset="klines"):
+                    # A partial run-level monthly index already proved the monthly kline archive is absent.
+                    # Do not explode that absence into dozens of direct daily 404 probes.
+                    fallback_days = []
             symbol_blocks_total += len(fallback_days)
             for daily_block in fallback_days:
                 process_data_block(daily_block)
@@ -1432,6 +1452,86 @@ def make_archive_url(*, symbol: str, block: VisionBlock, dataset: Literal["kline
     return f"{BINANCE_VISION_BASE_URL}/{path}"
 
 
+
+def load_or_build_run_klines_archive_index(*, config: CacheConfig) -> RunKlinesArchiveIndex:
+    index_path = run_klines_archive_index_path(config.out_dir)
+    if index_path.exists() and not config.refresh_archive_file_index:
+        return read_run_klines_archive_index(index_path)
+    index = build_run_klines_archive_index(config=config)
+    write_run_klines_archive_index(index_path, index)
+    return index
+
+
+def run_klines_archive_index_path(out_dir: Path) -> Path:
+    return cache_metadata_dir(out_dir) / "archive_file_index" / "run_monthly_klines.json"
+
+
+def build_run_klines_archive_index(*, config: CacheConfig) -> RunKlinesArchiveIndex:
+    labels_by_symbol: dict[str, set[str]] = {}
+    keys = list_s3_object_keys(prefix="data/futures/um/monthly/klines/", config=config)
+    for key in keys:
+        parsed = parse_monthly_kline_archive_key(key)
+        if parsed is None:
+            continue
+        symbol, label = parsed
+        labels_by_symbol.setdefault(symbol, set()).add(label)
+    return RunKlinesArchiveIndex(
+        monthly_labels_by_symbol={
+            symbol: frozenset(labels)
+            for symbol, labels in sorted(labels_by_symbol.items())
+        }
+    )
+
+
+def parse_monthly_kline_archive_key(key: str) -> tuple[str, str] | None:
+    match = re.match(
+        r"^data/futures/um/monthly/klines/(?P<symbol>[A-Z0-9_]+)/1m/(?P=symbol)-1m-(?P<label>\d{4}-\d{2})\.zip$",
+        key,
+    )
+    if not match:
+        return None
+    return match.group("symbol"), match.group("label")
+
+
+def write_run_klines_archive_index(path: Path, index: RunKlinesArchiveIndex) -> None:
+    payload = {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": "monthly_klines",
+        "labels_by_symbol": {
+            symbol: sorted(labels)
+            for symbol, labels in sorted(index.monthly_labels_by_symbol.items())
+        },
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def read_run_klines_archive_index(path: Path) -> RunKlinesArchiveIndex:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = payload.get("labels_by_symbol") or {}
+    return RunKlinesArchiveIndex(
+        monthly_labels_by_symbol={
+            str(symbol).upper(): frozenset(str(label) for label in labels)
+            for symbol, labels in raw.items()
+        }
+    )
+
+
+def archive_index_from_run_klines_index(*, symbol: str, run_index: RunKlinesArchiveIndex) -> ArchiveFileIndex:
+    return ArchiveFileIndex(
+        symbol=symbol.upper(),
+        labels={
+            ("monthly", "klines"): run_index.monthly_labels(symbol),
+        },
+    )
+
+
+def archive_index_knows_dataset(*, index: ArchiveFileIndex, period: ArchivePeriod, dataset: ArchiveDataset) -> bool:
+    return (period, dataset) in index.labels
+
+
 def load_or_build_archive_file_index(*, symbol: str, config: CacheConfig) -> ArchiveFileIndex:
     index_path = archive_file_index_path(config.out_dir, symbol)
     if index_path.exists() and not config.refresh_archive_file_index:
@@ -1547,15 +1647,16 @@ def filter_symbols_by_archive_range(
     config: CacheConfig,
     start_date: date,
     end_date: date,
-    progress_factory: Callable[[list[str]], Iterable[str]] | None = None,
+    run_klines_index: RunKlinesArchiveIndex | None = None,
 ) -> tuple[list[str], dict[str, ArchiveFileIndex], list[SkippedSymbolRecord]]:
     eligible: list[str] = []
     indexes: dict[str, ArchiveFileIndex] = {}
     skipped: list[SkippedSymbolRecord] = []
     skipped_at = datetime.now(timezone.utc).isoformat()
-    iterable = progress_factory(symbols) if progress_factory is not None else symbols
-    for symbol in iterable:
-        index = load_or_build_archive_file_index(symbol=symbol, config=config)
+    if run_klines_index is None:
+        run_klines_index = load_or_build_run_klines_archive_index(config=config)
+    for symbol in symbols:
+        index = archive_index_from_run_klines_index(symbol=symbol, run_index=run_klines_index)
         if archive_index_has_klines_in_range(index=index, start_date=start_date, end_date=end_date):
             eligible.append(symbol)
             indexes[symbol] = index
@@ -2025,6 +2126,7 @@ def write_manifest(
         "use_archive_file_index": config.use_archive_file_index,
         "refresh_archive_file_index": config.refresh_archive_file_index,
         "archive_file_index_dir": str(cache_metadata_dir(config.out_dir) / "archive_file_index"),
+        "run_klines_archive_index": str(run_klines_archive_index_path(config.out_dir)),
         "output_columns": OUTPUT_COLUMNS,
     }
     tmp_path = path.with_suffix(path.suffix + ".tmp")

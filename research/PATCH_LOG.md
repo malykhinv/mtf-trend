@@ -211,3 +211,20 @@ Intent:
 Validation for this proposed patch:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest -q tests/test_binance_vision_cache.py tests/test_binance_vision_cache_delivery_symbols.py tests/test_binance_vision_cache_startup.py tests/test_zip_project.py`
+
+## perf: replace per-symbol Binance Vision preflight with run-level klines index
+
+Status: PROPOSED; patch generated on top of `perf: make Binance Vision cache startup visible`; GitHub head not checked in this environment.
+
+Intent:
+- Replace the slow per-symbol archive range preflight with one run-level monthly klines index scan.
+- Stop calling `load_or_build_archive_file_index()` once per symbol during preflight.
+- Preload partial monthly-kline indexes for eligible symbols, using them only for kline availability.
+- Keep optional metrics/liquidation datasets as direct probes when a partial index does not know those datasets.
+- Prevent missing monthly klines from exploding into daily fallback probes when the run-level monthly index already proves the monthly kline archive is absent.
+- Keep the compact cache command unchanged.
+
+Validation for this proposed patch:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_binance_vision_cache.py tests/test_binance_vision_cache_delivery_symbols.py tests/test_binance_vision_cache_startup.py tests/test_zip_project.py`
+
