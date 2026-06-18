@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-import pandas as pd
-
-from anomaly_science.contracts.events import AnomalyEvent
-from anomaly_science.contracts.market import Candle1m
+import polars as pl
 
 
 class StrategyContractError(ValueError):
@@ -20,8 +16,7 @@ class StrategyMetadata:
     strategy_version: str
     strategy_contract_version: str
     strategy_family: str
-    label_horizons_minutes: tuple[int, ...]
-    primary_horizon_minutes: int
+    horizon_minutes: int
     take_profit_atr: float
     stop_loss_atr: float
     feature_schema_version: str
@@ -36,14 +31,8 @@ class StrategyMetadata:
             raise StrategyContractError("strategy_contract_version is required")
         if not self.strategy_family:
             raise StrategyContractError("strategy_family is required")
-        if not self.label_horizons_minutes:
-            raise StrategyContractError("label_horizons_minutes is required")
-        if any(horizon <= 0 for horizon in self.label_horizons_minutes):
-            raise StrategyContractError("label_horizons_minutes must be positive")
-        if len(set(self.label_horizons_minutes)) != len(self.label_horizons_minutes):
-            raise StrategyContractError("label_horizons_minutes must be unique")
-        if self.primary_horizon_minutes not in self.label_horizons_minutes:
-            raise StrategyContractError("primary_horizon_minutes must be one of label_horizons_minutes")
+        if self.horizon_minutes <= 0:
+            raise StrategyContractError("horizon_minutes must be positive")
         if self.take_profit_atr <= 0:
             raise StrategyContractError("take_profit_atr must be positive")
         if self.stop_loss_atr <= 0:
@@ -57,8 +46,8 @@ class StrategyMetadata:
 class BaseStrategy(Protocol):
     metadata: StrategyMetadata
 
-    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
-        """Return strategy trigger events using only point-in-time market data."""
+    def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.Series:
+        """Return is_trigger using only the supplied point-in-time market frame."""
 
-    def generate_custom_features(self, market_frame_asof: pd.DataFrame) -> pd.DataFrame:
+    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         """Return strategy-specific as-of features, without fitting or reading labels."""

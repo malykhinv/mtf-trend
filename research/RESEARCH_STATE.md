@@ -6,13 +6,15 @@ Active rule:
 - `legacy_quarantine` is reference-only.
 - New code must not import legacy modules.
 - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
-- First target is MVP 1: dataset/state/future-path/audit, not live trading.
-- Current implemented slice after applying Patch 10: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events, online 1m anomaly state, raw future paths, descriptive anomaly nature atlas, descriptive future-nature outcome labels, first walk-forward calibrated baseline prediction, and placebo/control tests.
+- First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
+- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths, feature catalog/matrix, descriptive anomaly nature atlas, descriptive future-nature outcome labels, weekly frozen walk-forward prediction, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, and holdout governance artifacts.
 - Future paths remain raw outcomes.
 - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
 - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
 - Placebo/control rows are negative scientific controls; passing or failing them does not create a trade signal.
-- Decision timing, EV, trade simulation, shadow live, and production live are still intentionally absent.
+- Decision timing and EV are research decision artifacts, not live trade commands.
+- Trade simulation is simplified and pessimistic; it is not shadow live or production execution.
+- Shadow live and production live are still intentionally absent.
 
 Current local base commit before these working-tree fixes: `bcf39f51`, verified with `git rev-parse --short HEAD`.
 Last local validation on 2026-06-18:
