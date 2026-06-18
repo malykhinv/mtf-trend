@@ -80,26 +80,41 @@ def _label_row(*, state: AnomalyState1mRow, scenario_30m: str) -> AnomalyOutcome
 
 
 def _control_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutcomeLabelRow]]:
-    states = [
-        _state_row(event_id="aaa_train_1", day_offset=-1, minute_of_day=10, symbol="AAA/USDT:USDT", current_return_from_start=0.025, distance_to_running_high=-0.0005),
-        _state_row(event_id="aaa_train_2", day_offset=-1, minute_of_day=20, symbol="AAA/USDT:USDT", current_return_from_start=0.022, distance_to_running_high=-0.0004),
-        _state_row(event_id="bbb_train_1", day_offset=-1, minute_of_day=30, symbol="BBB/USDT:USDT", current_return_from_start=-0.02, distance_to_running_high=-0.04),
-        _state_row(event_id="bbb_train_2", day_offset=-1, minute_of_day=40, symbol="BBB/USDT:USDT", current_return_from_start=-0.018, distance_to_running_high=-0.035),
-        _state_row(event_id="aaa_test_1", day_offset=1, minute_of_day=70, symbol="AAA/USDT:USDT", current_return_from_start=0.024, distance_to_running_high=-0.0006),
-        _state_row(event_id="bbb_test_1", day_offset=1, minute_of_day=80, symbol="BBB/USDT:USDT", current_return_from_start=-0.021, distance_to_running_high=-0.045),
-        _state_row(event_id="aaa_test_2", day_offset=2, minute_of_day=60, symbol="AAA/USDT:USDT", current_return_from_start=0.023, distance_to_running_high=-0.0007),
-        _state_row(event_id="bbb_test_2", day_offset=2, minute_of_day=90, symbol="BBB/USDT:USDT", current_return_from_start=-0.022, distance_to_running_high=-0.05),
-    ]
-    labels = [
-        _label_row(state=states[0], scenario_30m="long_continuation"),
-        _label_row(state=states[1], scenario_30m="long_continuation"),
-        _label_row(state=states[2], scenario_30m="short_fade"),
-        _label_row(state=states[3], scenario_30m="short_fade"),
-        _label_row(state=states[4], scenario_30m="long_continuation"),
-        _label_row(state=states[5], scenario_30m="short_fade"),
-        _label_row(state=states[6], scenario_30m="long_continuation"),
-        _label_row(state=states[7], scenario_30m="short_fade"),
-    ]
+    scenarios = ("long_continuation", "short_fade", "static_or_chop", "unclear")
+    states: list[AnomalyState1mRow] = []
+    labels: list[AnomalyOutcomeLabelRow] = []
+    for index in range(80):
+        scenario = scenarios[index % len(scenarios)]
+        symbol = "AAA/USDT:USDT" if index % 2 == 0 else "BBB/USDT:USDT"
+        states.append(
+            _state_row(
+                event_id=f"train_{index:03d}",
+                day_offset=-2,
+                minute_of_day=10 + index,
+                symbol=symbol,
+                current_return_from_start=0.025 if scenario == "long_continuation" else -0.02 if scenario == "short_fade" else 0.0,
+                distance_to_running_high=-0.0005 if scenario == "long_continuation" else -0.04,
+            )
+        )
+        labels.append(_label_row(state=states[-1], scenario_30m=scenario))
+    test_specs = (
+        ("aaa_test_1", "AAA/USDT:USDT", "long_continuation", 1, 70, 0.024, -0.0006),
+        ("bbb_test_1", "BBB/USDT:USDT", "short_fade", 1, 80, -0.021, -0.045),
+        ("aaa_test_2", "AAA/USDT:USDT", "long_continuation", 2, 60, 0.023, -0.0007),
+        ("bbb_test_2", "BBB/USDT:USDT", "short_fade", 2, 90, -0.022, -0.05),
+    )
+    for event_id, symbol, scenario, day_offset, minute, current_return, distance_high in test_specs:
+        states.append(
+            _state_row(
+                event_id=event_id,
+                day_offset=day_offset,
+                minute_of_day=minute,
+                symbol=symbol,
+                current_return_from_start=current_return,
+                distance_to_running_high=distance_high,
+            )
+        )
+        labels.append(_label_row(state=states[-1], scenario_30m=scenario))
     return states, labels
 
 

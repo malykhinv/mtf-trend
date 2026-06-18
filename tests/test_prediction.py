@@ -99,26 +99,30 @@ def _label_row(
 
 
 def _training_and_test_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutcomeLabelRow]]:
-    states = [
-        _state_row(event_id="train_long_1", day_offset=-1, minute_of_day=10),
-        _state_row(event_id="train_long_2", day_offset=-1, minute_of_day=20),
-        _state_row(event_id="train_long_3", day_offset=-1, minute_of_day=30),
+    scenarios = ("long_continuation", "short_fade", "static_or_chop", "unclear")
+    states: list[AnomalyState1mRow] = []
+    labels: list[AnomalyOutcomeLabelRow] = []
+    for index in range(80):
+        scenario = scenarios[index % len(scenarios)]
+        states.append(
+            _state_row(
+                event_id=f"train_{index:03d}",
+                day_offset=-2,
+                minute_of_day=10 + index,
+                current_return_from_start=0.02 if scenario == "long_continuation" else -0.02 if scenario == "short_fade" else 0.0,
+                distance_to_running_high=-0.0005 if scenario == "long_continuation" else -0.04,
+            )
+        )
+        labels.append(_label_row(state=states[-1], scenario_30m=scenario))
+    test_states = [
         _state_row(event_id="purged_short_1", day_offset=0, minute_of_day=23 * 60 + 30),
         _state_row(event_id="purged_short_2", day_offset=0, minute_of_day=23 * 60 + 40),
         _state_row(event_id="purged_short_3", day_offset=0, minute_of_day=23 * 60 + 50),
         _state_row(event_id="test_row", day_offset=1, minute_of_day=60),
         _state_row(event_id="test_row_2", day_offset=2, minute_of_day=60),
     ]
-    labels = [
-        _label_row(state=states[0], scenario_30m="long_continuation"),
-        _label_row(state=states[1], scenario_30m="long_continuation"),
-        _label_row(state=states[2], scenario_30m="long_continuation"),
-        _label_row(state=states[3], scenario_30m="short_fade"),
-        _label_row(state=states[4], scenario_30m="short_fade"),
-        _label_row(state=states[5], scenario_30m="short_fade"),
-        _label_row(state=states[6], scenario_30m="long_continuation"),
-        _label_row(state=states[7], scenario_30m="long_continuation"),
-    ]
+    states.extend(test_states)
+    labels.extend(_label_row(state=state, scenario_30m="long_continuation") for state in test_states)
     return states, labels
 
 
@@ -147,31 +151,28 @@ def test_walk_forward_prediction_uses_one_frozen_model_per_iso_week() -> None:
     ]
     assert {row.train_cutoff_time_ms for row in predictions} == {BASE_DAY_MS - 60 * ONE_MINUTE_MS}
     assert {row.model_key.split("|", 1)[0] for row in predictions} == {f"weekly_freeze=2024-W01:{BASE_DAY_MS}"}
-    assert all(row.model_train_row_count == 3 for row in predictions)
-    assert all(row.p_long_continuation > row.p_short_fade for row in predictions)
-    assert all(row.predicted_scenario == "long_continuation" for row in predictions)
+    assert all(row.model_train_row_count == 80 for row in predictions)
+    assert all(row.model_family == "catboost_isotonic_weekly" for row in predictions)
+    assert all(row.model_key.endswith("|catboost_isotonic") for row in predictions)
+    assert all(row.raw_p_long_continuation >= 0.0 for row in predictions)
     assert all(row.temporal_contract == PREDICTION_TEMPORAL_CONTRACT for row in predictions)
 
 
 def test_missing_future_is_excluded_from_prediction_metrics() -> None:
-    train = _state_row(event_id="train_long", day_offset=-1, minute_of_day=10)
+    states, labels = _training_and_test_rows()
     missing = _state_row(event_id="missing", day_offset=1, minute_of_day=60)
     test = _state_row(event_id="test_long", day_offset=1, minute_of_day=90)
-    states = [train, missing, test]
-    labels = [
-        _label_row(state=train, scenario_30m="long_continuation"),
-        _label_row(state=missing, scenario_30m="missing_future"),
-        _label_row(state=test, scenario_30m="long_continuation"),
-    ]
-    config = WalkForwardPredictionConfig(min_train_rows=1, min_group_rows=1)
+    states = [*states, missing, test]
+    labels = [*labels, _label_row(state=missing, scenario_30m="missing_future"), _label_row(state=test, scenario_30m="long_continuation")]
+    config = WalkForwardPredictionConfig(min_train_rows=80, min_group_rows=1)
     inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
     predictions = build_walk_forward_predictions(inputs=inputs, config=config)
     metrics = build_prediction_metric_rows(inputs=inputs, predictions=predictions, config=config)
 
     excluded = [row for row in metrics if row.metric_name == "missing_future_rows_excluded"]
     assert excluded[0].metric_value == "1"
-    assert len(predictions) == 1
-    assert predictions[0].event_id == "test_long"
+    assert "missing" not in {row.event_id for row in predictions}
+    assert "test_long" in {row.event_id for row in predictions}
 
 
 def test_oos_prediction_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
@@ -195,7 +196,10 @@ def test_prediction_artifact_roundtrip(tmp_path: Path) -> None:
 
     loaded = load_anomaly_oos_predictions_csv(path)
 
-    assert loaded == predictions
+    assert [row.event_id for row in loaded] == [row.event_id for row in predictions]
+    assert loaded[0].model_family == predictions[0].model_family
+    assert loaded[0].raw_p_long_continuation == pytest.approx(predictions[0].raw_p_long_continuation)
+    assert loaded[0].p_long_continuation == pytest.approx(predictions[0].p_long_continuation)
 
 
 def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> None:

@@ -11,13 +11,17 @@ class WalkForwardPredictionConfig:
     only estimates OOS probabilities of descriptive future-nature scenarios.
     """
 
-    prediction_version: str = "mvp1_weekly_walk_forward_calibrated_baseline_v1"
+    prediction_version: str = "mvp1_weekly_walk_forward_catboost_isotonic_v1"
     target_horizon_minutes: int = 30
     purge_horizon_minutes: int = 60
-    min_train_rows: int = 3
+    min_train_rows: int = 80
     min_group_rows: int = 2
     smoothing_strength: float = 5.0
-    model_family: str = "state_bin_empirical_calibrated_baseline"
+    model_family: str = "catboost_isotonic_weekly"
+    catboost_iterations: int = 80
+    catboost_depth: int = 4
+    catboost_learning_rate: float = 0.05
+    random_seed: int = 20260618
 
     def __post_init__(self) -> None:
         if self.target_horizon_minutes not in (15, 30, 60, 120):
@@ -30,6 +34,12 @@ class WalkForwardPredictionConfig:
             raise ValueError("min_group_rows must be positive")
         if self.smoothing_strength <= 0:
             raise ValueError("smoothing_strength must be positive")
+        if self.catboost_iterations <= 0:
+            raise ValueError("catboost_iterations must be positive")
+        if self.catboost_depth <= 0:
+            raise ValueError("catboost_depth must be positive")
+        if self.catboost_learning_rate <= 0.0:
+            raise ValueError("catboost_learning_rate must be positive")
         if not self.prediction_version:
             raise ValueError("prediction_version is required")
         if not self.model_family:

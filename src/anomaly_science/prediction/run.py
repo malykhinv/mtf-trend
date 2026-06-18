@@ -27,7 +27,7 @@ def run_mvp1_prediction(
     out_dir: str | Path,
     config: WalkForwardPredictionConfig | None = None,
 ) -> Path:
-    """Run MVP1 walk-forward calibrated baseline prediction and write artifacts."""
+    """Run MVP1 weekly CatBoost + Isotonic prediction and write artifacts."""
     state_artifact_path = Path(state_path)
     labels_artifact_path = Path(labels_path)
     output_path = Path(out_dir)
@@ -121,7 +121,7 @@ def _protocol_rows(*, input_row_count: int, prediction_row_count: int, config: W
         ProtocolAuditRow(
             check_name="state_only_features",
             status=AuditStatus.PASS,
-            message="model bins are derived from anomaly_state_1m.csv fields only; labels are used only as training targets and OOS evaluation targets",
+            message="CatBoost features are derived from anomaly_state_1m.csv fields only; labels are used only as training and OOS evaluation targets",
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(
@@ -168,13 +168,13 @@ def _protocol_rows(*, input_row_count: int, prediction_row_count: int, config: W
         ProtocolAuditRow(
             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
             status=AuditStatus.PASS,
-            message=f"weekly baseline enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= weekly_model_freeze_time_ms",
+            message=f"weekly CatBoost enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= weekly_model_freeze_time_ms",
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(
             check_name="weekly_walk_forward_heavy_models_enforced",
             status=AuditStatus.PASS,
-            message="prediction stage trains at most one frozen model per ISO week; no daily retraining path exists in MVP1 baseline",
+            message="prediction stage trains at most one CatBoost model plus Isotonic calibrators per ISO week; no daily retraining path exists",
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(
@@ -220,6 +220,11 @@ def _run_config_rows(
         RunConfigRow(key="min_group_rows", value=str(config.min_group_rows), source="runtime"),
         RunConfigRow(key="smoothing_strength", value=str(config.smoothing_strength), source="runtime"),
         RunConfigRow(key="model_family", value=config.model_family, source="runtime"),
+        RunConfigRow(key="catboost_iterations", value=str(config.catboost_iterations), source="runtime"),
+        RunConfigRow(key="catboost_depth", value=str(config.catboost_depth), source="runtime"),
+        RunConfigRow(key="catboost_learning_rate", value=str(config.catboost_learning_rate), source="runtime"),
+        RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
+        RunConfigRow(key="calibration_method", value="one_vs_rest_isotonic_regression_on_train_calibration_split", source="runtime"),
         RunConfigRow(key="model_freeze_cadence", value="iso_weekly", source="runtime"),
         RunConfigRow(key="prediction_scope", value="calibrated_probabilities_not_decisions", source="runtime"),
     ]

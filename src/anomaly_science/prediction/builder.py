@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+import numpy as np
 import pandas as pd
+from catboost import CatBoostClassifier
+from sklearn.isotonic import IsotonicRegression
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.labels import AnomalyOutcomeLabelRow, MISSING_FUTURE_SCENARIO
@@ -120,12 +123,14 @@ def build_walk_forward_predictions(
         train_rows = [row for row in usable_rows if row.state.snapshot_time_ms <= train_cutoff_time_ms]
         if len(train_rows) < cfg.min_train_rows:
             continue
-        model = _EmpiricalStateBinModel.fit(rows=train_rows, config=cfg)
+        model = _CatBoostIsotonicModel.fit(rows=train_rows, config=cfg)
+        if model is None:
+            continue
         for test_row in sorted(rows_by_test_week[test_week], key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id)):
             target_scenario = _target_for_horizon(test_row.label, cfg.target_horizon_minutes)
             if target_scenario == MISSING_FUTURE_SCENARIO:
                 continue
-            probabilities, model_key, group_count = model.predict(test_row.state)
+            raw_probabilities, probabilities, model_key, group_count = model.predict(test_row.state)
             predicted_scenario, confidence = _predicted_scenario(probabilities)
             test_day = _utc_day(test_row.state.snapshot_time_ms)
             predictions.append(
@@ -144,6 +149,10 @@ def build_walk_forward_predictions(
                     model_key=f"weekly_freeze={test_week}:{weekly_model_freeze_time_ms}|{model_key}",
                     model_train_row_count=model.train_row_count,
                     model_group_row_count=group_count,
+                    raw_p_long_continuation=raw_probabilities["long_continuation"],
+                    raw_p_short_fade=raw_probabilities["short_fade"],
+                    raw_p_static_or_chop=raw_probabilities["static_or_chop"],
+                    raw_p_unclear=raw_probabilities["unclear"],
                     p_long_continuation=probabilities["long_continuation"],
                     p_short_fade=probabilities["short_fade"],
                     p_static_or_chop=probabilities["static_or_chop"],
@@ -240,6 +249,7 @@ def build_prediction_metric_rows(
         add("overall_accuracy", _mean(1.0 if row.predicted_scenario == row.target_scenario else 0.0 for row in prediction_rows), len(prediction_rows), "argmax scenario accuracy; not a trading metric")
         add("multiclass_brier", _mean(_brier_score(row) for row in prediction_rows), len(prediction_rows), "mean multiclass Brier score over OOS rows")
         add("log_loss", _mean(_log_loss(row) for row in prediction_rows), len(prediction_rows), "mean multiclass log loss over OOS rows")
+        add("expected_calibration_error", _expected_calibration_error(prediction_rows), len(prediction_rows), "confidence-bucket expected calibration error over OOS rows")
         add("mean_prediction_confidence", _mean(row.prediction_confidence for row in prediction_rows), len(prediction_rows), "mean max-class probability")
         add("max_probability_sum_error", max(abs(_probability_sum(row) - 1.0) for row in prediction_rows), len(prediction_rows), "strict probability normalization audit")
         for scenario in PREDICTED_SCENARIOS:
@@ -337,6 +347,72 @@ class _EmpiricalStateBinModel:
         return (dict(self._global_prior), "global_prior", sum(self._global_counts.values()))
 
 
+class _CatBoostIsotonicModel:
+    def __init__(
+        self,
+        *,
+        config: WalkForwardPredictionConfig,
+        model: CatBoostClassifier,
+        calibrators: dict[str, IsotonicRegression],
+        train_row_count: int,
+    ) -> None:
+        self._config = config
+        self._model = model
+        self._calibrators = calibrators
+        self.train_row_count = train_row_count
+
+    @classmethod
+    def fit(cls, *, rows: Sequence[PredictionInputRow], config: WalkForwardPredictionConfig) -> _CatBoostIsotonicModel | None:
+        ordered = sorted(rows, key=lambda row: (row.state.snapshot_time_ms, row.state.symbol, row.state.event_id))
+        if len(ordered) < config.min_train_rows:
+            return None
+        fit_rows, validation_rows, calibration_rows = _train_validation_calibration_split(ordered)
+        fit_targets = _targets(fit_rows, config)
+        calibration_targets = _targets(calibration_rows, config)
+        if len(set(fit_targets)) < 2:
+            return None
+        if len(calibration_rows) < len(PREDICTED_SCENARIOS):
+            return None
+        if set(calibration_targets) != set(PREDICTED_SCENARIOS):
+            return None
+
+        model = CatBoostClassifier(
+            loss_function="MultiClass",
+            class_names=list(PREDICTED_SCENARIOS),
+            iterations=config.catboost_iterations,
+            depth=config.catboost_depth,
+            learning_rate=config.catboost_learning_rate,
+            random_seed=config.random_seed,
+            verbose=False,
+            allow_writing_files=False,
+        )
+        eval_set = None
+        if validation_rows and len(set(_targets(validation_rows, config))) >= 2:
+            eval_set = (_feature_matrix(validation_rows), _targets(validation_rows, config))
+        model.fit(_feature_matrix(fit_rows), fit_targets, eval_set=eval_set)
+
+        raw_calibration = _raw_probability_matrix(model, calibration_rows)
+        calibrators: dict[str, IsotonicRegression] = {}
+        for scenario_index, scenario in enumerate(PREDICTED_SCENARIOS):
+            binary_targets = np.array([1.0 if target == scenario else 0.0 for target in calibration_targets], dtype=float)
+            if len(set(binary_targets.tolist())) < 2:
+                return None
+            calibrator = IsotonicRegression(out_of_bounds="clip")
+            calibrator.fit(raw_calibration[:, scenario_index], binary_targets)
+            calibrators[scenario] = calibrator
+        return cls(config=config, model=model, calibrators=calibrators, train_row_count=len(ordered))
+
+    def predict(self, state: AnomalyState1mRow) -> tuple[dict[str, float], dict[str, float], str, int]:
+        raw_vector = self._model.predict_proba(_feature_matrix_from_states([state]))[0]
+        raw = _probability_dict(raw_vector)
+        calibrated_vector = np.array(
+            [self._calibrators[scenario].predict([raw[scenario]])[0] for scenario in PREDICTED_SCENARIOS],
+            dtype=float,
+        )
+        calibrated = _probability_dict(_normalize_probability_array(calibrated_vector))
+        return raw, calibrated, "catboost_isotonic", self.train_row_count
+
+
 def _load_prediction_artifact(*, path: str | Path, schema_name: str, row_builder: object) -> tuple[object, ...]:
     artifact_path = Path(path)
     if not artifact_path.exists():
@@ -372,6 +448,10 @@ def _oos_prediction_from_mapping(row: Mapping[str, object]) -> OosPredictionRow:
         model_key=_required_str(row, "model_key"),
         model_train_row_count=_required_int(row, "model_train_row_count"),
         model_group_row_count=_required_int(row, "model_group_row_count"),
+        raw_p_long_continuation=_required_float(row, "raw_p_long_continuation"),
+        raw_p_short_fade=_required_float(row, "raw_p_short_fade"),
+        raw_p_static_or_chop=_required_float(row, "raw_p_static_or_chop"),
+        raw_p_unclear=_required_float(row, "raw_p_unclear"),
         p_long_continuation=_required_float(row, "p_long_continuation"),
         p_short_fade=_required_float(row, "p_short_fade"),
         p_static_or_chop=_required_float(row, "p_static_or_chop"),
@@ -462,6 +542,62 @@ def _state_bins(state: AnomalyState1mRow) -> dict[str, str]:
     }
 
 
+def _train_validation_calibration_split(
+    rows: Sequence[PredictionInputRow],
+) -> tuple[tuple[PredictionInputRow, ...], tuple[PredictionInputRow, ...], tuple[PredictionInputRow, ...]]:
+    first_cut = max(1, int(len(rows) * 0.60))
+    second_cut = max(first_cut + 1, int(len(rows) * 0.80))
+    second_cut = min(second_cut, len(rows) - 1)
+    return tuple(rows[:first_cut]), tuple(rows[first_cut:second_cut]), tuple(rows[second_cut:])
+
+
+def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionConfig) -> list[str]:
+    return [_target_for_horizon(row.label, config.target_horizon_minutes) for row in rows]
+
+
+def _feature_matrix(rows: Sequence[PredictionInputRow]) -> np.ndarray:
+    return _feature_matrix_from_states([row.state for row in rows])
+
+
+def _feature_matrix_from_states(states: Sequence[AnomalyState1mRow]) -> np.ndarray:
+    return np.array([_state_feature_vector(state) for state in states], dtype=float)
+
+
+def _state_feature_vector(state: AnomalyState1mRow) -> list[float]:
+    return [
+        float(state.minutes_since_event_start),
+        float(state.minutes_since_detection),
+        1.0 if state.event_alive else 0.0,
+        float(state.time_since_running_high_minutes),
+        float(state.current_return_from_start),
+        float(state.distance_to_running_high),
+        float(state.distance_to_running_low),
+        0.0 if state.distance_to_structural_low is None else float(state.distance_to_structural_low),
+        0.0 if state.distance_to_structural_high is None else float(state.distance_to_structural_high),
+        1.0 if state.distance_to_structural_low is None else 0.0,
+        1.0 if state.distance_to_structural_high is None else 0.0,
+    ]
+
+
+def _raw_probability_matrix(model: CatBoostClassifier, rows: Sequence[PredictionInputRow]) -> np.ndarray:
+    return np.asarray(model.predict_proba(_feature_matrix(rows)), dtype=float)
+
+
+def _probability_dict(values: Sequence[float] | np.ndarray) -> dict[str, float]:
+    vector = _normalize_probability_array(np.asarray(values, dtype=float))
+    return {scenario: float(vector[index]) for index, scenario in enumerate(PREDICTED_SCENARIOS)}
+
+
+def _normalize_probability_array(values: np.ndarray) -> np.ndarray:
+    raw = np.maximum(values.astype(float), 0.0)
+    total = float(raw.sum())
+    if total <= 0.0:
+        return np.full(len(PREDICTED_SCENARIOS), 1.0 / len(PREDICTED_SCENARIOS), dtype=float)
+    normalized = raw / total
+    normalized[-1] = 1.0 - float(normalized[:-1].sum())
+    return normalized
+
+
 def _exact_model_key(bins: Mapping[str, str]) -> str:
     fields = ("maturity", "return", "distance_high", "distance_low", "time_since_high", "alive")
     return "exact|" + "|".join(f"{field}={bins[field]}" for field in fields)
@@ -534,6 +670,23 @@ def _confidence_bucket(confidence: float) -> str:
     lower = math.floor(confidence * 10.0) / 10.0
     upper = min(1.0, lower + 0.1)
     return f"[{lower:.1f},{upper:.1f})" if upper < 1.0 else "[0.9,1.0]"
+
+
+def _expected_calibration_error(rows: Sequence[OosPredictionRow]) -> float:
+    if not rows:
+        return 0.0
+    grouped: dict[str, list[OosPredictionRow]] = defaultdict(list)
+    for row in rows:
+        grouped[_confidence_bucket(row.prediction_confidence)].append(row)
+    total = float(len(rows))
+    return sum(
+        (len(group) / total)
+        * abs(
+            _mean(item.prediction_confidence for item in group)
+            - _mean(1.0 if item.predicted_scenario == item.target_scenario else 0.0 for item in group)
+        )
+        for group in grouped.values()
+    )
 
 
 def _mean(values: Iterable[float]) -> float:

@@ -26,6 +26,10 @@ class OosPredictionRow:
     model_key: str
     model_train_row_count: int
     model_group_row_count: int
+    raw_p_long_continuation: float
+    raw_p_short_fade: float
+    raw_p_static_or_chop: float
+    raw_p_unclear: float
     p_long_continuation: float
     p_short_fade: float
     p_static_or_chop: float
@@ -59,17 +63,25 @@ class OosPredictionRow:
             raise MarketDataContractError("model_train_row_count must be positive")
         if self.model_group_row_count < 0:
             raise MarketDataContractError("model_group_row_count must be non-negative")
+        raw_probabilities = (
+            self.raw_p_long_continuation,
+            self.raw_p_short_fade,
+            self.raw_p_static_or_chop,
+            self.raw_p_unclear,
+        )
         probabilities = (
             self.p_long_continuation,
             self.p_short_fade,
             self.p_static_or_chop,
             self.p_unclear,
         )
-        for value in probabilities:
+        for value in (*raw_probabilities, *probabilities):
             if value < 0.0 or value > 1.0:
                 raise MarketDataContractError("prediction probabilities must be within [0, 1]")
+        if abs(sum(raw_probabilities) - 1.0) > 1e-9:
+            raise MarketDataContractError("raw prediction probabilities must sum to 1")
         if abs(sum(probabilities) - 1.0) > 1e-9:
-            raise MarketDataContractError("prediction probabilities must sum to 1")
+            raise MarketDataContractError("calibrated prediction probabilities must sum to 1")
         if abs(max(probabilities) - self.prediction_confidence) > 1e-9:
             raise MarketDataContractError("prediction_confidence must equal max class probability")
         if self.temporal_contract != PREDICTION_TEMPORAL_CONTRACT:
