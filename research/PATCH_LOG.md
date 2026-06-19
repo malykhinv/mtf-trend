@@ -1,5 +1,17 @@
 # Patch log
 
+## methodology: audit required controls completeness
+
+Status: APPLIED.
+
+Intent:
+- Add independent forensic verification for required placebo, baseline, anomaly ablation/subset, always-no-trade, and random-entry controls.
+- Make simulation control delta metrics appear even when no simulated trade rows exist.
+- Promote controls ledger rows only after code, artifacts, tests, and forensic proof agree.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_forensic_audit.py tests\test_controls.py tests\test_trade_simulation.py tests\test_research_run.py`
+
 ## methodology: strengthen simulation forensic audit
 
 Status: APPLIED.

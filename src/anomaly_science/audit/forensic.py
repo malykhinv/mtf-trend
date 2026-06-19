@@ -10,6 +10,35 @@ from anomaly_science.contracts.execution import EV_EXECUTION_REFERENCE_MODEL, RO
 
 
 _CANONICAL_AUDIT_ARTIFACT = "strategy_protocol_audit.csv"
+_REQUIRED_PLACEBO_CONTROLS = frozenset(("random_labels", "time_shuffled_labels", "symbol_shuffled_labels"))
+_REQUIRED_BASELINE_CONTROLS = frozenset(
+    (
+        "global_prior_only",
+        "session_only",
+        "event_time_only",
+        "price_path_only",
+        "volume_only",
+        "btc_eth_only",
+        "always_follow_anomaly",
+        "always_fade_anomaly",
+        "fade_only_after_extension",
+        "follow_only_early_squeeze",
+        "no_cvd_features_ablation",
+        "no_oi_features_ablation",
+        "no_liquidation_features_ablation",
+        "idiosyncratic_only_subset",
+        "systemic_cluster_only_subset",
+    )
+)
+_REQUIRED_SIMULATION_CONTROL_METRICS = frozenset(
+    (
+        "always_no_trade_baseline_net_pnl",
+        "random_entry_time_control_rows",
+        "random_entry_time_control_total_net_pnl",
+        "delta_vs_always_no_trade_net_pnl",
+        "delta_vs_random_entry_time_net_pnl",
+    )
+)
 
 
 class ForensicAuditError(ValueError):
@@ -42,6 +71,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_simulation_decision_contract_alignment_row(found))
     rows.append(_simulation_pessimistic_prices_and_costs_row(found))
     rows.append(_simulation_no_parallel_symbol_positions_row(found))
+    rows.append(_required_controls_completeness_row(found))
     rows.append(_stage_audit_fail_summary_row(found))
     rows.append(_forensic_gate_row(rows))
     return rows
@@ -590,6 +620,81 @@ def _simulation_no_parallel_symbol_positions_row(found: Mapping[str, tuple[Path,
         f"verified no overlapping positions per strategy/version/symbol across {checked} simulation row(s)",
         artifact="strategy_trade_simulation.csv",
     )
+
+
+def _required_controls_completeness_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    failures: list[str] = []
+    checked_artifacts = 0
+    placebo_names: set[str] = set()
+    baseline_names: set[str] = set()
+    simulation_metric_names: set[str] = set()
+
+    for path in found.get("strategy_placebo_tests.csv", ()):
+        checked_artifacts += 1
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            name = row.get("control_name", "")
+            if name:
+                placebo_names.add(name)
+            _append_control_status_failure(failures, path=path, row_index=row_index, row=row, status_field="status")
+
+    for path in found.get("strategy_baseline_comparison.csv", ()):
+        checked_artifacts += 1
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            name = row.get("baseline_name", "")
+            if name:
+                baseline_names.add(name)
+            _append_control_status_failure(failures, path=path, row_index=row_index, row=row, status_field="status")
+
+    for path in found.get("strategy_trade_simulation_metrics.csv", ()):
+        checked_artifacts += 1
+        for row in _read_csv_rows(path):
+            metric_name = row.get("metric_name", "")
+            if metric_name:
+                simulation_metric_names.add(metric_name)
+
+    missing_placebo = sorted(_REQUIRED_PLACEBO_CONTROLS - placebo_names)
+    missing_baselines = sorted(_REQUIRED_BASELINE_CONTROLS - baseline_names)
+    missing_simulation_metrics = sorted(_REQUIRED_SIMULATION_CONTROL_METRICS - simulation_metric_names)
+    if missing_placebo:
+        failures.append("missing placebo controls: " + ", ".join(missing_placebo))
+    if missing_baselines:
+        failures.append("missing baseline/ablation controls: " + ", ".join(missing_baselines))
+    if missing_simulation_metrics:
+        failures.append("missing simulation control metrics: " + ", ".join(missing_simulation_metrics))
+
+    if failures:
+        return _row(
+            "forensic_required_controls_complete",
+            AuditStatus.FAIL,
+            f"{len(failures)} required control completeness violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv;strategy_trade_simulation_metrics.csv",
+        )
+    if checked_artifacts == 0:
+        return _row(
+            "forensic_required_controls_complete",
+            AuditStatus.WARN,
+            "no control artifacts were available for independent required-control verification",
+            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv;strategy_trade_simulation_metrics.csv",
+        )
+    return _row(
+        "forensic_required_controls_complete",
+        AuditStatus.PASS,
+        "verified required placebo, baseline, ablation, subset, always-no-trade, and random-entry controls from artifacts",
+        artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv;strategy_trade_simulation_metrics.csv",
+    )
+
+
+def _append_control_status_failure(
+    failures: list[str],
+    *,
+    path: Path,
+    row_index: int,
+    row: Mapping[str, str],
+    status_field: str,
+) -> None:
+    status = row.get(status_field, "")
+    if status not in {"OK", "SKIPPED"}:
+        failures.append(f"{path}:{row_index} has invalid control status={status!r}")
 
 
 def _decision_simulation_key(row: Mapping[str, str]) -> tuple[str, str, str, str] | None:

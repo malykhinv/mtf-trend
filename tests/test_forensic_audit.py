@@ -233,6 +233,91 @@ def _write_valid_minimal_forensic_fixture(root: Path) -> None:
         },
     )
     _copy_text(simulation / "strategy_trade_simulation.csv", simulation / "anomaly_trade_simulation.csv")
+    _write_artifact_rows(
+        simulation / "strategy_trade_simulation_metrics.csv",
+        "strategy_trade_simulation_metrics.csv",
+        [
+            {
+                "simulation_version": "mvp1_trade_simulation_pessimistic_v1",
+                "target_horizon_minutes": 30,
+                "metric_name": metric_name,
+                "metric_value": "1",
+                "row_count": 1,
+                "notes": "fixture",
+            }
+            for metric_name in (
+                "always_no_trade_baseline_net_pnl",
+                "random_entry_time_control_rows",
+                "random_entry_time_control_total_net_pnl",
+                "delta_vs_always_no_trade_net_pnl",
+                "delta_vs_random_entry_time_net_pnl",
+            )
+        ],
+    )
+    _copy_text(simulation / "strategy_trade_simulation_metrics.csv", simulation / "anomaly_trade_simulation_metrics.csv")
+    controls = root / "stages" / "controls"
+    _write_artifact_rows(
+        controls / "strategy_placebo_tests.csv",
+        "strategy_placebo_tests.csv",
+        [
+            {
+                "control_version": "mvp1_controls_v1",
+                "control_name": control_name,
+                "target_horizon_minutes": 30,
+                "random_seed": 7,
+                "available_label_rows": 20,
+                "oos_prediction_rows": 4,
+                "accuracy": 0.25,
+                "multiclass_brier": 0.75,
+                "log_loss": 1.0,
+                "reference_real_brier": 0.6,
+                "brier_delta_vs_real": 0.15,
+                "status": "OK",
+                "notes": "fixture",
+            }
+            for control_name in ("random_labels", "time_shuffled_labels", "symbol_shuffled_labels")
+        ],
+    )
+    _copy_text(controls / "strategy_placebo_tests.csv", controls / "anomaly_placebo_tests.csv")
+    _write_artifact_rows(
+        controls / "strategy_baseline_comparison.csv",
+        "strategy_baseline_comparison.csv",
+        [
+            {
+                "control_version": "mvp1_controls_v1",
+                "baseline_name": baseline_name,
+                "feature_family": "fixture",
+                "target_horizon_minutes": 30,
+                "available_label_rows": 20,
+                "oos_prediction_rows": 4,
+                "accuracy": 0.25,
+                "multiclass_brier": 0.75,
+                "log_loss": 1.0,
+                "reference_real_brier": 0.6,
+                "brier_delta_vs_real": 0.15,
+                "status": "OK",
+                "notes": "fixture",
+            }
+            for baseline_name in (
+                "global_prior_only",
+                "session_only",
+                "event_time_only",
+                "price_path_only",
+                "volume_only",
+                "btc_eth_only",
+                "always_follow_anomaly",
+                "always_fade_anomaly",
+                "fade_only_after_extension",
+                "follow_only_early_squeeze",
+                "no_cvd_features_ablation",
+                "no_oi_features_ablation",
+                "no_liquidation_features_ablation",
+                "idiosyncratic_only_subset",
+                "systemic_cluster_only_subset",
+            )
+        ],
+    )
+    _copy_text(controls / "strategy_baseline_comparison.csv", controls / "anomaly_baseline_comparison.csv")
 
 
 def _by_name(rows):
@@ -255,6 +340,7 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_simulation_decision_contract_alignment_verified"].status is AuditStatus.PASS
     assert by_name["forensic_simulation_pessimistic_prices_and_costs_verified"].status is AuditStatus.PASS
     assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.PASS
+    assert by_name["forensic_required_controls_complete"].status is AuditStatus.PASS
     assert by_name["forensic_stage_protocol_audit_has_no_fail_rows"].status is AuditStatus.PASS
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.PASS
 
@@ -344,6 +430,20 @@ def test_independent_forensic_audit_fails_parallel_simulation_positions(tmp_path
     by_name = _by_name(result)
 
     assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_independent_forensic_audit_fails_missing_required_control(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "controls" / "strategy_baseline_comparison.csv"
+    rows = [row for row in _read_csv_payload(path) if row["baseline_name"] != "btc_eth_only"]
+    _write_artifact_rows(path, "strategy_baseline_comparison.csv", [dict(row) for row in rows])
+    _copy_text(path, tmp_path / "stages" / "controls" / "anomaly_baseline_comparison.csv")
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_required_controls_complete"].status is AuditStatus.FAIL
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
 
