@@ -59,6 +59,9 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
         "broad_anomaly_v1_h15",
         "broad_anomaly_v1_h30",
         "broad_anomaly_v1_h60",
+        "post_anomaly_extension_v1_h60",
+        "post_anomaly_extension_v1_h120",
+        "post_anomaly_extension_v1_h180",
         "post_pump_distribution_v1_h60",
         "post_pump_distribution_v1_h120",
         "post_pump_distribution_v1_h180",
@@ -91,18 +94,17 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
         "broad_anomaly_v1_h15",
         "broad_anomaly_v1_h30",
         "broad_anomaly_v1_h60",
+        "post_anomaly_extension_v1_h60",
+        "post_anomaly_extension_v1_h120",
+        "post_anomaly_extension_v1_h180",
         "post_pump_distribution_v1_h60",
         "post_pump_distribution_v1_h120",
         "post_pump_distribution_v1_h180",
     ]} == {"implemented"}
-    assert {status_by_name[name]["implementation_status"] for name in specified_not_implemented_strategy_names()} == {
-        "specified_not_implemented"
-    }
+    assert specified_not_implemented_strategy_names() == ()
     assert status_by_name["broad_anomaly_v1_h30"]["executable"] == "True"
-    assert status_by_name["post_anomaly_extension_v1_h180"]["executable"] == "False"
-    assert status_by_name["post_anomaly_extension_v1_h180"]["registry_error"] == (
-        "strategy variant is specified but not implemented yet"
-    )
+    assert status_by_name["post_anomaly_extension_v1_h180"]["executable"] == "True"
+    assert status_by_name["post_anomaly_extension_v1_h180"]["registry_error"] == ""
 
     with (out_dir / "strategy_reject_reasons.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         reject_rows = list(csv.DictReader(file_obj))
@@ -111,6 +113,9 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
         "broad_anomaly_v1_h15",
         "broad_anomaly_v1_h30",
         "broad_anomaly_v1_h60",
+        "post_anomaly_extension_v1_h60",
+        "post_anomaly_extension_v1_h120",
+        "post_anomaly_extension_v1_h180",
         "post_pump_distribution_v1_h60",
         "post_pump_distribution_v1_h120",
         "post_pump_distribution_v1_h180",

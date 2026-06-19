@@ -99,6 +99,11 @@ BROAD_ANOMALY_REQUIRED_DATA_STREAMS: dict[str, bool] = {
     "liquidations": False,
 }
 
+POST_ANOMALY_EXTENSION_REQUIRED_DATA_STREAMS: dict[str, bool] = {
+    "open_interest": True,
+    "liquidations": True,
+}
+
 POST_PUMP_REQUIRED_DATA_STREAMS: dict[str, bool] = {
     "open_interest": True,
     "liquidations": True,
@@ -150,6 +155,25 @@ def anomaly_strategy_metadata(strategy_name: str) -> StrategyMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class PostAnomalyExtensionConfig:
+    detector_version: str = "post_anomaly_extension_v1"
+    broad_detector_config: BroadAnomalyDetectorConfig = field(default_factory=BroadAnomalyDetectorConfig)
+    min_abs_extension_return_from_seed_open: float = 0.05
+    min_minutes_since_event_start: int = 5
+    max_minutes_since_event_start: int = 240
+
+    def __post_init__(self) -> None:
+        if not self.detector_version:
+            raise ValueError("detector_version is required")
+        if self.min_abs_extension_return_from_seed_open <= 0.0:
+            raise ValueError("min_abs_extension_return_from_seed_open must be positive")
+        if self.min_minutes_since_event_start < 0:
+            raise ValueError("min_minutes_since_event_start must be non-negative")
+        if self.max_minutes_since_event_start < self.min_minutes_since_event_start:
+            raise ValueError("max_minutes_since_event_start must be >= min_minutes_since_event_start")
+
+
+@dataclass(frozen=True, slots=True)
 class PostPumpDistributionConfig:
     detector_version: str = "post_pump_distribution_v1"
     min_daily_return_asof_t: float = 0.30
@@ -190,6 +214,36 @@ class BroadAnomalyStrategy(BaseStrategy):
 
     def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
         return detect_broad_anomaly_events(candles_1m, config=self.config)
+
+    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+        return pl.DataFrame()
+
+
+@dataclass(frozen=True, slots=True)
+class PostAnomalyExtensionStrategy(BaseStrategy):
+    config: PostAnomalyExtensionConfig = field(default_factory=PostAnomalyExtensionConfig)
+    _metadata: StrategyMetadata = field(default_factory=lambda: anomaly_strategy_metadata("post_anomaly_extension_v1_h120"))
+
+    @property
+    def metadata(self) -> StrategyMetadata:
+        return self._metadata
+
+    @property
+    def required_data_streams(self) -> Mapping[str, bool]:
+        validate_required_data_streams(POST_ANOMALY_EXTENSION_REQUIRED_DATA_STREAMS)
+        return POST_ANOMALY_EXTENSION_REQUIRED_DATA_STREAMS
+
+    def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+        if market_frame_asof.height == 0:
+            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+        pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
+        events = self.generate_events(normalize_candles_1m(pandas_frame))
+        trigger_frame = events_to_trigger_frame(events)
+        validate_trigger_frame(trigger_frame)
+        return trigger_frame
+
+    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
+        return detect_post_anomaly_extension_events(candles_1m, config=self.config)
 
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         return pl.DataFrame()
@@ -238,6 +292,19 @@ def make_broad_anomaly_strategy(
     )
 
 
+def make_post_anomaly_extension_strategy(
+    *,
+    strategy_name: str,
+    config: PostAnomalyExtensionConfig | None = None,
+) -> PostAnomalyExtensionStrategy:
+    if not strategy_name.startswith("post_anomaly_extension_v1_h"):
+        raise ValueError(f"not a post-anomaly extension strategy variant: {strategy_name!r}")
+    return PostAnomalyExtensionStrategy(
+        config=config or PostAnomalyExtensionConfig(),
+        _metadata=anomaly_strategy_metadata(strategy_name),
+    )
+
+
 def make_post_pump_distribution_strategy(
     *,
     strategy_name: str,
@@ -249,6 +316,86 @@ def make_post_pump_distribution_strategy(
         config=config or PostPumpDistributionConfig(),
         _metadata=anomaly_strategy_metadata(strategy_name),
     )
+
+
+def detect_post_anomaly_extension_events(
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    *,
+    config: PostAnomalyExtensionConfig | None = None,
+) -> tuple[AnomalyEvent, ...]:
+    """Detect late extension states after a causal broad anomaly seed.
+
+    The source anomaly is found by the broad detector. The extension trigger is
+    emitted only after later closed 1m candles prove that price has continued in
+    the seed direction by a configured as-of return from the seed open. Only the
+    first qualifying extension row per active same-symbol source window is emitted.
+    """
+    cfg = config or PostAnomalyExtensionConfig()
+    rows = sorted(tuple(candles_1m), key=lambda item: (item.symbol, item.open_time_ms))
+    if not rows:
+        return ()
+
+    broad_events = detect_broad_anomaly_events(rows, config=cfg.broad_detector_config)
+    candles_by_symbol: dict[str, list[Candle1m]] = {}
+    for candle in rows:
+        candles_by_symbol.setdefault(candle.symbol, []).append(candle)
+
+    events: list[AnomalyEvent] = []
+    blocked_until_by_symbol: dict[str, int] = {}
+    for source_event in sorted(broad_events, key=lambda item: (item.symbol, item.event_start_time_ms, item.event_id)):
+        if source_event.event_start_time_ms <= blocked_until_by_symbol.get(source_event.symbol, -1):
+            continue
+        direction = _seed_direction(source_event)
+        source_candles = candles_by_symbol.get(source_event.symbol, [])
+        for candle in source_candles:
+            if candle.available_time_ms <= source_event.event_detection_time_ms:
+                continue
+            minutes_since_start = _minutes_between(source_event.event_start_time_ms, candle.available_time_ms)
+            if minutes_since_start < cfg.min_minutes_since_event_start:
+                continue
+            if minutes_since_start > cfg.max_minutes_since_event_start:
+                break
+            extension_return = (candle.close / source_event.seed_open) - 1.0
+            if not _extension_reached(
+                extension_return=extension_return,
+                direction=direction,
+                threshold=cfg.min_abs_extension_return_from_seed_open,
+            ):
+                continue
+            direction_component = "upside_extension" if direction > 0 else "downside_extension"
+            events.append(
+                AnomalyEvent(
+                    event_id=_post_anomaly_extension_event_id(
+                        cfg.detector_version,
+                        source_event.symbol,
+                        source_event.event_start_time_ms,
+                        candle.open_time_ms,
+                    ),
+                    symbol=source_event.symbol,
+                    event_start_time_ms=source_event.event_start_time_ms,
+                    event_detection_time_ms=candle.available_time_ms,
+                    seed_time_ms=source_event.seed_time_ms,
+                    seed_open=source_event.seed_open,
+                    seed_high=source_event.seed_high,
+                    seed_low=source_event.seed_low,
+                    seed_close=source_event.seed_close,
+                    initial_move_pct=extension_return,
+                    initial_volume_zscore=source_event.initial_volume_zscore,
+                    initial_quote_volume_zscore=source_event.initial_quote_volume_zscore,
+                    initial_trade_count_zscore=source_event.initial_trade_count_zscore,
+                    trigger_component="post_anomaly_extension",
+                    trigger_components=("post_anomaly_extension", direction_component),
+                    technical_noise_shock=False,
+                    raw_candle_gap_minutes=None,
+                    excluded_by_data_quality_gate=False,
+                    detector_version=cfg.detector_version,
+                )
+            )
+            blocked_until_by_symbol[source_event.symbol] = (
+                source_event.event_start_time_ms + cfg.max_minutes_since_event_start * ONE_MINUTE_MS
+            )
+            break
+    return tuple(events)
 
 
 def detect_post_pump_distribution_events(
@@ -357,6 +504,22 @@ def _event_to_trigger_row(event: AnomalyEvent) -> dict[str, object]:
     }
 
 
+def _seed_direction(event: AnomalyEvent) -> int:
+    return 1 if event.seed_close >= event.seed_open else -1
+
+
+def _extension_reached(*, extension_return: float, direction: int, threshold: float) -> bool:
+    if direction > 0:
+        return extension_return >= threshold
+    return extension_return <= -threshold
+
+
+def _minutes_between(start_ms: int, end_ms: int) -> int:
+    if end_ms < start_ms:
+        raise ValueError("end timestamp must be >= start timestamp")
+    return (end_ms - start_ms) // ONE_MINUTE_MS
+
+
 def _same_minute_trade_count_percentiles(candles: Sequence[Candle1m]) -> dict[str, float]:
     values = [(candle.symbol, candle.number_of_trades) for candle in candles if candle.number_of_trades is not None]
     if not values:
@@ -374,6 +537,12 @@ def _same_minute_trade_count_percentiles(candles: Sequence[Candle1m]) -> dict[st
 
 def _utc_day_start_ms(timestamp_ms: int) -> int:
     return timestamp_ms - (timestamp_ms % (24 * 60 * ONE_MINUTE_MS))
+
+
+def _post_anomaly_extension_event_id(detector_version: str, symbol: str, source_event_start_ms: int, extension_time_ms: int) -> str:
+    raw = f"{detector_version}|{symbol}|{source_event_start_ms}|{extension_time_ms}".encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:16]
+    return f"evt_{digest}"
 
 
 def _post_pump_event_id(detector_version: str, symbol: str, seed_time_ms: int) -> str:

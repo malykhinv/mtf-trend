@@ -64,9 +64,9 @@ Horizon suffix не является свободным параметром: st
 | broad_anomaly_v1_h15 | 15 | implemented | OI optional, liquidations optional | TP 1.5 ATR / SL 1.0 ATR |
 | broad_anomaly_v1_h30 | 30 | implemented, primary MVP variant | OI optional, liquidations optional | TP 2.0 ATR / SL 1.1 ATR |
 | broad_anomaly_v1_h60 | 60 | implemented | OI optional, liquidations optional | TP 2.5 ATR / SL 1.2 ATR |
-| post_anomaly_extension_v1_h60 | 60 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 2.5 ATR / SL 1.3 ATR |
-| post_anomaly_extension_v1_h120 | 120 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 3.0 ATR / SL 1.5 ATR |
-| post_anomaly_extension_v1_h180 | 180 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 4.0 ATR / SL 2.0 ATR |
+| post_anomaly_extension_v1_h60 | 60 | implemented | OI required, liquidations required | TP 2.5 ATR / SL 1.3 ATR |
+| post_anomaly_extension_v1_h120 | 120 | implemented | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
+| post_anomaly_extension_v1_h180 | 180 | implemented | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
 | post_pump_distribution_v1_h60 | 60 | implemented | OI required, liquidations required | TP 2.0 ATR / SL 1.2 ATR |
 | post_pump_distribution_v1_h120 | 120 | implemented | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
 | post_pump_distribution_v1_h180 | 180 | implemented | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
@@ -94,6 +94,7 @@ post_pump_distribution_v1:
 Если variant specified but not implemented, CLI/registry должен падать явной ошибкой.
 Запрещено запускать specified-only variant через broad/default factory.
 `strategy_registry.csv` содержит только executable variants; `strategy_implementation_status.csv` является truth table для implemented/specified-only variants.
+Текущие anomaly variants из таблицы выше являются executable.
 ```
 
 ## 2. Что именно исследует anomaly strategy
@@ -226,7 +227,44 @@ seed_time >= event_start_time
 считать strategy_events.csv полным поминутным state artifact
 ```
 
-### 3.2. post_pump_distribution_v1_*
+### 3.2. post_anomaly_extension_v1_*
+
+Цель:
+
+```text
+исследовать не первичный broad seed, а первое позднее extension-состояние после уже найденной anomaly,
+где цена as-of продолжила движение в направлении seed и может перейти в continuation, fade или chop.
+```
+
+Executable implementation rule:
+
+```text
+source seed = событие broad_anomaly_detector_v1, найденное только по closed candles и past baseline
+seed direction = sign(seed_close / seed_open - 1)
+extension_return_asof_t = current closed 1m close / seed_open - 1
+trigger fires only when extension_return_asof_t reaches configured direction-aware threshold
+event_start_time = source broad anomaly seed time
+state_time / event_detection_time = фактическое время late extension trigger
+only the first qualifying extension row per source broad event is emitted; later source events inside the active extension window are blocked
+open_interest and liquidations are required streams before trigger generation
+```
+
+Правило:
+
+```text
+post-extension t_0 — это поздний state_time после broad anomaly, а не новый primary spike.
+minutes_since_start должен быть больше нуля и рассчитываться от source anomaly start.
+```
+
+Запрещено:
+
+```text
+использовать future running high/low для подтверждения extension
+подменять event_start_time временем future high
+создавать несколько extension triggers из одного source event без отдельного cascade experiment
+```
+
+### 3.3. post_pump_distribution_v1_*
 
 Цель:
 
@@ -457,15 +495,15 @@ broad_anomaly_v1_*:
   liquidations: optional
   если stream отсутствует, Core выставляет missing_oi_flag / missing_liquidation_flag и не трактует missing как edge
 
-post_pump_distribution_v1_*:
+post_anomaly_extension_v1_*:
   open_interest: required
   liquidations: required
   если stream отсутствует за symbol/day, Core делает explicit reject до генерации triggers
 
-post_anomaly_extension_v1_*:
-  open_interest: optional by default
-  liquidations: optional by default
-  required mode допускается только как отдельный strategy_version или experiment mode
+post_pump_distribution_v1_*:
+  open_interest: required
+  liquidations: required
+  если stream отсутствует за symbol/day, Core делает explicit reject до генерации triggers
 ```
 
 Ablation Runs:
@@ -523,7 +561,7 @@ Horizon suffix должен быть явно перечислен ниже; unk
 broad_anomaly_v1_h15              быстрый diagnostic horizon первичной реакции
 broad_anomaly_v1_h30              primary MVP horizon broad anomaly
 broad_anomaly_v1_h60              extended broad anomaly horizon
-post_anomaly_extension_v1_h60     specified-only до реализации late-state trigger
+post_anomaly_extension_v1_h60     executable causal late extension trigger
 post_anomaly_extension_v1_h120
 post_anomaly_extension_v1_h180
 post_pump_distribution_v1_h60     executable causal post-pump trigger

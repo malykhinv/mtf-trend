@@ -648,3 +648,18 @@ Changes:
 Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
 - Full pytest still needs the project venv because this sandbox lacks `polars`.
+
+## strategy: implement post-anomaly extension variants
+
+Status: PROPOSED
+
+Changes:
+- Makes `post_anomaly_extension_v1_h60/h120/h180` executable registry variants.
+- Adds `PostAnomalyExtensionStrategy` with causal late-extension semantics: source broad anomaly seed from closed candles, direction-aware as-of extension from seed open, and only the first qualifying extension row per source event.
+- Keeps `event_start_time` anchored to the source broad anomaly and writes the actual late extension trigger as `state_time` / `event_detection_time`.
+- Requires OI and liquidations before trigger generation for post-extension variants.
+- Updates registry/status/docs/ledger/tests.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- Full pytest still needs the project venv because this sandbox may lack project runtime dependencies.

@@ -358,7 +358,37 @@ def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[R
                 RunConfigRow(key="detector_cooldown_minutes", value=str(config.cooldown_minutes), source="runtime"),
             ]
         )
-    else:
+    elif hasattr(config, "min_abs_extension_return_from_seed_open"):
+        rows.extend(
+            [
+                RunConfigRow(
+                    key="detector_min_abs_extension_return_from_seed_open",
+                    value=str(getattr(config, "min_abs_extension_return_from_seed_open")),
+                    source="runtime",
+                ),
+                RunConfigRow(
+                    key="detector_min_minutes_since_event_start",
+                    value=str(getattr(config, "min_minutes_since_event_start")),
+                    source="runtime",
+                ),
+                RunConfigRow(
+                    key="detector_max_minutes_since_event_start",
+                    value=str(getattr(config, "max_minutes_since_event_start")),
+                    source="runtime",
+                ),
+                RunConfigRow(
+                    key="source_broad_detector_version",
+                    value=str(getattr(getattr(config, "broad_detector_config"), "detector_version")),
+                    source="runtime",
+                ),
+                RunConfigRow(
+                    key="source_broad_detector_min_abs_return_pct",
+                    value=str(getattr(getattr(config, "broad_detector_config"), "min_abs_return_pct")),
+                    source="runtime",
+                ),
+            ]
+        )
+    elif hasattr(config, "min_daily_return_asof_t"):
         rows.extend(
             [
                 RunConfigRow(

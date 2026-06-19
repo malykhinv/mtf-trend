@@ -8,8 +8,10 @@ from anomaly_science.events.config import BroadAnomalyDetectorConfig
 from anomaly_science.strategy.anomaly import (
     ANOMALY_STRATEGY_DEFAULTS,
     BroadAnomalyStrategy,
+    PostAnomalyExtensionStrategy,
     PostPumpDistributionStrategy,
     make_broad_anomaly_strategy,
+    make_post_anomaly_extension_strategy,
     make_post_pump_distribution_strategy,
 )
 from anomaly_science.strategy.base import BaseStrategy
@@ -46,13 +48,21 @@ BROAD_ANOMALY_VARIANTS: tuple[str, ...] = (
     "broad_anomaly_v1_h60",
 )
 
+POST_ANOMALY_EXTENSION_VARIANTS: tuple[str, ...] = (
+    "post_anomaly_extension_v1_h60",
+    "post_anomaly_extension_v1_h120",
+    "post_anomaly_extension_v1_h180",
+)
+
 POST_PUMP_DISTRIBUTION_VARIANTS: tuple[str, ...] = (
     "post_pump_distribution_v1_h60",
     "post_pump_distribution_v1_h120",
     "post_pump_distribution_v1_h180",
 )
 
-EXECUTABLE_STRATEGY_NAMES: tuple[str, ...] = BROAD_ANOMALY_VARIANTS + POST_PUMP_DISTRIBUTION_VARIANTS
+EXECUTABLE_STRATEGY_NAMES: tuple[str, ...] = (
+    BROAD_ANOMALY_VARIANTS + POST_ANOMALY_EXTENSION_VARIANTS + POST_PUMP_DISTRIBUTION_VARIANTS
+)
 SPECIFIED_NOT_IMPLEMENTED_STRATEGY_NAMES: tuple[str, ...] = tuple(
     strategy_name for strategy_name in ANOMALY_STRATEGY_DEFAULTS if strategy_name not in EXECUTABLE_STRATEGY_NAMES
 )
@@ -73,6 +83,15 @@ def available_strategies() -> tuple[StrategyRegistryEntry, ...]:
                 strategy_family="anomaly",
                 strategy_contract_version="base_strategy_v1",
                 factory=lambda strategy_name=strategy_name: make_broad_anomaly_strategy(strategy_name=strategy_name),
+            )
+        )
+    for strategy_name in POST_ANOMALY_EXTENSION_VARIANTS:
+        rows.append(
+            StrategyRegistryEntry(
+                strategy_name=strategy_name,
+                strategy_family="anomaly",
+                strategy_contract_version="base_strategy_v1",
+                factory=lambda strategy_name=strategy_name: make_post_anomaly_extension_strategy(strategy_name=strategy_name),
             )
         )
     for strategy_name in POST_PUMP_DISTRIBUTION_VARIANTS:
@@ -164,3 +183,7 @@ def get_broad_anomaly_strategy(
 
 def get_post_pump_distribution_strategy(*, strategy_name: str = "post_pump_distribution_v1_h120") -> PostPumpDistributionStrategy:
     return make_post_pump_distribution_strategy(strategy_name=strategy_name)
+
+
+def get_post_anomaly_extension_strategy(*, strategy_name: str = "post_anomaly_extension_v1_h120") -> PostAnomalyExtensionStrategy:
+    return make_post_anomaly_extension_strategy(strategy_name=strategy_name)

@@ -164,7 +164,7 @@ def _implementation_status_audit_status(rows: list[dict[str, object]]) -> AuditS
     specified_rows = [row for row in rows if row["implementation_status"] == "specified_not_implemented"]
     executable_ok = all(row["executable"] is True and row["registry_error"] == "" for row in executable_rows)
     specified_ok = all(row["executable"] is False and bool(row["registry_error"]) for row in specified_rows)
-    return AuditStatus.PASS if rows and executable_rows and specified_rows and executable_ok and specified_ok else AuditStatus.FAIL
+    return AuditStatus.PASS if rows and executable_rows and executable_ok and specified_ok else AuditStatus.FAIL
 
 
 def _implementation_status_audit_message(rows: list[dict[str, object]]) -> str:
@@ -173,7 +173,7 @@ def _implementation_status_audit_message(rows: list[dict[str, object]]) -> str:
     return (
         "strategy_implementation_status.csv written with "
         f"{implemented} executable variants and {specified} specified-only variants; "
-        "specified-only variants are not instantiable through the registry"
+        "specified-only variants are not instantiable through the registry when present"
     )
 
 

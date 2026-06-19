@@ -19,13 +19,21 @@ BROAD_ANOMALY_VARIANTS: tuple[str, ...] = (
     "broad_anomaly_v1_h60",
 )
 
+POST_ANOMALY_EXTENSION_VARIANTS: tuple[str, ...] = (
+    "post_anomaly_extension_v1_h60",
+    "post_anomaly_extension_v1_h120",
+    "post_anomaly_extension_v1_h180",
+)
+
 POST_PUMP_DISTRIBUTION_VARIANTS: tuple[str, ...] = (
     "post_pump_distribution_v1_h60",
     "post_pump_distribution_v1_h120",
     "post_pump_distribution_v1_h180",
 )
 
-ANOMALY_EXECUTABLE_VARIANTS: tuple[str, ...] = BROAD_ANOMALY_VARIANTS + POST_PUMP_DISTRIBUTION_VARIANTS
+ANOMALY_EXECUTABLE_VARIANTS: tuple[str, ...] = (
+    BROAD_ANOMALY_VARIANTS + POST_ANOMALY_EXTENSION_VARIANTS + POST_PUMP_DISTRIBUTION_VARIANTS
+)
 
 _REASON_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("not_triggered", "mvp1_events", "trigger", "input row did not satisfy the anomaly trigger contract"),
