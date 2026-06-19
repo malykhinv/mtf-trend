@@ -4,6 +4,7 @@ import gc
 import hashlib
 import json
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +63,7 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
     )
 
     start_ms = _resolve_export_start_ms(config=config, symbols=symbols)
+    export_started_at = time.monotonic()
     coverage_frames: list[pd.DataFrame] = []
     exported_symbols: list[str] = []
     total_rows = 0
@@ -76,11 +78,12 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
         if candles_1m.empty:
             _print_cache_export_progress(
                 config=config,
+                phase="write",
                 symbol_index=symbol_index,
                 symbol_count=len(symbols),
                 symbol=symbol,
-                rows_written=0,
-                skipped=True,
+                status="skipped",
+                started_at=export_started_at,
             )
             continue
 
@@ -94,11 +97,12 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
         _append_csv(open_interest_5m_path, open_interest_5m)
         _print_cache_export_progress(
             config=config,
+            phase="write",
             symbol_index=symbol_index,
             symbol_count=len(symbols),
             symbol=symbol,
-            rows_written=int(len(candles_1m)),
-            skipped=False,
+            status=f"rows={int(len(candles_1m))} total_rows={total_rows}",
+            started_at=export_started_at,
         )
         del candles_1m, candles_5m, open_interest_5m
         gc.collect()
@@ -141,7 +145,8 @@ def _resolve_export_start_ms(*, config: CacheMvp1CsvExportConfig, symbols: tuple
     if config.days is None:
         return None
     max_open_time_ms: int | None = None
-    for symbol in symbols:
+    started_at = time.monotonic()
+    for symbol_index, symbol in enumerate(symbols, start=1):
         path = config.cache_dir / f"{symbol}.parquet"
         if not path.exists():
             raise FileNotFoundError(f"cache parquet is missing for {symbol}: {path}")
@@ -150,9 +155,27 @@ def _resolve_export_start_ms(*, config: CacheMvp1CsvExportConfig, symbols: tuple
             raise ValueError(f"{path} is missing required cache columns: ['timestamp']")
         timestamps = pd.read_parquet(path, columns=["timestamp"], use_threads=config.parquet_use_threads)
         if timestamps.empty:
+            _print_cache_export_progress(
+                config=config,
+                phase="scan",
+                symbol_index=symbol_index,
+                symbol_count=len(symbols),
+                symbol=symbol,
+                status="empty",
+                started_at=started_at,
+            )
             continue
         symbol_max = int(timestamps["timestamp"].astype("int64").max())
         max_open_time_ms = symbol_max if max_open_time_ms is None else max(max_open_time_ms, symbol_max)
+        _print_cache_export_progress(
+            config=config,
+            phase="scan",
+            symbol_index=symbol_index,
+            symbol_count=len(symbols),
+            symbol=symbol,
+            status=f"max_ts={symbol_max}",
+            started_at=started_at,
+        )
         del timestamps
     if max_open_time_ms is None:
         return None
@@ -163,22 +186,54 @@ def _resolve_export_start_ms(*, config: CacheMvp1CsvExportConfig, symbols: tuple
 def _print_cache_export_progress(
     *,
     config: CacheMvp1CsvExportConfig,
+    phase: str,
     symbol_index: int,
     symbol_count: int,
     symbol: str,
-    rows_written: int,
-    skipped: bool,
+    status: str,
+    started_at: float,
 ) -> None:
     if config.progress_every == 0:
         return
     if symbol_index != 1 and symbol_index != symbol_count and symbol_index % config.progress_every != 0:
         return
-    status = "skipped" if skipped else f"rows={rows_written}"
+    elapsed_seconds = max(0.0, time.monotonic() - started_at)
+    eta_seconds = _estimate_eta_seconds(
+        elapsed_seconds=elapsed_seconds,
+        processed_count=symbol_index,
+        total_count=symbol_count,
+    )
     print(
-        f"cache export {symbol_index}/{symbol_count} symbol={symbol} {status}",
+        " ".join(
+            (
+                f"cache export {phase}",
+                f"{symbol_index}/{symbol_count}",
+                f"symbol={symbol}",
+                status,
+                f"elapsed={_format_duration_seconds(elapsed_seconds)}",
+                f"eta={_format_duration_seconds(eta_seconds)}",
+            )
+        ),
         file=sys.stderr,
         flush=True,
     )
+
+
+def _estimate_eta_seconds(*, elapsed_seconds: float, processed_count: int, total_count: int) -> float:
+    if processed_count <= 0 or total_count <= processed_count:
+        return 0.0
+    return max(0.0, elapsed_seconds / processed_count * (total_count - processed_count))
+
+
+def _format_duration_seconds(seconds: float) -> str:
+    whole_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(whole_seconds, 3600)
+    minutes, seconds_part = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{seconds_part:02d}s"
+    if minutes:
+        return f"{minutes}m{seconds_part:02d}s"
+    return f"{seconds_part}s"
 
 
 def discover_cache_symbols(cache_dir: Path, *, include_delivery_contracts: bool = False) -> tuple[str, ...]:

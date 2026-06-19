@@ -294,3 +294,39 @@ def test_export_cache_cli_accepts_delivery_contract_opt_in() -> None:
     assert args.include_delivery_contracts is True
     assert args.progress_every == 10
     assert args.parquet_use_threads is True
+
+
+def test_export_cache_progress_includes_scan_write_eta(tmp_path, capsys) -> None:
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "mvp1"
+    cache_dir.mkdir()
+    for symbol in ("AAAUSDT", "BBBUSDT"):
+        pd.DataFrame(
+            {
+                "timestamp": [1704067200000, 1704067260000],
+                "open": [1, 2],
+                "high": [2, 3],
+                "low": [0.5, 1.5],
+                "close": [1.5, 2.5],
+                "volume": [10, 11],
+                "quote_volume": [100, 110],
+                "trade_count": [1, 2],
+                "taker_buy_quote_volume": [50, 55],
+                "open_interest": [1000, 1001],
+            }
+        ).to_parquet(cache_dir / f"{symbol}.parquet")
+
+    export_cache_to_mvp1_csv(
+        CacheMvp1CsvExportConfig(
+            cache_dir=cache_dir,
+            out_dir=out_dir,
+            days=1,
+            progress_every=1,
+        )
+    )
+
+    stderr = capsys.readouterr().err
+    assert "cache export scan 1/2 symbol=AAAUSDT" in stderr
+    assert "cache export write 1/2 symbol=AAAUSDT" in stderr
+    assert "elapsed=" in stderr
+    assert "eta=" in stderr
