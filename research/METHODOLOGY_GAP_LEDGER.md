@@ -1,0 +1,158 @@
+# Methodology gap ledger
+
+Status source for the gap between the documented research methodology, the anomaly strategy spec, and the current implementation.
+
+This file is intentionally part of the repository. It prevents the project from silently treating a documented rule as implemented when it is only specified, partially implemented, or out of scope for the current research-only phase.
+
+## Scope boundary
+
+In scope for "100% without live":
+
+```text
+strategy-independent Core methodology
+anomaly strategy research variants
+offline data quality / universe / feature / label / prediction / control / EV / simulation artifacts
+holdout governance
+protocol audit
+reproducibility ledger
+unit and smoke tests
+```
+
+Out of scope for this ledger phase:
+
+```text
+shadow live
+production live
+exchange order execution
+portfolio risk engine
+position sizing for real capital
+scheduler / daemon runtime
+latency-sensitive market-data stream
+```
+
+Rule:
+
+```text
+Do not mark live, shadow, execution, or portfolio features as missing research gaps.
+They are intentionally absent until offline research evidence passes audit.
+```
+
+## Status values
+
+| Status | Meaning |
+| :--- | :--- |
+| `IMPLEMENTED` | Code, artifact contract, docs, and tests exist for the current research scope. |
+| `PARTIAL` | Some code exists, but contract coverage, audit depth, strategy coverage, horizon coverage, or tests are incomplete. |
+| `MISSING` | Methodology/spec requires it, but the implementation is absent or only a placeholder. |
+| `OUT_OF_SCOPE` | Deliberately excluded from the current offline research scope. |
+| `UNKNOWN` | Cannot be claimed from the current snapshot; requires direct verification before planning a patch. |
+
+Rule:
+
+```text
+A status may move to IMPLEMENTED only when the implementation and tests are both present.
+A passing smoke run alone is not enough if the methodology invariant is not independently audited.
+```
+
+## 100% research-ready definition
+
+The offline research system is considered complete when all in-scope rows in this ledger are `IMPLEMENTED` and the final validation gate passes:
+
+```text
+python -m compileall main.py src tests zip_project.py
+python -m pytest tests
+python main.py run-research broad_anomaly_v1_h30 --days <small fixture/cache smoke window>
+```
+
+Additionally:
+
+```text
+no strategy-specific if/else inside Core Engine
+no legacy_quarantine imports from new code
+no silent fallback for unknown data schemas
+H_max purge is enforced from active strategy horizons
+final holdout cannot be read before protocol freeze
+protocol audit independently validates temporal and artifact invariants
+canonical strategy_* artifacts exist, with anomaly_* only as aliases
+```
+
+## Core methodology implementation matrix
+
+| Area | Status | Current evidence / gap | Required patch direction |
+| :--- | :--- | :--- | :--- |
+| Legacy quarantine boundary | IMPLEMENTED | New code is under `src/anomaly_science`; tests include no-legacy-import checks. | Keep as permanent gate. |
+| BaseStrategy contract | IMPLEMENTED | Strategy metadata and trigger/custom-feature contract exist. | Keep stable unless explicit contract version bump. |
+| Strategy registry for broad anomaly | IMPLEMENTED | `broad_anomaly_v1_h15/h30/h60` are registry-backed. | Keep registry honest. |
+| Strategy registry truthfulness for specified-only variants | PARTIAL | Registry rejects specified-but-not-implemented variants, but docs/CLI/commands must stay synchronized. | Add registry/status tests and generated docs check. |
+| Data source boundary / normalized market data | PARTIAL | Binance Vision cache and normalized CSV boundary exist. Full all-symbol 380d resource envelope is not proven here. | Add run manifest, cache/data snapshot hashes, and resource smoke docs. |
+| Data quality gates | PARTIAL | Gaps, bad candles, technical noise, and explicit failure flags exist. Need stricter evidence that every downstream stage excludes the same bad rows. | Add shared `DataQualityMask` and cross-stage exclusion tests. |
+| Point-in-time universe | PARTIAL | Universe skeleton exists. Listing/delisting confidence and anti-survivorship proof are not complete. | Harden universe artifact and tests for delisted/missing symbols. |
+| Market context engine | PARTIAL | BTC/ETH/systemic context features exist. Coverage and tests are still MVP-level. | Add catalog/audit coverage by context feature family. |
+| Feature registry / feature schema | PARTIAL | Feature catalog exists. It is not yet a hard gate for every model feature. | Enforce catalog membership before prediction. |
+| Generic online state builder | PARTIAL | Online anomaly state is causal. Current artifact path/name is still anomaly-first. | Move toward strategy-neutral `strategy_state_1m.csv` with aliases. |
+| Generic future path builder | PARTIAL | Future path uses post-snapshot candles and pessimistic double-barrier. Horizon support stops at 120m. | Add 180m or remove all 180m promises. |
+| Generic label builder | PARTIAL | ATR labels exist for 15/30/60/120. 180m is missing. | Add 180m labels or remove 180m strategies from spec. |
+| Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
+| Weekly walk-forward prediction | PARTIAL | Weekly CatBoost + Isotonic exists. Purge must use active `H_max`, not a local/default horizon assumption. | Add horizon registry and enforce `H_max` in prediction/controls. |
+| Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
+| Sample weighting | MISSING | Methodology allows as-of sample weights, but no explicit policy is implemented. | Add `sample_weight_policy_v1` after audit/horizon fixes. |
+| Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
+| Expected utility | PARTIAL | EV calculations exist. Canonical artifact naming and simulation alignment are incomplete. | Rename/canonicalize `strategy_expected_utility.csv`; keep anomaly alias. |
+| Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, and no same-symbol parallel positions exist. Needs canonical artifact naming and stronger audit. | Align artifact names and audit simulation assumptions. |
+| Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
+| Protocol audit | PARTIAL | Protocol audit exists, but not all checks are independently recomputed from artifacts. | Add forensic audit that reads artifacts and can fail the run. |
+| Reproducibility ledger | PARTIAL | Run metadata/artifact manifest exist. Full dependency/data/config hash trail needs tightening. | Add full run manifest and config hash enforcement. |
+| Final holdout governance | PARTIAL | Holdout governance command/artifacts exist. `run-research` does not yet hard-enforce holdout access by default. | Integrate holdout lock/freeze into `run-research`. |
+| Live/shadow/production | OUT_OF_SCOPE | Intentionally absent. | Do not implement in this phase. |
+
+## Anomaly strategy implementation matrix
+
+| Area | Status | Current evidence / gap | Required patch direction |
+| :--- | :--- | :--- | :--- |
+| Broad anomaly strategy variants h15/h30/h60 | IMPLEMENTED | Variants are registry-backed and executable. | Keep tests around contract validation. |
+| Broad anomaly trigger breadth | PARTIAL | Detector exists, but component coverage should be explicit for one-shot, burst, grind, volume-only, breakout, session, and market-wide impulse. | Add explicit `trigger_component` accounting and tests. |
+| Trigger deduplication / anti-pyramiding | IMPLEMENTED | Same-symbol cooldown/dedup policy exists. | Keep as permanent regression test. |
+| Anomaly event lifecycle | PARTIAL | Online state lifecycle exists. Structural state fields are incomplete. | Add structural high/low/break/compression fields. |
+| Running high/low as-of semantics | IMPLEMENTED | State uses data available only up to `state_time`. | Keep no-leakage tests. |
+| Post-anomaly extension strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
+| Post-pump distribution strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
+| 180m anomaly horizon | MISSING | Spec mentions h180, while future/labels stop at 120m. | Add 180m support or remove promise. |
+| Relaxed geometry features | MISSING | Shelf/sweep/consolidation continuous features are not fully implemented. | Add strategy-specific feature module and catalog rows. |
+| Required anomaly controls | PARTIAL | Controls exist, but full anomaly-specific ablation/control list needs completion check. | Add missing baselines/ablations. |
+| Reject reasons | PARTIAL | Reject constants exist, but funnel coverage is not complete across every stage. | Add rejection funnel artifact and tests. |
+| Strategy-specific artifact aliases | PARTIAL | Anomaly artifact names exist. Canonical strategy-neutral names are incomplete. | Write canonical artifacts first, then aliases. |
+| Strategy/Core separation | PARTIAL | Direction is correct; some stages remain anomaly-named and should be generalized. | Refactor artifact boundaries before adding more strategies. |
+
+## Patch queue implied by this ledger
+
+1. `methodology: add implementation gap ledger` — this patch.
+2. `methodology: enforce active-horizon H_max purge`.
+3. `methodology: integrate holdout freeze into run-research`.
+4. `methodology: add independent forensic protocol audit`.
+5. `methodology: canonicalize strategy-neutral artifacts`.
+6. `strategy: make registry status self-auditing`.
+7. `strategy: complete broad anomaly trigger component accounting`.
+8. `strategy: add 180m horizon support or remove 180m promises`.
+9. `strategy: implement post-pump distribution variants`.
+10. `strategy: implement post-anomaly extension variants`.
+11. `features: add structural state and relaxed geometry features`.
+12. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+
+Rule:
+
+```text
+Patch order may change only if a later patch is blocked by a stricter invariant discovered earlier.
+Do not optimize PnL or thresholds while this ledger still has unresolved MISSING/PARTIAL research-methodology rows.
+```
+
+## Maintenance rule
+
+Every methodology or strategy patch must update this file when it changes any row status, scope definition, or completion criterion.
+
+Forbidden:
+
+```text
+claiming methodology completeness in README, PATCH_LOG, RESEARCH_STATE, or chat while this ledger still has in-scope MISSING rows
+marking a row IMPLEMENTED without tests
+hiding a MISSING row by moving it to OUT_OF_SCOPE unless it is live/shadow/production or explicitly removed from methodology/spec
+```

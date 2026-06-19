@@ -14,6 +14,8 @@ MVP 3+ research slice — descriptive labels, weekly CatBoost+Isotonic walk-forw
 
 The project has an active anomaly research strategy documented in `docs/strategies/anomaly_strategy.md`. It does not currently define a live trading strategy. Live execution comes only after calibrated prediction, decision timing, EV, and simulation checks.
 
+Methodology completion is tracked explicitly in `research/METHODOLOGY_GAP_LEDGER.md`. That ledger is the source of truth for what is implemented, partial, missing, or intentionally out of scope for the offline research phase.
+
 ## Current executable stage
 
 Primary MVP1 research command:

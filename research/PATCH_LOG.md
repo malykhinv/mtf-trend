@@ -244,3 +244,16 @@ Validation for this proposed patch:
 - `PYTHONPATH=. pytest -q tests/test_binance_vision_cache_startup.py tests/test_binance_vision_cache.py tests/test_binance_vision_cache_delivery_symbols.py tests/test_zip_project.py`
 - Full `PYTHONPATH=. pytest -q` was attempted, but this container lacks `pyarrow`/`fastparquet`, so `tests/test_cache_export.py::test_export_cache_to_mvp1_csv_writes_explicit_boundary` fails before exercising this patch.
 - GitHub combined status for `e1a4e19a14a6a735a650aaec50f0f41f65da57eb`: no status checks returned.
+
+## methodology: add implementation gap ledger
+
+Status: PROPOSED; patch generated from uploaded snapshot `project_20260619_084329.zip`; GitHub head was not available inside the uploaded archive, so this patch is against the snapshot contents only.
+
+Intent:
+- Add `research/METHODOLOGY_GAP_LEDGER.md` as the explicit source of truth for what is implemented, partial, missing, or out of scope in the offline research methodology.
+- Define the "100% without live" completion criteria without including shadow live, production live, exchange execution, or portfolio infrastructure.
+- Record Core methodology gaps and anomaly strategy gaps separately so future patches do not mix strategy-specific work into Core.
+- Update README and research state so completeness claims must reference the ledger.
+
+Validation for this proposed patch:
+- `python -m compileall -q main.py src tests zip_project.py`

@@ -15,6 +15,7 @@ Active rule:
 - Decision timing and EV are research decision artifacts, not live trade commands.
 - Trade simulation is simplified and pessimistic; it is not shadow live or production execution.
 - Shadow live and production live are still intentionally absent.
+- Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
 
 Current local base commit before these working-tree fixes: `bcf39f51`, verified with `git rev-parse --short HEAD`.
 Last local validation on 2026-06-18:
