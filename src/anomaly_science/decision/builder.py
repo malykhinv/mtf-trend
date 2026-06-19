@@ -66,6 +66,11 @@ def build_expected_value_rows(
     for prediction in sorted(prediction_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
         if prediction.target_horizon_minutes != cfg.target_horizon_minutes:
             continue
+        if prediction.target_label_column != cfg.target_label_column:
+            raise ExpectedValueInputError(
+                "prediction target_label_column does not match EV target_horizon_minutes: "
+                f"got {prediction.target_label_column!r}, expected {cfg.target_label_column!r}"
+            )
         key = _join_key(prediction)
         try:
             state = state_by_key[key]

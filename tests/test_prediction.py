@@ -363,16 +363,26 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
     assert run_config["strategy_horizon_minutes"] == "30"
+    assert run_config["target_label_column"] == "scenario_30m"
+    assert run_config["active_h_max_minutes"] == "30"
     assert run_config["feature_schema_version"] == "feature_schema_v1_relative_asof"
 
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert {row["event_id"] for row in rows} >= {"test_row", "test_row_2"}
     assert "raw_p_long_continuation" in rows[0]
+    assert rows[0]["strategy_name"] == "broad_anomaly_v1_h30"
+    assert rows[0]["target_horizon_minutes"] == "30"
+    assert rows[0]["target_label_column"] == "scenario_30m"
+    assert rows[0]["active_h_max_minutes"] == "30"
 
     with (out_dir / "strategy_model_metadata.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         metadata_rows = list(csv.DictReader(file_obj))
     assert metadata_rows[0]["class_order"] == "long_continuation,short_fade,static_or_chop,unclear"
+    assert metadata_rows[0]["strategy_name"] == "broad_anomaly_v1_h30"
+    assert metadata_rows[0]["target_horizon_minutes"] == "30"
+    assert metadata_rows[0]["target_label_column"] == "scenario_30m"
+    assert metadata_rows[0]["active_h_max_minutes"] == "30"
     assert int(metadata_rows[0]["best_iteration"]) >= 0
     assert "feature_matrix.volume_zscore" in metadata_rows[0]["model_feature_names"]
 

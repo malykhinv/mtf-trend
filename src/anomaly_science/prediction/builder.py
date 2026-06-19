@@ -172,6 +172,7 @@ def build_walk_forward_prediction_result(
 ) -> WalkForwardPredictionResult:
     cfg = config or WalkForwardPredictionConfig()
     _validate_strategy_horizon(config=cfg)
+    strategy_metadata = get_strategy(cfg.strategy_name).metadata
     usable_rows = [row for row in inputs if _target_for_horizon(row.label, cfg.target_horizon_minutes) != MISSING_FUTURE_SCENARIO]
     usable_rows.sort(key=lambda item: (item.state.snapshot_time_ms, item.state.symbol, item.state.event_id))
     rows_by_test_week: dict[str, list[PredictionInputRow]] = defaultdict(list)
@@ -227,6 +228,11 @@ def build_walk_forward_prediction_result(
             predictions.append(
                 OosPredictionRow(
                     prediction_version=cfg.prediction_version,
+                    strategy_name=strategy_metadata.strategy_name,
+                    strategy_version=strategy_metadata.strategy_version,
+                    strategy_contract_version=strategy_metadata.strategy_contract_version,
+                    target_label_column=cfg.target_label_column,
+                    active_h_max_minutes=cfg.active_h_max_minutes,
                     event_id=test_row.state.event_id,
                     symbol=test_row.state.symbol,
                     snapshot_time_ms=test_row.state.snapshot_time_ms,
@@ -557,6 +563,12 @@ class _CatBoostIsotonicModel:
             prediction_version=prediction_version,
             model_key=model_key,
             model_family=self._config.model_family,
+            strategy_name=get_strategy(self._config.strategy_name).metadata.strategy_name,
+            strategy_version=get_strategy(self._config.strategy_name).metadata.strategy_version,
+            strategy_contract_version=get_strategy(self._config.strategy_name).metadata.strategy_contract_version,
+            target_horizon_minutes=self._config.target_horizon_minutes,
+            target_label_column=self._config.target_label_column,
+            active_h_max_minutes=self._config.active_h_max_minutes,
             weekly_model_freeze_time_ms=weekly_model_freeze_time_ms,
             train_cutoff_time_ms=train_cutoff_time_ms,
             train_row_count=self.train_row_count,
@@ -612,6 +624,11 @@ def _load_prediction_artifact(*, path: str | Path, schema_name: str, row_builder
 def _oos_prediction_from_mapping(row: Mapping[str, object]) -> OosPredictionRow:
     return OosPredictionRow(
         prediction_version=_required_str(row, "prediction_version"),
+        strategy_name=_required_str(row, "strategy_name"),
+        strategy_version=_required_str(row, "strategy_version"),
+        strategy_contract_version=_required_str(row, "strategy_contract_version"),
+        target_label_column=_required_str(row, "target_label_column"),
+        active_h_max_minutes=_required_int(row, "active_h_max_minutes"),
         event_id=_required_str(row, "event_id"),
         symbol=_required_str(row, "symbol"),
         snapshot_time_ms=_required_int(row, "snapshot_time_ms"),

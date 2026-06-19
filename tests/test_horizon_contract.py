@@ -6,6 +6,8 @@ from anomaly_science.contracts.horizons import (
     FUTURE_PATH_RETURN_HORIZONS,
     SUPPORTED_RESEARCH_HORIZONS,
     is_supported_research_horizon,
+    research_horizon_label_available_column,
+    research_horizon_label_column,
     validate_supported_research_horizon,
     validate_supported_research_horizons,
 )
@@ -31,6 +33,15 @@ def test_supported_research_horizon_validator_rejects_arbitrary_minutes() -> Non
         with pytest.raises(ValueError, match="must be one of 15, 30, 60, 120, 180"):
             validate_supported_research_horizon(invalid_horizon)  # type: ignore[arg-type]
         assert not is_supported_research_horizon(invalid_horizon)  # type: ignore[arg-type]
+
+
+def test_core_horizon_label_column_helpers_are_whitelist_backed() -> None:
+    assert research_horizon_label_column(30) == "scenario_30m"
+    assert research_horizon_label_column(180) == "scenario_180m"
+    assert research_horizon_label_available_column(30) == "label_available_30m"
+
+    with pytest.raises(ValueError, match="must be one of 15, 30, 60, 120, 180"):
+        research_horizon_label_column(32)
 
 
 def test_supported_research_horizon_tuple_validator_rejects_duplicates_and_unknowns() -> None:

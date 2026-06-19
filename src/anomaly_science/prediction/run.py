@@ -270,6 +270,8 @@ def _run_config_rows(
         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="prediction_version", value=config.prediction_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
+        RunConfigRow(key="target_label_column", value=config.target_label_column, source="runtime"),
+        RunConfigRow(key="active_h_max_minutes", value=str(config.active_h_max_minutes), source="runtime"),
         RunConfigRow(key="purge_horizon_minutes", value=str(config.purge_horizon_minutes), source="runtime"),
         RunConfigRow(key="min_train_rows", value=str(config.min_train_rows), source="runtime"),
         RunConfigRow(key="min_group_rows", value=str(config.min_group_rows), source="runtime"),

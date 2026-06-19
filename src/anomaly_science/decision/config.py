@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from anomaly_science.contracts.horizons import research_horizon_label_column
 from anomaly_science.strategy.registry import validate_strategy_horizon
 
 
@@ -31,3 +32,7 @@ class ExpectedValueConfig:
             raise ValueError("min_prediction_confidence must be within [0, 1]")
         if self.min_rr <= 0.0:
             raise ValueError("min_rr must be positive")
+
+    @property
+    def target_label_column(self) -> str:
+        return research_horizon_label_column(self.target_horizon_minutes)

@@ -84,6 +84,11 @@ def _prediction(state: AnomalyState1mRow, *, p_long: float, p_short: float) -> O
     p_static = 1.0 - p_long - p_short
     return OosPredictionRow(
         prediction_version="mvp1_weekly_walk_forward_calibrated_baseline_v1",
+        strategy_name="broad_anomaly_v1_h30",
+        strategy_version="v1",
+        strategy_contract_version="base_strategy_v1",
+        target_label_column="scenario_30m",
+        active_h_max_minutes=30,
         event_id=state.event_id,
         symbol=state.symbol,
         snapshot_time_ms=state.snapshot_time_ms,

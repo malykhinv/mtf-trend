@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from anomaly_science.contracts.horizons import research_horizon_label_column
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
 from anomaly_science.strategy.registry import validate_strategy_horizon
 
@@ -58,5 +59,13 @@ class WalkForwardPredictionConfig:
             raise ValueError("excluded_model_feature_prefixes must not contain empty values")
 
     @property
-    def purge_horizon_minutes(self) -> int:
+    def active_h_max_minutes(self) -> int:
         return active_strategy_h_max_minutes(self.active_strategy_names)
+
+    @property
+    def purge_horizon_minutes(self) -> int:
+        return self.active_h_max_minutes
+
+    @property
+    def target_label_column(self) -> str:
+        return research_horizon_label_column(self.target_horizon_minutes)

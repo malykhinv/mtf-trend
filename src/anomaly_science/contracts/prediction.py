@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .horizons import research_horizon_label_column, validate_supported_research_horizon
 from .labels import PREDICTABLE_OUTCOME_SCENARIOS, VALID_OUTCOME_SCENARIOS
 from .market import MarketDataContractError
 from .time import validate_timestamp_ms
@@ -13,6 +14,11 @@ PREDICTION_TEMPORAL_CONTRACT = "train_snapshot_time_ms_plus_horizon<=weekly_mode
 @dataclass(frozen=True, slots=True)
 class OosPredictionRow:
     prediction_version: str
+    strategy_name: str
+    strategy_version: str
+    strategy_contract_version: str
+    target_label_column: str
+    active_h_max_minutes: int
     event_id: str
     symbol: str
     snapshot_time_ms: int
@@ -41,6 +47,14 @@ class OosPredictionRow:
     def __post_init__(self) -> None:
         if not self.prediction_version:
             raise MarketDataContractError("prediction_version is required")
+        if not self.strategy_name:
+            raise MarketDataContractError("strategy_name is required")
+        if not self.strategy_version:
+            raise MarketDataContractError("strategy_version is required")
+        if not self.strategy_contract_version:
+            raise MarketDataContractError("strategy_contract_version is required")
+        if self.active_h_max_minutes <= 0:
+            raise MarketDataContractError("active_h_max_minutes must be positive")
         if not self.event_id:
             raise MarketDataContractError("event_id is required")
         if not self.symbol:
@@ -53,8 +67,14 @@ class OosPredictionRow:
             raise MarketDataContractError("prediction feature_cutoff_time_ms must be <= snapshot_time_ms")
         if self.future_start_time_ms <= self.snapshot_time_ms:
             raise MarketDataContractError("prediction future_start_time_ms must be > snapshot_time_ms")
-        if self.target_horizon_minutes <= 0:
-            raise MarketDataContractError("target_horizon_minutes must be positive")
+        try:
+            validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
+        except ValueError as exc:
+            raise MarketDataContractError(str(exc)) from exc
+        if self.target_label_column != research_horizon_label_column(self.target_horizon_minutes):
+            raise MarketDataContractError("target_label_column must match target_horizon_minutes")
+        if self.active_h_max_minutes < self.target_horizon_minutes:
+            raise MarketDataContractError("active_h_max_minutes must be >= target_horizon_minutes")
         if self.target_scenario not in PREDICTED_SCENARIOS:
             raise MarketDataContractError(f"target_scenario is not predictable in MVP1: {self.target_scenario!r}")
         if self.predicted_scenario not in PREDICTED_SCENARIOS:
@@ -105,8 +125,10 @@ class CalibrationRow:
     def __post_init__(self) -> None:
         if not self.prediction_version:
             raise MarketDataContractError("prediction_version is required")
-        if self.target_horizon_minutes <= 0:
-            raise MarketDataContractError("target_horizon_minutes must be positive")
+        try:
+            validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
+        except ValueError as exc:
+            raise MarketDataContractError(str(exc)) from exc
         if self.predicted_scenario not in PREDICTED_SCENARIOS:
             raise MarketDataContractError("predicted_scenario has unknown value")
         if not self.confidence_bucket:
@@ -131,8 +153,10 @@ class PredictionMetricRow:
     def __post_init__(self) -> None:
         if not self.prediction_version:
             raise MarketDataContractError("prediction_version is required")
-        if self.target_horizon_minutes <= 0:
-            raise MarketDataContractError("target_horizon_minutes must be positive")
+        try:
+            validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
+        except ValueError as exc:
+            raise MarketDataContractError(str(exc)) from exc
         if not self.metric_name:
             raise MarketDataContractError("metric_name is required")
         if self.row_count < 0:
@@ -144,6 +168,12 @@ class ModelMetadataRow:
     prediction_version: str
     model_key: str
     model_family: str
+    strategy_name: str
+    strategy_version: str
+    strategy_contract_version: str
+    target_horizon_minutes: int
+    target_label_column: str
+    active_h_max_minutes: int
     weekly_model_freeze_time_ms: int
     train_cutoff_time_ms: int
     train_row_count: int
@@ -162,6 +192,20 @@ class ModelMetadataRow:
             raise MarketDataContractError("model_key is required")
         if not self.model_family:
             raise MarketDataContractError("model_family is required")
+        if not self.strategy_name:
+            raise MarketDataContractError("strategy_name is required")
+        if not self.strategy_version:
+            raise MarketDataContractError("strategy_version is required")
+        if not self.strategy_contract_version:
+            raise MarketDataContractError("strategy_contract_version is required")
+        try:
+            validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
+        except ValueError as exc:
+            raise MarketDataContractError(str(exc)) from exc
+        if self.target_label_column != research_horizon_label_column(self.target_horizon_minutes):
+            raise MarketDataContractError("target_label_column must match target_horizon_minutes")
+        if self.active_h_max_minutes < self.target_horizon_minutes:
+            raise MarketDataContractError("active_h_max_minutes must be >= target_horizon_minutes")
         validate_timestamp_ms(self.weekly_model_freeze_time_ms, field_name="weekly_model_freeze_time_ms")
         validate_timestamp_ms(self.train_cutoff_time_ms, field_name="train_cutoff_time_ms")
         for field_name in ("train_row_count", "fit_row_count", "validation_row_count", "calibration_row_count"):

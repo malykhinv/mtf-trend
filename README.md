@@ -71,7 +71,7 @@ Low-level prediction/control/EV/simulation commands accept only Core-supported h
 - `strategy_feature_importance.csv`
 - `strategy_model_training_diagnostics.csv`
 
-Predictions are calibrated future-nature probabilities, not trading commands. If a weekly model cannot be trained honestly, `strategy_model_training_diagnostics.csv` records the explicit skip reason.
+Predictions are calibrated future-nature probabilities, not trading commands. `strategy_oos_predictions.csv` and `strategy_model_metadata.csv` carry explicit `target_horizon_minutes`, `target_label_column`, active `H_max`, and strategy identity fields so downstream stages do not infer the target from file names or CLI defaults. If a weekly model cannot be trained honestly, `strategy_model_training_diagnostics.csv` records the explicit skip reason.
 
 `run-mvp1-controls` reads the same strict state/label boundaries and writes negative scientific controls:
 

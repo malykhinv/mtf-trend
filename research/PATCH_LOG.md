@@ -1,6 +1,23 @@
 # Patch log
 
 
+## methodology: add prediction artifact horizon identity
+
+Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying H2 v2, H3, H4 v2, and H5.
+
+Intent:
+- Make prediction artifacts self-describing about their strategy/horizon identity.
+- Add `target_label_column` and `active_h_max_minutes` to OOS prediction rows and frozen model metadata.
+- Add strategy name/version/contract identity to OOS prediction rows and frozen model metadata.
+- Add Core helpers that map supported horizons to strict label columns such as `scenario_30m`, rejecting arbitrary horizons before artifact construction.
+- Make EV verify that prediction `target_label_column` matches the configured target horizon instead of relying only on numeric horizon filtering.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_add_prediction_artifact_horizon_identity.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_horizon_contract.py tests/test_prediction.py tests/test_decision_expected_value.py` was attempted in this sandbox but collection requires missing third-party dependency `polars`; run it in the project venv.
+
+
 ## methodology: align CLI horizon validation
 
 Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying H2 v2, H3, and H4 v2.

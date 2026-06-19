@@ -95,7 +95,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. | Keep horizon/schema tests as permanent gate. |
 | Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
 | Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
-| Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`, and tests cover multi-strategy H_max. | Keep as permanent regression gate. |
+| Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Tests cover multi-strategy H_max and artifact horizon identity. | Keep as permanent regression gate. |
 | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
 | Sample weighting | MISSING | Methodology allows as-of sample weights, but no explicit policy is implemented. | Add `sample_weight_policy_v1` after audit/horizon fixes. |
 | Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
@@ -134,14 +134,15 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 5. `methodology: document horizon ownership contract` - implemented in this patch.
 6. `methodology: add Core supported horizon constants` - implemented in this patch.
 7. `methodology: enforce registry horizon compatibility` - implemented in this patch.
-8. `methodology: add independent forensic protocol audit`.
-9. `strategy: make registry status self-auditing`.
-10. `strategy: complete broad anomaly trigger component accounting`.
-11. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
-12. `strategy: implement post-pump distribution variants`.
-13. `strategy: implement post-anomaly extension variants`.
-14. `features: add structural state and relaxed geometry features`.
-15. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+8. `methodology: add prediction artifact horizon identity` - implemented in this patch.
+9. `methodology: add independent forensic protocol audit`.
+10. `strategy: make registry status self-auditing`.
+11. `strategy: complete broad anomaly trigger component accounting`.
+12. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
+13. `strategy: implement post-pump distribution variants`.
+14. `strategy: implement post-anomaly extension variants`.
+15. `features: add structural state and relaxed geometry features`.
+16. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 

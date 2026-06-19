@@ -36,3 +36,12 @@ def validate_supported_research_horizons(
         if horizon_minutes in seen:
             raise ValueError(f"{field_name} must not contain duplicate horizons")
         seen.add(horizon_minutes)
+
+def research_horizon_label_column(horizon_minutes: int) -> str:
+    validate_supported_research_horizon(horizon_minutes)
+    return f"scenario_{horizon_minutes}m"
+
+
+def research_horizon_label_available_column(horizon_minutes: int) -> str:
+    validate_supported_research_horizon(horizon_minutes)
+    return f"label_available_{horizon_minutes}m"
