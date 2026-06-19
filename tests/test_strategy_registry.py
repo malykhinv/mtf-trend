@@ -60,6 +60,11 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
         "broad_anomaly_v1_h60",
     ]
     assert rows[0]["strategy_contract_version"] == "base_strategy_v1"
+    assert rows[0]["allowed_horizons"] == "15;30;60"
+    assert rows[0]["default_horizon_minutes"] == "30"
+    assert {row["horizon_minutes"] for row in rows} == {"15", "30", "60"}
+    assert {row["allowed_horizons"] for row in rows} == {"15;30;60"}
+    assert {row["default_horizon_minutes"] for row in rows} == {"30"}
     assert rows[0]["required_data_streams"] == "liquidations=false;open_interest=false"
     assert rows[0]["live_trading_strategy"] == "False"
 

@@ -8,7 +8,7 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.strategy.metadata import format_required_data_streams
+from anomaly_science.strategy.metadata import format_horizons, format_required_data_streams
 from anomaly_science.strategy.reject_reasons import anomaly_reject_reasons
 from anomaly_science.strategy.registry import available_strategies
 
@@ -61,6 +61,8 @@ def _strategy_registry_rows() -> list[dict[str, object]]:
                 "strategy_contract_version": metadata.strategy_contract_version,
                 "strategy_family": metadata.strategy_family,
                 "horizon_minutes": metadata.horizon_minutes,
+                "allowed_horizons": format_horizons(metadata.allowed_horizons),
+                "default_horizon_minutes": metadata.default_horizon_minutes,
                 "take_profit_atr_1440": metadata.take_profit_atr_1440,
                 "stop_loss_atr_1440": metadata.stop_loss_atr_1440,
                 "feature_schema_version": metadata.feature_schema_version,
@@ -107,7 +109,7 @@ def _protocol_rows(*, row_count: int, reject_reason_count: int) -> list[Protocol
         ProtocolAuditRow(
             check_name="base_strategy_contract_valid",
             status=AuditStatus.PASS,
-            message="all registered strategies expose StrategyMetadata, required_data_streams, trigger-frame generate_triggers, and generate_custom_features contract",
+            message="all registered strategies expose StrategyMetadata with selected/allowed/default horizons, required_data_streams, trigger-frame generate_triggers, and generate_custom_features contract",
             artifact="strategy_registry.csv",
         )
     ]

@@ -23,15 +23,67 @@ from anomaly_science.strategy.base import (
 )
 
 
-ANOMALY_STRATEGY_DEFAULTS: dict[str, dict[str, float | int | str]] = {
-    "broad_anomaly_v1_h15": {"horizon_minutes": 15, "take_profit_atr_1440": 1.5, "stop_loss_atr_1440": 1.0},
-    "broad_anomaly_v1_h30": {"horizon_minutes": 30, "take_profit_atr_1440": 2.0, "stop_loss_atr_1440": 1.1},
-    "broad_anomaly_v1_h60": {"horizon_minutes": 60, "take_profit_atr_1440": 2.5, "stop_loss_atr_1440": 1.2},
-    "post_anomaly_extension_v1_h60": {"horizon_minutes": 60, "take_profit_atr_1440": 2.5, "stop_loss_atr_1440": 1.3},
-    "post_anomaly_extension_v1_h120": {"horizon_minutes": 120, "take_profit_atr_1440": 3.0, "stop_loss_atr_1440": 1.5},
-    "post_pump_distribution_v1_h60": {"horizon_minutes": 60, "take_profit_atr_1440": 2.0, "stop_loss_atr_1440": 1.2},
-    "post_pump_distribution_v1_h120": {"horizon_minutes": 120, "take_profit_atr_1440": 3.0, "stop_loss_atr_1440": 1.5},
-    "post_pump_distribution_v1_h180": {"horizon_minutes": 180, "take_profit_atr_1440": 4.0, "stop_loss_atr_1440": 2.0},
+BROAD_ANOMALY_ALLOWED_HORIZONS: tuple[int, ...] = (15, 30, 60)
+POST_ANOMALY_EXTENSION_ALLOWED_HORIZONS: tuple[int, ...] = (60, 120, 180)
+POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS: tuple[int, ...] = (60, 120, 180)
+
+ANOMALY_STRATEGY_DEFAULTS: dict[str, dict[str, object]] = {
+    "broad_anomaly_v1_h15": {
+        "horizon_minutes": 15,
+        "allowed_horizons": BROAD_ANOMALY_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 30,
+        "take_profit_atr_1440": 1.5,
+        "stop_loss_atr_1440": 1.0,
+    },
+    "broad_anomaly_v1_h30": {
+        "horizon_minutes": 30,
+        "allowed_horizons": BROAD_ANOMALY_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 30,
+        "take_profit_atr_1440": 2.0,
+        "stop_loss_atr_1440": 1.1,
+    },
+    "broad_anomaly_v1_h60": {
+        "horizon_minutes": 60,
+        "allowed_horizons": BROAD_ANOMALY_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 30,
+        "take_profit_atr_1440": 2.5,
+        "stop_loss_atr_1440": 1.2,
+    },
+    "post_anomaly_extension_v1_h60": {
+        "horizon_minutes": 60,
+        "allowed_horizons": POST_ANOMALY_EXTENSION_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 120,
+        "take_profit_atr_1440": 2.5,
+        "stop_loss_atr_1440": 1.3,
+    },
+    "post_anomaly_extension_v1_h120": {
+        "horizon_minutes": 120,
+        "allowed_horizons": POST_ANOMALY_EXTENSION_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 120,
+        "take_profit_atr_1440": 3.0,
+        "stop_loss_atr_1440": 1.5,
+    },
+    "post_pump_distribution_v1_h60": {
+        "horizon_minutes": 60,
+        "allowed_horizons": POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 120,
+        "take_profit_atr_1440": 2.0,
+        "stop_loss_atr_1440": 1.2,
+    },
+    "post_pump_distribution_v1_h120": {
+        "horizon_minutes": 120,
+        "allowed_horizons": POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 120,
+        "take_profit_atr_1440": 3.0,
+        "stop_loss_atr_1440": 1.5,
+    },
+    "post_pump_distribution_v1_h180": {
+        "horizon_minutes": 180,
+        "allowed_horizons": POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 120,
+        "take_profit_atr_1440": 4.0,
+        "stop_loss_atr_1440": 2.0,
+    },
 }
 
 BROAD_ANOMALY_REQUIRED_DATA_STREAMS: dict[str, bool] = {
@@ -76,6 +128,8 @@ def anomaly_strategy_metadata(strategy_name: str) -> StrategyMetadata:
         strategy_contract_version="base_strategy_v1",
         strategy_family="anomaly",
         horizon_minutes=int(defaults["horizon_minutes"]),
+        allowed_horizons=tuple(int(horizon) for horizon in defaults["allowed_horizons"]),
+        default_horizon_minutes=int(defaults["default_horizon_minutes"]),
         take_profit_atr_1440=float(defaults["take_profit_atr_1440"]),
         stop_loss_atr_1440=float(defaults["stop_loss_atr_1440"]),
         feature_schema_version=FEATURE_SCHEMA_VERSION,

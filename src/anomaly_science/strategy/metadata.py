@@ -14,6 +14,10 @@ def format_required_data_streams(streams: Mapping[str, bool]) -> str:
     return ";".join(f"{name}={str(required).lower()}" for name, required in sorted(streams.items()))
 
 
+def format_horizons(horizons_minutes: Iterable[int]) -> str:
+    return ";".join(str(horizon) for horizon in horizons_minutes)
+
+
 def active_strategy_h_max_minutes(strategy_names: Iterable[str]) -> int:
     names = tuple(strategy_names)
     if not names:
@@ -32,6 +36,8 @@ def strategy_metadata_run_config_rows(strategy: BaseStrategy | None = None, *, s
         RunConfigRow(key="strategy_contract_version", value=metadata.strategy_contract_version, source="strategy_registry"),
         RunConfigRow(key="strategy_family", value=metadata.strategy_family, source="strategy_registry"),
         RunConfigRow(key="strategy_horizon_minutes", value=str(metadata.horizon_minutes), source="strategy_registry"),
+        RunConfigRow(key="strategy_allowed_horizons", value=format_horizons(metadata.allowed_horizons), source="strategy_registry"),
+        RunConfigRow(key="strategy_default_horizon_minutes", value=str(metadata.default_horizon_minutes), source="strategy_registry"),
         RunConfigRow(key="take_profit_atr_1440", value=str(metadata.take_profit_atr_1440), source="strategy_registry"),
         RunConfigRow(key="stop_loss_atr_1440", value=str(metadata.stop_loss_atr_1440), source="strategy_registry"),
         RunConfigRow(key="feature_schema_version", value=metadata.feature_schema_version, source="strategy_registry"),

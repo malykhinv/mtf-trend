@@ -7,6 +7,11 @@ from typing import Mapping, Sequence
 
 import polars as pl
 
+from anomaly_science.contracts.horizons import (
+    validate_supported_research_horizon,
+    validate_supported_research_horizons,
+)
+
 
 class StrategyContractError(ValueError):
     """Raised when a strategy declaration violates the base strategy contract."""
@@ -38,6 +43,8 @@ class StrategyMetadata:
     strategy_contract_version: str
     strategy_family: str
     horizon_minutes: int
+    allowed_horizons: tuple[int, ...]
+    default_horizon_minutes: int
     take_profit_atr_1440: float
     stop_loss_atr_1440: float
     feature_schema_version: str
@@ -53,9 +60,23 @@ class StrategyMetadata:
         if not self.strategy_family:
             raise StrategyContractError("strategy_family is required")
         if type(self.horizon_minutes) is not int:
-            raise StrategyContractError("horizon_minutes must be one fixed int per strategy instance")
-        if self.horizon_minutes <= 0:
-            raise StrategyContractError("horizon_minutes must be positive")
+            raise StrategyContractError("horizon_minutes must be one selected int per strategy run")
+        try:
+            validate_supported_research_horizon(self.horizon_minutes)
+            validate_supported_research_horizons(self.allowed_horizons, field_name="allowed_horizons")
+            validate_supported_research_horizon(self.default_horizon_minutes, field_name="default_horizon_minutes")
+        except ValueError as exc:
+            raise StrategyContractError(str(exc)) from exc
+        if self.horizon_minutes not in self.allowed_horizons:
+            raise StrategyContractError(
+                "horizon_minutes must be one of the strategy allowed_horizons; "
+                f"got {self.horizon_minutes}, allowed={self.allowed_horizons}"
+            )
+        if self.default_horizon_minutes not in self.allowed_horizons:
+            raise StrategyContractError(
+                "default_horizon_minutes must be one of the strategy allowed_horizons; "
+                f"got {self.default_horizon_minutes}, allowed={self.allowed_horizons}"
+            )
         if self.take_profit_atr_1440 <= 0:
             raise StrategyContractError("take_profit_atr_1440 must be positive")
         if self.stop_loss_atr_1440 <= 0:
@@ -70,8 +91,10 @@ class BaseStrategy(ABC):
     """Stable strategy boundary used by Core without strategy-specific branching.
 
     One concrete strategy instance represents exactly one trading hypothesis version
-    and one fixed prediction horizon. Multi-horizon research must register separate
-    strategy variants instead of passing tuple/list horizons through one instance.
+    and one selected prediction horizon for the current run. Strategy metadata also
+    declares the semantic allowed/default horizons for that hypothesis; Core still
+    owns the technical supported-horizon whitelist. Multi-horizon model runs require
+    explicit architecture and metadata rather than an implicit tuple/list target.
 
     All Polars frames crossing this boundary use native ``pl.Datetime[ms, UTC]``
     columns for internal time fields. Unix ``*_ms`` integers are reserved for
@@ -81,7 +104,7 @@ class BaseStrategy(ABC):
     @property
     @abstractmethod
     def metadata(self) -> StrategyMetadata:
-        """Return immutable strategy identity, horizon, schemas and ATR-1440 simulation defaults."""
+        """Return immutable strategy identity, selected/allowed horizons, schemas and ATR-1440 simulation defaults."""
 
     @property
     @abstractmethod

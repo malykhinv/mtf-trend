@@ -582,6 +582,8 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "strategy_contract_version",
             "strategy_family",
             "horizon_minutes",
+            "allowed_horizons",
+            "default_horizon_minutes",
             "take_profit_atr_1440",
             "stop_loss_atr_1440",
             "feature_schema_version",
@@ -590,7 +592,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "active_research_strategy",
             "live_trading_strategy",
         ),
-        description="Registered strategy metadata exposed through the BaseStrategy contract.",
+        description="Registered strategy metadata exposed through the BaseStrategy contract, including selected, allowed, and default horizons.",
     ),
     "strategy_reject_reasons.csv": ArtifactSchema(
         name="strategy_reject_reasons.csv",

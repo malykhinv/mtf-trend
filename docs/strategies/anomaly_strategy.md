@@ -69,6 +69,23 @@ Horizon suffix не является свободным параметром: st
 | post_pump_distribution_v1_h120 | 120 | specified, not implemented until explicit patch | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
 | post_pump_distribution_v1_h180 | 180 | specified, not implemented until explicit patch | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
 
+Semantic horizon metadata:
+
+```text
+broad_anomaly_v1:
+  allowed_horizons = 15, 30, 60
+  default_horizon_minutes = 30
+
+post_anomaly_extension_v1:
+  allowed_horizons = 60, 120, 180
+  default_horizon_minutes = 120
+
+post_pump_distribution_v1:
+  allowed_horizons = 60, 120, 180
+  default_horizon_minutes = 120
+```
+
+
 Правило:
 
 ```text

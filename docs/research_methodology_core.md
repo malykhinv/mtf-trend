@@ -97,7 +97,7 @@ no-leakage invariants
 
 ## 4. Stable BaseStrategy contract
 
-Любая стратегия подключается через стабильный контракт. Один инстанс стратегии обслуживает ровно один фиксированный горизонт прогнозирования. Multi-horizon research регистрируется как набор отдельных strategy variants, а не как tuple/list внутри одного model_version.
+Любая стратегия подключается через стабильный контракт. Один инстанс стратегии обслуживает ровно один выбранный горизонт прогнозирования для текущего run-а. Strategy metadata дополнительно объявляет смысловые `allowed_horizons` и `default_horizon_minutes` для этой гипотезы. Multi-horizon research регистрируется как набор отдельных strategy variants или отдельная explicit multi-horizon architecture, а не как неявный tuple/list внутри одного model_version.
 
 ```python
 from __future__ import annotations
@@ -115,7 +115,9 @@ class StrategyMetadata:
     strategy_version: str
     strategy_contract_version: str
     strategy_family: str
-    horizon_minutes: int
+    horizon_minutes: int  # selected target/run horizon
+    allowed_horizons: tuple[int, ...]  # semantic strategy subset of Core-supported horizons
+    default_horizon_minutes: int
     take_profit_atr_1440: float
     stop_loss_atr_1440: float
     feature_schema_version: str
@@ -126,7 +128,7 @@ class BaseStrategy(ABC):
     @property
     @abstractmethod
     def metadata(self) -> StrategyMetadata:
-        """Identity, one fixed horizon, schemas and simulation defaults."""
+        """Identity, selected/allowed/default horizons, schemas and simulation defaults."""
 
     @property
     @abstractmethod
@@ -171,6 +173,19 @@ Core зависит только от BaseStrategy contract.
 Strategy зависит от BaseStrategy contract.
 Core не зависит от конкретного strategy module.
 ```
+
+Horizon metadata rule:
+
+```text
+horizon_minutes = selected target horizon for this concrete strategy variant/run
+allowed_horizons = semantic horizons that this strategy hypothesis allows
+default_horizon_minutes = default semantic horizon for this strategy hypothesis
+
+horizon_minutes must be in allowed_horizons
+default_horizon_minutes must be in allowed_horizons
+allowed_horizons must be a non-empty subset of the Core-supported research horizon set
+```
+
 
 Запрещено:
 

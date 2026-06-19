@@ -1,5 +1,21 @@
 # Patch log
 
+
+## methodology: add StrategyMetadata horizon semantics
+
+Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying `methodology_add_core_supported_horizon_constants_v2.patch`.
+
+Intent:
+- Extend `StrategyMetadata` with semantic `allowed_horizons` and `default_horizon_minutes` while keeping `horizon_minutes` as the selected run/variant horizon.
+- Validate selected/default/allowed horizons against the Core supported horizon whitelist.
+- Export allowed/default horizons in strategy registry and run-config artifacts.
+- Add contract tests for arbitrary horizons, selected horizon outside allowed set, and default horizon outside allowed set.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_add_strategy_metadata_horizon_semantics.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_strategy_contract.py tests/test_strategy_registry.py tests/test_horizon_contract.py` was attempted in this sandbox but collection requires missing third-party dependency `polars`; run it in the project venv.
+
 ## methodology: add Core supported horizon constants
 
 Status: PROPOSED; patch regenerated from uploaded snapshot `project_20260619_111337.zip`; GitHub head not checked in this environment.

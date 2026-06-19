@@ -44,6 +44,8 @@ def test_strategy_metadata_validates_required_base_contract_fields() -> None:
             strategy_contract_version="base_strategy_v1",
             strategy_family="anomaly",
             horizon_minutes=0,
+            allowed_horizons=(15, 30, 60),
+            default_horizon_minutes=30,
             take_profit_atr_1440=1.0,
             stop_loss_atr_1440=1.0,
             feature_schema_version="features_v1",
@@ -51,19 +53,73 @@ def test_strategy_metadata_validates_required_base_contract_fields() -> None:
         )
 
 
-def test_strategy_metadata_rejects_multi_horizon_values() -> None:
-    with pytest.raises(StrategyContractError, match="one fixed int"):
+def test_strategy_metadata_rejects_multi_horizon_selected_values() -> None:
+    with pytest.raises(StrategyContractError, match="one selected int"):
         StrategyMetadata(
             strategy_name="bad",
             strategy_version="1.0.0",
             strategy_contract_version="base_strategy_v1",
             strategy_family="anomaly",
             horizon_minutes=(15, 30),  # type: ignore[arg-type]
+            allowed_horizons=(15, 30, 60),
+            default_horizon_minutes=30,
             take_profit_atr_1440=1.0,
             stop_loss_atr_1440=1.0,
             feature_schema_version="features_v1",
             label_schema_version="labels_v1",
         )
+
+
+def test_strategy_metadata_rejects_allowed_horizons_outside_core_whitelist() -> None:
+    with pytest.raises(StrategyContractError, match="allowed_horizons"):
+        StrategyMetadata(
+            strategy_name="bad",
+            strategy_version="1.0.0",
+            strategy_contract_version="base_strategy_v1",
+            strategy_family="anomaly",
+            horizon_minutes=30,
+            allowed_horizons=(15, 30, 32),
+            default_horizon_minutes=30,
+            take_profit_atr_1440=1.0,
+            stop_loss_atr_1440=1.0,
+            feature_schema_version="features_v1",
+            label_schema_version="labels_v1",
+        )
+
+
+def test_strategy_metadata_rejects_selected_horizon_outside_allowed_set() -> None:
+    with pytest.raises(StrategyContractError, match="horizon_minutes must be one of"):
+        StrategyMetadata(
+            strategy_name="bad",
+            strategy_version="1.0.0",
+            strategy_contract_version="base_strategy_v1",
+            strategy_family="anomaly",
+            horizon_minutes=120,
+            allowed_horizons=(15, 30, 60),
+            default_horizon_minutes=30,
+            take_profit_atr_1440=1.0,
+            stop_loss_atr_1440=1.0,
+            feature_schema_version="features_v1",
+            label_schema_version="labels_v1",
+        )
+
+
+def test_strategy_metadata_rejects_default_horizon_outside_allowed_set() -> None:
+    with pytest.raises(StrategyContractError, match="default_horizon_minutes must be one of"):
+        StrategyMetadata(
+            strategy_name="bad",
+            strategy_version="1.0.0",
+            strategy_contract_version="base_strategy_v1",
+            strategy_family="anomaly",
+            horizon_minutes=30,
+            allowed_horizons=(15, 30, 60),
+            default_horizon_minutes=120,
+            take_profit_atr_1440=1.0,
+            stop_loss_atr_1440=1.0,
+            feature_schema_version="features_v1",
+            label_schema_version="labels_v1",
+        )
+
 
 
 def test_broad_anomaly_strategy_wraps_detector_behind_base_contract() -> None:
@@ -79,6 +135,8 @@ def test_broad_anomaly_strategy_wraps_detector_behind_base_contract() -> None:
     assert strategy.metadata.strategy_family == "anomaly"
     assert strategy.metadata.strategy_contract_version == "base_strategy_v1"
     assert strategy.metadata.horizon_minutes == 30
+    assert strategy.metadata.allowed_horizons == (15, 30, 60)
+    assert strategy.metadata.default_horizon_minutes == 30
     assert strategy.metadata.take_profit_atr_1440 == 2.0
     assert strategy.metadata.stop_loss_atr_1440 == 1.1
     assert strategy.required_data_streams == {"open_interest": False, "liquidations": False}
