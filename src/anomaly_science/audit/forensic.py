@@ -672,8 +672,9 @@ def _canonical_alias_consistency_row(root: Path) -> ProtocolAuditRow:
         for parent in sorted(set(anomaly_by_parent) & set(strategy_by_parent)):
             anomaly_path = anomaly_by_parent[parent]
             strategy_path = strategy_by_parent[parent]
-            if anomaly_path.read_bytes() != strategy_path.read_bytes():
-                failures.append(f"{anomaly_path} content differs from {strategy_path}")
+            mismatch_reason = _csv_artifact_mismatch_reason(anomaly_path, strategy_path)
+            if mismatch_reason is not None:
+                failures.append(f"{anomaly_path} content differs from {strategy_path}: {mismatch_reason}")
                 continue
     if failures:
         return _row(
@@ -692,6 +693,23 @@ def _canonical_alias_consistency_row(root: Path) -> ProtocolAuditRow:
         AuditStatus.PASS,
         f"verified {checked} canonical strategy_* artifact family alias pair(s)",
     )
+
+
+def _csv_artifact_mismatch_reason(left_path: Path, right_path: Path) -> str | None:
+    left_header = _read_csv_header(left_path)
+    right_header = _read_csv_header(right_path)
+    if left_header != right_header:
+        return f"header mismatch left={left_header!r} right={right_header!r}"
+
+    left_rows = _read_csv_rows(left_path)
+    right_rows = _read_csv_rows(right_path)
+    if len(left_rows) != len(right_rows):
+        return f"row count mismatch left={len(left_rows)} right={len(right_rows)}"
+
+    for row_index, (left_row, right_row) in enumerate(zip(left_rows, right_rows), start=2):
+        if left_row != right_row:
+            return f"row {row_index} mismatch"
+    return None
 
 
 def _simulation_decision_contract_alignment_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
