@@ -21,14 +21,38 @@ class StrategyRegistryEntry:
     factory: Callable[[], BaseStrategy]
 
 
+@dataclass(frozen=True, slots=True)
+class StrategyImplementationStatus:
+    strategy_name: str
+    strategy_family: str
+    strategy_contract_version: str
+    horizon_minutes: int
+    allowed_horizons: tuple[int, ...]
+    default_horizon_minutes: int
+    implementation_status: str
+    executable: bool
+    registry_error: str
+
+
 BROAD_ANOMALY_VARIANTS: tuple[str, ...] = (
     "broad_anomaly_v1_h15",
     "broad_anomaly_v1_h30",
     "broad_anomaly_v1_h60",
 )
 
+EXECUTABLE_STRATEGY_NAMES: tuple[str, ...] = BROAD_ANOMALY_VARIANTS
+SPECIFIED_NOT_IMPLEMENTED_STRATEGY_NAMES: tuple[str, ...] = tuple(
+    strategy_name for strategy_name in ANOMALY_STRATEGY_DEFAULTS if strategy_name not in EXECUTABLE_STRATEGY_NAMES
+)
+
 
 def available_strategies() -> tuple[StrategyRegistryEntry, ...]:
+    """Return executable strategy variants only.
+
+    Specified-only variants are intentionally excluded. They can appear in the
+    implementation-status artifact but must never be instantiated through a
+    default or broad-anomaly fallback factory.
+    """
     return tuple(
         StrategyRegistryEntry(
             strategy_name=strategy_name,
@@ -36,15 +60,43 @@ def available_strategies() -> tuple[StrategyRegistryEntry, ...]:
             strategy_contract_version="base_strategy_v1",
             factory=lambda strategy_name=strategy_name: make_broad_anomaly_strategy(strategy_name=strategy_name),
         )
-        for strategy_name in BROAD_ANOMALY_VARIANTS
+        for strategy_name in EXECUTABLE_STRATEGY_NAMES
     )
+
+
+def executable_strategy_names() -> tuple[str, ...]:
+    return EXECUTABLE_STRATEGY_NAMES
+
+
+def specified_not_implemented_strategy_names() -> tuple[str, ...]:
+    return SPECIFIED_NOT_IMPLEMENTED_STRATEGY_NAMES
+
+
+def strategy_implementation_statuses() -> tuple[StrategyImplementationStatus, ...]:
+    rows: list[StrategyImplementationStatus] = []
+    for strategy_name, defaults in ANOMALY_STRATEGY_DEFAULTS.items():
+        executable = strategy_name in EXECUTABLE_STRATEGY_NAMES
+        rows.append(
+            StrategyImplementationStatus(
+                strategy_name=strategy_name,
+                strategy_family="anomaly",
+                strategy_contract_version="base_strategy_v1",
+                horizon_minutes=int(defaults["horizon_minutes"]),
+                allowed_horizons=tuple(int(horizon) for horizon in defaults["allowed_horizons"]),
+                default_horizon_minutes=int(defaults["default_horizon_minutes"]),
+                implementation_status="implemented" if executable else "specified_not_implemented",
+                executable=executable,
+                registry_error="" if executable else "strategy variant is specified but not implemented yet",
+            )
+        )
+    return tuple(rows)
 
 
 def get_strategy(strategy_name: str) -> BaseStrategy:
     for entry in available_strategies():
         if entry.strategy_name == strategy_name:
             return entry.factory()
-    if strategy_name in ANOMALY_STRATEGY_DEFAULTS:
+    if strategy_name in SPECIFIED_NOT_IMPLEMENTED_STRATEGY_NAMES:
         raise StrategyRegistryError(f"strategy variant is specified but not implemented yet: {strategy_name!r}")
     raise StrategyRegistryError(f"unknown strategy_name: {strategy_name!r}")
 

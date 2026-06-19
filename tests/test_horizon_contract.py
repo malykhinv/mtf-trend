@@ -78,6 +78,9 @@ def test_registry_validates_executable_strategy_horizon_pairs() -> None:
     with pytest.raises(StrategyRegistryError, match="specified but not implemented yet"):
         validate_strategy_horizon("post_pump_distribution_v1_h120", 120)
 
+    with pytest.raises(StrategyRegistryError, match="specified but not implemented yet"):
+        validate_strategy_horizon("post_anomaly_extension_v1_h180", 180)
+
 
 def test_target_horizon_configs_validate_strategy_horizon_pair() -> None:
     config_types = (
@@ -101,6 +104,9 @@ def test_target_horizon_configs_validate_strategy_horizon_pair() -> None:
 
         with pytest.raises(StrategyRegistryError, match="specified but not implemented yet"):
             config_type(strategy_name="post_pump_distribution_v1_h120", target_horizon_minutes=120)
+
+        with pytest.raises(StrategyRegistryError, match="specified but not implemented yet"):
+            config_type(strategy_name="post_anomaly_extension_v1_h180", target_horizon_minutes=180)
 
 
 

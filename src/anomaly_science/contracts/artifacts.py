@@ -618,6 +618,22 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         ),
         description="Explicit strategy reject-reason contract; no generic or silent rejects.",
     ),
+    "strategy_implementation_status.csv": ArtifactSchema(
+        name="strategy_implementation_status.csv",
+        stage="mvp1_strategy_registry",
+        required_columns=(
+            "strategy_name",
+            "strategy_family",
+            "strategy_contract_version",
+            "horizon_minutes",
+            "allowed_horizons",
+            "default_horizon_minutes",
+            "implementation_status",
+            "executable",
+            "registry_error",
+        ),
+        description="Truth table for strategy variants: executable rows may be instantiated; specified-only rows must fail explicitly.",
+    ),
     "anomaly_feature_matrix.csv": ArtifactSchema(
         name="anomaly_feature_matrix.csv",
         stage="mvp1_features",

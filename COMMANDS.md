@@ -36,6 +36,14 @@ MVP1 feature catalog:
 python main.py run-mvp1-features --out tmp/mvp1_features
 ```
 
+MVP1 strategy registry truth table:
+
+```bash
+python main.py run-mvp1-strategy-registry --out tmp/mvp1_strategy_registry
+```
+
+`strategy_registry.csv` contains executable variants only. `strategy_implementation_status.csv` also lists specified-only variants that must fail explicitly until implemented.
+
 MVP1 as-of feature matrix:
 
 ```bash

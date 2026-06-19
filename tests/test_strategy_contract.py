@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 
 from anomaly_science.strategy import StrategyContractError, StrategyMetadata, validate_trigger_frame
-from anomaly_science.strategy.registry import available_strategies, get_strategy
+from anomaly_science.strategy.registry import available_strategies, get_strategy, specified_not_implemented_strategy_names
 from anomaly_science.strategy.anomaly import BroadAnomalyStrategy
 
 
@@ -250,3 +250,11 @@ def test_strategy_registry_exposes_broad_anomaly_by_contract_name() -> None:
     ]
     assert strategy.metadata.strategy_name == "broad_anomaly_v1_h30"
     assert strategy.metadata.strategy_contract_version == "base_strategy_v1"
+    assert specified_not_implemented_strategy_names() == (
+        "post_anomaly_extension_v1_h60",
+        "post_anomaly_extension_v1_h120",
+        "post_anomaly_extension_v1_h180",
+        "post_pump_distribution_v1_h60",
+        "post_pump_distribution_v1_h120",
+        "post_pump_distribution_v1_h180",
+    )

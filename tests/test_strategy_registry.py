@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from anomaly_science.strategy import anomaly_reject_reason_codes
+from anomaly_science.strategy import anomaly_reject_reason_codes, specified_not_implemented_strategy_names
 
 
 EXPECTED_ANOMALY_REJECT_REASONS = {
@@ -48,6 +48,7 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
     assert result.returncode == 0, result.stderr
     assert "mvp1 strategy registry artifacts written" in result.stdout
     assert (out_dir / "strategy_registry.csv").is_file()
+    assert (out_dir / "strategy_implementation_status.csv").is_file()
     assert (out_dir / "strategy_reject_reasons.csv").is_file()
     assert (out_dir / "strategy_protocol_audit.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
@@ -68,6 +69,34 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
     assert rows[0]["required_data_streams"] == "liquidations=false;open_interest=false"
     assert rows[0]["live_trading_strategy"] == "False"
 
+    with (out_dir / "strategy_implementation_status.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        status_rows = list(csv.DictReader(file_obj))
+    status_by_name = {row["strategy_name"]: row for row in status_rows}
+    assert [row["strategy_name"] for row in status_rows] == [
+        "broad_anomaly_v1_h15",
+        "broad_anomaly_v1_h30",
+        "broad_anomaly_v1_h60",
+        "post_anomaly_extension_v1_h60",
+        "post_anomaly_extension_v1_h120",
+        "post_anomaly_extension_v1_h180",
+        "post_pump_distribution_v1_h60",
+        "post_pump_distribution_v1_h120",
+        "post_pump_distribution_v1_h180",
+    ]
+    assert {status_by_name[name]["implementation_status"] for name in [
+        "broad_anomaly_v1_h15",
+        "broad_anomaly_v1_h30",
+        "broad_anomaly_v1_h60",
+    ]} == {"implemented"}
+    assert {status_by_name[name]["implementation_status"] for name in specified_not_implemented_strategy_names()} == {
+        "specified_not_implemented"
+    }
+    assert status_by_name["broad_anomaly_v1_h30"]["executable"] == "True"
+    assert status_by_name["post_anomaly_extension_v1_h180"]["executable"] == "False"
+    assert status_by_name["post_anomaly_extension_v1_h180"]["registry_error"] == (
+        "strategy variant is specified but not implemented yet"
+    )
+
     with (out_dir / "strategy_reject_reasons.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         reject_rows = list(csv.DictReader(file_obj))
     assert {row["reason_code"] for row in reject_rows} == EXPECTED_ANOMALY_REJECT_REASONS
@@ -81,6 +110,7 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["base_strategy_contract_valid"]["status"] == "PASS"
     assert audit_by_name["strategy_reject_reasons_declared"]["status"] == "PASS"
+    assert audit_by_name["strategy_implementation_status_truthful"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
 

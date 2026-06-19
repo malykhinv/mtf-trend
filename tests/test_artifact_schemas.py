@@ -36,6 +36,7 @@ REQUIRED_MVP1 = {
     "anomaly_feature_catalog.csv",
     "strategy_feature_schema.csv",
     "strategy_registry.csv",
+    "strategy_implementation_status.csv",
     "strategy_reject_reasons.csv",
     "anomaly_feature_matrix.csv",
     "anomaly_nature_atlas.csv",

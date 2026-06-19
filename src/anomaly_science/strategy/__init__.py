@@ -7,16 +7,21 @@ from anomaly_science.strategy.base import (
 )
 from anomaly_science.strategy.reject_reasons import StrategyRejectReason, anomaly_reject_reason_codes, anomaly_reject_reasons
 from anomaly_science.strategy.registry import (
+    StrategyImplementationStatus,
     StrategyRegistryEntry,
     StrategyRegistryError,
     available_strategies,
+    executable_strategy_names,
     get_strategy,
+    specified_not_implemented_strategy_names,
+    strategy_implementation_statuses,
     validate_strategy_horizon,
 )
 from anomaly_science.strategy.run import run_mvp1_strategy_registry
 
 __all__ = [
     "BaseStrategy",
+    "StrategyImplementationStatus",
     "StrategyRegistryEntry",
     "StrategyRegistryError",
     "StrategyRejectReason",
@@ -27,7 +32,10 @@ __all__ = [
     "anomaly_reject_reason_codes",
     "anomaly_reject_reasons",
     "available_strategies",
+    "executable_strategy_names",
     "get_strategy",
+    "specified_not_implemented_strategy_names",
+    "strategy_implementation_statuses",
     "validate_strategy_horizon",
     "run_mvp1_strategy_registry",
 ]

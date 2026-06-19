@@ -63,6 +63,13 @@ ANOMALY_STRATEGY_DEFAULTS: dict[str, dict[str, object]] = {
         "take_profit_atr_1440": 3.0,
         "stop_loss_atr_1440": 1.5,
     },
+    "post_anomaly_extension_v1_h180": {
+        "horizon_minutes": 180,
+        "allowed_horizons": POST_ANOMALY_EXTENSION_ALLOWED_HORIZONS,
+        "default_horizon_minutes": 120,
+        "take_profit_atr_1440": 4.0,
+        "stop_loss_atr_1440": 2.0,
+    },
     "post_pump_distribution_v1_h60": {
         "horizon_minutes": 60,
         "allowed_horizons": POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS,

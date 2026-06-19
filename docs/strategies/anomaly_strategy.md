@@ -40,6 +40,7 @@ broad_anomaly_v1_h30
 broad_anomaly_v1_h60
 post_anomaly_extension_v1_h60
 post_anomaly_extension_v1_h120
+post_anomaly_extension_v1_h180
 post_pump_distribution_v1_h60
 post_pump_distribution_v1_h120
 post_pump_distribution_v1_h180
@@ -65,6 +66,7 @@ Horizon suffix не является свободным параметром: st
 | broad_anomaly_v1_h60 | 60 | implemented | OI optional, liquidations optional | TP 2.5 ATR / SL 1.2 ATR |
 | post_anomaly_extension_v1_h60 | 60 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 2.5 ATR / SL 1.3 ATR |
 | post_anomaly_extension_v1_h120 | 120 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 3.0 ATR / SL 1.5 ATR |
+| post_anomaly_extension_v1_h180 | 180 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 4.0 ATR / SL 2.0 ATR |
 | post_pump_distribution_v1_h60 | 60 | specified, not implemented until explicit patch | OI required, liquidations required | TP 2.0 ATR / SL 1.2 ATR |
 | post_pump_distribution_v1_h120 | 120 | specified, not implemented until explicit patch | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
 | post_pump_distribution_v1_h180 | 180 | specified, not implemented until explicit patch | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
@@ -91,6 +93,7 @@ post_pump_distribution_v1:
 ```text
 Если variant specified but not implemented, CLI/registry должен падать явной ошибкой.
 Запрещено запускать specified-only variant через broad/default factory.
+`strategy_registry.csv` содержит только executable variants; `strategy_implementation_status.csv` является truth table для implemented/specified-only variants.
 ```
 
 ## 2. Что именно исследует anomaly strategy
@@ -499,9 +502,10 @@ Horizon suffix должен быть явно перечислен ниже; unk
 broad_anomaly_v1_h15              быстрый diagnostic horizon первичной реакции
 broad_anomaly_v1_h30              primary MVP horizon broad anomaly
 broad_anomaly_v1_h60              extended broad anomaly horizon
-post_anomaly_extension_v1_h60     торговля продолжения на часовом окне
+post_anomaly_extension_v1_h60     specified-only до реализации late-state trigger
 post_anomaly_extension_v1_h120
-post_pump_distribution_v1_h60     торговля полки распределения
+post_anomaly_extension_v1_h180
+post_pump_distribution_v1_h60     specified-only до реализации post-pump trigger
 post_pump_distribution_v1_h120
 post_pump_distribution_v1_h180
 ```
@@ -536,6 +540,7 @@ H_max для purging/embargo рассчитывает Core как максиму
 | broad_anomaly_v1_h60 | 60 | 2.5 | 1.2 |
 | post_anomaly_extension_v1_h60 | 60 | 2.5 | 1.3 |
 | post_anomaly_extension_v1_h120 | 120 | 3.0 | 1.5 |
+| post_anomaly_extension_v1_h180 | 180 | 4.0 | 2.0 |
 | post_pump_distribution_v1_h60 | 60 | 2.0 | 1.2 |
 | post_pump_distribution_v1_h120 | 120 | 3.0 | 1.5 |
 | post_pump_distribution_v1_h180 | 180 | 4.0 | 2.0 |

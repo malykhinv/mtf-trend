@@ -10,7 +10,7 @@ from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.strategy.metadata import format_horizons, format_required_data_streams
 from anomaly_science.strategy.reject_reasons import anomaly_reject_reasons
-from anomaly_science.strategy.registry import available_strategies
+from anomaly_science.strategy.registry import available_strategies, strategy_implementation_statuses
 
 
 def run_mvp1_strategy_registry(*, out_dir: str | Path) -> Path:
@@ -18,11 +18,23 @@ def run_mvp1_strategy_registry(*, out_dir: str | Path) -> Path:
     output_path.mkdir(parents=True, exist_ok=True)
     rows = _strategy_registry_rows()
     reject_reason_rows = _strategy_reject_reason_rows()
-    protocol_rows = _protocol_rows(row_count=len(rows), reject_reason_count=len(reject_reason_rows))
+    implementation_status_rows = _strategy_implementation_status_rows()
+    protocol_rows = _protocol_rows(
+        row_count=len(rows),
+        reject_reason_count=len(reject_reason_rows),
+        implementation_status_rows=implementation_status_rows,
+    )
     run_config_rows = _run_config_rows(output_path=output_path)
 
     written: list[Path] = []
     written.append(write_csv_artifact(output_path / "strategy_registry.csv", rows, get_artifact_schema("strategy_registry.csv")))
+    written.append(
+        write_csv_artifact(
+            output_path / "strategy_implementation_status.csv",
+            implementation_status_rows,
+            get_artifact_schema("strategy_implementation_status.csv"),
+        )
+    )
     written.append(
         write_csv_artifact(
             output_path / "strategy_reject_reasons.csv",
@@ -79,7 +91,31 @@ def _strategy_reject_reason_rows() -> list[dict[str, object]]:
     return [asdict(row) for row in anomaly_reject_reasons()]
 
 
-def _protocol_rows(*, row_count: int, reject_reason_count: int) -> list[ProtocolAuditRow]:
+def _strategy_implementation_status_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for status in strategy_implementation_statuses():
+        rows.append(
+            {
+                "strategy_name": status.strategy_name,
+                "strategy_family": status.strategy_family,
+                "strategy_contract_version": status.strategy_contract_version,
+                "horizon_minutes": status.horizon_minutes,
+                "allowed_horizons": format_horizons(status.allowed_horizons),
+                "default_horizon_minutes": status.default_horizon_minutes,
+                "implementation_status": status.implementation_status,
+                "executable": status.executable,
+                "registry_error": status.registry_error,
+            }
+        )
+    return rows
+
+
+def _protocol_rows(
+    *,
+    row_count: int,
+    reject_reason_count: int,
+    implementation_status_rows: list[dict[str, object]],
+) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_strategy_registry_scope",
@@ -100,6 +136,12 @@ def _protocol_rows(*, row_count: int, reject_reason_count: int) -> list[Protocol
             artifact="strategy_reject_reasons.csv",
         ),
         ProtocolAuditRow(
+            check_name="strategy_implementation_status_truthful",
+            status=_implementation_status_audit_status(implementation_status_rows),
+            message=_implementation_status_audit_message(implementation_status_rows),
+            artifact="strategy_implementation_status.csv",
+        ),
+        ProtocolAuditRow(
             check_name="legacy_import_boundary",
             status=AuditStatus.PASS,
             message="mvp1 strategy registry uses anomaly_science modules only; legacy_quarantine is reference-only",
@@ -114,6 +156,24 @@ def _protocol_rows(*, row_count: int, reject_reason_count: int) -> list[Protocol
         )
     ]
     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_strategy_registry", implemented=implemented)
+
+
+def _implementation_status_audit_status(rows: list[dict[str, object]]) -> AuditStatus:
+    executable_rows = [row for row in rows if row["implementation_status"] == "implemented"]
+    specified_rows = [row for row in rows if row["implementation_status"] == "specified_not_implemented"]
+    executable_ok = all(row["executable"] is True and row["registry_error"] == "" for row in executable_rows)
+    specified_ok = all(row["executable"] is False and bool(row["registry_error"]) for row in specified_rows)
+    return AuditStatus.PASS if rows and executable_rows and specified_rows and executable_ok and specified_ok else AuditStatus.FAIL
+
+
+def _implementation_status_audit_message(rows: list[dict[str, object]]) -> str:
+    implemented = sum(1 for row in rows if row["implementation_status"] == "implemented")
+    specified = sum(1 for row in rows if row["implementation_status"] == "specified_not_implemented")
+    return (
+        "strategy_implementation_status.csv written with "
+        f"{implemented} executable variants and {specified} specified-only variants; "
+        "specified-only variants are not instantiable through the registry"
+    )
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

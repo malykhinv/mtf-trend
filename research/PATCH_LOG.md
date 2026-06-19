@@ -1,3 +1,19 @@
+
+## methodology: clean up strategy executable horizon status
+
+Status: PROPOSED
+
+Changes:
+- Add `strategy_implementation_status.csv` as a registry truth table covering executable and specified-only anomaly variants.
+- Keep `strategy_registry.csv` executable-only: currently `broad_anomaly_v1_h15/h30/h60`.
+- Mark `post_anomaly_extension_v1_h60/h120/h180` and `post_pump_distribution_v1_h60/h120/h180` as specified-only until explicit implementation patches.
+- Add the missing specified-only `post_anomaly_extension_v1_h180` metadata row so docs, defaults, and registry-status output agree.
+- Add strategy registry tests for the executable/specified-only split and update docs/state/ledger.
+
+Validation:
+- `git apply --check --whitespace=error methodology_cleanup_strategy_executable_horizon_status.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+
 # Patch log
 
 

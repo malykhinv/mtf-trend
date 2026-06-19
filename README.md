@@ -35,6 +35,7 @@ python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out 
 python main.py run-mvp1-state --input tests/fixtures/minimal_market_data --events tmp/mvp1_events/strategy_events.csv --out tmp/mvp1_state
 python main.py run-mvp1-future --input tests/fixtures/minimal_market_data --state tmp/mvp1_state/strategy_state_1m.csv --out tmp/mvp1_future
 python main.py run-mvp1-features --out tmp/mvp1_features
+python main.py run-mvp1-strategy-registry --out tmp/mvp1_strategy_registry
 python main.py run-mvp1-feature-matrix --input tests/fixtures/minimal_market_data --state tmp/mvp1_state/strategy_state_1m.csv --out tmp/mvp1_feature_matrix
 python main.py run-mvp1-atlas --state tmp/mvp1_state/strategy_state_1m.csv --future tmp/mvp1_future/strategy_future_paths.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_atlas
 python main.py run-mvp1-labels --state tmp/mvp1_state/strategy_state_1m.csv --future tmp/mvp1_future/strategy_future_paths.csv --out tmp/mvp1_labels
@@ -57,6 +58,8 @@ python main.py run-mvp1-holdout-governance --out tmp/mvp1_governance --start-dat
 - `strategy_market_shock_groups.csv`
 
 Atlas grouping uses state plus feature-matrix as-of fields. Coarse 30m response bins are descriptive atlas bins only, not calibrated labels, entry logic, exit logic, EV, PnL, or trade simulation. Market-shock groups use point-in-time `market_shock_id` and `systemic_cluster_regime` from the feature matrix.
+
+`run-mvp1-strategy-registry` writes `strategy_registry.csv` for executable variants only and `strategy_implementation_status.csv` as the truth table for specified-only variants. At this stage, only `broad_anomaly_v1_h15/h30/h60` are executable; `post_anomaly_extension_v1_h60/h120/h180` and `post_pump_distribution_v1_h60/h120/h180` are specified-only and must fail explicitly until implemented.
 
 `run-mvp1-labels` reads the same state/future artifacts through strict boundaries, joins them one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`, and writes `strategy_outcome_labels.csv` with `scenario_15m`, `scenario_30m`, `scenario_60m`, `scenario_120m`, and `scenario_180m`. Scenario values are descriptive future-nature targets for later walk-forward prediction calibration: `long_continuation`, `short_fade`, `static_or_chop`, `unclear`, or explicit `missing_future`. Trap-like ambiguity maps to `unclear` in MVP1; a separate trap class requires a new label schema.
 
