@@ -730,6 +730,33 @@ market_context × future_outcome_atr
 Atlas не доказывает edge.
 Он только генерирует гипотезы и показывает, есть ли структура в будущих outcomes.
 
+Implementation requirement:
+
+```text
+anomaly atlas должен писать descriptive rows по всем research horizons: 15/30/60/120/180m
+каждый row обязан хранить outcome_horizon_minutes и outcome_coordinate
+relaxed geometry slices должны быть continuous/as-of bins, а не hard trade verdict
+```
+
+Обязательные relaxed-geometry atlas contexts после появления geometry features:
+
+```text
+initial_pump_height_atr
+consolidation_width_ratio
+shelf_position_atr
+shelf_break_risk
+shelf_reclaim_state
+sweep_flow_regime
+```
+
+Запрещено:
+
+```text
+использовать atlas_outcome_bin как label для модели
+использовать atlas slices как decision rule
+подбирать strategy thresholds по atlas после OOS/holdout и считать holdout чистым
+```
+
 ## 12. Anomaly-specific controls
 
 Кроме universal Core placebo, anomaly family требует baselines:

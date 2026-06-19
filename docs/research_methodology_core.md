@@ -812,6 +812,38 @@ barrier_resolution = stop_loss_first
 использовать optimistic intra-candle ordering без tick/order-book данных
 ```
 
+## 13.5. Atlas / Discovery Layer
+
+Core atlas is descriptive discovery, not decision logic.
+
+Minimum contract:
+
+```text
+state rows + feature matrix rows are joined one-to-one as-of snapshot_time
+future path fields are used only for descriptive response summaries
+all rows preserve feature_cutoff_time <= snapshot_time < future_start_time
+all configured research horizons are written explicitly through outcome_horizon_minutes
+outcome_coordinate must identify the ATR-normalized horizon
+```
+
+Required descriptive coverage:
+
+```text
+15m / 30m / 60m / 120m / 180m ATR-normalized outcomes
+session / market_context / speed / systemic cluster contexts
+feature-family context splits
+relaxed continuous geometry slices when strategy provides them
+market-shock group summaries by point-in-time market_shock_id
+```
+
+Запрещено:
+
+```text
+читать atlas output inside prediction, EV, decision, or simulation layers
+использовать atlas_outcome_bin как model label
+кодировать manual setup verdict instead of continuous geometry bins
+```
+
 ## 14. Weekly Walk-Forward protocol
 
 Core использует недельное переобучение тяжёлых моделей.

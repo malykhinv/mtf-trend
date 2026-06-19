@@ -6,7 +6,6 @@ from pathlib import Path
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.atlas.builder import (
-    OUTCOME_COORDINATE_ATR,
     build_atlas_artifacts_from_inputs,
     context_split_rows_to_artifact,
     load_atlas_inputs,
@@ -144,8 +143,20 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> li
         ProtocolAuditRow(
             check_name="atlas_outcome_bins_atr_normalized",
             status=AuditStatus.PASS,
-            message="coarse 30m outcome bins are built from future_return_atr_30m/future_max_atr_30m/future_min_atr_30m and are atlas-only descriptive bins",
+            message="coarse multi-horizon outcome bins are built from ATR-normalized future paths and are atlas-only descriptive bins",
             artifact="anomaly_nature_atlas.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="atlas_multi_horizon_complete",
+            status=AuditStatus.PASS,
+            message="atlas writes descriptive slices for every configured research horizon without using them as decision logic",
+            artifact="anomaly_nature_atlas.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="atlas_relaxed_geometry_slices",
+            status=AuditStatus.PASS,
+            message="atlas includes relaxed shelf/sweep/consolidation geometry bins derived from anomaly_feature_matrix.csv as-of fields",
+            artifact="anomaly_response_surfaces.csv",
         ),
         ProtocolAuditRow(
             check_name="market_shock_groups_from_point_in_time_feature_context",
@@ -203,8 +214,12 @@ def _run_config_rows(
         ),
         RunConfigRow(key="stage", value="mvp1_atlas", source="runtime"),
         RunConfigRow(key="atlas_version", value=config.atlas_version, source="runtime"),
-        RunConfigRow(key="outcome_coordinate", value=OUTCOME_COORDINATE_ATR, source="runtime"),
-        RunConfigRow(key="outcome_horizon_minutes", value=str(config.outcome_horizon_minutes), source="runtime"),
+        RunConfigRow(key="outcome_coordinate", value="ATR_normalized_multi_horizon", source="runtime"),
+        RunConfigRow(
+            key="outcome_horizon_minutes_list",
+            value="|".join(str(horizon) for horizon in config.outcome_horizon_minutes_list),
+            source="runtime",
+        ),
         RunConfigRow(
             key="outcome_continuation_threshold_atr",
             value=str(config.outcome_continuation_threshold_atr),

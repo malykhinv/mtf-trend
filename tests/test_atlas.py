@@ -68,26 +68,52 @@ def _future_row(
         feature_cutoff_time_ms=snapshot_time_ms,
         future_start_time_ms=snapshot_time_ms + 60_000,
         future_return_5m=0.005,
-        future_return_15m=0.01,
+        future_return_15m=future_return_30m,
         future_return_30m=future_return_30m,
-        future_return_60m=None,
+        future_return_60m=future_return_30m,
+        future_return_120m=future_return_30m,
+        future_return_180m=future_return_30m,
         core_atr_1440=1.0,
         ATR_1d_pct_asof_t=0.01,
         double_barrier_k_continuation=1.0,
         double_barrier_k_fade=1.0,
         future_max_5m=0.01,
-        future_max_15m=0.02,
+        future_max_15m=future_max_30m,
         future_max_30m=future_max_30m,
-        future_max_60m=None,
+        future_max_60m=future_max_30m,
+        future_max_120m=future_max_30m,
+        future_max_180m=future_max_30m,
+        future_return_atr_15m=future_return_30m,
         future_return_atr_30m=future_return_30m,
+        future_return_atr_60m=future_return_30m,
+        future_return_atr_120m=future_return_30m,
+        future_return_atr_180m=future_return_30m,
+        future_max_atr_15m=future_max_30m,
         future_max_atr_30m=future_max_30m,
+        future_max_atr_60m=future_max_30m,
+        future_max_atr_120m=future_max_30m,
+        future_max_atr_180m=future_max_30m,
         future_min_5m=-0.001,
-        future_min_15m=-0.001,
+        future_min_15m=future_min_30m,
         future_min_30m=future_min_30m,
-        future_min_60m=None,
+        future_min_60m=future_min_30m,
+        future_min_120m=future_min_30m,
+        future_min_180m=future_min_30m,
+        future_min_atr_15m=future_min_30m,
         future_min_atr_30m=future_min_30m,
+        future_min_atr_60m=future_min_30m,
+        future_min_atr_120m=future_min_30m,
+        future_min_atr_180m=future_min_30m,
+        intracandle_double_barrier_hit_15m=False,
         intracandle_double_barrier_hit_30m=False,
+        intracandle_double_barrier_hit_60m=False,
+        intracandle_double_barrier_hit_120m=False,
+        intracandle_double_barrier_hit_180m=False,
+        barrier_resolution_15m="none",
         barrier_resolution_30m="none",
+        barrier_resolution_60m="none",
+        barrier_resolution_120m="none",
+        barrier_resolution_180m="none",
         reclaimed_running_high_30m=reclaimed_running_high_30m,
         reclaimed_running_high_60m=None,
         broke_structural_low_30m=None,
@@ -150,6 +176,21 @@ def _feature_row(
         market_shock_id=market_shock_id,
         cross_section_available=True,
         cross_section_symbol_count=10,
+        initial_pump_height_core_atr_1440=3.5,
+        post_pump_consolidation_minutes=12,
+        consolidation_width_ratio=0.35,
+        shelf_low_asof_t=100.0,
+        shelf_high_asof_t=103.0,
+        current_low_minus_shelf_low_core_atr_1440=-0.1,
+        current_close_minus_shelf_low_core_atr_1440=0.2,
+        current_high_minus_shelf_high_core_atr_1440=0.1,
+        minutes_spent_below_shelf=1,
+        minutes_since_reclaim=1,
+        volume_on_sweep_percentile=0.95,
+        trade_count_on_sweep_percentile=0.9,
+        cvd_change_during_sweep=-0.3,
+        oi_change_during_sweep=0.2,
+        liq_intensity_during_sweep=1.2,
     )
 
 
@@ -180,8 +221,8 @@ def test_atlas_grouping_contexts_ignore_future_values() -> None:
     upside_contexts = {(row.context_name, row.context_value) for row in upside_artifacts.context_split_rows}
     downside_contexts = {(row.context_name, row.context_value) for row in downside_artifacts.context_split_rows}
     assert upside_contexts == downside_contexts
-    assert {row.atlas_outcome_bin for row in upside_artifacts.nature_atlas_rows} == {"range_chop_atr_30m"}
-    assert {row.atlas_outcome_bin for row in downside_artifacts.nature_atlas_rows} == {"range_chop_atr_30m"}
+    assert {row.atlas_outcome_bin for row in upside_artifacts.nature_atlas_rows if row.outcome_horizon_minutes == 30} == {"range_chop_atr_30m"}
+    assert {row.atlas_outcome_bin for row in downside_artifacts.nature_atlas_rows if row.outcome_horizon_minutes == 30} == {"range_chop_atr_30m"}
 
 
 def test_atlas_preserves_temporal_contract_in_outputs() -> None:
@@ -240,7 +281,11 @@ def test_atlas_uses_feature_matrix_relative_contexts_and_market_shock_ids(tmp_pa
     assert ("liquidation_regime_relative", "top_decile_short_liq_dominant") in contexts
     assert ("cvd_divergence_regime", "price_up_cvd_down") in contexts
     assert ("systemic_cluster_regime", "idiosyncratic") in contexts
-    assert {row.atlas_outcome_bin for row in artifacts.nature_atlas_rows} == {"upside_continuation_atr_30m"}
+    assert ("initial_pump_height_atr", "large_initial_pump_atr") in contexts
+    assert ("shelf_break_risk", "shallow_shelf_sweep_asof") in contexts
+    assert {row.outcome_horizon_minutes for row in artifacts.nature_atlas_rows} == {15, 30, 60, 120, 180}
+    assert {row.atlas_outcome_bin for row in artifacts.nature_atlas_rows if row.outcome_horizon_minutes == 30} == {"upside_continuation_atr_30m"}
+    assert {row.surface_name for row in artifacts.response_surface_rows} >= {"initial_pump_x_consolidation", "shelf_break_x_systemic_cluster", "sweep_flow_x_liquidation"}
     assert artifacts.market_shock_group_rows[0].market_shock_id == "idiosyncratic:AAA"
     assert artifacts.market_shock_group_rows[0].systemic_cluster_regime == "idiosyncratic"
 
@@ -287,11 +332,15 @@ def test_run_mvp1_atlas_cli_accepts_feature_matrix(tmp_path: Path) -> None:
     with (out_dir / "strategy_nature_atlas.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         atlas_rows = list(csv.DictReader(file_obj))
     assert atlas_rows
-    assert atlas_rows[0]["atlas_version"] == "mvp1_atlas_v2"
-    assert atlas_rows[0]["outcome_coordinate"] == "ATR_normalized_30m"
-    assert atlas_rows[0]["atlas_outcome_bin"] == "upside_continuation_atr_30m"
+    assert atlas_rows[0]["atlas_version"] == "mvp1_atlas_v3"
+    assert {int(row["outcome_horizon_minutes"]) for row in atlas_rows} == {15, 30, 60, 120, 180}
+    atlas_30m_rows = [row for row in atlas_rows if row["outcome_horizon_minutes"] == "30"]
+    assert atlas_30m_rows
+    assert {row["outcome_coordinate"] for row in atlas_30m_rows} == {"ATR_normalized_30m"}
+    assert {row["atlas_outcome_bin"] for row in atlas_30m_rows} == {"upside_continuation_atr_30m"}
 
     with (out_dir / "strategy_market_shock_groups.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
+    assert {int(row["outcome_horizon_minutes"]) for row in rows} == {15, 30, 60, 120, 180}
     assert rows[0]["market_shock_id"] == "idiosyncratic:AAA/USDT:USDT"
     assert rows[0]["systemic_cluster_regime"] == "idiosyncratic"

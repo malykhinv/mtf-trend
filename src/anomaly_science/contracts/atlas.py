@@ -50,6 +50,7 @@ class AtlasContextSplitRow:
     atlas_version: str
     context_name: str
     context_value: str
+    outcome_horizon_minutes: int
     outcome_coordinate: str
     row_count: int
     unique_event_count: int
@@ -69,6 +70,7 @@ class AtlasContextSplitRow:
         _require_text(self.atlas_version, "atlas_version")
         _require_text(self.context_name, "context_name")
         _require_text(self.context_value, "context_value")
+        _require_positive_int(self.outcome_horizon_minutes, "outcome_horizon_minutes")
         _require_text(self.outcome_coordinate, "outcome_coordinate")
         _require_non_negative_int(self.row_count, "row_count")
         _require_non_negative_int(self.unique_event_count, "unique_event_count")
@@ -115,6 +117,8 @@ class AtlasMarketShockGroupRow:
     market_shock_id: str
     systemic_cluster_regime: str
     snapshot_time_ms: int
+    outcome_horizon_minutes: int
+    outcome_coordinate: str
     row_count: int
     unique_event_count: int
     unique_symbol_count: int
@@ -123,7 +127,7 @@ class AtlasMarketShockGroupRow:
     symbols: str
     market_shock_candidate: bool
     mean_current_return_from_start: float | None
-    mean_future_return_atr_30m: float | None
+    mean_future_return_atr: float | None
     dominant_outcome_bin: str
     temporal_contract: str
 
@@ -133,6 +137,8 @@ class AtlasMarketShockGroupRow:
         _require_text(self.market_shock_id, "market_shock_id")
         _require_text(self.systemic_cluster_regime, "systemic_cluster_regime")
         _require_non_negative_int(self.snapshot_time_ms, "snapshot_time_ms")
+        _require_positive_int(self.outcome_horizon_minutes, "outcome_horizon_minutes")
+        _require_text(self.outcome_coordinate, "outcome_coordinate")
         _require_non_negative_int(self.row_count, "row_count")
         _require_non_negative_int(self.unique_event_count, "unique_event_count")
         _require_non_negative_int(self.unique_symbol_count, "unique_symbol_count")

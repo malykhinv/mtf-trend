@@ -698,3 +698,20 @@ Validation in this environment:
 - `pytest -q tests/test_artifact_schemas.py`
 
 Prediction/forensic pytest collection still needs the project venv because this sandbox lacks `polars`.
+
+## methodology: expand atlas multi-horizon geometry slices
+
+Status: PROPOSED
+
+Changes:
+- Expands atlas output from fixed 30m to configured 15/30/60/120/180m ATR-normalized descriptive outcomes.
+- Adds explicit `outcome_horizon_minutes` to context split and market-shock atlas artifacts.
+- Adds session, speed, market-context, and relaxed shelf/sweep/consolidation geometry contexts.
+- Adds geometry response surfaces without feeding atlas output into prediction, EV, decision, or simulation.
+- Updates methodology/spec/docs/ledger/tests.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `pytest -q tests/test_atlas.py tests/test_artifact_schemas.py -k 'not cli'`
+
+Full CLI pytest still needs the project venv because this sandbox lacks `polars`.
