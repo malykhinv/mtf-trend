@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from anomaly_science.contracts.horizons import validate_supported_research_horizon
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
 
 
@@ -38,8 +39,7 @@ class WalkForwardPredictionConfig:
             object.__setattr__(self, "active_strategy_names", (self.strategy_name,))
         if self.strategy_name not in self.active_strategy_names:
             raise ValueError("active_strategy_names must include strategy_name")
-        if self.target_horizon_minutes not in (15, 30, 60, 120, 180):
-            raise ValueError("target_horizon_minutes must be one of 15, 30, 60, 120, or 180")
+        validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
         if self.purge_horizon_minutes < self.target_horizon_minutes:
             raise ValueError("active strategy H_max must be >= target_horizon_minutes")
         if self.min_train_rows <= 0:

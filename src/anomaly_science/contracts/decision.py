@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
 from .market import MarketDataContractError
 from .time import enforce_snapshot_contract, validate_timestamp_ms
 
@@ -67,8 +68,8 @@ class ExpectedValueRow:
             feature_cutoff_time_ms=self.feature_cutoff_time_ms,
             future_start_time_ms=self.future_start_time_ms,
         )
-        if self.target_horizon_minutes <= 0:
-            raise MarketDataContractError("target_horizon_minutes must be positive")
+        if not is_supported_research_horizon(self.target_horizon_minutes):
+            raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
         _require_positive_finite(self.entry_reference_price, "entry_reference_price")
         _require_positive_finite(self.core_atr_1440, "core_atr_1440")
         _require_positive_finite(self.stop_distance, "stop_distance")
@@ -108,8 +109,8 @@ class ExpectedValueMetricRow:
     def __post_init__(self) -> None:
         if not self.ev_version:
             raise MarketDataContractError("ev_version is required")
-        if self.target_horizon_minutes <= 0:
-            raise MarketDataContractError("target_horizon_minutes must be positive")
+        if not is_supported_research_horizon(self.target_horizon_minutes):
+            raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
         if not self.metric_name:
             raise MarketDataContractError("metric_name is required")
         if self.row_count < 0:

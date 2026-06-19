@@ -101,7 +101,7 @@ class FuturePathRow:
         self._validate_optional_positive_float("double_barrier_k_fade")
         if (self.double_barrier_k_continuation is None) != (self.double_barrier_k_fade is None):
             raise MarketDataContractError("double barrier ATR thresholds must be present or missing together")
-        for horizon in (5, 15, 30, 60, 120, 180):
+        for horizon in FUTURE_PATH_RETURN_HORIZONS:
             self._validate_barrier_resolution(horizon)
         for field_name in ("time_to_new_high_minutes", "time_to_structural_break_minutes"):
             value = getattr(self, field_name)

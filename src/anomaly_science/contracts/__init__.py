@@ -40,6 +40,7 @@ __all__ = [
     "RunConfigRow",
     "SnapshotTiming",
     "SymbolDayUniverseRow",
+    "SUPPORTED_RESEARCH_HORIZONS",
     "TemporalContractError",
     "datetime_to_utc_ms",
     "get_artifact_schema",

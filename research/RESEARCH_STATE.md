@@ -7,7 +7,7 @@ Active rule:
 - New code must not import legacy modules.
 - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
 - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
-- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for 15/30/60/120/180m, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
 - Future paths remain raw outcomes.
 - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
 - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
@@ -16,6 +16,7 @@ Active rule:
 - Trade simulation is simplified and pessimistic; it is not shadow live or production execution.
 - Shadow live and production live are still intentionally absent.
 - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
+- Horizon ownership is documented and code-side supported horizon constants now live in `anomaly_science.contracts.horizons`; StrategyMetadata allowed/default horizons are still the next contract patch.
 - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
 
 Current local base commit before the active run-research holdout freeze patch: `db17b76a`, verified with `git rev-parse --short HEAD`.

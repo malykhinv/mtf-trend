@@ -1,5 +1,21 @@
 # Patch log
 
+## methodology: add Core supported horizon constants
+
+Status: PROPOSED; patch regenerated from uploaded snapshot `project_20260619_111337.zip`; GitHub head not checked in this environment.
+
+Intent:
+- Add a single Core horizon whitelist and validator in `anomaly_science.contracts.horizons`.
+- Keep `15/30/60/120/180` as the only supported research label/prediction horizons.
+- Keep `5m` only as a raw future-path diagnostic horizon, not as a label/prediction horizon.
+- Make labels, future config, prediction config, controls config, EV config, simulation config, and row contracts reuse the Core horizon contract instead of local literal lists.
+- Add regression tests rejecting arbitrary horizons such as h11/h32.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_add_core_supported_horizon_constants_v2.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_horizon_contract.py` was attempted in this sandbox but collection requires missing third-party dependency `polars`; run it in the project venv.
+
 ## methodology: document horizon ownership contract
 
 Status: PROPOSED; patch generated from uploaded snapshot `project_20260619_103805.zip`; GitHub head not checked in this environment.

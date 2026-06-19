@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
 from .market import MarketDataContractError
 from .time import validate_timestamp_ms
 
@@ -57,8 +58,8 @@ class TradeSimulationRow:
             raise MarketDataContractError("entry_reference_time_ms must be > snapshot_time_ms")
         if self.exit_time_ms < self.entry_reference_time_ms:
             raise MarketDataContractError("exit_time_ms must be >= entry_reference_time_ms")
-        if self.target_horizon_minutes <= 0:
-            raise MarketDataContractError("target_horizon_minutes must be positive")
+        if not is_supported_research_horizon(self.target_horizon_minutes):
+            raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
         if self.decision_action not in SIMULATION_SIDES:
             raise MarketDataContractError("decision_action must be long or short for simulated trade rows")
         if self.simulated_side not in SIMULATION_SIDES:
@@ -103,8 +104,8 @@ class TradeSimulationMetricRow:
     def __post_init__(self) -> None:
         if not self.simulation_version:
             raise MarketDataContractError("simulation_version is required")
-        if self.target_horizon_minutes <= 0:
-            raise MarketDataContractError("target_horizon_minutes must be positive")
+        if not is_supported_research_horizon(self.target_horizon_minutes):
+            raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
         if not self.metric_name:
             raise MarketDataContractError("metric_name is required")
         if self.row_count < 0:

@@ -18,8 +18,7 @@ class TradeSimulationConfig:
             raise ValueError("simulation_version is required")
         if not self.strategy_name:
             raise ValueError("strategy_name is required")
-        if self.target_horizon_minutes <= 0:
-            raise ValueError("target_horizon_minutes must be positive")
+        validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
         if self.toxic_entry_atr_1m_fraction < 0.0:
             raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")
         if self.random_seed < 0:

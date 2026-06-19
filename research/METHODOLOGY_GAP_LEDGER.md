@@ -85,15 +85,15 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | BaseStrategy contract | IMPLEMENTED | Strategy metadata and trigger/custom-feature contract exist. | Keep stable unless explicit contract version bump. |
 | Strategy registry for broad anomaly | IMPLEMENTED | `broad_anomaly_v1_h15/h30/h60` are registry-backed. | Keep registry honest. |
 | Strategy registry truthfulness for specified-only variants | PARTIAL | Registry rejects specified-but-not-implemented variants, but docs/CLI/commands must stay synchronized. | Add registry/status tests and generated docs check. |
-| Horizon ownership contract | IMPLEMENTED | Core methodology now states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Implement the code-side single source of truth and validator in the next patch. |
+| Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code now has a single Core whitelist/validator for supported research horizons, and strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Next patch should move semantic allowed/default horizons into StrategyMetadata. |
 | Data source boundary / normalized market data | PARTIAL | Binance Vision cache and normalized CSV boundary exist. Full all-symbol 380d resource envelope is not proven here. | Add run manifest, cache/data snapshot hashes, and resource smoke docs. |
 | Data quality gates | PARTIAL | Gaps, bad candles, technical noise, and explicit failure flags exist. Need stricter evidence that every downstream stage excludes the same bad rows. | Add shared `DataQualityMask` and cross-stage exclusion tests. |
 | Point-in-time universe | PARTIAL | Universe skeleton exists. Listing/delisting confidence and anti-survivorship proof are not complete. | Harden universe artifact and tests for delisted/missing symbols. |
 | Market context engine | PARTIAL | BTC/ETH/systemic context features exist. Coverage and tests are still MVP-level. | Add catalog/audit coverage by context feature family. |
 | Feature registry / feature schema | PARTIAL | Feature catalog exists. It is not yet a hard gate for every model feature. | Enforce catalog membership before prediction. |
 | Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. | Keep temporal/no-leakage tests as permanent gate. |
-| Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and 5/15/30/60/120/180m outcome windows with tests. | Keep horizon/schema tests as permanent gate. |
-| Generic label builder | IMPLEMENTED | ATR labels exist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
+| Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. | Keep horizon/schema tests as permanent gate. |
+| Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
 | Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
 | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`, and tests cover multi-strategy H_max. | Keep as permanent regression gate. |
 | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
@@ -132,14 +132,15 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 3. `methodology: canonicalize strategy-neutral artifacts` - implemented in this patch.
 4. `methodology: integrate holdout freeze into run-research` - implemented in this patch.
 5. `methodology: document horizon ownership contract` - implemented in this patch.
-6. `methodology: add independent forensic protocol audit`.
-7. `strategy: make registry status self-auditing`.
-8. `strategy: complete broad anomaly trigger component accounting`.
-9. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
-10. `strategy: implement post-pump distribution variants`.
-11. `strategy: implement post-anomaly extension variants`.
-12. `features: add structural state and relaxed geometry features`.
-13. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+6. `methodology: add Core supported horizon constants` - implemented in this patch.
+7. `methodology: add independent forensic protocol audit`.
+8. `strategy: make registry status self-auditing`.
+9. `strategy: complete broad anomaly trigger component accounting`.
+10. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
+11. `strategy: implement post-pump distribution variants`.
+12. `strategy: implement post-anomaly extension variants`.
+13. `features: add structural state and relaxed geometry features`.
+14. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 
