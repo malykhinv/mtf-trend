@@ -9,7 +9,7 @@ from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.controls import ControlsConfig, build_baseline_comparison_rows, build_placebo_test_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
-from anomaly_science.contracts.controls import CONTROL_STATUS_DEFERRED, CONTROL_STATUS_OK
+from anomaly_science.contracts.controls import CONTROL_STATUS_OK
 from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT, AnomalyOutcomeLabelRow
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.features import FEATURE_SCHEMA_VERSION, FeatureMatrixConfig, feature_matrix_rows_to_artifact
@@ -81,7 +81,12 @@ def _label_row(*, state: AnomalyState1mRow, scenario_30m: str) -> AnomalyOutcome
     )
 
 
-def _feature_row(*, state: AnomalyState1mRow) -> AnomalyFeatureMatrixRow:
+def _feature_row(
+    *,
+    state: AnomalyState1mRow,
+    systemic_cluster_regime: str = "idiosyncratic",
+    market_shock_id: str = "shock_1",
+) -> AnomalyFeatureMatrixRow:
     return AnomalyFeatureMatrixRow(
         feature_schema_version=FEATURE_SCHEMA_VERSION,
         feature_matrix_version=FeatureMatrixConfig().feature_matrix_version,
@@ -117,9 +122,22 @@ def _feature_row(*, state: AnomalyState1mRow) -> AnomalyFeatureMatrixRow:
         symbol_return_minus_btc_return_15m=0.01,
         cross_section_available=True,
         cross_section_symbol_count=10,
-        systemic_cluster_regime="idiosyncratic",
-        market_shock_id="shock_1",
+        systemic_cluster_regime=systemic_cluster_regime,
+        market_shock_id=market_shock_id,
     )
+
+
+def _feature_rows_for_controls(states: list[AnomalyState1mRow]) -> list[AnomalyFeatureMatrixRow]:
+    rows: list[AnomalyFeatureMatrixRow] = []
+    for state in states:
+        if state.event_id.startswith("train_"):
+            train_index = int(state.event_id.removeprefix("train_"))
+            systemic = train_index % 8 >= 4
+        else:
+            systemic = state.event_id.startswith("bbb_")
+        regime = "systemic_beta_shock" if systemic else "idiosyncratic"
+        rows.append(_feature_row(state=state, systemic_cluster_regime=regime, market_shock_id=f"{regime}:{state.symbol}"))
+    return rows
 
 
 def _control_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutcomeLabelRow]]:
@@ -175,7 +193,8 @@ def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:
 
 def test_placebo_controls_emit_negative_control_rows() -> None:
     states, labels = _control_rows()
-    inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
+    features = _feature_rows_for_controls(states)
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
     rows = build_placebo_test_rows(inputs=inputs, config=ControlsConfig(min_train_rows=2, min_group_rows=1, smoothing_strength=1.0))
 
     assert {row.control_name for row in rows} == {"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"}
@@ -184,9 +203,10 @@ def test_placebo_controls_emit_negative_control_rows() -> None:
     assert all(row.reference_real_brier >= 0.0 for row in rows)
 
 
-def test_baseline_comparison_defers_volume_without_proxy_fields() -> None:
+def test_baseline_comparison_runs_feature_aware_controls() -> None:
     states, labels = _control_rows()
-    inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
+    features = _feature_rows_for_controls(states)
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
     rows = build_baseline_comparison_rows(inputs=inputs, config=ControlsConfig(min_train_rows=2, min_group_rows=1, smoothing_strength=1.0))
 
     by_name = {row.baseline_name: row for row in rows}
@@ -211,14 +231,13 @@ def test_baseline_comparison_defers_volume_without_proxy_fields() -> None:
     assert by_name["always_fade_anomaly"].status == CONTROL_STATUS_OK
     assert by_name["fade_only_after_extension"].status == CONTROL_STATUS_OK
     assert by_name["follow_only_early_squeeze"].status == CONTROL_STATUS_OK
-    assert by_name["volume_only"].status == CONTROL_STATUS_DEFERRED
-    assert by_name["btc_eth_only"].status == CONTROL_STATUS_DEFERRED
-    assert by_name["no_cvd_features_ablation"].status == CONTROL_STATUS_DEFERRED
-    assert by_name["no_oi_features_ablation"].status == CONTROL_STATUS_DEFERRED
-    assert by_name["no_liquidation_features_ablation"].status == CONTROL_STATUS_DEFERRED
-    assert by_name["idiosyncratic_only_subset"].status == CONTROL_STATUS_DEFERRED
-    assert by_name["systemic_cluster_only_subset"].status == CONTROL_STATUS_DEFERRED
-    assert "no proxy volume baseline" in by_name["volume_only"].notes
+    assert by_name["volume_only"].status == CONTROL_STATUS_OK
+    assert by_name["btc_eth_only"].status == CONTROL_STATUS_OK
+    assert by_name["no_cvd_features_ablation"].status == CONTROL_STATUS_OK
+    assert by_name["no_oi_features_ablation"].status == CONTROL_STATUS_OK
+    assert by_name["no_liquidation_features_ablation"].status == CONTROL_STATUS_OK
+    assert by_name["idiosyncratic_only_subset"].status == CONTROL_STATUS_OK
+    assert by_name["systemic_cluster_only_subset"].status == CONTROL_STATUS_OK
     assert by_name["price_path_only"].oos_prediction_rows > 0
 
 
@@ -261,7 +280,7 @@ def test_run_mvp1_controls_cli_uses_feature_matrix_for_ablation_baselines(tmp_pa
     out_dir = tmp_path / "controls_with_features"
     _write_state(state_path, states)
     _write_labels(labels_path, labels)
-    _write_features(features_path, [_feature_row(state=state) for state in states])
+    _write_features(features_path, _feature_rows_for_controls(states))
 
     result = subprocess.run(
         [

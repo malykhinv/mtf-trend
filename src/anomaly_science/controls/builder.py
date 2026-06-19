@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Callable, Iterable, Mapping, Sequence
 
 from anomaly_science.contracts.controls import (
-    CONTROL_STATUS_DEFERRED,
     CONTROL_STATUS_OK,
     CONTROL_STATUS_SKIPPED,
     BaselineComparisonRow,
@@ -113,7 +112,6 @@ def build_baseline_comparison_rows(
     reference_brier = reference.multiclass_brier
     target_by_key = {_row_key(row): _target_for_horizon(row.label, cfg.target_horizon_minutes) for row in rows}
 
-    has_feature_matrix = any(row.features is not None for row in rows)
     baseline_specs: tuple[tuple[str, str, Callable[[PredictionInputRow], str], str], ...] = (
         ("global_prior_only", "global_label_prior", _global_feature_key, "weekly frozen-model global class-prior baseline"),
         ("session_only", "snapshot_utc_session", _session_feature_key, "weekly frozen-model baseline using only UTC session/time buckets"),
@@ -140,29 +138,28 @@ def build_baseline_comparison_rows(
             )
         )
 
-    if has_feature_matrix:
-        feature_matrix_specs: tuple[tuple[str, str, Callable[[PredictionInputRow], str], str], ...] = (
-            ("volume_only", "volume", _volume_feature_key, "weekly frozen-model baseline using only volume-relative feature bins"),
-            ("btc_eth_only", "market_anchor", _btc_relative_feature_key, "weekly frozen-model baseline using only BTC-relative context bins"),
+    feature_matrix_specs: tuple[tuple[str, str, Callable[[PredictionInputRow], str], str], ...] = (
+        ("volume_only", "volume", _volume_feature_key, "weekly frozen-model baseline using only volume-relative feature bins"),
+        ("btc_eth_only", "market_anchor", _btc_relative_feature_key, "weekly frozen-model baseline using only BTC-relative context bins"),
+    )
+    for baseline_name, feature_family, feature_key_fn, notes in feature_matrix_specs:
+        evaluation = _evaluate_feature_family_model(
+            rows=rows,
+            target_by_key=target_by_key,
+            feature_key_fn=feature_key_fn,
+            config=cfg,
         )
-        for baseline_name, feature_family, feature_key_fn, notes in feature_matrix_specs:
-            evaluation = _evaluate_feature_family_model(
-                rows=rows,
-                target_by_key=target_by_key,
-                feature_key_fn=feature_key_fn,
-                config=cfg,
+        result.append(
+            _baseline_row(
+                cfg=cfg,
+                baseline_name=baseline_name,
+                feature_family=feature_family,
+                evaluation=evaluation,
+                reference_brier=reference_brier,
+                status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                notes=notes if evaluation.oos_prediction_rows > 0 else "feature-matrix baseline produced no OOS rows after train-size and purge checks",
             )
-            result.append(
-                _baseline_row(
-                    cfg=cfg,
-                    baseline_name=baseline_name,
-                    feature_family=feature_family,
-                    evaluation=evaluation,
-                    reference_brier=reference_brier,
-                    status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
-                    notes=notes if evaluation.oos_prediction_rows > 0 else "feature-matrix baseline produced no OOS rows after train-size and purge checks",
-                )
-            )
+        )
 
     rule_specs: tuple[tuple[str, str, Callable[[AnomalyState1mRow], str], str], ...] = (
         ("always_follow_anomaly", "anomaly_direction_rule", _always_follow_anomaly, "anomaly-specific rule baseline: always predict follow-through"),
@@ -184,65 +181,40 @@ def build_baseline_comparison_rows(
             )
         )
 
-    if has_feature_matrix:
-        ablation_specs = (
-            ("no_cvd_features_ablation", "flow_ablation", ("feature_matrix.cvd_", "feature_matrix.price_up_cvd", "feature_matrix.price_down_cvd"), "CatBoost ablation excluding CVD divergence feature prefixes"),
-            ("no_oi_features_ablation", "open_interest_ablation", ("feature_matrix.oi_", "feature_matrix.closed_5m_oi"), "CatBoost ablation excluding open-interest feature prefixes"),
-            ("no_liquidation_features_ablation", "liquidation_ablation", ("feature_matrix.short_liq", "feature_matrix.long_liq", "feature_matrix.liquidation_", "feature_matrix.cumulative_liq", "feature_matrix.liq_intensity"), "CatBoost ablation excluding liquidation feature prefixes"),
-        )
-        for baseline_name, feature_family, excluded_prefixes, notes in ablation_specs:
-            evaluation = _evaluate_reference_model_with_exclusions(rows=rows, config=cfg, excluded_prefixes=excluded_prefixes)
-            result.append(
-                _baseline_row(
-                    cfg=cfg,
-                    baseline_name=baseline_name,
-                    feature_family=feature_family,
-                    evaluation=evaluation,
-                    reference_brier=reference_brier,
-                    status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
-                    notes=notes if evaluation.oos_prediction_rows > 0 else "ablation produced no OOS rows after train-size, class-coverage, and purge checks",
-                )
-            )
-        subset_specs = (
-            ("idiosyncratic_only_subset", "market_shock_subset", "idiosyncratic", "CatBoost evaluated only on idiosyncratic anomaly subset"),
-            ("systemic_cluster_only_subset", "market_shock_subset", "systemic_beta_shock", "CatBoost evaluated only on systemic beta shock anomaly subset"),
-        )
-        for baseline_name, feature_family, regime, notes in subset_specs:
-            subset_rows = tuple(row for row in rows if row.features is not None and row.features.systemic_cluster_regime == regime)
-            evaluation = _evaluate_reference_model(rows=subset_rows, config=cfg)
-            result.append(
-                _baseline_row(
-                    cfg=cfg,
-                    baseline_name=baseline_name,
-                    feature_family=feature_family,
-                    evaluation=evaluation,
-                    reference_brier=reference_brier,
-                    status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
-                    notes=notes if evaluation.oos_prediction_rows > 0 else f"subset {regime} produced no OOS rows after train-size, class-coverage, and purge checks",
-                )
-            )
-
-    deferred_specs = (
-        *(() if has_feature_matrix else (
-            ("volume_only", "volume", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy volume baseline is emitted"),
-            ("btc_eth_only", "market_anchor", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy market-anchor baseline is emitted"),
-            ("no_cvd_features_ablation", "flow_ablation", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy CVD ablation is emitted"),
-            ("no_oi_features_ablation", "open_interest_ablation", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy OI ablation is emitted"),
-            ("no_liquidation_features_ablation", "liquidation_ablation", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy liquidation ablation is emitted"),
-            ("idiosyncratic_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy idiosyncratic subset is emitted"),
-            ("systemic_cluster_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy systemic subset is emitted"),
-        )),
+    ablation_specs = (
+        ("no_cvd_features_ablation", "flow_ablation", ("feature_matrix.cvd_", "feature_matrix.price_up_cvd", "feature_matrix.price_down_cvd"), "CatBoost ablation excluding CVD divergence feature prefixes"),
+        ("no_oi_features_ablation", "open_interest_ablation", ("feature_matrix.oi_", "feature_matrix.closed_5m_oi"), "CatBoost ablation excluding open-interest feature prefixes"),
+        ("no_liquidation_features_ablation", "liquidation_ablation", ("feature_matrix.short_liq", "feature_matrix.long_liq", "feature_matrix.liquidation_", "feature_matrix.cumulative_liq", "feature_matrix.liq_intensity"), "CatBoost ablation excluding liquidation feature prefixes"),
     )
-    for baseline_name, feature_family, notes in deferred_specs:
+    for baseline_name, feature_family, excluded_prefixes, notes in ablation_specs:
+        evaluation = _evaluate_reference_model_with_exclusions(rows=rows, config=cfg, excluded_prefixes=excluded_prefixes)
         result.append(
             _baseline_row(
                 cfg=cfg,
                 baseline_name=baseline_name,
                 feature_family=feature_family,
-                evaluation=ControlEvaluation(available_label_rows=len(rows), oos_prediction_rows=0, accuracy=0.0, multiclass_brier=0.0, log_loss=0.0),
+                evaluation=evaluation,
                 reference_brier=reference_brier,
-                status=CONTROL_STATUS_DEFERRED,
-                notes=notes,
+                status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                notes=notes if evaluation.oos_prediction_rows > 0 else "ablation produced no OOS rows after train-size, class-coverage, and purge checks",
+            )
+        )
+    subset_specs = (
+        ("idiosyncratic_only_subset", "market_shock_subset", "idiosyncratic", "CatBoost evaluated only on idiosyncratic anomaly subset"),
+        ("systemic_cluster_only_subset", "market_shock_subset", "systemic_beta_shock", "CatBoost evaluated only on systemic beta shock anomaly subset"),
+    )
+    for baseline_name, feature_family, regime, notes in subset_specs:
+        subset_rows = tuple(row for row in rows if row.features.systemic_cluster_regime == regime)
+        evaluation = _evaluate_reference_model(rows=subset_rows, config=cfg)
+        result.append(
+            _baseline_row(
+                cfg=cfg,
+                baseline_name=baseline_name,
+                feature_family=feature_family,
+                evaluation=evaluation,
+                reference_brier=reference_brier,
+                status=CONTROL_STATUS_OK if evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
+                notes=notes if evaluation.oos_prediction_rows > 0 else f"subset {regime} produced no OOS rows after train-size, class-coverage, and purge checks",
             )
         )
     return tuple(result)

@@ -78,7 +78,7 @@ class WalkForwardPredictionResult:
 class PredictionInputRow:
     state: AnomalyState1mRow
     label: AnomalyOutcomeLabelRow
-    features: AnomalyFeatureMatrixRow | None = None
+    features: AnomalyFeatureMatrixRow
 
     @property
     def target_scenario_15m(self) -> str:
@@ -101,13 +101,13 @@ def load_prediction_inputs(
     *,
     state_path: str | Path,
     labels_path: str | Path,
-    feature_matrix_path: str | Path | None = None,
+    feature_matrix_path: str | Path,
 ) -> tuple[PredictionInputRow, ...]:
-    """Load prediction inputs through strict state and label schema boundaries."""
+    """Load prediction inputs through strict state, label, and feature schema boundaries."""
     return build_prediction_inputs(
         state_rows=load_anomaly_state_1m_csv(state_path),
         label_rows=load_anomaly_outcome_labels_csv(labels_path),
-        feature_rows=None if feature_matrix_path is None else load_anomaly_feature_matrix_csv(feature_matrix_path),
+        feature_rows=load_anomaly_feature_matrix_csv(feature_matrix_path),
     )
 
 
@@ -115,14 +115,14 @@ def build_prediction_inputs(
     *,
     state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
     label_rows: Sequence[AnomalyOutcomeLabelRow] | Iterable[AnomalyOutcomeLabelRow],
-    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow] | None = None,
+    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow],
 ) -> tuple[PredictionInputRow, ...]:
     states = tuple(state_rows)
     labels = tuple(label_rows)
-    features = None if feature_rows is None else tuple(feature_rows)
+    features = tuple(feature_rows)
     state_by_key = _unique_by_join_key(states, artifact_name="anomaly_state_1m.csv")
     label_by_key = _unique_by_join_key(labels, artifact_name="anomaly_outcome_labels.csv")
-    feature_by_key = None if features is None else _unique_by_join_key(features, artifact_name="anomaly_feature_matrix.csv")
+    feature_by_key = _unique_by_join_key(features, artifact_name="anomaly_feature_matrix.csv")
 
     state_keys = set(state_by_key)
     label_keys = set(label_by_key)
@@ -134,7 +134,7 @@ def build_prediction_inputs(
             "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
             f"missing_label={missing_label}, orphan_label={orphan_label}"
         )
-    if feature_by_key is not None and set(feature_by_key) != state_keys:
+    if set(feature_by_key) != state_keys:
         missing_feature = sorted(state_keys - set(feature_by_key))[:5]
         orphan_feature = sorted(set(feature_by_key) - state_keys)[:5]
         raise PredictionInputError(
@@ -147,7 +147,7 @@ def build_prediction_inputs(
     for key in sorted(state_keys):
         state = state_by_key[key]
         label = label_by_key[key]
-        feature = None if feature_by_key is None else feature_by_key[key]
+        feature = feature_by_key[key]
         _enforce_prediction_input_temporal_contract(state=state, label=label, feature=feature)
         rows.append(PredictionInputRow(state=state, label=label, features=feature))
     return tuple(rows)
@@ -703,7 +703,7 @@ def _enforce_prediction_input_temporal_contract(
     *,
     state: AnomalyState1mRow,
     label: AnomalyOutcomeLabelRow,
-    feature: AnomalyFeatureMatrixRow | None,
+    feature: AnomalyFeatureMatrixRow,
 ) -> None:
     if state.snapshot_time_ms != label.snapshot_time_ms:
         raise MarketDataContractError("prediction join requires equal state/label snapshot_time_ms")
@@ -715,13 +715,12 @@ def _enforce_prediction_input_temporal_contract(
         raise MarketDataContractError("prediction label feature_cutoff_time_ms must be <= snapshot_time_ms")
     if label.future_start_time_ms <= state.snapshot_time_ms:
         raise MarketDataContractError("prediction label future_start_time_ms must be > state snapshot_time_ms")
-    if feature is not None:
-        if feature.snapshot_time_ms != state.snapshot_time_ms:
-            raise MarketDataContractError("prediction feature join requires equal feature/state snapshot_time_ms")
-        if feature.feature_cutoff_time_ms != state.feature_cutoff_time_ms:
-            raise MarketDataContractError("prediction feature join requires equal feature/state feature_cutoff_time_ms")
-        if feature.feature_cutoff_time_ms > feature.snapshot_time_ms:
-            raise MarketDataContractError("prediction feature feature_cutoff_time_ms must be <= snapshot_time_ms")
+    if feature.snapshot_time_ms != state.snapshot_time_ms:
+        raise MarketDataContractError("prediction feature join requires equal feature/state snapshot_time_ms")
+    if feature.feature_cutoff_time_ms != state.feature_cutoff_time_ms:
+        raise MarketDataContractError("prediction feature join requires equal feature/state feature_cutoff_time_ms")
+    if feature.feature_cutoff_time_ms > feature.snapshot_time_ms:
+        raise MarketDataContractError("prediction feature feature_cutoff_time_ms must be <= snapshot_time_ms")
 
 
 def _state_bins(state: AnomalyState1mRow) -> dict[str, str]:
@@ -806,13 +805,7 @@ def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionCo
 
 
 def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> tuple[str, ...]:
-    has_feature_matrix = {row.features is not None for row in rows}
-    if has_feature_matrix == {True}:
-        names = (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES)
-    if has_feature_matrix == {False}:
-        names = STATE_MODEL_FEATURE_NAMES
-    if has_feature_matrix not in ({True}, {False}):
-        raise PredictionInputError("prediction rows must not mix feature-matrix and state-only inputs")
+    names = (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES)
     if config.excluded_model_feature_prefixes:
         names = tuple(
             name
@@ -837,8 +830,6 @@ def _feature_vector(row: PredictionInputRow, *, feature_names: tuple[str, ...]) 
             continue
         if not name.startswith("feature_matrix."):
             raise PredictionInputError(f"unknown model feature name: {name}")
-        if row.features is None:
-            raise PredictionInputError(f"missing anomaly_feature_matrix.csv row for model feature: {name}")
         values.append(_feature_matrix_value(row.features, name.removeprefix("feature_matrix.")))
     return values
 

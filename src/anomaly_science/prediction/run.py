@@ -28,14 +28,14 @@ def run_mvp1_prediction(
     *,
     state_path: str | Path,
     labels_path: str | Path,
-    feature_matrix_path: str | Path | None = None,
+    feature_matrix_path: str | Path,
     out_dir: str | Path,
     config: WalkForwardPredictionConfig | None = None,
 ) -> Path:
     """Run MVP1 weekly CatBoost + Isotonic prediction and write artifacts."""
     state_artifact_path = Path(state_path)
     labels_artifact_path = Path(labels_path)
-    feature_artifact_path = None if feature_matrix_path is None else Path(feature_matrix_path)
+    feature_artifact_path = Path(feature_matrix_path)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or WalkForwardPredictionConfig()
@@ -52,7 +52,6 @@ def run_mvp1_prediction(
     protocol_rows = _protocol_rows(
         input_row_count=len(inputs),
         prediction_row_count=len(predictions),
-        feature_matrix_joined=feature_artifact_path is not None,
         config=cfg,
     )
     run_config_rows = _run_config_rows(
@@ -129,7 +128,6 @@ def _protocol_rows(
     *,
     input_row_count: int,
     prediction_row_count: int,
-    feature_matrix_joined: bool,
     config: WalkForwardPredictionConfig,
 ) -> list[ProtocolAuditRow]:
     base_rows = [
@@ -152,12 +150,8 @@ def _protocol_rows(
         ),
         ProtocolAuditRow(
             check_name="feature_matrix_artifact_schema_boundary",
-            status=AuditStatus.PASS if feature_matrix_joined else AuditStatus.NOT_IMPLEMENTED,
-            message=(
-                f"anomaly_feature_matrix.csv accepted through strict schema boundary for {input_row_count} prediction input rows"
-                if feature_matrix_joined
-                else "prediction ran without anomaly_feature_matrix.csv; rich anomaly feature coverage requires --features"
-            ),
+            status=AuditStatus.PASS,
+            message=f"anomaly_feature_matrix.csv accepted through strict schema boundary for {input_row_count} prediction input rows",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -175,11 +169,7 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="asof_model_features",
             status=AuditStatus.PASS,
-            message=(
-                "CatBoost features are derived from anomaly_state_1m.csv plus anomaly_feature_matrix.csv as-of fields; labels are used only as targets"
-                if feature_matrix_joined
-                else "CatBoost features are derived from anomaly_state_1m.csv only; pass --features for rich anomaly feature matrix inputs"
-            ),
+            message="CatBoost features are derived from anomaly_state_1m.csv plus anomaly_feature_matrix.csv as-of fields; labels are used only as targets",
             artifact="anomaly_oos_predictions.csv",
         ),
         ProtocolAuditRow(
@@ -261,7 +251,7 @@ def _run_config_rows(
     *,
     state_path: Path,
     labels_path: Path,
-    feature_matrix_path: Path | None,
+    feature_matrix_path: Path,
     output_path: Path,
     config: WalkForwardPredictionConfig,
 ) -> list[RunConfigRow]:
@@ -269,7 +259,7 @@ def _run_config_rows(
         RunConfigRow(key="command", value="run-mvp1-prediction", source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="labels_path", value=str(labels_path), source="cli"),
-        RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
+        RunConfigRow(key="feature_matrix_path", value=str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         *runtime_reproducibility_rows(
             data_paths=(state_path, labels_path, feature_matrix_path),

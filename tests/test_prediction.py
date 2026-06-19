@@ -203,7 +203,8 @@ def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:
 
 def test_walk_forward_prediction_uses_one_frozen_model_per_iso_week() -> None:
     states, labels = _training_and_test_rows()
-    inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
+    features = [_feature_row(state=state) for state in states]
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
     predictions = build_walk_forward_predictions(
         inputs=inputs,
         config=WalkForwardPredictionConfig(min_train_rows=1, min_group_rows=1, smoothing_strength=1.0),
@@ -231,8 +232,9 @@ def test_missing_future_is_excluded_from_prediction_metrics() -> None:
     test = _state_row(event_id="test_long", day_offset=1, minute_of_day=90)
     states = [*states, missing, test]
     labels = [*labels, _label_row(state=missing, scenario_30m="missing_future"), _label_row(state=test, scenario_30m="long_continuation")]
+    features = [_feature_row(state=state) for state in states]
     config = WalkForwardPredictionConfig(min_train_rows=80, min_group_rows=1)
-    inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
     predictions = build_walk_forward_predictions(inputs=inputs, config=config)
     metrics = build_prediction_metric_rows(inputs=inputs, predictions=predictions, config=config)
 
@@ -264,7 +266,8 @@ def test_oos_prediction_artifact_boundary_rejects_extra_columns(tmp_path: Path) 
 
 def test_prediction_artifact_roundtrip(tmp_path: Path) -> None:
     states, labels = _training_and_test_rows()
-    inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
+    features = [_feature_row(state=state) for state in states]
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
     predictions = build_walk_forward_predictions(
         inputs=inputs,
         config=WalkForwardPredictionConfig(min_train_rows=1, min_group_rows=1, smoothing_strength=1.0),

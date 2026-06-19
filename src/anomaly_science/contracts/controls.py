@@ -6,8 +6,7 @@ from .market import MarketDataContractError
 
 CONTROL_STATUS_OK = "OK"
 CONTROL_STATUS_SKIPPED = "SKIPPED"
-CONTROL_STATUS_DEFERRED = "DEFERRED"
-VALID_CONTROL_STATUSES = frozenset({CONTROL_STATUS_OK, CONTROL_STATUS_SKIPPED, CONTROL_STATUS_DEFERRED})
+VALID_CONTROL_STATUSES = frozenset({CONTROL_STATUS_OK, CONTROL_STATUS_SKIPPED})
 
 PLACEBO_CONTROL_NAMES = frozenset({"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"})
 BASELINE_NAMES = frozenset(
@@ -22,7 +21,6 @@ BASELINE_NAMES = frozenset(
         "follow_only_early_squeeze",
         "volume_only",
         "btc_eth_only",
-        "always_no_trade",
         "no_cvd_features_ablation",
         "no_oi_features_ablation",
         "no_liquidation_features_ablation",

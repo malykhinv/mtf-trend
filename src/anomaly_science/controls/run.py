@@ -23,14 +23,14 @@ def run_mvp1_controls(
     *,
     state_path: str | Path,
     labels_path: str | Path,
-    feature_matrix_path: str | Path | None = None,
+    feature_matrix_path: str | Path,
     out_dir: str | Path,
     config: ControlsConfig | None = None,
 ) -> Path:
     """Run MVP1 placebo/control checks and write control artifacts."""
     state_artifact_path = Path(state_path)
     labels_artifact_path = Path(labels_path)
-    feature_artifact_path = None if feature_matrix_path is None else Path(feature_matrix_path)
+    feature_artifact_path = Path(feature_matrix_path)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or ControlsConfig()
@@ -48,7 +48,6 @@ def run_mvp1_controls(
         placebo_count=len(placebo_rows),
         baseline_count=len(baseline_rows),
         ok_control_count=ok_control_count,
-        feature_matrix_joined=feature_artifact_path is not None,
         config=cfg,
     )
     run_config_rows = _run_config_rows(
@@ -99,7 +98,6 @@ def _protocol_rows(
     placebo_count: int,
     baseline_count: int,
     ok_control_count: int,
-    feature_matrix_joined: bool,
     config: ControlsConfig,
 ) -> list[ProtocolAuditRow]:
     base_rows = [
@@ -135,11 +133,7 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="feature_matrix_control_baselines",
             status=AuditStatus.PASS,
-            message=(
-                "feature-aware volume/BTC and anomaly ablation baselines use anomaly_feature_matrix.csv through a strict join"
-                if feature_matrix_joined
-                else "feature-aware baselines are explicitly deferred because anomaly_feature_matrix.csv was not supplied; no proxy fallback is used"
-            ),
+            message="feature-aware volume/BTC and anomaly ablation baselines use anomaly_feature_matrix.csv through a strict join",
             artifact="anomaly_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
@@ -203,7 +197,7 @@ def _run_config_rows(
     *,
     state_path: Path,
     labels_path: Path,
-    feature_matrix_path: Path | None,
+    feature_matrix_path: Path,
     output_path: Path,
     config: ControlsConfig,
 ) -> list[RunConfigRow]:
@@ -211,7 +205,7 @@ def _run_config_rows(
         RunConfigRow(key="command", value="run-mvp1-controls", source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="labels_path", value=str(labels_path), source="cli"),
-        RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
+        RunConfigRow(key="feature_matrix_path", value=str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         *runtime_reproducibility_rows(
             data_paths=(state_path, labels_path, feature_matrix_path),
