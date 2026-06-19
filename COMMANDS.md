@@ -105,6 +105,16 @@ Binance Vision USD-M Futures cache build:
 python main.py build-binance-vision-cache --days 380
 ```
 
+Export local cache into the normalized MVP1 CSV boundary:
+
+```bash
+python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input
+python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input --days 30
+python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input --symbols BTCUSDT,ETHUSDT --days 7
+```
+
+If `--days` is omitted, the export uses the full available cache period. If `--symbols` is omitted, it exports every `{symbol}.parquet` file discovered in the cache. The export writes `cache_export_coverage.csv` and `cache_export_manifest.json` next to `candles_1m.csv`, `candles_5m.csv`, and `open_interest_5m.csv`.
+
 Smoke test on a small subset:
 
 ```bash

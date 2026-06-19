@@ -1170,6 +1170,8 @@ artifact_manifest.json
 
 For `run-research`, the root-level `strategy_run_config.csv` is the canonical run manifest. It must include strategy identity, target horizon, active `H_max`, research/holdout mode, protocol freeze id, data snapshot hash, config hash, dependency versions, methodology ledger status, and forensic audit status. Stage-level `strategy_run_config.csv` files may exist, but they do not replace the root run manifest.
 
+The normalized market-data input boundary must also be reproducible. Cache exports must write `cache_export_coverage.csv` and `cache_export_manifest.json` next to the normalized CSV inputs. Those files record exported symbols, effective date range, row counts, missing UTC days, and hashes for the exported input artifacts. When `run-research` is called without `--days`, the export uses the full available local cache period.
+
 ## 24. Canonical artifact naming
 
 Core использует strategy-neutral artifact names:

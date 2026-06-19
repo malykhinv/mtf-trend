@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -24,9 +27,28 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
     frames = [_read_symbol_cache(config.cache_dir, symbol) for symbol in symbols]
     candles_1m = pd.concat(frames, ignore_index=True)
     candles_1m = _filter_days(candles_1m, days=config.days).sort_values(["symbol", "open_time_ms"])
-    candles_1m.to_csv(config.out_dir / "candles_1m.csv", index=False)
-    _build_candles_5m(candles_1m).to_csv(config.out_dir / "candles_5m.csv", index=False)
-    _build_open_interest_5m(candles_1m).to_csv(config.out_dir / "open_interest_5m.csv", index=False)
+    if candles_1m.empty:
+        raise ValueError(f"cache export produced no rows for days={config.days!r} symbols={symbols!r}")
+    candles_5m = _build_candles_5m(candles_1m)
+    open_interest_5m = _build_open_interest_5m(candles_1m)
+    candles_1m_path = config.out_dir / "candles_1m.csv"
+    candles_5m_path = config.out_dir / "candles_5m.csv"
+    open_interest_5m_path = config.out_dir / "open_interest_5m.csv"
+    coverage_path = config.out_dir / "cache_export_coverage.csv"
+    manifest_path = config.out_dir / "cache_export_manifest.json"
+    candles_1m.to_csv(candles_1m_path, index=False)
+    candles_5m.to_csv(candles_5m_path, index=False)
+    open_interest_5m.to_csv(open_interest_5m_path, index=False)
+    coverage = _build_cache_export_coverage(candles_1m, cache_dir=config.cache_dir)
+    coverage.to_csv(coverage_path, index=False)
+    _write_cache_export_manifest(
+        manifest_path,
+        config=config,
+        symbols=tuple(symbols),
+        candles_1m=candles_1m,
+        coverage=coverage,
+        artifact_paths=(candles_1m_path, candles_5m_path, open_interest_5m_path, coverage_path),
+    )
     return config.out_dir
 
 
@@ -124,3 +146,97 @@ def _build_open_interest_5m(candles_1m: pd.DataFrame) -> pd.DataFrame:
     output["available_time_ms"] = output["timestamp_ms"] + 300_000
     output["source"] = "binance_vision_cache"
     return output[["symbol", "timestamp_ms", "available_time_ms", "open_interest", "source"]]
+
+
+def _build_cache_export_coverage(candles_1m: pd.DataFrame, *, cache_dir: Path) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for symbol, frame in candles_1m.groupby("symbol", sort=True):
+        ordered = frame.sort_values("open_time_ms")
+        first_ms = int(ordered["open_time_ms"].iloc[0])
+        last_ms = int(ordered["open_time_ms"].iloc[-1])
+        observed_days = {
+            datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).date()
+            for value in ordered["open_time_ms"].tolist()
+        }
+        first_date = datetime.fromtimestamp(first_ms / 1000, tz=timezone.utc).date()
+        last_date = datetime.fromtimestamp(last_ms / 1000, tz=timezone.utc).date()
+        calendar_days = (last_date - first_date).days + 1
+        rows.append(
+            {
+                "symbol": symbol,
+                "rows_1m": int(len(ordered)),
+                "first_open_time_ms": first_ms,
+                "last_open_time_ms": last_ms,
+                "first_date": first_date.isoformat(),
+                "last_date": last_date.isoformat(),
+                "calendar_days": calendar_days,
+                "observed_utc_days": len(observed_days),
+                "missing_utc_days": calendar_days - len(observed_days),
+                "has_open_interest": bool(ordered["open_interest"].notna().any()),
+                "source_path": str(cache_dir / f"{symbol}.parquet"),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "symbol",
+            "rows_1m",
+            "first_open_time_ms",
+            "last_open_time_ms",
+            "first_date",
+            "last_date",
+            "calendar_days",
+            "observed_utc_days",
+            "missing_utc_days",
+            "has_open_interest",
+            "source_path",
+        ],
+    )
+
+
+def _write_cache_export_manifest(
+    path: Path,
+    *,
+    config: CacheMvp1CsvExportConfig,
+    symbols: tuple[str, ...],
+    candles_1m: pd.DataFrame,
+    coverage: pd.DataFrame,
+    artifact_paths: tuple[Path, ...],
+) -> None:
+    timestamps = pd.to_datetime(candles_1m["open_time_ms"].astype("int64"), unit="ms", utc=True)
+    payload = {
+        "source": "binance_vision_cache",
+        "boundary": "mvp1_normalized_csv",
+        "cache_dir": str(config.cache_dir),
+        "out_dir": str(config.out_dir),
+        "requested_symbols": list(config.symbols),
+        "exported_symbols": list(symbols),
+        "requested_days": config.days,
+        "effective_start_date": timestamps.min().date().isoformat(),
+        "effective_end_date": timestamps.max().date().isoformat(),
+        "effective_calendar_days": (timestamps.max().date() - timestamps.min().date()).days + 1,
+        "rows_1m": int(len(candles_1m)),
+        "symbols_with_missing_utc_days": coverage.loc[coverage["missing_utc_days"] > 0, "symbol"].tolist(),
+        "missing_utc_days_total": int(coverage["missing_utc_days"].sum()),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "artifacts": [
+            {
+                "name": artifact_path.name,
+                "path": str(artifact_path.relative_to(config.out_dir)),
+                "sha256": _sha256_file(artifact_path),
+                "size_bytes": artifact_path.stat().st_size,
+            }
+            for artifact_path in artifact_paths
+        ],
+    }
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

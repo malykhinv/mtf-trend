@@ -1,5 +1,19 @@
 # Patch log
 
+## methodology: prove cache export boundary
+
+Status: APPLIED.
+
+Intent:
+- Make the Binance Vision cache to MVP1 CSV export write explicit coverage and manifest proof artifacts.
+- Record exported symbols, effective date range, row counts, missing UTC days, and hashes for normalized input files.
+- Keep `run-research <strategy> [--days]` compact: output is automatic, and omitted `--days` still means full available cache period.
+- Leave the data-source ledger row `PARTIAL` until a real full 380d all-symbol local cache/export validation is run and recorded.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_cache_export.py tests\test_research_run.py -q`
+- `.venv\Scripts\python.exe -m compileall -q src main.py tests zip_project.py`
+
 ## methodology: neutralize core contract names
 
 Status: APPLIED.

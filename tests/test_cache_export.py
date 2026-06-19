@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 
+from anomaly_science.cli import build_parser
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, discover_cache_symbols, export_cache_to_mvp1_csv
 
 
@@ -29,6 +32,8 @@ def test_export_cache_to_mvp1_csv_writes_explicit_boundary(tmp_path):
     candles_1m = pd.read_csv(out_dir / "candles_1m.csv")
     candles_5m = pd.read_csv(out_dir / "candles_5m.csv")
     oi_5m = pd.read_csv(out_dir / "open_interest_5m.csv")
+    coverage = pd.read_csv(out_dir / "cache_export_coverage.csv")
+    manifest = json.loads((out_dir / "cache_export_manifest.json").read_text(encoding="utf-8"))
     assert list(candles_1m.columns) == [
         "symbol",
         "open_time_ms",
@@ -46,6 +51,20 @@ def test_export_cache_to_mvp1_csv_writes_explicit_boundary(tmp_path):
     assert candles_1m["symbol"].unique().tolist() == ["BTCUSDT"]
     assert len(candles_5m) == 1
     assert oi_5m.iloc[0]["source"] == "binance_vision_cache"
+    assert coverage.loc[0, "symbol"] == "BTCUSDT"
+    assert coverage.loc[0, "rows_1m"] == 5
+    assert coverage.loc[0, "missing_utc_days"] == 0
+    assert bool(coverage.loc[0, "has_open_interest"])
+    assert manifest["boundary"] == "mvp1_normalized_csv"
+    assert manifest["requested_days"] is None
+    assert manifest["effective_start_date"] == "2024-01-01"
+    assert manifest["effective_end_date"] == "2024-01-01"
+    assert {item["name"] for item in manifest["artifacts"]} == {
+        "candles_1m.csv",
+        "candles_5m.csv",
+        "open_interest_5m.csv",
+        "cache_export_coverage.csv",
+    }
 
 
 def test_export_cache_to_mvp1_csv_discovers_symbols_and_filters_days(tmp_path):
@@ -73,3 +92,16 @@ def test_export_cache_to_mvp1_csv_discovers_symbols_and_filters_days(tmp_path):
     candles_1m = pd.read_csv(out_dir / "candles_1m.csv")
     assert candles_1m["symbol"].unique().tolist() == ["ETHUSDT"]
     assert candles_1m["open_time_ms"].tolist() == [1704153600000]
+    manifest = json.loads((out_dir / "cache_export_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["requested_days"] == 1
+    assert manifest["effective_start_date"] == "2024-01-02"
+
+
+def test_export_cache_cli_discovers_symbols_and_accepts_optional_days() -> None:
+    args = build_parser().parse_args(
+        ["export-cache-mvp1-csv", "--cache-dir", ".cache", "--out", "tmp/mvp1", "--days", "7"]
+    )
+
+    assert args.command == "export-cache-mvp1-csv"
+    assert args.symbols == ""
+    assert args.days == 7

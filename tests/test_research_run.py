@@ -42,6 +42,8 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
 
     assert run_dir.parent == tmp_path / "runs"
     assert (run_dir / "input" / "candles_1m.csv").is_file()
+    assert (run_dir / "input" / "cache_export_coverage.csv").is_file()
+    assert (run_dir / "input" / "cache_export_manifest.json").is_file()
     assert (run_dir / "stages" / "events" / "strategy_events.csv").is_file()
     assert (run_dir / "stages" / "feature_matrix" / "strategy_feature_matrix.csv").is_file()
     assert (run_dir / "stages" / "prediction" / "strategy_oos_predictions.csv").is_file()
@@ -82,6 +84,11 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert run_config_by_key["forensic_audit_status"] in {"PASS", "WARN"}
     assert run_config_by_key["data_snapshot_hash"]
     assert run_config_by_key["config_hash"]
+
+    coverage = pd.read_csv(run_dir / "input" / "cache_export_coverage.csv")
+    assert coverage.loc[0, "symbol"] == "AAAUSDT"
+    assert coverage.loc[0, "rows_1m"] == 4
+    assert coverage.loc[0, "first_date"] == "2024-01-01"
 
 
 def test_run_research_cli_accepts_strategy_and_optional_days() -> None:

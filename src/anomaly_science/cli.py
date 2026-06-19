@@ -340,7 +340,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export Binance Vision enriched parquet cache into the explicit MVP1 CSV data boundary.",
     )
     export_cache.add_argument("--cache-dir", required=True, help="Directory containing {symbol}.parquet cache files.")
-    export_cache.add_argument("--symbols", required=True, help="Comma-separated symbols to export.")
+    export_cache.add_argument("--symbols", default="", help="Optional comma-separated symbols. Empty means discover all cache parquet files.")
+    export_cache.add_argument("--days", type=int, default=None, help="Optional lookback days. Omit to export the full available cache period.")
     export_cache.add_argument("--out", required=True, help="Directory where MVP1 CSV files will be written.")
 
 
@@ -566,7 +567,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "export-cache-mvp1-csv":
         symbols = tuple(symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip())
         output_dir = export_cache_to_mvp1_csv(
-            CacheMvp1CsvExportConfig(cache_dir=Path(args.cache_dir), out_dir=Path(args.out), symbols=symbols)
+            CacheMvp1CsvExportConfig(
+                cache_dir=Path(args.cache_dir),
+                out_dir=Path(args.out),
+                symbols=symbols,
+                days=args.days,
+            )
         )
         print(f"mvp1 csv export written: {output_dir}")
         return 0
