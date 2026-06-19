@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     atlas.add_argument(
         "--features",
         required=True,
-        help="Path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for relative atlas slices.",
+        help="Path to strategy_feature_matrix.csv from run-mvp1-feature-matrix for relative atlas slices.",
     )
     atlas.add_argument("--out", required=True, help="Directory where atlas artifacts will be written.")
 
@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     prediction.add_argument(
         "--features",
         required=True,
-        help="Path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for rich as-of model features.",
+        help="Path to strategy_feature_matrix.csv from run-mvp1-feature-matrix for rich as-of model features.",
     )
     prediction.add_argument("--out", required=True, help="Directory where prediction artifacts will be written.")
     prediction.add_argument(
@@ -164,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     controls.add_argument(
         "--features",
         required=True,
-        help="Path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for feature-aware baselines and ablations.",
+        help="Path to strategy_feature_matrix.csv from run-mvp1-feature-matrix for feature-aware baselines and ablations.",
     )
     controls.add_argument("--out", required=True, help="Directory where control artifacts will be written.")
     controls.add_argument(

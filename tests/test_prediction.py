@@ -338,17 +338,18 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stderr
     assert "mvp1 walk-forward prediction artifacts written" in result.stdout
+    assert (out_dir / "strategy_oos_predictions.csv").is_file()
+    assert (out_dir / "strategy_calibration.csv").is_file()
+    assert (out_dir / "strategy_prediction_metrics.csv").is_file()
     assert (out_dir / "anomaly_oos_predictions.csv").is_file()
-    assert (out_dir / "anomaly_calibration.csv").is_file()
-    assert (out_dir / "anomaly_prediction_metrics.csv").is_file()
     assert (out_dir / "strategy_model_metadata.csv").is_file()
     assert (out_dir / "strategy_feature_importance.csv").is_file()
     assert (out_dir / "strategy_model_training_diagnostics.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
+    assert (out_dir / "strategy_protocol_audit.csv").is_file()
+    assert (out_dir / "strategy_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
-    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["non_empty_oos_prediction_gate"]["status"] == "PASS"
     assert audit_by_name["technical_noise_shock_excluded_from_ml_train_validation_calibration_test"]["status"] == "PASS"
@@ -358,7 +359,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert audit_by_name["frozen_weekly_model_used_for_daily_oos"]["status"] == "PASS"
     assert audit_by_name["feature_matrix_artifact_schema_boundary"]["status"] == "PASS"
 
-    with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
     assert run_config["strategy_horizon_minutes"] == "30"

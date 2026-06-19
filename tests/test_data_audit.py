@@ -164,15 +164,16 @@ def test_run_mvp1_data_audit_writes_core_artifacts(tmp_path: Path) -> None:
 
     assert result == out_dir
     for name in (
-        "anomaly_data_quality.csv",
+        "strategy_data_quality.csv",
         "symbol_universe_by_day.csv",
-        "anomaly_protocol_audit.csv",
-        "anomaly_run_config.csv",
+        "strategy_protocol_audit.csv",
+        "strategy_run_config.csv",
         "artifact_manifest.json",
     ):
         assert (out_dir / name).exists()
+    assert (out_dir / "anomaly_data_quality.csv").exists()
 
-    quality_rows = _read_csv_rows(out_dir / "anomaly_data_quality.csv")
+    quality_rows = _read_csv_rows(out_dir / "strategy_data_quality.csv")
     assert not [row for row in quality_rows if row["status"] == "FAIL" and row["severity"] == "critical"]
 
     universe_rows = _read_csv_rows(out_dir / "symbol_universe_by_day.csv")
@@ -182,7 +183,7 @@ def test_run_mvp1_data_audit_writes_core_artifacts(tmp_path: Path) -> None:
 
     manifest = json.loads((out_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
     manifest_names = {entry["name"] for entry in manifest["artifacts"]}
-    assert {"anomaly_data_quality.csv", "symbol_universe_by_day.csv", "anomaly_protocol_audit.csv", "anomaly_run_config.csv"} <= manifest_names
+    assert {"strategy_data_quality.csv", "symbol_universe_by_day.csv", "strategy_protocol_audit.csv", "strategy_run_config.csv"} <= manifest_names
 
 
 def test_run_mvp1_data_audit_cli(tmp_path: Path) -> None:
@@ -197,4 +198,5 @@ def test_run_mvp1_data_audit_cli(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "mvp1 data audit artifacts written" in result.stdout
+    assert (out_dir / "strategy_data_quality.csv").exists()
     assert (out_dir / "anomaly_data_quality.csv").exists()

@@ -267,12 +267,12 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert "mvp1 trade simulation artifacts written" in result.stdout
     assert (out_dir / "anomaly_trade_simulation.csv").is_file()
     assert (out_dir / "strategy_trade_simulation.csv").is_file()
-    assert (out_dir / "anomaly_trade_simulation_metrics.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
+    assert (out_dir / "strategy_trade_simulation_metrics.csv").is_file()
+    assert (out_dir / "strategy_protocol_audit.csv").is_file()
+    assert (out_dir / "strategy_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
-    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["trade_simulation_after_calibration_and_decision_timing"]["status"] == "PASS"
     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
@@ -281,14 +281,14 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["funding_rate_boundary"]["status"] == "WARN"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
-    with (out_dir / "anomaly_trade_simulation_metrics.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_trade_simulation_metrics.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         metrics_by_name = {row["metric_name"]: row for row in csv.DictReader(file_obj)}
     assert metrics_by_name["always_no_trade_baseline_net_pnl"]["metric_value"] == "0"
     assert "delta_vs_always_no_trade_net_pnl" in metrics_by_name
     assert "random_entry_time_control_rows" in metrics_by_name
     assert "delta_vs_random_entry_time_net_pnl" in metrics_by_name
 
-    with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
     assert run_config["stop_loss_atr_1440"] == "1.1"
@@ -350,10 +350,10 @@ def test_run_mvp1_trade_simulation_debits_present_funding_rate_stream(tmp_path: 
         out_dir=out_dir,
     )
 
-    with (out_dir / "anomaly_trade_simulation.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_trade_simulation.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert float(rows[0]["funding_cost"]) > 0.0
 
-    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["funding_rate_boundary"]["status"] == "PASS"

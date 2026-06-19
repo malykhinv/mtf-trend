@@ -165,7 +165,7 @@ detector_version
 
 ### 3.1.1. Trigger frame semantics for anomaly variants
 
-Anomaly Strategy возвращает trigger frame в формате BaseStrategy contract. Для broad MVP один row соответствует моменту detection события; последующий поминутный lifecycle строится Core в `anomaly_state_1m.csv`.
+Anomaly Strategy возвращает trigger frame в формате BaseStrategy contract. Для broad MVP один row соответствует моменту detection события; последующий поминутный lifecycle строится Core в `strategy_state_1m.csv`.
 
 Минимальные contract columns:
 
@@ -199,7 +199,7 @@ seed_time >= event_start_time
 подменять event_start_time временем будущего high/low
 пересоздавать event_id недетерминированно между повторными runs на одинаковых данных
 смешивать detection row и trade entry row
-считать anomaly_events.csv полным поминутным state artifact
+считать strategy_events.csv полным поминутным state artifact
 ```
 
 ### 3.2. post_pump_distribution_v1_*
@@ -278,11 +278,11 @@ running_high_asof_t = max(high) from event_start_time to state_time only.
 ### 4.1. Artifact boundary: events vs online state
 
 ```text
-anomaly_events.csv:
+strategy_events.csv:
   event/lifecycle seed rows returned by generate_triggers() and validated by Core.
   It answers: what event exists, when it started, when it was detected, why it passed/rejected gates.
 
-anomaly_state_1m.csv:
+strategy_state_1m.csv:
   per-minute online expansion after detection.
   It answers: what was knowable at each state_time while the event was alive.
 ```
@@ -290,15 +290,15 @@ anomaly_state_1m.csv:
 Правило:
 
 ```text
-Если нужен поминутный lifecycle, читать anomaly_state_1m.csv, а не растягивать anomaly_events.csv вручную.
+Если нужен поминутный lifecycle, читать strategy_state_1m.csv, а не растягивать strategy_events.csv вручную.
 ```
 
 Запрещено:
 
 ```text
-добавлять running_high_asof_t/running_low_asof_t в anomaly_events.csv как final event summary
-добавлять future_return/future_label/PnL в anomaly_events.csv
-использовать anomaly_events.csv как training matrix напрямую без state/features builders
+добавлять running_high_asof_t/running_low_asof_t в strategy_events.csv как final event summary
+добавлять future_return/future_label/PnL в strategy_events.csv
+использовать strategy_events.csv как training matrix напрямую без state/features builders
 ```
 
 ## 5. Required Core feature families for anomaly
@@ -688,7 +688,7 @@ generic reject без reason_if_excluded
 
 ## 14. Anomaly events artifact lifecycle structure
 
-`anomaly_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Это event/lifecycle seed artifact, а не полный поминутный state artifact. Строки упорядочиваются по `state_time`.
+`strategy_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Это event/lifecycle seed artifact, а не полный поминутный state artifact. Строки упорядочиваются по `state_time`.
 
 Внутренний trigger frame, который стратегия возвращает в Core, обязан содержать:
 
@@ -701,7 +701,7 @@ minutes_since_start: int                # возраст события: state_t
 is_trigger: bool                        # активен ли signal/lifecycle trigger прямо сейчас
 ```
 
-Persisted `anomaly_events.csv` является внешней serialization boundary и сохраняет эти же времена как:
+Persisted `strategy_events.csv` является внешней serialization boundary и сохраняет эти же времена как:
 
 ```text
 state_time_ms: int
@@ -747,18 +747,18 @@ Core canonical artifacts остаются strategy-neutral.
 Для совместимости anomaly family может писать aliases:
 
 ```text
-anomaly_events.csv              -> strategy_events.csv where strategy_family=anomaly
-anomaly_state_1m.csv            -> strategy_state_1m.csv where strategy_family=anomaly
-anomaly_future_paths.csv        -> strategy_future_paths.csv where strategy_family=anomaly
-anomaly_nature_atlas.csv        -> strategy_nature_atlas.csv where strategy_family=anomaly
-anomaly_oos_predictions.csv     -> strategy_oos_predictions.csv where strategy_family=anomaly
-anomaly_calibration.csv         -> strategy_calibration.csv where strategy_family=anomaly
-anomaly_decision_timing.csv     -> strategy_decision_timing.csv where strategy_family=anomaly
-anomaly_trade_simulation.csv    -> strategy_trade_simulation.csv where strategy_family=anomaly
-anomaly_protocol_audit.csv      -> strategy_protocol_audit.csv where strategy_family=anomaly
+strategy_events.csv              -> anomaly_events.csv where strategy_family=anomaly
+strategy_state_1m.csv            -> anomaly_state_1m.csv where strategy_family=anomaly
+strategy_future_paths.csv        -> anomaly_future_paths.csv where strategy_family=anomaly
+strategy_nature_atlas.csv        -> anomaly_nature_atlas.csv where strategy_family=anomaly
+strategy_oos_predictions.csv     -> anomaly_oos_predictions.csv where strategy_family=anomaly
+strategy_calibration.csv         -> anomaly_calibration.csv where strategy_family=anomaly
+strategy_decision_timing.csv     -> anomaly_decision_timing.csv where strategy_family=anomaly
+strategy_trade_simulation.csv    -> anomaly_trade_simulation.csv where strategy_family=anomaly
+strategy_protocol_audit.csv      -> anomaly_protocol_audit.csv where strategy_family=anomaly
 ```
 
-MVP1 expected utility / EV fields live inside `anomaly_decision_timing.csv`.
+MVP1 expected utility / EV fields live inside `strategy_decision_timing.csv`.
 
 Правило:
 

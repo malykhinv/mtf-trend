@@ -1,5 +1,20 @@
 # Patch log
 
+## methodology: canonicalize strategy-neutral artifacts
+
+Status: APPLIED in current local branch after direct code inspection of head `f61c11e`.
+
+Intent:
+- Make strategy-owned run outputs write canonical `strategy_*` artifacts first.
+- Keep `anomaly_*` files as compatibility aliases with the same strict schemas.
+- Make `run-research` pass canonical strategy artifact paths between stages.
+- Extend schema/writer tests to prevent returning to anomaly-first output.
+
+Validation for this patch:
+- `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py tests\test_data_audit.py tests\test_events_detector.py tests\test_state_builder.py tests\test_future_paths.py tests\test_feature_catalog.py tests\test_feature_matrix.py tests\test_atlas.py tests\test_labels.py tests\test_prediction.py tests\test_controls.py tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_holdout_governance.py tests\test_strategy_registry.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest`
+
 ## strategy: add 180m horizon support
 
 Status: APPLIED in current local branch after direct code inspection of head `eb280f4a`.

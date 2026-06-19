@@ -89,7 +89,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Point-in-time universe | PARTIAL | Universe skeleton exists. Listing/delisting confidence and anti-survivorship proof are not complete. | Harden universe artifact and tests for delisted/missing symbols. |
 | Market context engine | PARTIAL | BTC/ETH/systemic context features exist. Coverage and tests are still MVP-level. | Add catalog/audit coverage by context feature family. |
 | Feature registry / feature schema | PARTIAL | Feature catalog exists. It is not yet a hard gate for every model feature. | Enforce catalog membership before prediction. |
-| Generic online state builder | PARTIAL | Online anomaly state is causal. Current artifact path/name is still anomaly-first. | Move toward strategy-neutral `strategy_state_1m.csv` with aliases. |
+| Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. | Keep temporal/no-leakage tests as permanent gate. |
 | Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and 5/15/30/60/120/180m outcome windows with tests. | Keep horizon/schema tests as permanent gate. |
 | Generic label builder | IMPLEMENTED | ATR labels exist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
 | Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
@@ -97,8 +97,8 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
 | Sample weighting | MISSING | Methodology allows as-of sample weights, but no explicit policy is implemented. | Add `sample_weight_policy_v1` after audit/horizon fixes. |
 | Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
-| Expected utility | PARTIAL | EV calculations exist. Canonical artifact naming and simulation alignment are incomplete. | Rename/canonicalize `strategy_expected_utility.csv`; keep anomaly alias. |
-| Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, and no same-symbol parallel positions exist. Needs canonical artifact naming and stronger audit. | Align artifact names and audit simulation assumptions. |
+| Expected utility | PARTIAL | EV calculations exist and write canonical `strategy_decision_timing.csv` / `strategy_ev_metrics.csv`. Simulation alignment is still incomplete. | Align execution reference and store execution model fields. |
+| Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
 | Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
 | Protocol audit | PARTIAL | Protocol audit exists, but not all checks are independently recomputed from artifacts. | Add forensic audit that reads artifacts and can fail the run. |
 | Reproducibility ledger | PARTIAL | Run metadata/artifact manifest exist. Full dependency/data/config hash trail needs tightening. | Add full run manifest and config hash enforcement. |
@@ -120,14 +120,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Relaxed geometry features | MISSING | Shelf/sweep/consolidation continuous features are not fully implemented. | Add strategy-specific feature module and catalog rows. |
 | Required anomaly controls | PARTIAL | Controls exist, but full anomaly-specific ablation/control list needs completion check. | Add missing baselines/ablations. |
 | Reject reasons | PARTIAL | Reject constants exist, but funnel coverage is not complete across every stage. | Add rejection funnel artifact and tests. |
-| Strategy-specific artifact aliases | PARTIAL | Anomaly artifact names exist. Canonical strategy-neutral names are incomplete. | Write canonical artifacts first, then aliases. |
-| Strategy/Core separation | PARTIAL | Direction is correct; some stages remain anomaly-named and should be generalized. | Refactor artifact boundaries before adding more strategies. |
+| Strategy-specific artifact aliases | IMPLEMENTED | Strategy-owned stages write canonical `strategy_*` artifacts first and keep `anomaly_*` only as compatibility aliases, with schema/writer tests. | Keep canonical-first writer tests as permanent gate. |
+| Strategy/Core separation | PARTIAL | Artifact boundaries are strategy-neutral. Some internal module/function names remain anomaly-specific and should be generalized after registry/status cleanup. | Refactor internal names after higher-priority governance/audit gaps. |
 
 ## Patch queue implied by this ledger
 
 1. `methodology: add implementation gap ledger` — this patch.
 2. `methodology: enforce active-horizon H_max purge` - implemented in this patch.
-3. `methodology: canonicalize strategy-neutral artifacts`.
+3. `methodology: canonicalize strategy-neutral artifacts` - implemented in this patch.
 4. `methodology: integrate holdout freeze into run-research`.
 5. `methodology: add independent forensic protocol audit`.
 6. `strategy: make registry status self-auditing`.

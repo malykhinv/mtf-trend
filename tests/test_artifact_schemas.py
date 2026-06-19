@@ -60,9 +60,17 @@ REQUIRED_MVP1 = {
     "strategy_feature_catalog.csv",
     "strategy_feature_matrix.csv",
     "strategy_nature_atlas.csv",
+    "strategy_context_splits.csv",
+    "strategy_response_surfaces.csv",
+    "strategy_market_shock_groups.csv",
     "strategy_data_quality.csv",
     "strategy_protocol_audit.csv",
     "strategy_run_config.csv",
+    "strategy_prediction_metrics.csv",
+    "strategy_ev_metrics.csv",
+    "strategy_trade_simulation_metrics.csv",
+    "strategy_placebo_tests.csv",
+    "strategy_baseline_comparison.csv",
 }
 
 
@@ -126,7 +134,7 @@ def test_strategy_artifact_aliases_keep_source_columns() -> None:
 
 
 def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
-    schema = get_artifact_schema("anomaly_events.csv")
+    schema = get_artifact_schema("strategy_events.csv")
     rows = [
         {
             "event_id": "evt_1",
@@ -152,10 +160,10 @@ def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
         }
     ]
 
-    written = write_csv_artifact_with_aliases(tmp_path / "anomaly_events.csv", rows, schema)
+    written = write_csv_artifact_with_aliases(tmp_path / "strategy_events.csv", rows, schema)
 
-    assert [path.name for path in written] == ["anomaly_events.csv", "strategy_events.csv"]
-    assert (tmp_path / "strategy_events.csv").is_file()
+    assert [path.name for path in written] == ["strategy_events.csv", "anomaly_events.csv"]
+    assert (tmp_path / "anomaly_events.csv").is_file()
 
 
 def test_manifest_records_written_artifacts(tmp_path: Path) -> None:

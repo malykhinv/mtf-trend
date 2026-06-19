@@ -54,23 +54,23 @@ def run_mvp1_state(
     written: list[Path] = []
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_state_1m.csv",
+            output_path / "strategy_state_1m.csv",
             state_rows_to_artifact(state_rows),
-            get_artifact_schema("anomaly_state_1m.csv"),
+            get_artifact_schema("strategy_state_1m.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_protocol_audit.csv",
+            output_path / "strategy_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
-            get_artifact_schema("anomaly_protocol_audit.csv"),
+            get_artifact_schema("strategy_protocol_audit.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_run_config.csv",
+            output_path / "strategy_run_config.csv",
             [asdict(row) for row in run_config_rows],
-            get_artifact_schema("anomaly_run_config.csv"),
+            get_artifact_schema("strategy_run_config.csv"),
         )
     )
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)

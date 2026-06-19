@@ -53,30 +53,30 @@ def run_mvp1_expected_value(
     written: list[Path] = []
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_decision_timing.csv",
+            output_path / "strategy_decision_timing.csv",
             expected_value_rows_to_artifact(expected_value_rows),
-            get_artifact_schema("anomaly_decision_timing.csv"),
+            get_artifact_schema("strategy_decision_timing.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
-            output_path / "anomaly_ev_metrics.csv",
+    written.extend(
+        write_csv_artifact_with_aliases(
+            output_path / "strategy_ev_metrics.csv",
             expected_value_metric_rows_to_artifact(metric_rows),
-            get_artifact_schema("anomaly_ev_metrics.csv"),
+            get_artifact_schema("strategy_ev_metrics.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_protocol_audit.csv",
+            output_path / "strategy_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
-            get_artifact_schema("anomaly_protocol_audit.csv"),
+            get_artifact_schema("strategy_protocol_audit.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_run_config.csv",
+            output_path / "strategy_run_config.csv",
             [asdict(row) for row in run_config_rows],
-            get_artifact_schema("anomaly_run_config.csv"),
+            get_artifact_schema("strategy_run_config.csv"),
         )
     )
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)

@@ -367,15 +367,16 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
         config=FeatureMatrixConfig(expected_event_lifetime_minutes=30),
     )
 
-    matrix_path = out / "anomaly_feature_matrix.csv"
-    catalog_path = out / "anomaly_feature_catalog.csv"
-    audit_path = out / "anomaly_protocol_audit.csv"
-    run_config_path = out / "anomaly_run_config.csv"
+    matrix_path = out / "strategy_feature_matrix.csv"
+    catalog_path = out / "strategy_feature_catalog.csv"
+    audit_path = out / "strategy_protocol_audit.csv"
+    run_config_path = out / "strategy_run_config.csv"
     manifest_path = out / "artifact_manifest.json"
     assert matrix_path.is_file()
     assert catalog_path.is_file()
     assert audit_path.is_file()
     assert run_config_path.is_file()
+    assert (out / "anomaly_feature_matrix.csv").is_file()
     assert manifest_path.is_file()
 
     with matrix_path.open("r", encoding="utf-8-sig", newline="") as file_obj:

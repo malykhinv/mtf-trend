@@ -56,35 +56,35 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
     events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events")
     state_dir = run_mvp1_state(
         input_dir=input_dir,
-        events_path=events_dir / "anomaly_events.csv",
+        events_path=events_dir / "strategy_events.csv",
         out_dir=stages_dir / "state",
     )
     future_dir = run_mvp1_future(
         input_dir=input_dir,
-        state_path=state_dir / "anomaly_state_1m.csv",
+        state_path=state_dir / "strategy_state_1m.csv",
         out_dir=stages_dir / "future",
     )
     run_mvp1_features(out_dir=stages_dir / "features")
     feature_matrix_dir = run_mvp1_feature_matrix(
         input_dir=input_dir,
-        state_path=state_dir / "anomaly_state_1m.csv",
+        state_path=state_dir / "strategy_state_1m.csv",
         out_dir=stages_dir / "feature_matrix",
     )
     run_mvp1_atlas(
-        state_path=state_dir / "anomaly_state_1m.csv",
-        future_path=future_dir / "anomaly_future_paths.csv",
-        feature_matrix_path=feature_matrix_dir / "anomaly_feature_matrix.csv",
+        state_path=state_dir / "strategy_state_1m.csv",
+        future_path=future_dir / "strategy_future_paths.csv",
+        feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
         out_dir=stages_dir / "atlas",
     )
     labels_dir = run_mvp1_labels(
-        state_path=state_dir / "anomaly_state_1m.csv",
-        future_path=future_dir / "anomaly_future_paths.csv",
+        state_path=state_dir / "strategy_state_1m.csv",
+        future_path=future_dir / "strategy_future_paths.csv",
         out_dir=stages_dir / "labels",
     )
     prediction_dir = run_mvp1_prediction(
-        state_path=state_dir / "anomaly_state_1m.csv",
-        labels_path=labels_dir / "anomaly_outcome_labels.csv",
-        feature_matrix_path=feature_matrix_dir / "anomaly_feature_matrix.csv",
+        state_path=state_dir / "strategy_state_1m.csv",
+        labels_path=labels_dir / "strategy_outcome_labels.csv",
+        feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
         out_dir=stages_dir / "prediction",
         config=WalkForwardPredictionConfig(
             strategy_name=config.strategy_name,
@@ -92,9 +92,9 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         ),
     )
     run_mvp1_controls(
-        state_path=state_dir / "anomaly_state_1m.csv",
-        labels_path=labels_dir / "anomaly_outcome_labels.csv",
-        feature_matrix_path=feature_matrix_dir / "anomaly_feature_matrix.csv",
+        state_path=state_dir / "strategy_state_1m.csv",
+        labels_path=labels_dir / "strategy_outcome_labels.csv",
+        feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
         out_dir=stages_dir / "controls",
         config=ControlsConfig(
             strategy_name=config.strategy_name,
@@ -102,9 +102,9 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         ),
     )
     ev_dir = run_mvp1_expected_value(
-        state_path=state_dir / "anomaly_state_1m.csv",
-        labels_path=labels_dir / "anomaly_outcome_labels.csv",
-        predictions_path=prediction_dir / "anomaly_oos_predictions.csv",
+        state_path=state_dir / "strategy_state_1m.csv",
+        labels_path=labels_dir / "strategy_outcome_labels.csv",
+        predictions_path=prediction_dir / "strategy_oos_predictions.csv",
         out_dir=stages_dir / "expected_value",
         config=ExpectedValueConfig(
             strategy_name=config.strategy_name,
@@ -113,7 +113,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
     )
     run_mvp1_trade_simulation(
         input_dir=input_dir,
-        decision_timing_path=ev_dir / "anomaly_decision_timing.csv",
+        decision_timing_path=ev_dir / "strategy_decision_timing.csv",
         out_dir=stages_dir / "simulation",
         config=TradeSimulationConfig(
             strategy_name=config.strategy_name,

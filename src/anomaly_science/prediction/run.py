@@ -65,23 +65,23 @@ def run_mvp1_prediction(
     written: list[Path] = []
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_oos_predictions.csv",
+            output_path / "strategy_oos_predictions.csv",
             oos_prediction_rows_to_artifact(predictions),
-            get_artifact_schema("anomaly_oos_predictions.csv"),
+            get_artifact_schema("strategy_oos_predictions.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_calibration.csv",
+            output_path / "strategy_calibration.csv",
             calibration_rows_to_artifact(calibration_rows),
-            get_artifact_schema("anomaly_calibration.csv"),
+            get_artifact_schema("strategy_calibration.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
-            output_path / "anomaly_prediction_metrics.csv",
+    written.extend(
+        write_csv_artifact_with_aliases(
+            output_path / "strategy_prediction_metrics.csv",
             prediction_metric_rows_to_artifact(metric_rows),
-            get_artifact_schema("anomaly_prediction_metrics.csv"),
+            get_artifact_schema("strategy_prediction_metrics.csv"),
         )
     )
     written.append(
@@ -107,16 +107,16 @@ def run_mvp1_prediction(
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_protocol_audit.csv",
+            output_path / "strategy_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
-            get_artifact_schema("anomaly_protocol_audit.csv"),
+            get_artifact_schema("strategy_protocol_audit.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_run_config.csv",
+            output_path / "strategy_run_config.csv",
             [asdict(row) for row in run_config_rows],
-            get_artifact_schema("anomaly_run_config.csv"),
+            get_artifact_schema("strategy_run_config.csv"),
         )
     )
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)

@@ -58,44 +58,44 @@ def run_mvp1_atlas(
     written: list[Path] = []
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_nature_atlas.csv",
+            output_path / "strategy_nature_atlas.csv",
             nature_rows_to_artifact(artifacts.nature_atlas_rows),
-            get_artifact_schema("anomaly_nature_atlas.csv"),
+            get_artifact_schema("strategy_nature_atlas.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
-            output_path / "anomaly_context_splits.csv",
+    written.extend(
+        write_csv_artifact_with_aliases(
+            output_path / "strategy_context_splits.csv",
             context_split_rows_to_artifact(artifacts.context_split_rows),
-            get_artifact_schema("anomaly_context_splits.csv"),
+            get_artifact_schema("strategy_context_splits.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
-            output_path / "anomaly_response_surfaces.csv",
+    written.extend(
+        write_csv_artifact_with_aliases(
+            output_path / "strategy_response_surfaces.csv",
             response_surface_rows_to_artifact(artifacts.response_surface_rows),
-            get_artifact_schema("anomaly_response_surfaces.csv"),
+            get_artifact_schema("strategy_response_surfaces.csv"),
         )
     )
-    written.append(
-        write_csv_artifact(
-            output_path / "anomaly_market_shock_groups.csv",
+    written.extend(
+        write_csv_artifact_with_aliases(
+            output_path / "strategy_market_shock_groups.csv",
             market_shock_group_rows_to_artifact(artifacts.market_shock_group_rows),
-            get_artifact_schema("anomaly_market_shock_groups.csv"),
+            get_artifact_schema("strategy_market_shock_groups.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_protocol_audit.csv",
+            output_path / "strategy_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
-            get_artifact_schema("anomaly_protocol_audit.csv"),
+            get_artifact_schema("strategy_protocol_audit.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_run_config.csv",
+            output_path / "strategy_run_config.csv",
             [asdict(row) for row in run_config_rows],
-            get_artifact_schema("anomaly_run_config.csv"),
+            get_artifact_schema("strategy_run_config.csv"),
         )
     )
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)

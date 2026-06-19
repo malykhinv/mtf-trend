@@ -40,10 +40,11 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
 
     assert run_dir.parent == tmp_path / "runs"
     assert (run_dir / "input" / "candles_1m.csv").is_file()
+    assert (run_dir / "stages" / "events" / "strategy_events.csv").is_file()
+    assert (run_dir / "stages" / "feature_matrix" / "strategy_feature_matrix.csv").is_file()
+    assert (run_dir / "stages" / "prediction" / "strategy_oos_predictions.csv").is_file()
+    assert (run_dir / "stages" / "simulation" / "strategy_trade_simulation.csv").is_file()
     assert (run_dir / "stages" / "events" / "anomaly_events.csv").is_file()
-    assert (run_dir / "stages" / "feature_matrix" / "anomaly_feature_matrix.csv").is_file()
-    assert (run_dir / "stages" / "prediction" / "anomaly_oos_predictions.csv").is_file()
-    assert (run_dir / "stages" / "simulation" / "anomaly_trade_simulation.csv").is_file()
     assert (run_dir / "research_run_summary.csv").is_file()
 
 

@@ -32,8 +32,8 @@ def test_run_mvp1_holdout_governance_writes_freeze_artifacts(tmp_path: Path) -> 
     assert "mvp1 holdout governance artifacts written" in result.stdout
     assert (out_dir / "research_ledger.csv").is_file()
     assert (out_dir / "holdout_access_log.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
+    assert (out_dir / "strategy_protocol_audit.csv").is_file()
+    assert (out_dir / "strategy_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
     with (out_dir / "research_ledger.csv").open(encoding="utf-8-sig", newline="") as file_obj:
@@ -45,7 +45,7 @@ def test_run_mvp1_holdout_governance_writes_freeze_artifacts(tmp_path: Path) -> 
         access_rows = list(csv.DictReader(file_obj))
     assert access_rows == []
 
-    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["final_holdout_not_accessed_before_protocol_freeze"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"

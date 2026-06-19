@@ -333,30 +333,30 @@ def run_mvp1_feature_matrix(
     written: list[Path] = []
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_feature_matrix.csv",
+            output_path / "strategy_feature_matrix.csv",
             feature_matrix_rows_to_artifact(matrix_rows),
-            get_artifact_schema("anomaly_feature_matrix.csv"),
+            get_artifact_schema("strategy_feature_matrix.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_feature_catalog.csv",
+            output_path / "strategy_feature_catalog.csv",
             feature_rows_to_artifact(build_default_feature_catalog()),
-            get_artifact_schema("anomaly_feature_catalog.csv"),
+            get_artifact_schema("strategy_feature_catalog.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_protocol_audit.csv",
+            output_path / "strategy_protocol_audit.csv",
             _protocol_rows_to_artifact(protocol_rows),
-            get_artifact_schema("anomaly_protocol_audit.csv"),
+            get_artifact_schema("strategy_protocol_audit.csv"),
         )
     )
     written.extend(
         write_csv_artifact_with_aliases(
-            output_path / "anomaly_run_config.csv",
+            output_path / "strategy_run_config.csv",
             [asdict(row) for row in run_config_rows],
-            get_artifact_schema("anomaly_run_config.csv"),
+            get_artifact_schema("strategy_run_config.csv"),
         )
     )
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)

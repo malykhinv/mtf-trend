@@ -205,20 +205,20 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "mvp1 expected-value artifacts written" in result.stdout
-    assert (out_dir / "anomaly_decision_timing.csv").is_file()
     assert (out_dir / "strategy_decision_timing.csv").is_file()
-    assert (out_dir / "anomaly_ev_metrics.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
+    assert (out_dir / "anomaly_decision_timing.csv").is_file()
+    assert (out_dir / "strategy_ev_metrics.csv").is_file()
+    assert (out_dir / "strategy_protocol_audit.csv").is_file()
+    assert (out_dir / "strategy_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
-    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["expected_value_computed_before_trade_simulation"]["status"] == "PASS"
     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
-    with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
     assert run_config["take_profit_atr_1440"] == "2.0"

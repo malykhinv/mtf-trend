@@ -91,9 +91,9 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     written: list[Path] = []
     data_quality_rows = rows_to_artifact(data_quality)
     written.extend(write_csv_artifact_with_aliases(
-        output_path / "anomaly_data_quality.csv",
+        output_path / "strategy_data_quality.csv",
         data_quality_rows,
-        get_artifact_schema("anomaly_data_quality.csv"),
+        get_artifact_schema("strategy_data_quality.csv"),
     ))
     written.append(write_csv_artifact(
         output_path / "symbol_universe_by_day.csv",
@@ -102,21 +102,21 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
     ))
     event_rows = events_to_artifact(events)
     written.extend(write_csv_artifact_with_aliases(
-        output_path / "anomaly_events.csv",
+        output_path / "strategy_events.csv",
         event_rows,
-        get_artifact_schema("anomaly_events.csv"),
+        get_artifact_schema("strategy_events.csv"),
     ))
     protocol_artifact_rows = _protocol_rows_to_artifact(protocol_rows)
     written.extend(write_csv_artifact_with_aliases(
-        output_path / "anomaly_protocol_audit.csv",
+        output_path / "strategy_protocol_audit.csv",
         protocol_artifact_rows,
-        get_artifact_schema("anomaly_protocol_audit.csv"),
+        get_artifact_schema("strategy_protocol_audit.csv"),
     ))
     run_config_artifact_rows = [asdict(row) for row in run_config_rows]
     written.extend(write_csv_artifact_with_aliases(
-        output_path / "anomaly_run_config.csv",
+        output_path / "strategy_run_config.csv",
         run_config_artifact_rows,
-        get_artifact_schema("anomaly_run_config.csv"),
+        get_artifact_schema("strategy_run_config.csv"),
     ))
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)
     write_manifest(output_path / "artifact_manifest.json", manifest)

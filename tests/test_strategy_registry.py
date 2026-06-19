@@ -49,7 +49,7 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
     assert "mvp1 strategy registry artifacts written" in result.stdout
     assert (out_dir / "strategy_registry.csv").is_file()
     assert (out_dir / "strategy_reject_reasons.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
+    assert (out_dir / "strategy_protocol_audit.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
     with (out_dir / "strategy_registry.csv").open(encoding="utf-8-sig", newline="") as file_obj:
@@ -72,7 +72,7 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
         "broad_anomaly_v1_h60",
     }
 
-    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["base_strategy_contract_valid"]["status"] == "PASS"
     assert audit_by_name["strategy_reject_reasons_declared"]["status"] == "PASS"

@@ -331,12 +331,13 @@ def test_run_mvp1_labels_cli_writes_label_artifacts(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "mvp1 outcome label artifacts written" in result.stdout
+    assert (out_dir / "strategy_outcome_labels.csv").is_file()
+    assert (out_dir / "strategy_protocol_audit.csv").is_file()
+    assert (out_dir / "strategy_run_config.csv").is_file()
     assert (out_dir / "anomaly_outcome_labels.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
-    with (out_dir / "anomaly_outcome_labels.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_outcome_labels.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert rows == [
         {

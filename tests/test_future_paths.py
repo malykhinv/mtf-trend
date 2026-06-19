@@ -218,12 +218,13 @@ def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "mvp1 raw future path artifacts written" in result.stdout
+    assert (out_dir / "strategy_future_paths.csv").is_file()
+    assert (out_dir / "strategy_protocol_audit.csv").is_file()
+    assert (out_dir / "strategy_run_config.csv").is_file()
     assert (out_dir / "anomaly_future_paths.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
 
-    with (out_dir / "anomaly_future_paths.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_future_paths.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         rows = list(reader)
     assert len(rows) == 1
@@ -231,7 +232,7 @@ def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
     assert int(rows[0]["future_start_time_ms"]) > int(rows[0]["snapshot_time_ms"])
     assert rows[0]["broke_structural_low_30m"] == ""
 
-    with (out_dir / "anomaly_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+    with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["fixed_percent_labels_forbidden"]["status"] == AuditStatus.PASS.value
     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == AuditStatus.PASS.value
