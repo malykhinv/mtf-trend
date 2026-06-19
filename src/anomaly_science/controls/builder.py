@@ -242,7 +242,6 @@ def build_baseline_comparison_rows(
             ("idiosyncratic_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy idiosyncratic subset is emitted"),
             ("systemic_cluster_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy systemic subset is emitted"),
         )),
-        ("strategy_specific_heuristic", "strategy_heuristic", "deferred cleanly: no pre-registered strategy-specific heuristic baseline exists for MVP1 controls"),
     )
     for baseline_name, feature_family, notes in deferred_specs:
         result.append(

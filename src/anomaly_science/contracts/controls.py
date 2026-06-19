@@ -23,7 +23,6 @@ BASELINE_NAMES = frozenset(
         "volume_only",
         "btc_eth_only",
         "always_no_trade",
-        "strategy_specific_heuristic",
         "no_cvd_features_ablation",
         "no_oi_features_ablation",
         "no_liquidation_features_ablation",
