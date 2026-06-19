@@ -16,7 +16,16 @@ The project has an active anomaly research strategy documented in `docs/strategi
 
 ## Current executable stage
 
-Current MVP1 commands:
+Primary MVP1 research command:
+
+```bash
+python main.py run-research broad_anomaly_v1_h30
+python main.py run-research broad_anomaly_v1_h30 --days 380
+```
+
+`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, then runs the full research pipeline through simulation. If `--days` is omitted, it uses the full available cache period.
+
+Low-level MVP1 stage commands remain available for debugging:
 
 ```bash
 python main.py run-mvp1-data-audit --input tests/fixtures/minimal_market_data --out tmp/mvp1_audit

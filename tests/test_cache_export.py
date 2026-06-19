@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
+from anomaly_science.cache_export import CacheMvp1CsvExportConfig, discover_cache_symbols, export_cache_to_mvp1_csv
 
 
 def test_export_cache_to_mvp1_csv_writes_explicit_boundary(tmp_path):
@@ -46,3 +46,30 @@ def test_export_cache_to_mvp1_csv_writes_explicit_boundary(tmp_path):
     assert candles_1m["symbol"].unique().tolist() == ["BTCUSDT"]
     assert len(candles_5m) == 1
     assert oi_5m.iloc[0]["source"] == "binance_vision_cache"
+
+
+def test_export_cache_to_mvp1_csv_discovers_symbols_and_filters_days(tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "mvp1"
+    cache_dir.mkdir()
+    pd.DataFrame(
+        {
+            "timestamp": [1704067200000, 1704153600000],
+            "open": [1, 2],
+            "high": [2, 3],
+            "low": [0.5, 1.5],
+            "close": [1.5, 2.5],
+            "volume": [10, 11],
+            "quote_volume": [100, 110],
+            "trade_count": [1, 2],
+            "taker_buy_quote_volume": [50, 55],
+        }
+    ).to_parquet(cache_dir / "ETHUSDT.parquet")
+
+    assert discover_cache_symbols(cache_dir) == ("ETHUSDT",)
+
+    export_cache_to_mvp1_csv(CacheMvp1CsvExportConfig(cache_dir=cache_dir, out_dir=out_dir, days=1))
+
+    candles_1m = pd.read_csv(out_dir / "candles_1m.csv")
+    assert candles_1m["symbol"].unique().tolist() == ["ETHUSDT"]
+    assert candles_1m["open_time_ms"].tolist() == [1704153600000]

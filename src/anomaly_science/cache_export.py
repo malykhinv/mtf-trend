@@ -10,19 +10,30 @@ import pandas as pd
 class CacheMvp1CsvExportConfig:
     cache_dir: Path
     out_dir: Path
-    symbols: tuple[str, ...]
+    symbols: tuple[str, ...] = ()
+    days: int | None = None
 
 
 def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
-    if not config.symbols:
-        raise ValueError("symbols must not be empty")
+    if config.days is not None and config.days <= 0:
+        raise ValueError("days must be positive when provided")
     config.out_dir.mkdir(parents=True, exist_ok=True)
-    frames = [_read_symbol_cache(config.cache_dir, symbol) for symbol in config.symbols]
-    candles_1m = pd.concat(frames, ignore_index=True).sort_values(["symbol", "open_time_ms"])
+    symbols = config.symbols or discover_cache_symbols(config.cache_dir)
+    if not symbols:
+        raise ValueError(f"cache contains no symbol parquet files: {config.cache_dir}")
+    frames = [_read_symbol_cache(config.cache_dir, symbol) for symbol in symbols]
+    candles_1m = pd.concat(frames, ignore_index=True)
+    candles_1m = _filter_days(candles_1m, days=config.days).sort_values(["symbol", "open_time_ms"])
     candles_1m.to_csv(config.out_dir / "candles_1m.csv", index=False)
     _build_candles_5m(candles_1m).to_csv(config.out_dir / "candles_5m.csv", index=False)
     _build_open_interest_5m(candles_1m).to_csv(config.out_dir / "open_interest_5m.csv", index=False)
     return config.out_dir
+
+
+def discover_cache_symbols(cache_dir: Path) -> tuple[str, ...]:
+    if not cache_dir.exists():
+        raise FileNotFoundError(f"cache directory is missing: {cache_dir}")
+    return tuple(sorted(path.stem.upper() for path in cache_dir.glob("*.parquet") if path.is_file()))
 
 
 def _read_symbol_cache(cache_dir: Path, symbol: str) -> pd.DataFrame:
@@ -61,6 +72,15 @@ def _read_symbol_cache(cache_dir: Path, symbol: str) -> pd.DataFrame:
         }
     )
     return result
+
+
+def _filter_days(frame: pd.DataFrame, *, days: int | None) -> pd.DataFrame:
+    if days is None or frame.empty:
+        return frame
+    end_ms = int(frame["open_time_ms"].max())
+    end_day_start_ms = (end_ms // 86_400_000) * 86_400_000
+    start_ms = end_day_start_ms - (days - 1) * 86_400_000
+    return frame[frame["open_time_ms"] >= start_ms].copy()
 
 
 def _build_candles_5m(candles_1m: pd.DataFrame) -> pd.DataFrame:

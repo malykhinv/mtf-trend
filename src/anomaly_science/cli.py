@@ -15,6 +15,7 @@ from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matri
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
+from anomaly_science.research import ResearchRunConfig, run_research_pipeline
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 from anomaly_science.strategy import run_mvp1_strategy_registry
@@ -24,7 +25,7 @@ from anomaly_science.validation import run_mvp1_holdout_governance
 _BOOTSTRAP_MESSAGE = "anomaly_science bootstrap ok"
 
 
-def _broad_strategy_version_for_horizon(horizon_minutes: int) -> str:
+def _broad_strategy_name_for_horizon(horizon_minutes: int) -> str:
     return f"broad_anomaly_v1_h{horizon_minutes}"
 
 
@@ -38,6 +39,23 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "doctor",
         help="Run a minimal bootstrap check for the clean anomaly_science core.",
+    )
+
+    research = subparsers.add_parser(
+        "run-research",
+        help="Run the full MVP1 research pipeline from the local market cache.",
+    )
+    research.add_argument("strategy", help="Registered strategy name, for example broad_anomaly_v1_h30.")
+    research.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Optional lookback days. Omit to use the full available cache period.",
+    )
+    research.add_argument(
+        "--cache-dir",
+        default="",
+        help="Optional cache directory override. Default: Binance Vision enriched 1m cache.",
     )
 
     data_audit = subparsers.add_parser(
@@ -292,6 +310,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_BOOTSTRAP_MESSAGE)
         return 0
 
+    if args.command == "run-research":
+        from anomaly_science.binance_vision_cache import DEFAULT_MARKET_CACHE_DIR
+
+        cache_dir = Path(args.cache_dir) if args.cache_dir else DEFAULT_MARKET_CACHE_DIR
+        output_dir = run_research_pipeline(
+            ResearchRunConfig(
+                strategy_name=args.strategy,
+                cache_dir=cache_dir,
+                days=args.days,
+            )
+        )
+        print(f"research pipeline written: {output_dir}")
+        return 0
+
     if args.command == "run-mvp1-data-audit":
         output_dir = run_mvp1_data_audit(input_dir=Path(args.input), out_dir=Path(args.out))
         print(f"mvp1 data audit artifacts written: {output_dir}")
@@ -350,7 +382,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-prediction":
         config = WalkForwardPredictionConfig(
-            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
         )
         output_dir = run_mvp1_prediction(
@@ -365,7 +397,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-controls":
         config = ControlsConfig(
-            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
         )
         output_dir = run_mvp1_controls(
@@ -380,7 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-expected-value":
         config = ExpectedValueConfig(
-            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
             fee_bps=args.fee_bps,
             slippage_bps=args.slippage_bps,
@@ -399,7 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-trade-simulation":
         config = TradeSimulationConfig(
-            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
             require_prediction_confident=not bool(args.allow_unconfident),
             require_rr_acceptable=not bool(args.allow_low_rr),
