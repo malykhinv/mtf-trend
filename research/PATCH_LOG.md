@@ -1,6 +1,22 @@
 # Patch log
 
 
+## methodology: align CLI horizon validation
+
+Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying H2 v2, H3, and H4 v2.
+
+Intent:
+- Make low-level prediction/control/EV/simulation CLI commands use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist instead of local `(15, 30, 60)` choices.
+- Add optional `--strategy-name` to low-level target-horizon commands so CLI can express an explicit executable strategy variant instead of hardcoding broad anomaly from the horizon.
+- Preserve backward-compatible low-level defaults by resolving omitted `--strategy-name` to `broad_anomaly_v1_h{horizon}`.
+- Validate the resolved strategy/horizon pair through the registry before downstream file IO, so `h32`, `broad_anomaly_v1_h180`, and specified-but-not-implemented variants fail at the boundary.
+- Update README/COMMANDS examples to show explicit strategy+horizon arguments.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_align_cli_horizon_validation.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_horizon_contract.py` was attempted in this sandbox but collection requires missing third-party dependency `polars`; run it in the project venv.
+
 ## methodology: enforce registry horizon compatibility
 
 Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying H2 v2 and H3.

@@ -54,28 +54,31 @@ MVP1 descriptive future-nature outcome labels:
 python main.py run-mvp1-labels --state tmp/mvp1_state/strategy_state_1m.csv --future tmp/mvp1_future/strategy_future_paths.csv --out tmp/mvp1_labels
 ```
 
+
+Low-level target-horizon commands use the same horizon contract as `run-research`: `--horizon-minutes` must be one of `15/30/60/120/180`, and the selected `--strategy-name` must be an executable registry variant that semantically allows that horizon. Omitting `--strategy-name` resolves to `broad_anomaly_v1_h{horizon}` for compatibility, so `120/180` are rejected until a matching strategy is implemented.
+
 MVP1 weekly CatBoost+Isotonic calibrated prediction:
 
 ```bash
-python main.py run-mvp1-prediction --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_prediction
+python main.py run-mvp1-prediction --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_prediction --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
 ```
 
 MVP1 placebo/control checks:
 
 ```bash
-python main.py run-mvp1-controls --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_controls
+python main.py run-mvp1-controls --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_controls --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
 ```
 
 MVP1 decision timing / EV:
 
 ```bash
-python main.py run-mvp1-expected-value --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --predictions tmp/mvp1_prediction/strategy_oos_predictions.csv --out tmp/mvp1_ev
+python main.py run-mvp1-expected-value --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --predictions tmp/mvp1_prediction/strategy_oos_predictions.csv --out tmp/mvp1_ev --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
 ```
 
 MVP1 pessimistic trade simulation:
 
 ```bash
-python main.py run-mvp1-trade-simulation --input tests/fixtures/minimal_market_data --decision-timing tmp/mvp1_ev/strategy_decision_timing.csv --out tmp/mvp1_simulation
+python main.py run-mvp1-trade-simulation --input tests/fixtures/minimal_market_data --decision-timing tmp/mvp1_ev/strategy_decision_timing.csv --out tmp/mvp1_simulation --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
 ```
 
 MVP1 holdout governance:

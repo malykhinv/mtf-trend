@@ -38,10 +38,10 @@ python main.py run-mvp1-features --out tmp/mvp1_features
 python main.py run-mvp1-feature-matrix --input tests/fixtures/minimal_market_data --state tmp/mvp1_state/strategy_state_1m.csv --out tmp/mvp1_feature_matrix
 python main.py run-mvp1-atlas --state tmp/mvp1_state/strategy_state_1m.csv --future tmp/mvp1_future/strategy_future_paths.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_atlas
 python main.py run-mvp1-labels --state tmp/mvp1_state/strategy_state_1m.csv --future tmp/mvp1_future/strategy_future_paths.csv --out tmp/mvp1_labels
-python main.py run-mvp1-prediction --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_prediction
-python main.py run-mvp1-controls --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_controls
-python main.py run-mvp1-expected-value --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --predictions tmp/mvp1_prediction/strategy_oos_predictions.csv --out tmp/mvp1_ev
-python main.py run-mvp1-trade-simulation --input tests/fixtures/minimal_market_data --decision-timing tmp/mvp1_ev/strategy_decision_timing.csv --out tmp/mvp1_simulation
+python main.py run-mvp1-prediction --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_prediction --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
+python main.py run-mvp1-controls --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_controls --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
+python main.py run-mvp1-expected-value --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --predictions tmp/mvp1_prediction/strategy_oos_predictions.csv --out tmp/mvp1_ev --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
+python main.py run-mvp1-trade-simulation --input tests/fixtures/minimal_market_data --decision-timing tmp/mvp1_ev/strategy_decision_timing.csv --out tmp/mvp1_simulation --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
 python main.py run-mvp1-holdout-governance --out tmp/mvp1_governance --start-date 2024-01-01 --end-date 2024-12-15 --freeze-id protocol_freeze_v1
 ```
 
@@ -59,6 +59,8 @@ python main.py run-mvp1-holdout-governance --out tmp/mvp1_governance --start-dat
 Atlas grouping uses state plus feature-matrix as-of fields. Coarse 30m response bins are descriptive atlas bins only, not calibrated labels, entry logic, exit logic, EV, PnL, or trade simulation. Market-shock groups use point-in-time `market_shock_id` and `systemic_cluster_regime` from the feature matrix.
 
 `run-mvp1-labels` reads the same state/future artifacts through strict boundaries, joins them one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`, and writes `strategy_outcome_labels.csv` with `scenario_15m`, `scenario_30m`, `scenario_60m`, `scenario_120m`, and `scenario_180m`. Scenario values are descriptive future-nature targets for later walk-forward prediction calibration: `long_continuation`, `short_fade`, `static_or_chop`, `unclear`, or explicit `missing_future`. Trap-like ambiguity maps to `unclear` in MVP1; a separate trap class requires a new label schema.
+
+Low-level prediction/control/EV/simulation commands accept only Core-supported horizons `15/30/60/120/180`, then validate the selected `--strategy-name` + `--horizon-minutes` pair through the strategy registry before file IO. If `--strategy-name` is omitted, the CLI keeps the backward-compatible broad anomaly default `broad_anomaly_v1_h{horizon}`, which means `--horizon-minutes 120/180` is rejected until a matching executable strategy exists.
 
 `run-mvp1-prediction` reads `strategy_state_1m.csv`, required `strategy_feature_matrix.csv`, and `strategy_outcome_labels.csv` through strict boundaries, then runs weekly walk-forward CatBoost with one-vs-rest Isotonic calibration. Purge is computed from active strategy `H_max`, so train rows must satisfy `train_snapshot_time + H_max <= weekly_model_freeze_time`. OOS days inside a week use frozen weekly weights, best iteration, feature schema, and calibrators. It writes:
 

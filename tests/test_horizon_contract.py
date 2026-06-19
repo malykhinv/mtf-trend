@@ -90,3 +90,94 @@ def test_target_horizon_configs_validate_strategy_horizon_pair() -> None:
 
         with pytest.raises(StrategyRegistryError, match="specified but not implemented yet"):
             config_type(strategy_name="post_pump_distribution_v1_h120", target_horizon_minutes=120)
+
+
+
+def test_cli_target_horizon_arguments_use_core_supported_horizons() -> None:
+    from anomaly_science.cli import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run-mvp1-prediction",
+            "--state",
+            "state.csv",
+            "--labels",
+            "labels.csv",
+            "--features",
+            "features.csv",
+            "--out",
+            "out",
+            "--horizon-minutes",
+            "180",
+        ]
+    )
+
+    assert args.horizon_minutes == 180
+    assert args.strategy_name == ""
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "run-mvp1-prediction",
+                "--state",
+                "state.csv",
+                "--labels",
+                "labels.csv",
+                "--features",
+                "features.csv",
+                "--out",
+                "out",
+                "--horizon-minutes",
+                "32",
+            ]
+        )
+
+
+def test_low_level_cli_validates_strategy_horizon_pair_before_file_io(tmp_path, capsys) -> None:
+    from anomaly_science.cli import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "run-mvp1-prediction",
+                "--state",
+                "missing_state.csv",
+                "--labels",
+                "missing_labels.csv",
+                "--features",
+                "missing_features.csv",
+                "--out",
+                str(tmp_path / "prediction"),
+                "--horizon-minutes",
+                "180",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "unknown strategy_name" in capsys.readouterr().err
+
+
+def test_low_level_cli_accepts_explicit_matching_strategy_name() -> None:
+    from anomaly_science.cli import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "run-mvp1-controls",
+            "--state",
+            "state.csv",
+            "--labels",
+            "labels.csv",
+            "--features",
+            "features.csv",
+            "--out",
+            "out",
+            "--strategy-name",
+            "broad_anomaly_v1_h60",
+            "--horizon-minutes",
+            "60",
+        ]
+    )
+
+    assert args.strategy_name == "broad_anomaly_v1_h60"
+    assert args.horizon_minutes == 60

@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from anomaly_science.atlas import run_mvp1_atlas
+from anomaly_science.contracts.horizons import SUPPORTED_RESEARCH_HORIZONS
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
 from anomaly_science.data import run_mvp1_data_audit
@@ -19,6 +20,7 @@ from anomaly_science.research import ResearchRunConfig, run_research_pipeline
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 from anomaly_science.strategy import run_mvp1_strategy_registry
+from anomaly_science.strategy.registry import StrategyRegistryError, validate_strategy_horizon
 from anomaly_science.validation import run_mvp1_holdout_governance
 
 
@@ -27,6 +29,44 @@ _BOOTSTRAP_MESSAGE = "anomaly_science bootstrap ok"
 
 def _broad_strategy_name_for_horizon(horizon_minutes: int) -> str:
     return f"broad_anomaly_v1_h{horizon_minutes}"
+
+
+def _add_strategy_horizon_arguments(parser: argparse.ArgumentParser, *, verb: str) -> None:
+    parser.add_argument(
+        "--strategy-name",
+        default="",
+        help=(
+            "Optional executable strategy variant. If omitted, the CLI resolves "
+            "broad_anomaly_v1_h{horizon} for backward-compatible MVP1 debugging. "
+            "The final strategy/horizon pair is still validated by the registry."
+        ),
+    )
+    parser.add_argument(
+        "--horizon-minutes",
+        type=int,
+        default=30,
+        choices=SUPPORTED_RESEARCH_HORIZONS,
+        help=(
+            f"Core-supported scenario horizon to {verb}. "
+            "Must also be allowed by the selected executable strategy. Default: 30."
+        ),
+    )
+
+
+def _resolve_cli_strategy_name(
+    *,
+    parser: argparse.ArgumentParser,
+    strategy_name: str,
+    horizon_minutes: int,
+) -> str:
+    resolved_strategy_name = (
+        strategy_name.strip() if strategy_name.strip() else _broad_strategy_name_for_horizon(horizon_minutes)
+    )
+    try:
+        validate_strategy_horizon(resolved_strategy_name, horizon_minutes)
+    except StrategyRegistryError as exc:
+        parser.error(str(exc))
+    return resolved_strategy_name
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,13 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to strategy_feature_matrix.csv from run-mvp1-feature-matrix for rich as-of model features.",
     )
     prediction.add_argument("--out", required=True, help="Directory where prediction artifacts will be written.")
-    prediction.add_argument(
-        "--horizon-minutes",
-        type=int,
-        default=30,
-        choices=(15, 30, 60),
-        help="Descriptive scenario horizon to predict. Default: 30.",
-    )
+    _add_strategy_horizon_arguments(prediction, verb="predict")
 
     controls = subparsers.add_parser(
         "run-mvp1-controls",
@@ -167,13 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to strategy_feature_matrix.csv from run-mvp1-feature-matrix for feature-aware baselines and ablations.",
     )
     controls.add_argument("--out", required=True, help="Directory where control artifacts will be written.")
-    controls.add_argument(
-        "--horizon-minutes",
-        type=int,
-        default=30,
-        choices=(15, 30, 60),
-        help="Descriptive scenario horizon to control-test. Default: 30.",
-    )
+    _add_strategy_horizon_arguments(controls, verb="control-test")
 
     expected_value = subparsers.add_parser(
         "run-mvp1-expected-value",
@@ -183,13 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     expected_value.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
     expected_value.add_argument("--predictions", required=True, help="Path to anomaly_oos_predictions.csv from run-mvp1-prediction.")
     expected_value.add_argument("--out", required=True, help="Directory where expected-value artifacts will be written.")
-    expected_value.add_argument(
-        "--horizon-minutes",
-        type=int,
-        default=30,
-        choices=(15, 30, 60),
-        help="Descriptive scenario horizon to evaluate. Default: 30.",
-    )
+    _add_strategy_horizon_arguments(expected_value, verb="evaluate")
     expected_value.add_argument("--fee-bps", type=float, default=4.0, help="Per-side fee basis points. Default: 4.0.")
     expected_value.add_argument("--slippage-bps", type=float, default=2.0, help="Slippage penalty basis points. Default: 2.0.")
     expected_value.add_argument("--min-confidence", type=float, default=0.40, help="Minimum calibrated confidence flag. Default: 0.40.")
@@ -202,13 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     simulation.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
     simulation.add_argument("--decision-timing", required=True, help="Path to anomaly_decision_timing.csv from run-mvp1-expected-value.")
     simulation.add_argument("--out", required=True, help="Directory where trade simulation artifacts will be written.")
-    simulation.add_argument(
-        "--horizon-minutes",
-        type=int,
-        default=30,
-        choices=(15, 30, 60),
-        help="Decision horizon to simulate. Default: 30.",
-    )
+    _add_strategy_horizon_arguments(simulation, verb="simulate")
     simulation.add_argument(
         "--allow-unconfident",
         action="store_true",
@@ -382,7 +398,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-prediction":
         config = WalkForwardPredictionConfig(
-            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
+            strategy_name=_resolve_cli_strategy_name(
+                parser=parser,
+                strategy_name=args.strategy_name,
+                horizon_minutes=args.horizon_minutes,
+            ),
             target_horizon_minutes=args.horizon_minutes,
         )
         output_dir = run_mvp1_prediction(
@@ -397,7 +417,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-controls":
         config = ControlsConfig(
-            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
+            strategy_name=_resolve_cli_strategy_name(
+                parser=parser,
+                strategy_name=args.strategy_name,
+                horizon_minutes=args.horizon_minutes,
+            ),
             target_horizon_minutes=args.horizon_minutes,
         )
         output_dir = run_mvp1_controls(
@@ -412,7 +436,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-expected-value":
         config = ExpectedValueConfig(
-            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
+            strategy_name=_resolve_cli_strategy_name(
+                parser=parser,
+                strategy_name=args.strategy_name,
+                horizon_minutes=args.horizon_minutes,
+            ),
             target_horizon_minutes=args.horizon_minutes,
             fee_bps=args.fee_bps,
             slippage_bps=args.slippage_bps,
@@ -431,7 +459,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-trade-simulation":
         config = TradeSimulationConfig(
-            strategy_name=_broad_strategy_name_for_horizon(args.horizon_minutes),
+            strategy_name=_resolve_cli_strategy_name(
+                parser=parser,
+                strategy_name=args.strategy_name,
+                horizon_minutes=args.horizon_minutes,
+            ),
             target_horizon_minutes=args.horizon_minutes,
             require_prediction_confident=not bool(args.allow_unconfident),
             require_rr_acceptable=not bool(args.allow_low_rr),
