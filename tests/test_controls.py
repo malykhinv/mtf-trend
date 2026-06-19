@@ -72,10 +72,12 @@ def _label_row(*, state: AnomalyState1mRow, scenario_30m: str) -> AnomalyOutcome
         scenario_30m=scenario_30m,
         scenario_60m=scenario_30m,
         scenario_120m=scenario_30m,
+        scenario_180m=scenario_30m,
         label_available_15m=True,
         label_available_30m=True,
         label_available_60m=True,
         label_available_120m=True,
+        label_available_180m=True,
         label_source="atr_normalized_future_paths_only",
         temporal_contract=TEMPORAL_LABEL_CONTRACT,
     )

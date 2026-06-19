@@ -35,10 +35,12 @@ class AnomalyOutcomeLabelRow:
     scenario_30m: str
     scenario_60m: str
     scenario_120m: str
+    scenario_180m: str
     label_available_15m: bool
     label_available_30m: bool
     label_available_60m: bool
     label_available_120m: bool
+    label_available_180m: bool
     label_source: str
     temporal_contract: str
 
@@ -67,7 +69,7 @@ class AnomalyOutcomeLabelRow:
             feature_cutoff_time_ms=self.feature_cutoff_time_ms,
             future_start_time_ms=self.future_start_time_ms,
         )
-        for field_name in ("scenario_15m", "scenario_30m", "scenario_60m", "scenario_120m"):
+        for field_name in ("scenario_15m", "scenario_30m", "scenario_60m", "scenario_120m", "scenario_180m"):
             value = getattr(self, field_name)
             if value not in VALID_OUTCOME_SCENARIOS:
                 raise MarketDataContractError(f"{field_name} has unknown scenario value: {value!r}")
@@ -75,6 +77,7 @@ class AnomalyOutcomeLabelRow:
         _check_label_available(self.scenario_30m, self.label_available_30m, "label_available_30m")
         _check_label_available(self.scenario_60m, self.label_available_60m, "label_available_60m")
         _check_label_available(self.scenario_120m, self.label_available_120m, "label_available_120m")
+        _check_label_available(self.scenario_180m, self.label_available_180m, "label_available_180m")
         if self.label_source != ATR_LABEL_SOURCE:
             raise MarketDataContractError(f"label_source must be {ATR_LABEL_SOURCE}")
         if self.temporal_contract != TEMPORAL_LABEL_CONTRACT:

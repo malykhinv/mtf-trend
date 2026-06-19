@@ -471,6 +471,8 @@ def _label_with_target(*, label: AnomalyOutcomeLabelRow, horizon_minutes: int, t
         return replace(label, scenario_60m=target, label_available_60m=True)
     if horizon_minutes == 120:
         return replace(label, scenario_120m=target, label_available_120m=True)
+    if horizon_minutes == 180:
+        return replace(label, scenario_180m=target, label_available_180m=True)
     raise ControlsArtifactError(f"unsupported target horizon: {horizon_minutes}")
 
 
@@ -521,6 +523,8 @@ def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> 
         return label.scenario_60m
     if horizon_minutes == 120:
         return label.scenario_120m
+    if horizon_minutes == 180:
+        return label.scenario_180m
     raise ControlsArtifactError(f"unsupported target horizon: {horizon_minutes}")
 
 

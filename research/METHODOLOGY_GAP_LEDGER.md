@@ -90,8 +90,8 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Market context engine | PARTIAL | BTC/ETH/systemic context features exist. Coverage and tests are still MVP-level. | Add catalog/audit coverage by context feature family. |
 | Feature registry / feature schema | PARTIAL | Feature catalog exists. It is not yet a hard gate for every model feature. | Enforce catalog membership before prediction. |
 | Generic online state builder | PARTIAL | Online anomaly state is causal. Current artifact path/name is still anomaly-first. | Move toward strategy-neutral `strategy_state_1m.csv` with aliases. |
-| Generic future path builder | PARTIAL | Future path uses post-snapshot candles and pessimistic double-barrier. Horizon support stops at 120m. | Add 180m or remove all 180m promises. |
-| Generic label builder | PARTIAL | ATR labels exist for 15/30/60/120. 180m is missing. | Add 180m labels or remove 180m strategies from spec. |
+| Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and 5/15/30/60/120/180m outcome windows with tests. | Keep horizon/schema tests as permanent gate. |
+| Generic label builder | IMPLEMENTED | ATR labels exist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
 | Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
 | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`, and tests cover multi-strategy H_max. | Keep as permanent regression gate. |
 | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
@@ -116,7 +116,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Running high/low as-of semantics | IMPLEMENTED | State uses data available only up to `state_time`. | Keep no-leakage tests. |
 | Post-anomaly extension strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
 | Post-pump distribution strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
-| 180m anomaly horizon | MISSING | Spec mentions h180, while future/labels stop at 120m. | Add 180m support or remove promise. |
+| 180m anomaly horizon | IMPLEMENTED | 180m fields are supported in future paths, labels, prediction target dispatch, controls, EV target dispatch, artifact schemas, and tests. | Keep post-pump/post-extension 180m blocked only by strategy implementation rows. |
 | Relaxed geometry features | MISSING | Shelf/sweep/consolidation continuous features are not fully implemented. | Add strategy-specific feature module and catalog rows. |
 | Required anomaly controls | PARTIAL | Controls exist, but full anomaly-specific ablation/control list needs completion check. | Add missing baselines/ablations. |
 | Reject reasons | PARTIAL | Reject constants exist, but funnel coverage is not complete across every stage. | Add rejection funnel artifact and tests. |
@@ -127,12 +127,12 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 
 1. `methodology: add implementation gap ledger` — this patch.
 2. `methodology: enforce active-horizon H_max purge` - implemented in this patch.
-3. `methodology: integrate holdout freeze into run-research`.
-4. `methodology: add independent forensic protocol audit`.
-5. `methodology: canonicalize strategy-neutral artifacts`.
+3. `methodology: canonicalize strategy-neutral artifacts`.
+4. `methodology: integrate holdout freeze into run-research`.
+5. `methodology: add independent forensic protocol audit`.
 6. `strategy: make registry status self-auditing`.
 7. `strategy: complete broad anomaly trigger component accounting`.
-8. `strategy: add 180m horizon support or remove 180m promises`.
+8. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
 9. `strategy: implement post-pump distribution variants`.
 10. `strategy: implement post-anomaly extension variants`.
 11. `features: add structural state and relaxed geometry features`.

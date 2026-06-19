@@ -236,6 +236,8 @@ def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> 
         return label.scenario_60m
     if horizon_minutes == 120:
         return label.scenario_120m
+    if horizon_minutes == 180:
+        return label.scenario_180m
     raise ExpectedValueInputError(f"unsupported EV target horizon: {horizon_minutes}")
 
 

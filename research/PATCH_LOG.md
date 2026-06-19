@@ -1,5 +1,21 @@
 # Patch log
 
+## strategy: add 180m horizon support
+
+Status: APPLIED in current local branch after direct code inspection of head `eb280f4a`.
+
+Intent:
+- Add 180m future-path fields to contracts, artifact schemas, builder output, and loader boundaries.
+- Add 180m descriptive outcome labels and dynamic label run-config horizon recording.
+- Allow 180m target dispatch in prediction, controls, and EV/decision code.
+- Keep post-pump and post-extension strategy variants marked as not implemented until their own registry patches.
+
+Validation for this patch:
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_labels.py tests\test_prediction.py tests\test_controls.py tests\test_decision_expected_value.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_labels.py tests\test_prediction.py tests\test_controls.py tests\test_decision_expected_value.py tests\test_artifact_schemas.py tests\test_contracts.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest`
+
 ## methodology: enforce active-horizon H_max purge
 
 Status: APPLIED in current local branch after direct code inspection of head `be91a0ca`.

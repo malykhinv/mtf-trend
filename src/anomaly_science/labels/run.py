@@ -170,7 +170,11 @@ def _run_config_rows(
         ),
         RunConfigRow(key="stage", value="mvp1_labels", source="runtime"),
         RunConfigRow(key="label_schema_version", value=config.label_schema_version, source="runtime"),
-        RunConfigRow(key="horizons_minutes", value="15|30|60|120", source="runtime"),
+        RunConfigRow(
+            key="horizons_minutes",
+            value="|".join(str(horizon_minutes) for horizon_minutes in config.horizons_minutes),
+            source="runtime",
+        ),
         RunConfigRow(key="atr_window_minutes", value=str(config.atr_window_minutes), source="runtime"),
         RunConfigRow(key="k_continuation", value=str(config.k_continuation), source="runtime"),
         RunConfigRow(key="k_fade", value=str(config.k_fade), source="runtime"),

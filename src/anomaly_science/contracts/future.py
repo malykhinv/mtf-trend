@@ -28,41 +28,49 @@ class FuturePathRow:
     future_return_30m: float | None = None
     future_return_60m: float | None = None
     future_return_120m: float | None = None
+    future_return_180m: float | None = None
     future_max_5m: float | None = None
     future_max_15m: float | None = None
     future_max_30m: float | None = None
     future_max_60m: float | None = None
     future_max_120m: float | None = None
+    future_max_180m: float | None = None
     future_min_5m: float | None = None
     future_min_15m: float | None = None
     future_min_30m: float | None = None
     future_min_60m: float | None = None
     future_min_120m: float | None = None
+    future_min_180m: float | None = None
     future_return_atr_5m: float | None = None
     future_return_atr_15m: float | None = None
     future_return_atr_30m: float | None = None
     future_return_atr_60m: float | None = None
     future_return_atr_120m: float | None = None
+    future_return_atr_180m: float | None = None
     future_max_atr_5m: float | None = None
     future_max_atr_15m: float | None = None
     future_max_atr_30m: float | None = None
     future_max_atr_60m: float | None = None
     future_max_atr_120m: float | None = None
+    future_max_atr_180m: float | None = None
     future_min_atr_5m: float | None = None
     future_min_atr_15m: float | None = None
     future_min_atr_30m: float | None = None
     future_min_atr_60m: float | None = None
     future_min_atr_120m: float | None = None
+    future_min_atr_180m: float | None = None
     intracandle_double_barrier_hit_5m: bool | None = None
     intracandle_double_barrier_hit_15m: bool | None = None
     intracandle_double_barrier_hit_30m: bool | None = None
     intracandle_double_barrier_hit_60m: bool | None = None
     intracandle_double_barrier_hit_120m: bool | None = None
+    intracandle_double_barrier_hit_180m: bool | None = None
     barrier_resolution_5m: str | None = None
     barrier_resolution_15m: str | None = None
     barrier_resolution_30m: str | None = None
     barrier_resolution_60m: str | None = None
     barrier_resolution_120m: str | None = None
+    barrier_resolution_180m: str | None = None
     reclaimed_running_high_30m: bool | None = None
     reclaimed_running_high_60m: bool | None = None
     broke_structural_low_30m: bool | None = None
@@ -93,7 +101,7 @@ class FuturePathRow:
         self._validate_optional_positive_float("double_barrier_k_fade")
         if (self.double_barrier_k_continuation is None) != (self.double_barrier_k_fade is None):
             raise MarketDataContractError("double barrier ATR thresholds must be present or missing together")
-        for horizon in (5, 15, 30, 60, 120):
+        for horizon in (5, 15, 30, 60, 120, 180):
             self._validate_barrier_resolution(horizon)
         for field_name in ("time_to_new_high_minutes", "time_to_structural_break_minutes"):
             value = getattr(self, field_name)
@@ -105,31 +113,37 @@ class FuturePathRow:
             "future_return_30m",
             "future_return_60m",
             "future_return_120m",
+            "future_return_180m",
             "future_max_5m",
             "future_max_15m",
             "future_max_30m",
             "future_max_60m",
             "future_max_120m",
+            "future_max_180m",
             "future_min_5m",
             "future_min_15m",
             "future_min_30m",
             "future_min_60m",
             "future_min_120m",
+            "future_min_180m",
             "future_return_atr_5m",
             "future_return_atr_15m",
             "future_return_atr_30m",
             "future_return_atr_60m",
             "future_return_atr_120m",
+            "future_return_atr_180m",
             "future_max_atr_5m",
             "future_max_atr_15m",
             "future_max_atr_30m",
             "future_max_atr_60m",
             "future_max_atr_120m",
+            "future_max_atr_180m",
             "future_min_atr_5m",
             "future_min_atr_15m",
             "future_min_atr_30m",
             "future_min_atr_60m",
             "future_min_atr_120m",
+            "future_min_atr_180m",
         ):
             self._validate_optional_finite_float(field_name)
 

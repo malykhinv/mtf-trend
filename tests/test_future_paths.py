@@ -120,14 +120,18 @@ def test_future_builder_uses_only_candles_after_snapshot_time() -> None:
     assert row.future_max_5m == pytest.approx((106.0 / 102.0) - 1.0)
     assert row.future_min_5m == pytest.approx((97.5 / 102.0) - 1.0)
     assert row.future_return_120m is None
+    assert row.future_return_180m is None
     assert row.future_max_120m == pytest.approx((106.0 / 102.0) - 1.0)
+    assert row.future_max_180m == pytest.approx((106.0 / 102.0) - 1.0)
     assert row.future_min_120m == pytest.approx((97.5 / 102.0) - 1.0)
+    assert row.future_min_180m == pytest.approx((97.5 / 102.0) - 1.0)
     assert row.core_atr_1440 == pytest.approx(4.0)
     assert row.ATR_1d_pct_asof_t == pytest.approx(4.0 / 102.0)
     assert row.future_return_atr_5m == pytest.approx((103.0 - 102.0) / 4.0)
     assert row.future_max_atr_5m == pytest.approx((106.0 - 102.0) / 4.0)
     assert row.future_min_atr_5m == pytest.approx((97.5 - 102.0) / 4.0)
     assert row.future_return_atr_120m is None
+    assert row.future_return_atr_180m is None
     assert row.reclaimed_running_high_30m is True
     assert row.reclaimed_running_high_60m is True
     assert row.time_to_new_high_minutes == 2
@@ -284,3 +288,4 @@ def test_future_path_artifact_roundtrip_accepts_atr_normalized_schema(tmp_path: 
     header = path.read_text(encoding="utf-8-sig").splitlines()[0].split(",")
     assert "ATR_1d_asof_t" in header
     assert "future_max_atr_120m" in header
+    assert "future_max_atr_180m" in header

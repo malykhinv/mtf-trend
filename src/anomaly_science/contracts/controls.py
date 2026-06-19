@@ -116,8 +116,8 @@ def _validate_common_control_fields(
 ) -> None:
     if not version:
         raise MarketDataContractError("control_version is required")
-    if target_horizon_minutes not in (15, 30, 60):
-        raise MarketDataContractError("target_horizon_minutes must be one of 15, 30, or 60")
+    if target_horizon_minutes not in (15, 30, 60, 120, 180):
+        raise MarketDataContractError("target_horizon_minutes must be one of 15, 30, 60, 120, or 180")
     if available_label_rows < 0:
         raise MarketDataContractError("available_label_rows must be non-negative")
     if oos_prediction_rows < 0:

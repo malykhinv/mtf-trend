@@ -101,6 +101,7 @@ def build_anomaly_outcome_labels_from_inputs(
         scenario_30m = assign_future_nature_scenario(future=future, horizon_minutes=30, config=cfg)
         scenario_60m = assign_future_nature_scenario(future=future, horizon_minutes=60, config=cfg)
         scenario_120m = assign_future_nature_scenario(future=future, horizon_minutes=120, config=cfg)
+        scenario_180m = assign_future_nature_scenario(future=future, horizon_minutes=180, config=cfg)
         rows.append(
             AnomalyOutcomeLabelRow(
                 label_schema_version=cfg.label_schema_version,
@@ -118,10 +119,12 @@ def build_anomaly_outcome_labels_from_inputs(
                 scenario_30m=scenario_30m,
                 scenario_60m=scenario_60m,
                 scenario_120m=scenario_120m,
+                scenario_180m=scenario_180m,
                 label_available_15m=_label_available(scenario_15m),
                 label_available_30m=_label_available(scenario_30m),
                 label_available_60m=_label_available(scenario_60m),
                 label_available_120m=_label_available(scenario_120m),
+                label_available_180m=_label_available(scenario_180m),
                 label_source=ATR_LABEL_SOURCE,
                 temporal_contract=TEMPORAL_LABEL_CONTRACT,
             )
@@ -210,10 +213,12 @@ def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLab
                     scenario_30m=_required_str(row, "scenario_30m"),
                     scenario_60m=_required_str(row, "scenario_60m"),
                     scenario_120m=_required_str(row, "scenario_120m"),
+                    scenario_180m=_required_str(row, "scenario_180m"),
                     label_available_15m=_required_bool(row, "label_available_15m"),
                     label_available_30m=_required_bool(row, "label_available_30m"),
                     label_available_60m=_required_bool(row, "label_available_60m"),
                     label_available_120m=_required_bool(row, "label_available_120m"),
+                    label_available_180m=_required_bool(row, "label_available_180m"),
                     label_source=_required_str(row, "label_source"),
                     temporal_contract=_required_str(row, "temporal_contract"),
                 )
