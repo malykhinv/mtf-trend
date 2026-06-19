@@ -1,5 +1,17 @@
 # Patch log
 
+## methodology: add explicit sample weight policy
+
+Status: APPLIED.
+
+Intent:
+- Add `sample_weight_policy="uniform_v1"` to prediction config as an explicit ML protocol contract.
+- Pass validated fit-split sample weights into CatBoost instead of relying on implicit library defaults.
+- Record sample weight policy and weight sums in model metadata, model diagnostics, run config, and protocol audit.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_artifact_schemas.py`
+
 ## methodology: enforce feature catalog membership before prediction
 
 Status: APPLIED.

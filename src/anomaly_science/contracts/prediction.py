@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .horizons import research_horizon_label_column, validate_supported_research_horizon
@@ -183,6 +184,8 @@ class ModelMetadataRow:
     best_iteration: int
     class_order: str
     model_feature_names: str
+    sample_weight_policy: str
+    sample_weight_scope: str
     calibration_method: str
 
     def __post_init__(self) -> None:
@@ -217,6 +220,10 @@ class ModelMetadataRow:
             raise MarketDataContractError("class_order is required")
         if not self.model_feature_names:
             raise MarketDataContractError("model_feature_names is required")
+        if not self.sample_weight_policy:
+            raise MarketDataContractError("sample_weight_policy is required")
+        if not self.sample_weight_scope:
+            raise MarketDataContractError("sample_weight_scope is required")
         if not self.calibration_method:
             raise MarketDataContractError("calibration_method is required")
 
@@ -235,6 +242,10 @@ class ModelTrainingDiagnosticRow:
     fit_class_count: int
     validation_class_count: int
     calibration_class_count: int
+    sample_weight_policy: str
+    fit_sample_weight_sum: float
+    validation_sample_weight_sum: float
+    calibration_sample_weight_sum: float
     status: str
     reason: str
 
@@ -258,6 +269,12 @@ class ModelTrainingDiagnosticRow:
         ):
             if getattr(self, field_name) < 0:
                 raise MarketDataContractError(f"{field_name} must be non-negative")
+        if not self.sample_weight_policy:
+            raise MarketDataContractError("sample_weight_policy is required")
+        for field_name in ("fit_sample_weight_sum", "validation_sample_weight_sum", "calibration_sample_weight_sum"):
+            value = getattr(self, field_name)
+            if not math.isfinite(value) or value < 0.0:
+                raise MarketDataContractError(f"{field_name} must be finite and non-negative")
         if self.status not in {"TRAINED", "SKIPPED"}:
             raise MarketDataContractError("model training diagnostic status must be TRAINED or SKIPPED")
         if not self.reason:

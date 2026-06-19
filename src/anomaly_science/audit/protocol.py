@@ -48,6 +48,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "horizon_model_metadata_identity_consistent",
     "weekly_walk_forward_heavy_models_enforced",
     "frozen_weekly_model_used_for_daily_oos",
+    "sample_weight_policy_explicit_and_asof_safe",
     "expected_value_computed_before_trade_simulation",
     "trade_simulation_after_calibration_and_decision_timing",
     "pessimistic_entry_price_includes_slippage_penalty",
@@ -115,6 +116,7 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
         "horizon_model_metadata_identity_consistent",
         "weekly_walk_forward_heavy_models_enforced",
         "frozen_weekly_model_used_for_daily_oos",
+        "sample_weight_policy_explicit_and_asof_safe",
     ),
     "mvp1_controls": (
         "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",

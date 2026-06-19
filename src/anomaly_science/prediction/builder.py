@@ -538,6 +538,7 @@ class _CatBoostIsotonicModel:
         model.fit(
             _feature_matrix(fit_rows, feature_names=feature_names),
             fit_targets,
+            sample_weight=_sample_weights(fit_rows, config=config),
             eval_set=eval_set,
             use_best_model=True,
             early_stopping_rounds=20,
@@ -600,6 +601,8 @@ class _CatBoostIsotonicModel:
             best_iteration=self._best_iteration(),
             class_order=",".join(PREDICTED_SCENARIOS),
             model_feature_names=",".join(self.feature_names),
+            sample_weight_policy=self._config.sample_weight_policy,
+            sample_weight_scope="fit_split_only;validation_for_early_stopping;calibration_unweighted_isotonic",
             calibration_method="one_vs_rest_isotonic_regression_on_train_calibration_split",
         )
 
@@ -840,6 +843,10 @@ def _weekly_training_diagnostic(
         fit_class_count=len(set(fit_targets)),
         validation_class_count=len(set(validation_targets)),
         calibration_class_count=len(set(calibration_targets)),
+        sample_weight_policy=config.sample_weight_policy,
+        fit_sample_weight_sum=_sample_weight_sum(fit_rows, config=config),
+        validation_sample_weight_sum=_sample_weight_sum(validation_rows, config=config),
+        calibration_sample_weight_sum=_sample_weight_sum(calibration_rows, config=config),
         status=status,
         reason=reason,
     )
@@ -847,6 +854,23 @@ def _weekly_training_diagnostic(
 
 def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionConfig) -> list[str]:
     return [_target_for_horizon(row.label, config.target_horizon_minutes) for row in rows]
+
+
+def _sample_weights(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> np.ndarray:
+    if config.sample_weight_policy != "uniform_v1":
+        raise PredictionInputError(f"unsupported sample_weight_policy: {config.sample_weight_policy}")
+    weights = np.ones(len(rows), dtype=float)
+    if len(weights) != len(rows):
+        raise PredictionInputError("sample weights length must match rows")
+    if len(weights) and (not np.isfinite(weights).all() or np.any(weights <= 0.0)):
+        raise PredictionInputError("sample weights must be finite and strictly positive")
+    return weights
+
+
+def _sample_weight_sum(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> float:
+    if not rows:
+        return 0.0
+    return float(_sample_weights(rows, config=config).sum())
 
 
 def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> tuple[str, ...]:

@@ -1,0 +1,327 @@
+diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 3919f485..4f014829 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -97,7 +97,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
+ | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Prediction protocol audit now verifies Core whitelist, registry strategy/horizon compatibility, target label column, active H_max, purge horizon, OOS prediction artifact identity, and model metadata horizon identity. Tests cover multi-strategy H_max, artifact horizon identity, and horizon audit pass/fail rows. | Keep as permanent regression gate. |
+ | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
+-| Sample weighting | MISSING | Methodology allows as-of sample weights, but no explicit policy is implemented. | Add `sample_weight_policy_v1` after audit/horizon fixes. |
++| Sample weighting | IMPLEMENTED | Prediction config now requires explicit `sample_weight_policy="uniform_v1"`, CatBoost receives validated fit-split sample weights, model metadata and training diagnostics record the policy and weight sums, run config records the policy, and prediction protocol audit emits `sample_weight_policy_explicit_and_asof_safe`. Tests reject unknown policies and verify artifact/audit output. | Keep policy-version tests as permanent gate; add a new version before any non-uniform weighting. |
+ | Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
+ | Expected utility | PARTIAL | EV calculations exist and write canonical `strategy_decision_timing.csv` / `strategy_ev_metrics.csv`. Simulation alignment is still incomplete. | Align execution reference and store execution model fields. |
+ | Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
+@@ -138,13 +138,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ 9. `methodology: add independent forensic protocol audit` - implemented.
+ 10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
+ 11. `methodology: enforce feature catalog membership before prediction` - implemented.
+-12. `strategy: make registry status self-auditing`.
+-13. `strategy: complete broad anomaly trigger component accounting`.
+-14. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+-15. `strategy: implement post-pump distribution variants`.
+-16. `strategy: implement post-anomaly extension variants`.
+-17. `features: add structural state and relaxed geometry features`.
+-18. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
++12. `methodology: add explicit sample weight policy` - implemented.
++13. `strategy: make registry status self-auditing`.
++14. `strategy: complete broad anomaly trigger component accounting`.
++15. `strategy: add 180m horizon support or remove 180m promises` - implemented.
++16. `strategy: implement post-pump distribution variants`.
++17. `strategy: implement post-anomaly extension variants`.
++18. `features: add structural state and relaxed geometry features`.
++19. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+ 
+ Rule:
+ 
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 889ad926..24aa5e91 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,17 @@
+ # Patch log
+ 
++## methodology: add explicit sample weight policy
++
++Status: APPLIED.
++
++Intent:
++- Add `sample_weight_policy="uniform_v1"` to prediction config as an explicit ML protocol contract.
++- Pass validated fit-split sample weights into CatBoost instead of relying on implicit library defaults.
++- Record sample weight policy and weight sums in model metadata, model diagnostics, run config, and protocol audit.
++
++Validation:
++- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_artifact_schemas.py`
++
+ ## methodology: enforce feature catalog membership before prediction
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 0d542ddd..16691407 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -7,7 +7,7 @@ Active rule:
+ - New code must not import legacy modules.
+ - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
+ - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
+-- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix with prediction-time catalog membership hard gate for all numeric/bool model features, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
++- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix with prediction-time catalog membership hard gate for all numeric/bool model features, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, explicit prediction sample-weight policy `uniform_v1`, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+ - Future paths remain raw outcomes.
+ - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
+ - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
+@@ -21,6 +21,7 @@ Active rule:
+ 
+ Current local base commit before the active run-research holdout freeze patch: `db17b76a`, verified with `git rev-parse --short HEAD`.
+ Last local validation on 2026-06-19:
++- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_artifact_schemas.py`
+ - `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_feature_catalog.py tests\test_horizon_contract.py`
+ - `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
+ - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+diff --git a/src/anomaly_science/audit/protocol.py b/src/anomaly_science/audit/protocol.py
+index e11dd854..5e8ab835 100644
+--- a/src/anomaly_science/audit/protocol.py
++++ b/src/anomaly_science/audit/protocol.py
+@@ -48,6 +48,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
+     "horizon_model_metadata_identity_consistent",
+     "weekly_walk_forward_heavy_models_enforced",
+     "frozen_weekly_model_used_for_daily_oos",
++    "sample_weight_policy_explicit_and_asof_safe",
+     "expected_value_computed_before_trade_simulation",
+     "trade_simulation_after_calibration_and_decision_timing",
+     "pessimistic_entry_price_includes_slippage_penalty",
+@@ -115,6 +116,7 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
+         "horizon_model_metadata_identity_consistent",
+         "weekly_walk_forward_heavy_models_enforced",
+         "frozen_weekly_model_used_for_daily_oos",
++        "sample_weight_policy_explicit_and_asof_safe",
+     ),
+     "mvp1_controls": (
+         "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+diff --git a/src/anomaly_science/contracts/artifacts.py b/src/anomaly_science/contracts/artifacts.py
+index c968258f..62ed218a 100644
+--- a/src/anomaly_science/contracts/artifacts.py
++++ b/src/anomaly_science/contracts/artifacts.py
+@@ -362,6 +362,8 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
+             "best_iteration",
+             "class_order",
+             "model_feature_names",
++            "sample_weight_policy",
++            "sample_weight_scope",
+             "calibration_method",
+         ),
+         description="Frozen weekly model metadata including class order, feature names, and calibration method.",
+@@ -394,6 +396,10 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
+             "fit_class_count",
+             "validation_class_count",
+             "calibration_class_count",
++            "sample_weight_policy",
++            "fit_sample_weight_sum",
++            "validation_sample_weight_sum",
++            "calibration_sample_weight_sum",
+             "status",
+             "reason",
+         ),
+diff --git a/src/anomaly_science/contracts/prediction.py b/src/anomaly_science/contracts/prediction.py
+index cc44e1b1..e8b63feb 100644
+--- a/src/anomaly_science/contracts/prediction.py
++++ b/src/anomaly_science/contracts/prediction.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import math
+ from dataclasses import dataclass
+ 
+ from .horizons import research_horizon_label_column, validate_supported_research_horizon
+@@ -183,6 +184,8 @@ class ModelMetadataRow:
+     best_iteration: int
+     class_order: str
+     model_feature_names: str
++    sample_weight_policy: str
++    sample_weight_scope: str
+     calibration_method: str
+ 
+     def __post_init__(self) -> None:
+@@ -217,6 +220,10 @@ class ModelMetadataRow:
+             raise MarketDataContractError("class_order is required")
+         if not self.model_feature_names:
+             raise MarketDataContractError("model_feature_names is required")
++        if not self.sample_weight_policy:
++            raise MarketDataContractError("sample_weight_policy is required")
++        if not self.sample_weight_scope:
++            raise MarketDataContractError("sample_weight_scope is required")
+         if not self.calibration_method:
+             raise MarketDataContractError("calibration_method is required")
+ 
+@@ -235,6 +242,10 @@ class ModelTrainingDiagnosticRow:
+     fit_class_count: int
+     validation_class_count: int
+     calibration_class_count: int
++    sample_weight_policy: str
++    fit_sample_weight_sum: float
++    validation_sample_weight_sum: float
++    calibration_sample_weight_sum: float
+     status: str
+     reason: str
+ 
+@@ -258,6 +269,12 @@ class ModelTrainingDiagnosticRow:
+         ):
+             if getattr(self, field_name) < 0:
+                 raise MarketDataContractError(f"{field_name} must be non-negative")
++        if not self.sample_weight_policy:
++            raise MarketDataContractError("sample_weight_policy is required")
++        for field_name in ("fit_sample_weight_sum", "validation_sample_weight_sum", "calibration_sample_weight_sum"):
++            value = getattr(self, field_name)
++            if not math.isfinite(value) or value < 0.0:
++                raise MarketDataContractError(f"{field_name} must be finite and non-negative")
+         if self.status not in {"TRAINED", "SKIPPED"}:
+             raise MarketDataContractError("model training diagnostic status must be TRAINED or SKIPPED")
+         if not self.reason:
+diff --git a/src/anomaly_science/prediction/builder.py b/src/anomaly_science/prediction/builder.py
+index e773b395..9de8d94e 100644
+--- a/src/anomaly_science/prediction/builder.py
++++ b/src/anomaly_science/prediction/builder.py
+@@ -538,6 +538,7 @@ class _CatBoostIsotonicModel:
+         model.fit(
+             _feature_matrix(fit_rows, feature_names=feature_names),
+             fit_targets,
++            sample_weight=_sample_weights(fit_rows, config=config),
+             eval_set=eval_set,
+             use_best_model=True,
+             early_stopping_rounds=20,
+@@ -600,6 +601,8 @@ class _CatBoostIsotonicModel:
+             best_iteration=self._best_iteration(),
+             class_order=",".join(PREDICTED_SCENARIOS),
+             model_feature_names=",".join(self.feature_names),
++            sample_weight_policy=self._config.sample_weight_policy,
++            sample_weight_scope="fit_split_only;validation_for_early_stopping;calibration_unweighted_isotonic",
+             calibration_method="one_vs_rest_isotonic_regression_on_train_calibration_split",
+         )
+ 
+@@ -840,6 +843,10 @@ def _weekly_training_diagnostic(
+         fit_class_count=len(set(fit_targets)),
+         validation_class_count=len(set(validation_targets)),
+         calibration_class_count=len(set(calibration_targets)),
++        sample_weight_policy=config.sample_weight_policy,
++        fit_sample_weight_sum=_sample_weight_sum(fit_rows, config=config),
++        validation_sample_weight_sum=_sample_weight_sum(validation_rows, config=config),
++        calibration_sample_weight_sum=_sample_weight_sum(calibration_rows, config=config),
+         status=status,
+         reason=reason,
+     )
+@@ -849,6 +856,23 @@ def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionCo
+     return [_target_for_horizon(row.label, config.target_horizon_minutes) for row in rows]
+ 
+ 
++def _sample_weights(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> np.ndarray:
++    if config.sample_weight_policy != "uniform_v1":
++        raise PredictionInputError(f"unsupported sample_weight_policy: {config.sample_weight_policy}")
++    weights = np.ones(len(rows), dtype=float)
++    if len(weights) != len(rows):
++        raise PredictionInputError("sample weights length must match rows")
++    if len(weights) and (not np.isfinite(weights).all() or np.any(weights <= 0.0)):
++        raise PredictionInputError("sample weights must be finite and strictly positive")
++    return weights
++
++
++def _sample_weight_sum(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> float:
++    if not rows:
++        return 0.0
++    return float(_sample_weights(rows, config=config).sum())
++
++
+ def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> tuple[str, ...]:
+     names = (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES)
+     if config.excluded_model_feature_prefixes:
+diff --git a/src/anomaly_science/prediction/config.py b/src/anomaly_science/prediction/config.py
+index 5b7c8f49..0faafb13 100644
+--- a/src/anomaly_science/prediction/config.py
++++ b/src/anomaly_science/prediction/config.py
+@@ -28,6 +28,7 @@ class WalkForwardPredictionConfig:
+     catboost_learning_rate: float = 0.05
+     random_seed: int = 20260618
+     excluded_model_feature_prefixes: tuple[str, ...] = ()
++    sample_weight_policy: str = "uniform_v1"
+ 
+     def __post_init__(self) -> None:
+         if not self.prediction_version:
+@@ -57,6 +58,8 @@ class WalkForwardPredictionConfig:
+             raise ValueError("catboost_learning_rate must be positive")
+         if any(not item for item in self.excluded_model_feature_prefixes):
+             raise ValueError("excluded_model_feature_prefixes must not contain empty values")
++        if self.sample_weight_policy != "uniform_v1":
++            raise ValueError("sample_weight_policy must be 'uniform_v1'")
+ 
+     @property
+     def active_h_max_minutes(self) -> int:
+diff --git a/src/anomaly_science/prediction/run.py b/src/anomaly_science/prediction/run.py
+index d8d5a82c..11f489e2 100644
+--- a/src/anomaly_science/prediction/run.py
++++ b/src/anomaly_science/prediction/run.py
+@@ -247,6 +247,12 @@ def _protocol_rows(
+             message="all OOS days inside an ISO week share the same weekly_freeze model identifier and train_cutoff_time_ms",
+             artifact="anomaly_oos_predictions.csv",
+         ),
++        ProtocolAuditRow(
++            check_name="sample_weight_policy_explicit_and_asof_safe",
++            status=AuditStatus.PASS,
++            message=f"sample_weight_policy={config.sample_weight_policy}; uniform_v1 uses no labels, no future outcomes, and no full-period fitted weights",
++            artifact="strategy_model_metadata.csv;strategy_model_training_diagnostics.csv",
++        ),
+     ]
+     return base_rows + build_methodology_v2_audit_rows(
+         stage="mvp1_prediction",
+@@ -297,6 +303,7 @@ def _run_config_rows(
+         RunConfigRow(key="catboost_depth", value=str(config.catboost_depth), source="runtime"),
+         RunConfigRow(key="catboost_learning_rate", value=str(config.catboost_learning_rate), source="runtime"),
+         RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
++        RunConfigRow(key="sample_weight_policy", value=config.sample_weight_policy, source="runtime"),
+         RunConfigRow(key="calibration_method", value="one_vs_rest_isotonic_regression_on_train_calibration_split", source="runtime"),
+         RunConfigRow(key="model_freeze_cadence", value="iso_weekly", source="runtime"),
+         RunConfigRow(key="prediction_scope", value="calibrated_probabilities_not_decisions", source="runtime"),
+diff --git a/tests/test_prediction.py b/tests/test_prediction.py
+index dfe7102f..bb122e69 100644
+--- a/tests/test_prediction.py
++++ b/tests/test_prediction.py
+@@ -283,6 +283,11 @@ def test_prediction_model_features_must_be_declared_in_catalog() -> None:
+         validate_model_feature_catalog_membership(("undeclared_alpha",))
+ 
+ 
++def test_prediction_config_rejects_unknown_sample_weight_policy() -> None:
++    with pytest.raises(ValueError, match="sample_weight_policy"):
++        WalkForwardPredictionConfig(sample_weight_policy="future_outcome_weighted")
++
++
+ def test_oos_prediction_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
+     path = tmp_path / "anomaly_oos_predictions.csv"
+     columns = list(get_artifact_schema("anomaly_oos_predictions.csv").required_columns) + ["extra"]
+@@ -363,6 +368,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) ->
+     assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
+     assert audit_by_name["weekly_walk_forward_heavy_models_enforced"]["status"] == "PASS"
+     assert audit_by_name["frozen_weekly_model_used_for_daily_oos"]["status"] == "PASS"
++    assert audit_by_name["sample_weight_policy_explicit_and_asof_safe"]["status"] == "PASS"
+     assert audit_by_name["feature_matrix_artifact_schema_boundary"]["status"] == "PASS"
+ 
+     with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+@@ -372,6 +378,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) ->
+     assert run_config["target_label_column"] == "scenario_30m"
+     assert run_config["active_h_max_minutes"] == "30"
+     assert run_config["feature_schema_version"] == "feature_schema_v1_relative_asof"
++    assert run_config["sample_weight_policy"] == "uniform_v1"
+ 
+     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+         rows = list(csv.DictReader(file_obj))
+@@ -389,6 +396,8 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) ->
+     assert metadata_rows[0]["target_horizon_minutes"] == "30"
+     assert metadata_rows[0]["target_label_column"] == "scenario_30m"
+     assert metadata_rows[0]["active_h_max_minutes"] == "30"
++    assert metadata_rows[0]["sample_weight_policy"] == "uniform_v1"
++    assert metadata_rows[0]["sample_weight_scope"] == "fit_split_only;validation_for_early_stopping;calibration_unweighted_isotonic"
+     assert int(metadata_rows[0]["best_iteration"]) >= 0
+     assert "feature_matrix.volume_zscore" in metadata_rows[0]["model_feature_names"]
+ 
+@@ -400,3 +409,6 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) ->
+     with (out_dir / "strategy_model_training_diagnostics.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+         diagnostic_rows = list(csv.DictReader(file_obj))
+     assert any(row["status"] == "TRAINED" and row["reason"] == "trained" for row in diagnostic_rows)
++    trained = next(row for row in diagnostic_rows if row["status"] == "TRAINED")
++    assert trained["sample_weight_policy"] == "uniform_v1"
++    assert float(trained["fit_sample_weight_sum"]) == pytest.approx(float(trained["fit_row_count"]))

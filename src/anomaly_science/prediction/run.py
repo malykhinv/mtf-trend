@@ -247,6 +247,12 @@ def _protocol_rows(
             message="all OOS days inside an ISO week share the same weekly_freeze model identifier and train_cutoff_time_ms",
             artifact="anomaly_oos_predictions.csv",
         ),
+        ProtocolAuditRow(
+            check_name="sample_weight_policy_explicit_and_asof_safe",
+            status=AuditStatus.PASS,
+            message=f"sample_weight_policy={config.sample_weight_policy}; uniform_v1 uses no labels, no future outcomes, and no full-period fitted weights",
+            artifact="strategy_model_metadata.csv;strategy_model_training_diagnostics.csv",
+        ),
     ]
     return base_rows + build_methodology_v2_audit_rows(
         stage="mvp1_prediction",
@@ -297,6 +303,7 @@ def _run_config_rows(
         RunConfigRow(key="catboost_depth", value=str(config.catboost_depth), source="runtime"),
         RunConfigRow(key="catboost_learning_rate", value=str(config.catboost_learning_rate), source="runtime"),
         RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
+        RunConfigRow(key="sample_weight_policy", value=config.sample_weight_policy, source="runtime"),
         RunConfigRow(key="calibration_method", value="one_vs_rest_isotonic_regression_on_train_calibration_split", source="runtime"),
         RunConfigRow(key="model_freeze_cadence", value="iso_weekly", source="runtime"),
         RunConfigRow(key="prediction_scope", value="calibrated_probabilities_not_decisions", source="runtime"),

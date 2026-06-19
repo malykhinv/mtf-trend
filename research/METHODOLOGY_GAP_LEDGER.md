@@ -97,7 +97,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
 | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Prediction protocol audit now verifies Core whitelist, registry strategy/horizon compatibility, target label column, active H_max, purge horizon, OOS prediction artifact identity, and model metadata horizon identity. Tests cover multi-strategy H_max, artifact horizon identity, and horizon audit pass/fail rows. | Keep as permanent regression gate. |
 | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
-| Sample weighting | MISSING | Methodology allows as-of sample weights, but no explicit policy is implemented. | Add `sample_weight_policy_v1` after audit/horizon fixes. |
+| Sample weighting | IMPLEMENTED | Prediction config now requires explicit `sample_weight_policy="uniform_v1"`, CatBoost receives validated fit-split sample weights, model metadata and training diagnostics record the policy and weight sums, run config records the policy, and prediction protocol audit emits `sample_weight_policy_explicit_and_asof_safe`. Tests reject unknown policies and verify artifact/audit output. | Keep policy-version tests as permanent gate; add a new version before any non-uniform weighting. |
 | Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
 | Expected utility | PARTIAL | EV calculations exist and write canonical `strategy_decision_timing.csv` / `strategy_ev_metrics.csv`. Simulation alignment is still incomplete. | Align execution reference and store execution model fields. |
 | Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
@@ -138,13 +138,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 9. `methodology: add independent forensic protocol audit` - implemented.
 10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
 11. `methodology: enforce feature catalog membership before prediction` - implemented.
-12. `strategy: make registry status self-auditing`.
-13. `strategy: complete broad anomaly trigger component accounting`.
-14. `strategy: add 180m horizon support or remove 180m promises` - implemented.
-15. `strategy: implement post-pump distribution variants`.
-16. `strategy: implement post-anomaly extension variants`.
-17. `features: add structural state and relaxed geometry features`.
-18. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+12. `methodology: add explicit sample weight policy` - implemented.
+13. `strategy: make registry status self-auditing`.
+14. `strategy: complete broad anomaly trigger component accounting`.
+15. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+16. `strategy: implement post-pump distribution variants`.
+17. `strategy: implement post-anomaly extension variants`.
+18. `features: add structural state and relaxed geometry features`.
+19. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 

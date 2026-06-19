@@ -28,6 +28,7 @@ class WalkForwardPredictionConfig:
     catboost_learning_rate: float = 0.05
     random_seed: int = 20260618
     excluded_model_feature_prefixes: tuple[str, ...] = ()
+    sample_weight_policy: str = "uniform_v1"
 
     def __post_init__(self) -> None:
         if not self.prediction_version:
@@ -57,6 +58,8 @@ class WalkForwardPredictionConfig:
             raise ValueError("catboost_learning_rate must be positive")
         if any(not item for item in self.excluded_model_feature_prefixes):
             raise ValueError("excluded_model_feature_prefixes must not contain empty values")
+        if self.sample_weight_policy != "uniform_v1":
+            raise ValueError("sample_weight_policy must be 'uniform_v1'")
 
     @property
     def active_h_max_minutes(self) -> int:

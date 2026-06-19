@@ -283,6 +283,11 @@ def test_prediction_model_features_must_be_declared_in_catalog() -> None:
         validate_model_feature_catalog_membership(("undeclared_alpha",))
 
 
+def test_prediction_config_rejects_unknown_sample_weight_policy() -> None:
+    with pytest.raises(ValueError, match="sample_weight_policy"):
+        WalkForwardPredictionConfig(sample_weight_policy="future_outcome_weighted")
+
+
 def test_oos_prediction_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
     path = tmp_path / "anomaly_oos_predictions.csv"
     columns = list(get_artifact_schema("anomaly_oos_predictions.csv").required_columns) + ["extra"]
@@ -363,6 +368,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
     assert audit_by_name["weekly_walk_forward_heavy_models_enforced"]["status"] == "PASS"
     assert audit_by_name["frozen_weekly_model_used_for_daily_oos"]["status"] == "PASS"
+    assert audit_by_name["sample_weight_policy_explicit_and_asof_safe"]["status"] == "PASS"
     assert audit_by_name["feature_matrix_artifact_schema_boundary"]["status"] == "PASS"
 
     with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
@@ -372,6 +378,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert run_config["target_label_column"] == "scenario_30m"
     assert run_config["active_h_max_minutes"] == "30"
     assert run_config["feature_schema_version"] == "feature_schema_v1_relative_asof"
+    assert run_config["sample_weight_policy"] == "uniform_v1"
 
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
@@ -389,6 +396,8 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert metadata_rows[0]["target_horizon_minutes"] == "30"
     assert metadata_rows[0]["target_label_column"] == "scenario_30m"
     assert metadata_rows[0]["active_h_max_minutes"] == "30"
+    assert metadata_rows[0]["sample_weight_policy"] == "uniform_v1"
+    assert metadata_rows[0]["sample_weight_scope"] == "fit_split_only;validation_for_early_stopping;calibration_unweighted_isotonic"
     assert int(metadata_rows[0]["best_iteration"]) >= 0
     assert "feature_matrix.volume_zscore" in metadata_rows[0]["model_feature_names"]
 
@@ -400,3 +409,6 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     with (out_dir / "strategy_model_training_diagnostics.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         diagnostic_rows = list(csv.DictReader(file_obj))
     assert any(row["status"] == "TRAINED" and row["reason"] == "trained" for row in diagnostic_rows)
+    trained = next(row for row in diagnostic_rows if row["status"] == "TRAINED")
+    assert trained["sample_weight_policy"] == "uniform_v1"
+    assert float(trained["fit_sample_weight_sum"]) == pytest.approx(float(trained["fit_row_count"]))
