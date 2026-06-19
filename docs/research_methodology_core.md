@@ -532,6 +532,34 @@ required_data_streams[stream] = false -> stream optional, missing flag обяз�
 
 Ablation experiments могут временно переключать required streams в `false`, но только как отдельный experiment mode с записью в experiment/research ledger.
 
+### 7.2. Shared DataQualityMask перед trigger
+
+Core обязан строить один общий `DataQualityMask` до вызова `strategy.generate_triggers`.
+
+Правило:
+
+```text
+row-local bad candles -> excluded by DataQualityMask before trigger generation
+dataset/schema/source failures -> blocking FAIL, trigger generation forbidden
+technical_noise_shock and warmup_after_data_gap -> excluded by the same DataQualityMask
+```
+
+DataQualityMask является enforcement layer, а не post-processing:
+
+```text
+market_frame_asof для strategy.generate_triggers уже не содержит excluded rows.
+strategy_events.csv не должен содержать events, seed которых пришёл из excluded rows.
+strategy_data_quality.csv обязан хранить explicit row/reason counts for mask exclusions.
+```
+
+Запрещено:
+
+```text
+сначала сгенерировать triggers, а потом отфильтровать плохие события
+использовать critical row-local bad candles как причину silently skip всего detector run-а, если они могут быть явно excluded
+пропускать bad rows в baseline/rolling context detector-а
+```
+
 ## 8. Point-in-Time Universe
 
 Core обязан строить universe на каждый день/момент времени без survivorship bias.

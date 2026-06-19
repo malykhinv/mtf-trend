@@ -12,7 +12,15 @@ import pytest
 from anomaly_science.contracts.audit import AuditStatus
 from anomaly_science.contracts.methodology import MAX_FEATURE_LOOKBACK_MINUTES
 from anomaly_science.data import CsvDataSourceError, CsvDirectoryDataSource, run_data_quality, run_mvp1_data_audit
-from anomaly_science.data.quality import WARMUP_WINDOW_MINUTES, filter_warmup_window_rows
+from anomaly_science.data.quality import (
+    WARMUP_WINDOW_MINUTES,
+    apply_data_quality_mask,
+    build_candles_1m_data_quality_mask,
+    data_quality_mask_audit_row,
+    filter_warmup_window_rows,
+    has_critical_fail,
+    has_detector_blocking_quality_fail,
+)
 from anomaly_science.universe import build_symbol_universe_by_day
 
 
@@ -72,6 +80,55 @@ def test_data_quality_flags_duplicate_candles() -> None:
     assert by_name["candles_1m_duplicate_symbol_time"].severity == "critical"
     assert by_name["open_interest_5m_present"].status == AuditStatus.WARN
 
+
+
+
+def test_data_quality_mask_excludes_maskable_bad_1m_rows_without_blocking_detector() -> None:
+    candles_1m = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "open_time_ms": i * 60_000,
+                "available_time_ms": (i + 1) * 60_000,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": -1.0 if i == 5 else 100.0,
+                "volume": 10.0,
+                "quote_volume": 1_000.0,
+            }
+            for i in range(7)
+        ]
+    )
+    candles_5m = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "open_time_ms": 0,
+                "available_time_ms": 5 * 60_000,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 50.0,
+                "quote_volume": 5_000.0,
+            }
+        ]
+    )
+
+    rows = run_data_quality({"candles_1m": candles_1m, "candles_5m": candles_5m, "open_interest_5m": None, "liquidations": None})
+    mask = build_candles_1m_data_quality_mask(candles_1m)
+    masked_rows = [*rows, data_quality_mask_audit_row(mask)]
+    filtered = apply_data_quality_mask(candles_1m, mask)
+
+    assert has_critical_fail(rows) is True
+    assert has_detector_blocking_quality_fail(masked_rows) is False
+    assert mask.excluded_rows == 2
+    assert mask.reason_counts["non_positive_ohlc"] == 1
+    assert mask.reason_counts["invalid_ohlc"] == 1
+    assert mask.reason_counts["impossible_close_return"] == 2
+    assert 5 * 60_000 not in set(filtered["open_time_ms"].astype(int).to_list())
+    assert 6 * 60_000 not in set(filtered["open_time_ms"].astype(int).to_list())
 
 def test_data_quality_marks_first_1m_candle_after_gap_as_technical_noise_shock() -> None:
     frame = pd.DataFrame(

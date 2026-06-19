@@ -12,7 +12,14 @@ from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.normalized import normalize_candles_1m
-from anomaly_science.data.quality import filter_warmup_window_rows, has_critical_fail, rows_to_artifact, run_data_quality
+from anomaly_science.data.quality import (
+    apply_data_quality_mask,
+    build_candles_1m_data_quality_mask,
+    data_quality_mask_audit_row,
+    has_detector_blocking_quality_fail,
+    rows_to_artifact,
+    run_data_quality,
+)
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
 from anomaly_science.events.deduplication import suppress_event_cascade
@@ -37,6 +44,8 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
 
     frames, read_errors = _read_source_frames(input_path)
     data_quality = run_data_quality(frames, read_errors=read_errors)
+    data_quality_mask = build_candles_1m_data_quality_mask(frames.get("candles_1m"))
+    data_quality = [*data_quality, data_quality_mask_audit_row(data_quality_mask)]
     universe_rows = build_symbol_universe_by_day(
         candles_1m=frames.get("candles_1m"),
         candles_5m=frames.get("candles_5m"),
@@ -52,11 +61,12 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
         universe_rows=universe_rows,
         required_streams=strategy.required_data_streams,
     )
+    blocking_quality_fail = has_detector_blocking_quality_fail(data_quality)
     if required_stream_reject_count:
         event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
-    if frames.get("candles_1m") is not None and not has_critical_fail(data_quality) and not required_stream_reject_count:
+    if frames.get("candles_1m") is not None and not blocking_quality_fail and not required_stream_reject_count:
         try:
-            gated_candles_1m = filter_warmup_window_rows(frames["candles_1m"])
+            gated_candles_1m = apply_data_quality_mask(frames["candles_1m"], data_quality_mask)
             market_frame = pl.DataFrame(gated_candles_1m.to_dict(orient="list"))
             trigger_frame = strategy.generate_triggers(market_frame)
             validate_trigger_frame(trigger_frame)
@@ -74,7 +84,8 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
             event_error = f"event detector failed: {exc}"
 
     protocol_rows = _protocol_rows(
-        critical_fail=has_critical_fail(data_quality),
+        critical_fail=blocking_quality_fail,
+        data_quality_mask_excluded_count=data_quality_mask.excluded_rows,
         universe_rows_present=bool(universe_rows),
         event_count=len(events),
         raw_event_count=raw_event_count,
@@ -152,6 +163,7 @@ def _protocol_rows(
     event_error: str | None,
     technical_noise_shock_count: int,
     warmup_window_count: int,
+    data_quality_mask_excluded_count: int,
     strategy_name: str,
     required_stream_reject_count: int,
     required_data_streams: str,

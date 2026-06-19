@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 import pandas as pd
 
@@ -14,6 +14,29 @@ CRITICAL = "critical"
 WARNING = "warning"
 INFO = "info"
 WARMUP_WINDOW_MINUTES = MAX_FEATURE_LOOKBACK_MINUTES
+
+MASK_ENFORCED_CANDLES_1M_CHECKS: frozenset[str] = frozenset({
+    "candles_1m_duplicate_symbol_time",
+    "candles_1m_positive_prices",
+    "candles_1m_valid_ohlc",
+    "candles_1m_impossible_close_return",
+    "candles_1m_volume_non_negative",
+    "candles_1m_quote_volume_non_negative",
+    "candles_1m_taker_buy_quote_lte_quote_volume",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class DataQualityMask:
+    """Explicit row-level detector exclusion mask derived from data-quality rules."""
+
+    excluded_index: frozenset[int]
+    excluded_rows: int
+    reason_counts: dict[str, int]
+
+    @property
+    def has_exclusions(self) -> bool:
+        return self.excluded_rows > 0
 
 
 def rows_to_artifact(rows: list[DataQualityRow]) -> list[dict[str, object]]:
@@ -39,6 +62,100 @@ def run_data_quality(frames: dict[str, pd.DataFrame | None], *, read_errors: lis
 
 
 
+def build_candles_1m_data_quality_mask(frame: pd.DataFrame | None) -> DataQualityMask:
+    """Build the shared row-level pre-trigger data-quality mask for 1m candles.
+
+    This mask is the concrete enforcement layer for detector candidates. It removes
+    rows with row-local bad OHLC/volume payloads, duplicate symbol/time keys,
+    impossible close-to-close jumps, first candles after raw timestamp gaps, and the
+    rolling warm-up context after such gaps. Dataset-level schema/presence failures
+    remain blocking failures and are handled separately by
+    ``has_detector_blocking_quality_fail``.
+    """
+    if frame is None or frame.empty:
+        return DataQualityMask(excluded_index=frozenset(), excluded_rows=0, reason_counts={})
+    if not {"symbol", "open_time_ms"}.issubset(frame.columns):
+        return DataQualityMask(excluded_index=frozenset(), excluded_rows=0, reason_counts={})
+
+    reason_by_index: dict[int, set[str]] = {}
+
+    def mark(mask: pd.Series, reason: str) -> None:
+        for index in frame.index[mask.fillna(False)]:
+            reason_by_index.setdefault(int(index), set()).add(reason)
+
+    duplicate_mask = frame.duplicated(subset=["symbol", "open_time_ms"], keep=False)
+    mark(duplicate_mask, "duplicate_symbol_time")
+
+    if {"open", "high", "low", "close"}.issubset(frame.columns):
+        mark((frame[["open", "high", "low", "close"]] <= 0).any(axis=1), "non_positive_ohlc")
+        mark(
+            (frame["high"] < frame[["open", "close"]].max(axis=1))
+            | (frame["low"] > frame[["open", "close"]].min(axis=1))
+            | (frame["low"] > frame["high"]),
+            "invalid_ohlc",
+        )
+        sorted_frame = frame.sort_values(["symbol", "open_time_ms"])
+        pct = sorted_frame.groupby("symbol")["close"].pct_change().abs()
+        mark(pct.reindex(frame.index) > 0.80, "impossible_close_return")
+
+    for column in ("volume", "quote_volume"):
+        if column in frame.columns:
+            mark(frame[column] < 0, f"negative_{column}")
+
+    if {"taker_buy_quote_volume", "quote_volume"}.issubset(frame.columns):
+        mark(frame["taker_buy_quote_volume"] > frame["quote_volume"], "taker_buy_quote_gt_quote_volume")
+
+    gap_masked = _warmup_filtered_index(frame, time_column="open_time_ms", warmup_minutes=WARMUP_WINDOW_MINUTES)
+    for index in gap_masked:
+        reason_by_index.setdefault(int(index), set()).add("technical_noise_or_warmup_after_gap")
+
+    reason_counts: dict[str, int] = {}
+    for reasons in reason_by_index.values():
+        for reason in reasons:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return DataQualityMask(
+        excluded_index=frozenset(reason_by_index),
+        excluded_rows=len(reason_by_index),
+        reason_counts=dict(sorted(reason_counts.items())),
+    )
+
+
+def apply_data_quality_mask(frame: pd.DataFrame, mask: DataQualityMask) -> pd.DataFrame:
+    if not mask.excluded_index:
+        return frame.copy()
+    keep = ~frame.index.map(lambda index: int(index) in mask.excluded_index)
+    return frame.loc[keep].copy()
+
+
+def has_detector_blocking_quality_fail(rows: list[DataQualityRow]) -> bool:
+    """Return true for data-quality failures that a row mask cannot safely repair."""
+    for row in rows:
+        if row.status != AuditStatus.FAIL or row.severity != CRITICAL:
+            continue
+        if row.check_name in MASK_ENFORCED_CANDLES_1M_CHECKS:
+            continue
+        return True
+    return False
+
+
+def data_quality_mask_audit_row(mask: DataQualityMask) -> DataQualityRow:
+    reason_summary = ";".join(f"{reason}={count}" for reason, count in mask.reason_counts.items())
+    return _row(
+        "candles_1m_pre_trigger_quality_mask",
+        AuditStatus.WARN if mask.has_exclusions else AuditStatus.PASS,
+        WARNING if mask.has_exclusions else INFO,
+        mask.excluded_rows,
+        (
+            f"pre-trigger data-quality mask excluded {mask.excluded_rows} candles before strategy.generate_triggers; {reason_summary}"
+            if mask.has_exclusions
+            else "pre-trigger data-quality mask had no candle rows to exclude"
+        ),
+        excluded_from_detector=mask.has_exclusions,
+        excluded_from_ml_dataset=mask.has_exclusions,
+        reason="pre_trigger_quality_mask" if mask.has_exclusions else "",
+    )
+
+
 def filter_warmup_window_rows(
     frame: pd.DataFrame,
     *,
@@ -56,7 +173,25 @@ def filter_warmup_window_rows(
     if type(warmup_minutes) is not int or warmup_minutes <= 0:
         raise ValueError("warmup_minutes must be a positive int")
 
-    keep = pd.Series(True, index=frame.index)
+    excluded = _warmup_filtered_index(frame, time_column=time_column, warmup_minutes=warmup_minutes)
+    if not excluded:
+        return frame.copy()
+    keep = ~frame.index.map(lambda index: int(index) in excluded)
+    return frame.loc[keep].copy()
+
+
+def _warmup_filtered_index(
+    frame: pd.DataFrame,
+    *,
+    time_column: str,
+    warmup_minutes: int,
+) -> frozenset[int]:
+    if frame.empty or not {"symbol", time_column}.issubset(frame.columns):
+        return frozenset()
+    if type(warmup_minutes) is not int or warmup_minutes <= 0:
+        raise ValueError("warmup_minutes must be a positive int")
+
+    excluded: set[int] = set()
     warmup_ms = warmup_minutes * ONE_MINUTE_MS
     for _, group in frame.sort_values(["symbol", time_column]).groupby("symbol", sort=False):
         previous_time_ms: int | None = None
@@ -65,18 +200,18 @@ def filter_warmup_window_rows(
             current_time_ms = int(frame.at[index, time_column])
             if active_warmup_end_ms is not None:
                 if current_time_ms < active_warmup_end_ms:
-                    keep.at[index] = False
+                    excluded.add(int(index))
                     continue
                 active_warmup_end_ms = None
                 previous_time_ms = current_time_ms
                 continue
             if previous_time_ms is not None and current_time_ms - previous_time_ms > 3 * ONE_MINUTE_MS:
-                keep.at[index] = False
+                excluded.add(int(index))
                 active_warmup_end_ms = current_time_ms + warmup_ms
                 previous_time_ms = current_time_ms
                 continue
             previous_time_ms = current_time_ms
-    return frame.loc[keep].copy()
+    return frozenset(excluded)
 
 
 def has_critical_fail(rows: list[DataQualityRow]) -> bool:

@@ -1,5 +1,20 @@
 # Patch log
 
+## methodology: enforce data quality mask before trigger
+
+Status: PROPOSED; patch generated after `methodology: add full research run manifest`.
+
+Intent:
+- Add shared `DataQualityMask` for row-level 1m candle exclusions before `strategy.generate_triggers`.
+- Exclude maskable bad candles, duplicate symbol/time rows, impossible close returns, technical-noise rows, and post-gap warm-up rows from detector candidates and detector baseline context.
+- Keep dataset/schema/source failures as blocking FAIL rather than silently masking them.
+- Write explicit mask exclusion counts into `strategy_data_quality.csv` and event protocol audit.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_enforce_data_quality_mask_before_trigger.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_data_audit.py tests/test_events_detector.py` must be run in the project venv because this sandbox lacks `polars`.
+
 ## methodology: add full research run manifest
 
 Status: PROPOSED; patch generated after `methodology: enforce real holdout lock`.
