@@ -203,6 +203,12 @@ def test_placebo_controls_emit_negative_control_rows() -> None:
     assert all(row.reference_real_brier >= 0.0 for row in rows)
 
 
+def test_controls_purge_uses_active_strategy_hmax() -> None:
+    config = ControlsConfig(active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"))
+
+    assert config.purge_horizon_minutes == 60
+
+
 def test_baseline_comparison_runs_feature_aware_controls() -> None:
     states, labels = _control_rows()
     features = _feature_rows_for_controls(states)

@@ -93,7 +93,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Generic future path builder | PARTIAL | Future path uses post-snapshot candles and pessimistic double-barrier. Horizon support stops at 120m. | Add 180m or remove all 180m promises. |
 | Generic label builder | PARTIAL | ATR labels exist for 15/30/60/120. 180m is missing. | Add 180m labels or remove 180m strategies from spec. |
 | Atlas / discovery layer | PARTIAL | Descriptive atlas exists for MVP 30m. Multi-horizon and deeper strategy slices are incomplete. | Expand after horizon registry and strategy-neutral artifacts. |
-| Weekly walk-forward prediction | PARTIAL | Weekly CatBoost + Isotonic exists. Purge must use active `H_max`, not a local/default horizon assumption. | Add horizon registry and enforce `H_max` in prediction/controls. |
+| Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`, and tests cover multi-strategy H_max. | Keep as permanent regression gate. |
 | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
 | Sample weighting | MISSING | Methodology allows as-of sample weights, but no explicit policy is implemented. | Add `sample_weight_policy_v1` after audit/horizon fixes. |
 | Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
@@ -126,7 +126,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 ## Patch queue implied by this ledger
 
 1. `methodology: add implementation gap ledger` — this patch.
-2. `methodology: enforce active-horizon H_max purge`.
+2. `methodology: enforce active-horizon H_max purge` - implemented in this patch.
 3. `methodology: integrate holdout freeze into run-research`.
 4. `methodology: add independent forensic protocol audit`.
 5. `methodology: canonicalize strategy-neutral artifacts`.

@@ -60,7 +60,7 @@ Atlas grouping uses state plus feature-matrix as-of fields. Coarse 30m response 
 
 `run-mvp1-labels` reads the same state/future artifacts through strict boundaries, joins them one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`, and writes `anomaly_outcome_labels.csv` with `scenario_15m`, `scenario_30m`, `scenario_60m`, and `scenario_120m`. Scenario values are descriptive future-nature targets for later walk-forward prediction calibration: `long_continuation`, `short_fade`, `static_or_chop`, `unclear`, or explicit `missing_future`. Trap-like ambiguity maps to `unclear` in MVP1; a separate trap class requires a new label schema.
 
-`run-mvp1-prediction` reads `anomaly_state_1m.csv`, required `anomaly_feature_matrix.csv`, and `anomaly_outcome_labels.csv` through strict boundaries, then runs weekly walk-forward CatBoost with one-vs-rest Isotonic calibration. OOS days inside a week use frozen weekly weights, best iteration, feature schema, and calibrators. It writes:
+`run-mvp1-prediction` reads `anomaly_state_1m.csv`, required `anomaly_feature_matrix.csv`, and `anomaly_outcome_labels.csv` through strict boundaries, then runs weekly walk-forward CatBoost with one-vs-rest Isotonic calibration. Purge is computed from active strategy `H_max`, so train rows must satisfy `train_snapshot_time + H_max <= weekly_model_freeze_time`. OOS days inside a week use frozen weekly weights, best iteration, feature schema, and calibrators. It writes:
 
 - `anomaly_oos_predictions.csv`
 - `anomaly_calibration.csv`

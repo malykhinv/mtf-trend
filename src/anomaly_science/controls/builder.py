@@ -239,7 +239,7 @@ def _evaluate_reference_model(*, rows: Sequence[PredictionInputRow], config: Con
     prediction_config = WalkForwardPredictionConfig(
         strategy_name=config.strategy_name,
         target_horizon_minutes=config.target_horizon_minutes,
-        purge_horizon_minutes=config.purge_horizon_minutes,
+        active_strategy_names=config.active_strategy_names,
         min_train_rows=config.min_train_rows,
         min_group_rows=config.min_group_rows,
         smoothing_strength=config.smoothing_strength,
@@ -257,7 +257,7 @@ def _evaluate_reference_model_with_exclusions(
     prediction_config = WalkForwardPredictionConfig(
         strategy_name=config.strategy_name,
         target_horizon_minutes=config.target_horizon_minutes,
-        purge_horizon_minutes=config.purge_horizon_minutes,
+        active_strategy_names=config.active_strategy_names,
         min_train_rows=config.min_train_rows,
         min_group_rows=config.min_group_rows,
         smoothing_strength=config.smoothing_strength,

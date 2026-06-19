@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
+
 
 @dataclass(frozen=True, slots=True)
 class WalkForwardPredictionConfig:
@@ -14,7 +16,7 @@ class WalkForwardPredictionConfig:
     prediction_version: str = "mvp1_weekly_walk_forward_catboost_isotonic_v1"
     strategy_name: str = "broad_anomaly_v1_h30"
     target_horizon_minutes: int = 30
-    purge_horizon_minutes: int = 60
+    active_strategy_names: tuple[str, ...] = ()
     min_train_rows: int = 80
     min_group_rows: int = 2
     smoothing_strength: float = 5.0
@@ -26,10 +28,20 @@ class WalkForwardPredictionConfig:
     excluded_model_feature_prefixes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if not self.prediction_version:
+            raise ValueError("prediction_version is required")
+        if not self.strategy_name:
+            raise ValueError("strategy_name is required")
+        if not self.model_family:
+            raise ValueError("model_family is required")
+        if not self.active_strategy_names:
+            object.__setattr__(self, "active_strategy_names", (self.strategy_name,))
+        if self.strategy_name not in self.active_strategy_names:
+            raise ValueError("active_strategy_names must include strategy_name")
         if self.target_horizon_minutes not in (15, 30, 60, 120):
             raise ValueError("target_horizon_minutes must be one of 15, 30, 60, or 120")
         if self.purge_horizon_minutes < self.target_horizon_minutes:
-            raise ValueError("purge_horizon_minutes must be >= target_horizon_minutes")
+            raise ValueError("active strategy H_max must be >= target_horizon_minutes")
         if self.min_train_rows <= 0:
             raise ValueError("min_train_rows must be positive")
         if self.min_group_rows <= 0:
@@ -42,11 +54,9 @@ class WalkForwardPredictionConfig:
             raise ValueError("catboost_depth must be positive")
         if self.catboost_learning_rate <= 0.0:
             raise ValueError("catboost_learning_rate must be positive")
-        if not self.prediction_version:
-            raise ValueError("prediction_version is required")
-        if not self.strategy_name:
-            raise ValueError("strategy_name is required")
-        if not self.model_family:
-            raise ValueError("model_family is required")
         if any(not item for item in self.excluded_model_feature_prefixes):
             raise ValueError("excluded_model_feature_prefixes must not contain empty values")
+
+    @property
+    def purge_horizon_minutes(self) -> int:
+        return active_strategy_h_max_minutes(self.active_strategy_names)

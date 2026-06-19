@@ -1,5 +1,19 @@
 # Patch log
 
+## methodology: enforce active-horizon H_max purge
+
+Status: APPLIED in current local branch after direct code inspection of head `be91a0ca`.
+
+Intent:
+- Remove the manual/default purge horizon assumption from prediction and controls configs.
+- Compute purge as `H_max = max(horizon_minutes)` across active strategy variants in the run.
+- Keep weekly walk-forward train rows constrained by `train_snapshot_time + H_max <= weekly_model_freeze_time`.
+- Record the computed H_max in run config and protocol audit messages.
+
+Validation for this patch:
+- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_controls.py`
+- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+
 ## refactor: quarantine legacy code and bootstrap anomaly science core
 
 Status: APPLIED in uploaded snapshot `project_20260617_104034.zip`; GitHub head not checked.

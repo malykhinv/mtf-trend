@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from anomaly_science.contracts.audit import RunConfigRow
 from anomaly_science.strategy.base import BaseStrategy
@@ -12,6 +12,14 @@ DEFAULT_RESEARCH_STRATEGY_NAME = "broad_anomaly_v1_h30"
 
 def format_required_data_streams(streams: Mapping[str, bool]) -> str:
     return ";".join(f"{name}={str(required).lower()}" for name, required in sorted(streams.items()))
+
+
+def active_strategy_h_max_minutes(strategy_names: Iterable[str]) -> int:
+    names = tuple(strategy_names)
+    if not names:
+        raise ValueError("active_strategy_names must not be empty")
+    horizons = tuple(get_strategy(name).metadata.horizon_minutes for name in names)
+    return max(horizons)
 
 
 def strategy_metadata_run_config_rows(strategy: BaseStrategy | None = None, *, strategy_name: str | None = None) -> list[RunConfigRow]:

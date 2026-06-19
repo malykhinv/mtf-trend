@@ -217,13 +217,30 @@ def test_walk_forward_prediction_uses_one_frozen_model_per_iso_week() -> None:
         "test_row",
         "test_row_2",
     ]
-    assert {row.train_cutoff_time_ms for row in predictions} == {BASE_DAY_MS - 60 * ONE_MINUTE_MS}
+    assert {row.train_cutoff_time_ms for row in predictions} == {BASE_DAY_MS - 30 * ONE_MINUTE_MS}
     assert {row.model_key.split("|", 1)[0] for row in predictions} == {f"weekly_freeze=2024-W01:{BASE_DAY_MS}"}
     assert all(row.model_train_row_count == 80 for row in predictions)
     assert all(row.model_family == "catboost_isotonic_weekly" for row in predictions)
     assert all(row.model_key.endswith("|catboost_isotonic") for row in predictions)
     assert all(row.raw_p_long_continuation >= 0.0 for row in predictions)
     assert all(row.temporal_contract == PREDICTION_TEMPORAL_CONTRACT for row in predictions)
+
+
+def test_walk_forward_prediction_purge_uses_active_strategy_hmax() -> None:
+    states, labels = _training_and_test_rows()
+    features = [_feature_row(state=state) for state in states]
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
+    predictions = build_walk_forward_predictions(
+        inputs=inputs,
+        config=WalkForwardPredictionConfig(
+            min_train_rows=1,
+            min_group_rows=1,
+            smoothing_strength=1.0,
+            active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
+        ),
+    )
+
+    assert {row.train_cutoff_time_ms for row in predictions} == {BASE_DAY_MS - 60 * ONE_MINUTE_MS}
 
 
 def test_missing_future_is_excluded_from_prediction_metrics() -> None:
@@ -251,6 +268,7 @@ def test_prediction_rejects_strategy_horizon_mismatch() -> None:
             config=WalkForwardPredictionConfig(
                 strategy_name="broad_anomaly_v1_h30",
                 target_horizon_minutes=60,
+                active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
             ),
         )
 
