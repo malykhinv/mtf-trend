@@ -43,6 +43,28 @@ _REQUIRED_CALIBRATION_BREAKDOWNS = frozenset(
     )
 )
 
+_REQUIRED_MARKET_CONTEXT_FEATURES: dict[str, tuple[str, str]] = {
+    "volume_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+    "quote_volume_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+    "return_1m_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+    "return_from_event_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+    "oi_growth_market_percentile": ("open_interest", "market_relative"),
+    "liq_intensity_market_percentile": ("liquidation", "market_relative"),
+    "range_expansion_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+    "cross_section_available": ("cross_sectional_market_relative", "boolean_flag"),
+    "cross_section_symbol_count": ("cross_sectional_market_relative", "point_in_time_id"),
+    "corr_with_btc_15m": ("market_context", "btc_relative"),
+    "corr_with_btc_30m": ("market_context", "btc_relative"),
+    "corr_with_btc_60m": ("market_context", "btc_relative"),
+    "symbol_return_minus_btc_return_5m": ("market_context", "btc_relative"),
+    "symbol_return_minus_btc_return_15m": ("market_context", "btc_relative"),
+    "idiosyncratic_momentum_score": ("market_context", "dimensionless_ratio"),
+    "simultaneous_anomalies_count_1m": ("signal_clustering_systemic_beta", "point_in_time_id"),
+    "simultaneous_anomalies_share_1m": ("signal_clustering_systemic_beta", "dimensionless_ratio"),
+    "systemic_cluster_regime": ("signal_clustering_systemic_beta", "categorical_bucket"),
+    "market_shock_id": ("signal_clustering_systemic_beta", "point_in_time_id"),
+}
+
 
 _REQUIRED_SIMULATION_CONTROL_METRICS = frozenset(
     (
@@ -88,6 +110,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_required_controls_completeness_row(found))
     rows.append(_calibration_breakdown_completeness_row(found))
     rows.append(_rejection_funnel_completeness_row(found))
+    rows.append(_market_context_feature_coverage_row(found))
     rows.append(_stage_audit_fail_summary_row(found))
     rows.append(_forensic_gate_row(rows))
     return rows
@@ -788,6 +811,13 @@ def _calibration_breakdown_completeness_row(found: Mapping[str, tuple[Path, ...]
                 failures.append(f"{path}:{row_index} has empty breakdown_value")
             if not row.get("confidence_bucket", ""):
                 failures.append(f"{path}:{row_index} has empty confidence_bucket")
+    if checked == 0:
+        return _row(
+            "forensic_calibration_breakdowns_complete",
+            AuditStatus.WARN,
+            "strategy_calibration_breakdown.csv exists but contains no rows; calibration breakdown proof requires non-empty OOS predictions",
+            artifact="strategy_calibration_breakdown.csv",
+        )
     missing = sorted(_REQUIRED_CALIBRATION_BREAKDOWNS - breakdowns)
     if missing:
         failures.append("missing calibration breakdowns: " + ", ".join(missing))
@@ -796,13 +826,6 @@ def _calibration_breakdown_completeness_row(found: Mapping[str, tuple[Path, ...]
             "forensic_calibration_breakdowns_complete",
             AuditStatus.FAIL,
             f"{len(failures)} calibration-breakdown violation(s): " + "; ".join(failures[:5]),
-            artifact="strategy_calibration_breakdown.csv",
-        )
-    if checked == 0:
-        return _row(
-            "forensic_calibration_breakdowns_complete",
-            AuditStatus.FAIL,
-            "strategy_calibration_breakdown.csv exists but contains no rows",
             artifact="strategy_calibration_breakdown.csv",
         )
     return _row(
@@ -879,6 +902,124 @@ def _rejection_funnel_completeness_row(found: Mapping[str, tuple[Path, ...]]) ->
         f"verified strategy_rejection_funnel.csv coverage for {len(stages)} stage(s), {checked} row(s), and {excluded_reason_rows} explicit exclusion row(s)",
         artifact="strategy_rejection_funnel.csv",
     )
+
+
+def _market_context_feature_coverage_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    catalog_paths = found.get("strategy_feature_catalog.csv", ())
+    matrix_paths = found.get("strategy_feature_matrix.csv", ())
+    if not catalog_paths:
+        return _row(
+            "forensic_market_context_feature_coverage_verified",
+            AuditStatus.FAIL,
+            "missing strategy_feature_catalog.csv; market context feature contract is not independently auditable",
+            artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv",
+        )
+    if not matrix_paths:
+        return _row(
+            "forensic_market_context_feature_coverage_verified",
+            AuditStatus.FAIL,
+            "missing strategy_feature_matrix.csv; market context feature materialization is not independently auditable",
+            artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv",
+        )
+
+    failures: list[str] = []
+    catalog_by_name: dict[str, dict[str, str]] = {}
+    for path in catalog_paths:
+        seen_in_path: set[str] = set()
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            feature_name = row.get("feature_name", "")
+            if feature_name in seen_in_path:
+                failures.append(f"{path}:{row_index} duplicate feature catalog row for {feature_name!r}")
+            if feature_name:
+                seen_in_path.add(feature_name)
+                catalog_by_name[feature_name] = row
+    for feature_name, (expected_family, expected_normalization) in sorted(_REQUIRED_MARKET_CONTEXT_FEATURES.items()):
+        row = catalog_by_name.get(feature_name)
+        if row is None:
+            failures.append(f"missing market-context feature catalog row: {feature_name}")
+            continue
+        if row.get("feature_family") != expected_family:
+            failures.append(f"{feature_name} feature_family={row.get('feature_family')!r}, expected {expected_family!r}")
+        if row.get("normalization_type") != expected_normalization:
+            failures.append(f"{feature_name} normalization_type={row.get('normalization_type')!r}, expected {expected_normalization!r}")
+        if row.get("source_artifact") != "anomaly_feature_matrix.csv":
+            failures.append(f"{feature_name} source_artifact={row.get('source_artifact')!r}, expected 'anomaly_feature_matrix.csv'")
+        if row.get("uses_future_data") not in {"False", "false", "0", ""}:
+            failures.append(f"{feature_name} uses_future_data must be false")
+
+    checked_rows = 0
+    for path in matrix_paths:
+        header = _read_csv_header(path)
+        missing_columns = sorted(set(_REQUIRED_MARKET_CONTEXT_FEATURES) - set(header))
+        if missing_columns:
+            failures.append(f"{path} missing market-context feature matrix columns: " + ", ".join(missing_columns))
+            continue
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            checked_rows += 1
+            _append_market_context_matrix_failures(failures, path=path, row_index=row_index, row=row)
+    if failures:
+        return _row(
+            "forensic_market_context_feature_coverage_verified",
+            AuditStatus.FAIL,
+            f"{len(failures)} market-context feature violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv",
+        )
+    if checked_rows == 0:
+        return _row(
+            "forensic_market_context_feature_coverage_verified",
+            AuditStatus.WARN,
+            "market-context catalog exists but no feature-matrix rows were available for value checks",
+            artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv",
+        )
+    return _row(
+        "forensic_market_context_feature_coverage_verified",
+        AuditStatus.PASS,
+        f"verified required market-relative, BTC-relative, and systemic-cluster feature coverage across {checked_rows} feature-matrix row(s)",
+        artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv",
+    )
+
+
+def _append_market_context_matrix_failures(failures: list[str], *, path: Path, row_index: int, row: Mapping[str, str]) -> None:
+    for field_name in (
+        "volume_market_percentile",
+        "quote_volume_market_percentile",
+        "return_1m_market_percentile",
+        "return_from_event_market_percentile",
+        "oi_growth_market_percentile",
+        "liq_intensity_market_percentile",
+        "range_expansion_market_percentile",
+        "simultaneous_anomalies_share_1m",
+    ):
+        value = _to_float(row.get(field_name))
+        if value is not None and not 0.0 <= value <= 1.0:
+            failures.append(f"{path}:{row_index} {field_name}={value} outside [0, 1]")
+    for field_name in ("corr_with_btc_15m", "corr_with_btc_30m", "corr_with_btc_60m"):
+        value = _to_float(row.get(field_name))
+        if value is not None and not -1.0 <= value <= 1.0:
+            failures.append(f"{path}:{row_index} {field_name}={value} outside [-1, 1]")
+    for field_name in ("cross_section_symbol_count", "simultaneous_anomalies_count_1m"):
+        value = _to_int(row.get(field_name))
+        if value is None or value < 0:
+            failures.append(f"{path}:{row_index} {field_name} must be a non-negative integer")
+    cross_section_available = _to_bool(row.get("cross_section_available"))
+    if cross_section_available is None:
+        failures.append(f"{path}:{row_index} cross_section_available must be boolean")
+    elif not cross_section_available:
+        for field_name in (
+            "volume_market_percentile",
+            "quote_volume_market_percentile",
+            "return_1m_market_percentile",
+            "oi_growth_market_percentile",
+            "liq_intensity_market_percentile",
+            "range_expansion_market_percentile",
+        ):
+            if row.get(field_name) not in (None, ""):
+                failures.append(f"{path}:{row_index} {field_name} must be empty when cross_section_available=false")
+    if row.get("systemic_cluster_regime") not in {"unknown", "idiosyncratic", "moderate_cluster", "systemic_beta_shock"}:
+        failures.append(f"{path}:{row_index} invalid systemic_cluster_regime={row.get('systemic_cluster_regime')!r}")
+    if not row.get("market_shock_id", ""):
+        failures.append(f"{path}:{row_index} market_shock_id is required")
+
 
 def _stage_audit_fail_summary_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     checked = 0
@@ -963,6 +1104,17 @@ def _to_float(value: object) -> float | None:
         return float(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _to_bool(value: object) -> bool | None:
+    if value in (None, ""):
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    return None
 
 
 def _float_equal(left: float, right: float) -> bool:

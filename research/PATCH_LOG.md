@@ -1,5 +1,18 @@
 # Patch log
 
+## methodology: audit market context feature coverage
+
+Status: APPLIED.
+
+Intent:
+- Add independent forensic verification that required cross-sectional, BTC-relative, systemic-cluster, and market-shock context features are cataloged and materialized.
+- Validate market-context feature families, normalization types, source artifacts, no-future-data flags, feature-matrix columns, percentile/correlation ranges, systemic regime values, and market shock IDs.
+- Make rejection funnel write explicit skipped placeholders for empty stages so small smoke runs remain auditable without hard-failing on absent downstream rows.
+- Register `calibration_breakdowns_written` in the methodology-v2 audit catalog.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_forensic_audit.py tests\test_feature_catalog.py tests\test_feature_matrix.py tests\test_research_run.py tests\test_prediction.py tests\test_contracts.py tests\test_rejection_funnel.py`
+
 ## methodology: audit required controls completeness
 
 Status: APPLIED.

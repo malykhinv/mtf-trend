@@ -81,6 +81,7 @@ def build_rejection_funnel_rows(run_dir: str | Path) -> tuple[RejectionFunnelRow
     rows.extend(_prediction_rows(context=context, label_rows=label_rows, prediction_rows=prediction_rows))
     rows.extend(_decision_rows(context=context, prediction_rows=prediction_rows, decision_rows=decision_rows))
     rows.extend(_simulation_rows(context=context, decision_rows=decision_rows, simulation_rows=simulation_rows))
+    rows.extend(_empty_stage_placeholder_rows(context=context, rows=rows))
     rows.extend(_summary_rows(context=context, rows=rows))
     return tuple(rows)
 
@@ -471,6 +472,37 @@ def _summary_rows(*, context: _Context, rows: Sequence[RejectionFunnelRow]) -> l
                 reason_code=reason_code,
                 reason_detail=f"aggregate {status} row_count for {stage}",
                 row_count=count,
+            )
+        )
+    return result
+
+
+def _empty_stage_placeholder_rows(*, context: _Context, rows: Sequence[RejectionFunnelRow]) -> list[RejectionFunnelRow]:
+    required = {
+        "data_quality": "strategy_data_quality.csv",
+        "point_in_time_universe": "symbol_universe_by_day.csv",
+        "events": "strategy_events.csv",
+        "state": "strategy_state_1m.csv",
+        "future_path": "strategy_future_paths.csv",
+        "labels": "strategy_outcome_labels.csv",
+        "prediction": "strategy_oos_predictions.csv",
+        "decision": "strategy_decision_timing.csv",
+        "simulation": "strategy_trade_simulation.csv",
+    }
+    present = {row.stage for row in rows}
+    result: list[RejectionFunnelRow] = []
+    for stage, artifact in sorted(required.items()):
+        if stage in present:
+            continue
+        result.append(
+            context.row(
+                stage=stage,
+                source_artifact=artifact,
+                row_key=f"{stage}|no_rows",
+                status=_STATUS_SKIPPED,
+                reason_code="no_rows_for_stage",
+                reason_detail="stage artifact produced no row-level records in this run",
+                row_count=0,
             )
         )
     return result

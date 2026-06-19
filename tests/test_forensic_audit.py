@@ -74,6 +74,96 @@ def _write_root_research_manifest(root: Path) -> None:
 
 def _write_valid_minimal_forensic_fixture(root: Path) -> None:
     _write_root_research_manifest(root)
+    features = root / "stages" / "features"
+    market_context_catalog_specs = {
+        "volume_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+        "quote_volume_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+        "return_1m_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+        "return_from_event_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+        "oi_growth_market_percentile": ("open_interest", "market_relative"),
+        "liq_intensity_market_percentile": ("liquidation", "market_relative"),
+        "range_expansion_market_percentile": ("cross_sectional_market_relative", "market_relative"),
+        "cross_section_available": ("cross_sectional_market_relative", "boolean_flag"),
+        "cross_section_symbol_count": ("cross_sectional_market_relative", "point_in_time_id"),
+        "corr_with_btc_15m": ("market_context", "btc_relative"),
+        "corr_with_btc_30m": ("market_context", "btc_relative"),
+        "corr_with_btc_60m": ("market_context", "btc_relative"),
+        "symbol_return_minus_btc_return_5m": ("market_context", "btc_relative"),
+        "symbol_return_minus_btc_return_15m": ("market_context", "btc_relative"),
+        "idiosyncratic_momentum_score": ("market_context", "dimensionless_ratio"),
+        "simultaneous_anomalies_count_1m": ("signal_clustering_systemic_beta", "point_in_time_id"),
+        "simultaneous_anomalies_share_1m": ("signal_clustering_systemic_beta", "dimensionless_ratio"),
+        "systemic_cluster_regime": ("signal_clustering_systemic_beta", "categorical_bucket"),
+        "market_shock_id": ("signal_clustering_systemic_beta", "point_in_time_id"),
+    }
+    _write_artifact_rows(
+        features / "strategy_feature_catalog.csv",
+        "strategy_feature_catalog.csv",
+        [
+            {
+                "feature_schema_version": "feature_schema_v1_relative_asof",
+                "feature_name": feature_name,
+                "feature_family": feature_family,
+                "source_artifact": "anomaly_feature_matrix.csv",
+                "available_asof_time": "computed from point-in-time market context available <= snapshot_time_ms",
+                "uses_future_data": "False",
+                "normalization_type": normalization_type,
+                "is_model_feature": "False" if feature_name == "market_shock_id" else "True",
+                "is_audit_field": "True",
+                "missing_policy": "null_if_source_missing",
+                "dtype": "str" if feature_name in {"systemic_cluster_regime", "market_shock_id"} else "float64",
+                "description": "fixture market context feature",
+            }
+            for feature_name, (feature_family, normalization_type) in market_context_catalog_specs.items()
+        ],
+    )
+    _copy_text(features / "strategy_feature_catalog.csv", features / "anomaly_feature_catalog.csv")
+    feature_matrix = root / "stages" / "feature_matrix"
+    _write_artifact(
+        feature_matrix / "strategy_feature_matrix.csv",
+        "strategy_feature_matrix.csv",
+        {
+            "feature_schema_version": "feature_schema_v1_relative_asof",
+            "feature_matrix_version": "mvp1_feature_matrix_v1",
+            "event_id": "e1",
+            "symbol": "AAAUSDT",
+            "snapshot_time_ms": 1_800_000,
+            "feature_cutoff_time_ms": 1_800_000,
+            "minutes_since_trigger": 3,
+            "ATR_1d_asof_t": 2.0,
+            "ATR_1d_pct_asof_t": 0.02,
+            "current_return_from_start": 0.03,
+            "range_since_start_atr": 1.0,
+            "distance_to_running_high_atr": 0.1,
+            "distance_to_running_low_atr": 0.2,
+            "retracement_from_high_atr": 0.1,
+            "price_speed_atr": 0.05,
+            "clock_maturity": 0.4,
+            "event_age_ratio": 0.2,
+            "alpha_decay_bucket": "3-5m",
+            "feature_source_status": "complete",
+            "volume_market_percentile": 0.8,
+            "quote_volume_market_percentile": 0.7,
+            "return_1m_market_percentile": 0.6,
+            "return_from_event_market_percentile": 0.9,
+            "oi_growth_market_percentile": 0.5,
+            "liq_intensity_market_percentile": 0.4,
+            "range_expansion_market_percentile": 0.75,
+            "cross_section_available": "True",
+            "cross_section_symbol_count": 5,
+            "corr_with_btc_15m": 0.2,
+            "corr_with_btc_30m": 0.3,
+            "corr_with_btc_60m": 0.4,
+            "symbol_return_minus_btc_return_5m": 0.01,
+            "symbol_return_minus_btc_return_15m": 0.015,
+            "idiosyncratic_momentum_score": 0.2,
+            "simultaneous_anomalies_count_1m": 2,
+            "simultaneous_anomalies_share_1m": 0.4,
+            "systemic_cluster_regime": "moderate_cluster",
+            "market_shock_id": "market_shock:1800000",
+        },
+    )
+    _copy_text(feature_matrix / "strategy_feature_matrix.csv", feature_matrix / "anomaly_feature_matrix.csv")
     prediction = root / "stages" / "prediction"
     _write_artifact(
         prediction / "strategy_oos_predictions.csv",
@@ -413,6 +503,7 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_required_controls_complete"].status is AuditStatus.PASS
     assert by_name["forensic_calibration_breakdowns_complete"].status is AuditStatus.PASS
     assert by_name["forensic_rejection_funnel_complete"].status is AuditStatus.PASS
+    assert by_name["forensic_market_context_feature_coverage_verified"].status is AuditStatus.PASS
     assert by_name["forensic_stage_protocol_audit_has_no_fail_rows"].status is AuditStatus.PASS
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.PASS
 
@@ -516,6 +607,21 @@ def test_independent_forensic_audit_fails_missing_calibration_breakdown(tmp_path
 
     assert by_name["forensic_calibration_breakdowns_complete"].status is AuditStatus.FAIL
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_independent_forensic_audit_fails_missing_market_context_catalog_row(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "features" / "strategy_feature_catalog.csv"
+    rows = [row for row in _read_csv_payload(path) if row["feature_name"] != "corr_with_btc_30m"]
+    _write_artifact_rows(path, "strategy_feature_catalog.csv", [dict(row) for row in rows])
+    _copy_text(path, tmp_path / "stages" / "features" / "anomaly_feature_catalog.csv")
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_market_context_feature_coverage_verified"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
 
 def test_independent_forensic_audit_fails_missing_required_control(tmp_path: Path) -> None:
     _write_valid_minimal_forensic_fixture(tmp_path)
