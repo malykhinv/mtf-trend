@@ -168,13 +168,14 @@ def test_future_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
 
 def test_atlas_grouping_contexts_ignore_future_values() -> None:
     state = _state_row()
+    feature = _feature_row()
     upside_future = _future_row(future_return_30m=0.03, future_max_30m=0.05, future_min_30m=-0.001, reclaimed_running_high_30m=True)
     downside_future = _future_row(future_return_30m=-0.03, future_max_30m=0.002, future_min_30m=-0.05, reclaimed_running_high_30m=False)
 
-    assert assign_atlas_contexts(state) == assign_atlas_contexts(state)
+    assert assign_atlas_contexts(state, feature=feature) == assign_atlas_contexts(state, feature=feature)
 
-    upside_artifacts = build_atlas_artifacts(state_rows=[state], future_rows=[upside_future])
-    downside_artifacts = build_atlas_artifacts(state_rows=[state], future_rows=[downside_future])
+    upside_artifacts = build_atlas_artifacts(state_rows=[state], future_rows=[upside_future], feature_rows=[feature])
+    downside_artifacts = build_atlas_artifacts(state_rows=[state], future_rows=[downside_future], feature_rows=[feature])
 
     upside_contexts = {(row.context_name, row.context_value) for row in upside_artifacts.context_split_rows}
     downside_contexts = {(row.context_name, row.context_value) for row in downside_artifacts.context_split_rows}
@@ -186,8 +187,9 @@ def test_atlas_grouping_contexts_ignore_future_values() -> None:
 def test_atlas_preserves_temporal_contract_in_outputs() -> None:
     state = _state_row()
     future = _future_row()
+    feature = _feature_row()
 
-    artifacts = build_atlas_artifacts(state_rows=[state], future_rows=[future])
+    artifacts = build_atlas_artifacts(state_rows=[state], future_rows=[future], feature_rows=[feature])
 
     assert artifacts.nature_atlas_rows
     assert all(

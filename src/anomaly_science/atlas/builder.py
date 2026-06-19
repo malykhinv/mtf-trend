@@ -38,7 +38,7 @@ class AtlasInputError(ValueError):
 class AtlasInputRow:
     state: AnomalyState1mRow
     future: FuturePathRow
-    feature: AnomalyFeatureMatrixRow | None
+    feature: AnomalyFeatureMatrixRow
     contexts: tuple[tuple[str, str], ...]
     atlas_outcome_bin: str
 
@@ -55,14 +55,14 @@ def load_atlas_inputs(
     *,
     state_path: str | Path,
     future_path: str | Path,
-    feature_matrix_path: str | Path | None = None,
+    feature_matrix_path: str | Path,
     config: AtlasConfig | None = None,
 ) -> tuple[AtlasInputRow, ...]:
-    """Load state, future and optional feature matrix artifacts through strict boundaries."""
+    """Load state, future and feature matrix artifacts through strict boundaries."""
     cfg = config or AtlasConfig()
     state_rows = load_anomaly_state_1m_csv(state_path)
     future_rows = load_anomaly_future_paths_csv(future_path)
-    feature_rows = None if feature_matrix_path is None else load_anomaly_feature_matrix_csv(feature_matrix_path)
+    feature_rows = load_anomaly_feature_matrix_csv(feature_matrix_path)
     return build_atlas_inputs(state_rows=state_rows, future_rows=future_rows, feature_rows=feature_rows, config=cfg)
 
 
@@ -70,16 +70,16 @@ def build_atlas_inputs(
     *,
     state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
     future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
-    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow] | None = None,
+    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow],
     config: AtlasConfig | None = None,
 ) -> tuple[AtlasInputRow, ...]:
     cfg = config or AtlasConfig()
     states = tuple(state_rows)
     futures = tuple(future_rows)
-    features = None if feature_rows is None else tuple(feature_rows)
+    features = tuple(feature_rows)
     state_by_key = _unique_by_join_key(states, artifact_name="anomaly_state_1m.csv")
     future_by_key = _unique_by_join_key(futures, artifact_name="anomaly_future_paths.csv")
-    feature_by_key = None if features is None else _unique_by_join_key(features, artifact_name="anomaly_feature_matrix.csv")
+    feature_by_key = _unique_by_join_key(features, artifact_name="anomaly_feature_matrix.csv")
 
     state_keys = set(state_by_key)
     future_keys = set(future_by_key)
@@ -91,7 +91,7 @@ def build_atlas_inputs(
             "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
             f"missing_future={missing_future}, orphan_future={orphan_future}"
         )
-    if feature_by_key is not None and state_keys != set(feature_by_key):
+    if state_keys != set(feature_by_key):
         missing_feature = sorted(state_keys - set(feature_by_key))[:5]
         orphan_feature = sorted(set(feature_by_key) - state_keys)[:5]
         raise AtlasInputError(
@@ -104,10 +104,10 @@ def build_atlas_inputs(
     for key in sorted(state_keys):
         state = state_by_key[key]
         future = future_by_key[key]
-        feature = None if feature_by_key is None else feature_by_key[key]
+        feature = feature_by_key[key]
         if not isinstance(state, AnomalyState1mRow) or not isinstance(future, FuturePathRow):
             raise AtlasInputError("atlas join loaded unexpected row types")
-        if feature is not None and not isinstance(feature, AnomalyFeatureMatrixRow):
+        if not isinstance(feature, AnomalyFeatureMatrixRow):
             raise AtlasInputError("feature matrix join loaded unexpected row type")
         _enforce_atlas_temporal_contract(state=state, future=future, feature=feature)
         rows.append(
@@ -126,7 +126,7 @@ def build_atlas_artifacts(
     *,
     state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
     future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
-    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow] | None = None,
+    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow],
     config: AtlasConfig | None = None,
 ) -> AtlasArtifacts:
     cfg = config or AtlasConfig()
@@ -152,25 +152,15 @@ def build_atlas_artifacts_from_inputs(
 def assign_atlas_contexts(
     state: AnomalyState1mRow,
     *,
-    feature: AnomalyFeatureMatrixRow | None = None,
+    feature: AnomalyFeatureMatrixRow,
 ) -> tuple[tuple[str, str], ...]:
-    """Assign atlas context bins from state-only or feature-matrix as-of fields."""
+    """Assign atlas context bins from feature-matrix as-of fields."""
     base_contexts: list[tuple[str, str]] = [
         ("price_shape_atr", _price_shape_atr_bin(state, feature)),
         ("high_position_atr", _high_position_atr_bin(state, feature)),
         ("detection_maturity", _detection_maturity_bin(state)),
         ("state_liveness", "alive" if state.event_alive else "not_alive"),
     ]
-    if feature is None:
-        base_contexts.extend(
-            [
-                ("feature_matrix", "missing_feature_matrix"),
-                ("alpha_decay_bucket", _detection_maturity_bin(state)),
-                ("systemic_cluster_regime", "unknown"),
-            ]
-        )
-        return tuple(base_contexts)
-
     base_contexts.extend(
         [
             ("alpha_decay_bucket", feature.alpha_decay_bucket),
@@ -373,42 +363,28 @@ def _build_market_shock_groups(*, rows: Sequence[AtlasInputRow], config: AtlasCo
     return tuple(result)
 
 
-def _price_shape_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatrixRow | None) -> str:
-    if feature is not None and feature.range_since_start_atr is not None:
-        value = feature.range_since_start_atr
-        if value >= 3.0:
-            return "strong_range_expansion_atr"
-        if value >= 1.5:
-            return "moderate_range_expansion_atr"
-        return "muted_range_expansion_atr"
-    value = state.current_return_from_start
-    if value >= 0.05:
-        return "strong_up_extension_raw_fallback"
-    if value >= 0.02:
-        return "moderate_up_extension_raw_fallback"
-    if value <= -0.02:
-        return "downside_reversal_raw_fallback"
-    return "muted_move_raw_fallback"
+def _price_shape_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatrixRow) -> str:
+    value = feature.range_since_start_atr
+    if value is None:
+        return "missing_range_since_start_atr"
+    if value >= 3.0:
+        return "strong_range_expansion_atr"
+    if value >= 1.5:
+        return "moderate_range_expansion_atr"
+    return "muted_range_expansion_atr"
 
 
-def _high_position_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatrixRow | None) -> str:
-    if feature is not None and feature.distance_to_running_high_atr is not None:
-        value = feature.distance_to_running_high_atr
-        if value <= 0.25:
-            return "at_or_near_running_high_atr"
-        if value <= 0.75:
-            return "shallow_pullback_from_high_atr"
-        if value <= 1.5:
-            return "deep_pullback_from_high_atr"
-        return "far_below_running_high_atr"
-    value = state.distance_to_running_high
-    if value >= -0.003:
-        return "at_or_near_running_high_raw_fallback"
-    if value >= -0.015:
-        return "shallow_pullback_from_high_raw_fallback"
-    if value >= -0.05:
-        return "deep_pullback_from_high_raw_fallback"
-    return "far_below_running_high_raw_fallback"
+def _high_position_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatrixRow) -> str:
+    value = feature.distance_to_running_high_atr
+    if value is None:
+        return "missing_distance_to_running_high_atr"
+    if value <= 0.25:
+        return "at_or_near_running_high_atr"
+    if value <= 0.75:
+        return "shallow_pullback_from_high_atr"
+    if value <= 1.5:
+        return "deep_pullback_from_high_atr"
+    return "far_below_running_high_atr"
 
 
 def _detection_maturity_bin(state: AnomalyState1mRow) -> str:
@@ -503,19 +479,18 @@ def _enforce_atlas_temporal_contract(
     *,
     state: AnomalyState1mRow,
     future: FuturePathRow,
-    feature: AnomalyFeatureMatrixRow | None,
+    feature: AnomalyFeatureMatrixRow,
 ) -> None:
     if state.snapshot_time_ms != future.snapshot_time_ms:
         raise AtlasInputError("state and future snapshot_time_ms must match")
     if state.feature_cutoff_time_ms != future.feature_cutoff_time_ms:
         raise AtlasInputError("state and future feature_cutoff_time_ms must match")
-    if feature is not None:
-        if feature.snapshot_time_ms != state.snapshot_time_ms:
-            raise AtlasInputError("feature and state snapshot_time_ms must match")
-        if feature.feature_cutoff_time_ms != state.feature_cutoff_time_ms:
-            raise AtlasInputError("feature and state feature_cutoff_time_ms must match")
-        if feature.feature_cutoff_time_ms > feature.snapshot_time_ms:
-            raise AtlasInputError("feature matrix violates as-of contract")
+    if feature.snapshot_time_ms != state.snapshot_time_ms:
+        raise AtlasInputError("feature and state snapshot_time_ms must match")
+    if feature.feature_cutoff_time_ms != state.feature_cutoff_time_ms:
+        raise AtlasInputError("feature and state feature_cutoff_time_ms must match")
+    if feature.feature_cutoff_time_ms > feature.snapshot_time_ms:
+        raise AtlasInputError("feature matrix violates as-of contract")
     if state.feature_cutoff_time_ms > state.snapshot_time_ms:
         raise AtlasInputError("state row violates as-of feature cutoff contract")
     if future.future_start_time_ms <= state.snapshot_time_ms:
@@ -538,39 +513,27 @@ def _stop_first_30m(row: AtlasInputRow) -> bool | None:
 
 
 def _minutes_since_trigger(row: AtlasInputRow) -> int:
-    if row.feature is not None:
-        return row.feature.minutes_since_trigger
-    return row.state.minutes_since_detection
+    return row.feature.minutes_since_trigger
 
 
 def _distance_to_running_high_atr(row: AtlasInputRow) -> float | None:
-    if row.feature is not None:
-        return row.feature.distance_to_running_high_atr
-    return None
+    return row.feature.distance_to_running_high_atr
 
 
 def _market_shock_id(row: AtlasInputRow) -> str:
-    if row.feature is not None:
-        return row.feature.market_shock_id
-    return f"snapshot:{row.state.snapshot_time_ms}"
+    return row.feature.market_shock_id
 
 
 def _systemic_cluster_regime(row: AtlasInputRow) -> str:
-    if row.feature is not None:
-        return row.feature.systemic_cluster_regime
-    return "unknown"
+    return row.feature.systemic_cluster_regime
 
 
 def _simultaneous_count(row: AtlasInputRow) -> int:
-    if row.feature is not None:
-        return row.feature.simultaneous_anomalies_count_1m
-    return 1
+    return row.feature.simultaneous_anomalies_count_1m
 
 
 def _simultaneous_share(row: AtlasInputRow) -> float | None:
-    if row.feature is not None:
-        return row.feature.simultaneous_anomalies_share_1m
-    return None
+    return row.feature.simultaneous_anomalies_share_1m
 
 
 def _mean(values: Iterable[float | int | None]) -> float | None:

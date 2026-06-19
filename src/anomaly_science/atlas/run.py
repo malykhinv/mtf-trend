@@ -25,13 +25,13 @@ def run_mvp1_atlas(
     state_path: str | Path,
     future_path: str | Path,
     out_dir: str | Path,
-    feature_matrix_path: str | Path | None = None,
+    feature_matrix_path: str | Path,
     config: AtlasConfig | None = None,
 ) -> Path:
     """Run MVP1 anomaly nature atlas and write descriptive discovery artifacts."""
     state_artifact_path = Path(state_path)
     future_artifact_path = Path(future_path)
-    feature_artifact_path = None if feature_matrix_path is None else Path(feature_matrix_path)
+    feature_artifact_path = Path(feature_matrix_path)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or AtlasConfig()
@@ -46,7 +46,6 @@ def run_mvp1_atlas(
     protocol_rows = _protocol_rows(
         input_row_count=len(inputs),
         market_shock_group_count=len(artifacts.market_shock_group_rows),
-        feature_matrix_joined=feature_artifact_path is not None,
     )
     run_config_rows = _run_config_rows(
         state_path=state_artifact_path,
@@ -104,7 +103,7 @@ def run_mvp1_atlas(
     return output_path
 
 
-def _protocol_rows(*, input_row_count: int, market_shock_group_count: int, feature_matrix_joined: bool) -> list[ProtocolAuditRow]:
+def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_atlas_scope",
@@ -125,12 +124,8 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int, featu
         ),
         ProtocolAuditRow(
             check_name="feature_matrix_schema_boundary",
-            status=AuditStatus.PASS if feature_matrix_joined else AuditStatus.NOT_IMPLEMENTED,
-            message=(
-                "anomaly_feature_matrix.csv accepted through strict schema boundary and used for relative atlas contexts"
-                if feature_matrix_joined
-                else "feature matrix was not provided; atlas used state-only fallback contexts and cannot cover full relative/OI/liquidation/CVD/systemic methodology slices"
-            ),
+            status=AuditStatus.PASS,
+            message="anomaly_feature_matrix.csv accepted through strict schema boundary and used for relative atlas contexts",
             artifact="anomaly_feature_matrix.csv",
         ),
         ProtocolAuditRow(
@@ -142,7 +137,7 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int, featu
         ProtocolAuditRow(
             check_name="atlas_grouping_uses_asof_features_only",
             status=AuditStatus.PASS,
-            message="context/surface grouping bins are derived only from anomaly_state_1m.csv and optional anomaly_feature_matrix.csv as-of fields; future fields are used only for descriptive response summaries",
+            message="context/surface grouping bins are derived only from anomaly_state_1m.csv and anomaly_feature_matrix.csv as-of fields; future fields are used only for descriptive response summaries",
             artifact="anomaly_context_splits.csv",
         ),
         ProtocolAuditRow(
@@ -153,12 +148,8 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int, featu
         ),
         ProtocolAuditRow(
             check_name="market_shock_groups_from_point_in_time_feature_context",
-            status=AuditStatus.PASS if feature_matrix_joined else AuditStatus.NOT_IMPLEMENTED,
-            message=(
-                f"anomaly_market_shock_groups.csv groups by point-in-time market_shock_id/systemic_cluster_regime; {market_shock_group_count} groups written"
-                if feature_matrix_joined
-                else "feature matrix was not provided; market-shock groups fall back to snapshot_time_ms only"
-            ),
+            status=AuditStatus.PASS,
+            message=f"anomaly_market_shock_groups.csv groups by point-in-time market_shock_id/systemic_cluster_regime; {market_shock_group_count} groups written",
             artifact="anomaly_market_shock_groups.csv",
         ),
         ProtocolAuditRow(
@@ -170,12 +161,8 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int, featu
     implemented_methodology_rows = [
         ProtocolAuditRow(
             check_name="market_shock_id_assigned",
-            status=AuditStatus.PASS if feature_matrix_joined else AuditStatus.NOT_IMPLEMENTED,
-            message=(
-                f"atlas joined anomaly_feature_matrix.csv market_shock_id/systemic_cluster_regime and wrote {market_shock_group_count} market-shock groups"
-                if feature_matrix_joined
-                else "feature matrix was not provided; atlas cannot prove point-in-time market_shock_id assignment"
-            ),
+            status=AuditStatus.PASS,
+            message=f"atlas joined anomaly_feature_matrix.csv market_shock_id/systemic_cluster_regime and wrote {market_shock_group_count} market-shock groups",
             artifact="anomaly_market_shock_groups.csv",
         )
     ]
@@ -198,7 +185,7 @@ def _run_config_rows(
     *,
     state_path: Path,
     future_path: Path,
-    feature_matrix_path: Path | None,
+    feature_matrix_path: Path,
     output_path: Path,
     config: AtlasConfig,
 ) -> list[RunConfigRow]:
@@ -206,7 +193,7 @@ def _run_config_rows(
         RunConfigRow(key="command", value="run-mvp1-atlas", source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="future_path", value=str(future_path), source="cli"),
-        RunConfigRow(key="feature_matrix_path", value="" if feature_matrix_path is None else str(feature_matrix_path), source="cli"),
+        RunConfigRow(key="feature_matrix_path", value=str(feature_matrix_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
         *runtime_reproducibility_rows(
             data_paths=(state_path, future_path, feature_matrix_path),
