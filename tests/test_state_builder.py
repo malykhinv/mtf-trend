@@ -93,6 +93,11 @@ def _write_events_csv(path: Path) -> None:
                 "initial_trade_count_zscore": "",
                 "trigger_component": "one_shot_spike",
                 "trigger_components": "one_shot_spike",
+                "technical_noise_shock": "False",
+                "raw_candle_gap_minutes": "",
+                "excluded_by_data_quality_gate": "False",
+                "daily_return_asof_t": "",
+                "trade_count_market_percentile_asof_t": "",
                 "detector_version": "test_detector",
             }
         )

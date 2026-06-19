@@ -124,10 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     events = subparsers.add_parser(
         "run-mvp1-events",
-        help="Run MVP1 data audit, point-in-time universe, and broad anomaly event detector.",
+        help="Run MVP1 data audit, point-in-time universe, and strategy event detector.",
     )
     events.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
     events.add_argument("--out", required=True, help="Directory where event artifacts will be written.")
+    _add_strategy_horizon_arguments(events, verb="detect")
 
     state = subparsers.add_parser(
         "run-mvp1-state",
@@ -377,8 +378,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "run-mvp1-events":
-        output_dir = run_mvp1_events(input_dir=Path(args.input), out_dir=Path(args.out))
-        print(f"mvp1 broad event artifacts written: {output_dir}")
+        resolved_strategy_name = _resolve_cli_strategy_name(
+            parser=parser,
+            strategy_name=args.strategy_name,
+            horizon_minutes=args.horizon_minutes,
+        )
+        output_dir = run_mvp1_events(
+            input_dir=Path(args.input),
+            out_dir=Path(args.out),
+            strategy_name=resolved_strategy_name,
+        )
+        print(f"mvp1 strategy event artifacts written: {output_dir}")
         return 0
 
     if args.command == "run-mvp1-state":

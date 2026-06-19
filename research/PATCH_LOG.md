@@ -633,3 +633,18 @@ Validation in this environment:
 - `pytest -q tests/test_feature_catalog.py -k 'not run_mvp1_features_writes_catalog_and_audit'`
 
 Full CLI/audit pytest still needs the project venv because this sandbox lacks `polars`.
+
+## strategy: implement post-pump distribution variants
+
+Status: PROPOSED
+
+Changes:
+- Makes `post_pump_distribution_v1_h60/h120/h180` executable registry variants.
+- Adds `PostPumpDistributionStrategy` with causal trigger semantics: `daily_return_asof_t > 0.30`, same-minute `trade_count_market_percentile_asof_t > 0.99`, and one trigger per symbol/UTC-day.
+- Adds explicit post-pump audit fields to the canonical/alias events artifact schema and loader boundary.
+- Routes `run-mvp1-events` and `run-research` through the selected registry strategy instead of hard-coding broad anomaly.
+- Keeps OI and liquidations required for post-pump variants before trigger generation.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- Full pytest still needs the project venv because this sandbox lacks `polars`.

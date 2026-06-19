@@ -159,6 +159,8 @@ def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
             "technical_noise_shock": False,
             "raw_candle_gap_minutes": "",
             "excluded_by_data_quality_gate": False,
+            "daily_return_asof_t": "",
+            "trade_count_market_percentile_asof_t": "",
             "detector_version": "test",
         }
     ]

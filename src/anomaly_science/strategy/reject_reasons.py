@@ -19,6 +19,14 @@ BROAD_ANOMALY_VARIANTS: tuple[str, ...] = (
     "broad_anomaly_v1_h60",
 )
 
+POST_PUMP_DISTRIBUTION_VARIANTS: tuple[str, ...] = (
+    "post_pump_distribution_v1_h60",
+    "post_pump_distribution_v1_h120",
+    "post_pump_distribution_v1_h180",
+)
+
+ANOMALY_EXECUTABLE_VARIANTS: tuple[str, ...] = BROAD_ANOMALY_VARIANTS + POST_PUMP_DISTRIBUTION_VARIANTS
+
 _REASON_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("not_triggered", "mvp1_events", "trigger", "input row did not satisfy the anomaly trigger contract"),
     ("technical_noise_shock", "mvp1_events", "trigger", "first candle after raw timestamp gap is excluded from trigger source"),
@@ -42,7 +50,7 @@ _REASON_SPECS: tuple[tuple[str, str, str, str], ...] = (
 
 ANOMALY_REJECT_REASONS: tuple[StrategyRejectReason, ...] = tuple(
     StrategyRejectReason(strategy_name, "1.0.0", reason_code, owner_stage, blocks_stage, description)
-    for strategy_name in BROAD_ANOMALY_VARIANTS
+    for strategy_name in ANOMALY_EXECUTABLE_VARIANTS
     for reason_code, owner_stage, blocks_stage, description in _REASON_SPECS
 )
 

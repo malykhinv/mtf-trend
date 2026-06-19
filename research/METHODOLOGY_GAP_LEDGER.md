@@ -117,7 +117,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Anomaly event lifecycle | IMPLEMENTED | Online state lifecycle now materializes causal confirmed structural high/low levels, level timestamps, distances to those levels, and keeps missing levels explicit until confirmation. | Keep no-leakage tests around structural state. |
 | Running high/low as-of semantics | IMPLEMENTED | State uses data available only up to `state_time`. | Keep no-leakage tests. |
 | Post-anomaly extension strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
-| Post-pump distribution strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
+| Post-pump distribution strategy | IMPLEMENTED | `post_pump_distribution_v1_h60/h120/h180` are registry-backed executable strategies. Trigger uses causal `daily_return_asof_t > 0.30`, same-minute `trade_count_market_percentile_asof_t > 0.99`, first trigger per symbol/UTC-day, and required OI/liquidation stream gates before generation. | Keep registry, horizon, trigger-frame, and event-artifact tests as permanent gates. |
 | 180m anomaly horizon | IMPLEMENTED | 180m fields are supported in future paths, labels, prediction target dispatch, controls, EV target dispatch, artifact schemas, and tests. | Keep post-pump/post-extension 180m blocked only by strategy implementation rows. |
 | Relaxed geometry features | IMPLEMENTED | Feature matrix now materializes the required continuous shelf/sweep/consolidation geometry fields from data available <= state_time; raw shelf prices are audit-only and ATR/relative coordinates are cataloged as model features. | Keep point-in-time equivalence tests and anti-binary catalog checks. |
 | Required anomaly controls | IMPLEMENTED | Anomaly-specific controls include always-follow, always-fade, fade-after-extension, follow-early-squeeze, no-CVD/no-OI/no-liquidation ablations, and idiosyncratic/systemic subsets. Forensic audit verifies the complete required set in `strategy_baseline_comparison.csv`. | Keep required-control forensic tests as permanent gate. |
@@ -145,7 +145,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 16. `strategy: make registry status self-auditing`.
 17. `strategy: complete broad anomaly trigger component accounting` - implemented in this patch; broader trigger-family coverage remains tracked by the Broad anomaly trigger breadth PARTIAL row.
 18. `strategy: add 180m horizon support or remove 180m promises` - implemented.
-19. `strategy: implement post-pump distribution variants`.
+19. `strategy: implement post-pump distribution variants` - implemented in this patch.
 20. `strategy: implement post-anomaly extension variants`.
 21. `features: add structural state and relaxed geometry features` - implemented in this patch.
 22. `methodology: complete rejection funnel and docs sync`.

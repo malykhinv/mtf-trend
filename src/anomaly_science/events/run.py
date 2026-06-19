@@ -25,7 +25,7 @@ from anomaly_science.events.deduplication import suppress_event_cascade
 from anomaly_science.events.detector import events_to_artifact
 from anomaly_science.strategy.base import validate_trigger_frame
 from anomaly_science.strategy.metadata import format_required_data_streams, strategy_metadata_run_config_rows
-from anomaly_science.strategy.registry import get_broad_anomaly_strategy
+from anomaly_science.strategy.registry import get_broad_anomaly_strategy, get_strategy
 
 
 REQUIRED_DATASETS = ("candles_1m", "candles_5m")
@@ -33,13 +33,23 @@ OPTIONAL_DATASETS = ("open_interest_5m", "liquidations")
 from anomaly_science.universe import build_symbol_universe_by_day, universe_rows_to_artifact
 
 
-def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: BroadAnomalyDetectorConfig | None = None) -> Path:
-    """Run the MVP1 broad event detector and write protocol artifacts."""
+def run_mvp1_events(
+    *,
+    input_dir: str | Path,
+    out_dir: str | Path,
+    config: BroadAnomalyDetectorConfig | None = None,
+    strategy_name: str = "broad_anomaly_v1_h30",
+) -> Path:
+    """Run the MVP1 strategy event detector and write protocol artifacts."""
     input_path = Path(input_dir)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or BroadAnomalyDetectorConfig()
-    strategy = get_broad_anomaly_strategy(config=cfg)
+    strategy = (
+        get_broad_anomaly_strategy(config=cfg, strategy_name=strategy_name)
+        if strategy_name.startswith("broad_anomaly_v1_h")
+        else get_strategy(strategy_name)
+    )
 
     frames, read_errors = _read_source_frames(input_path)
     data_quality = run_data_quality(frames, read_errors=read_errors)
@@ -72,7 +82,7 @@ def run_mvp1_events(*, input_dir: str | Path, out_dir: str | Path, config: Broad
             raw_events = (
                 ()
                 if gated_candles_1m.empty
-                else strategy.generate_events(normalize_candles_1m(gated_candles_1m))
+                else strategy.generate_events(normalize_candles_1m(gated_candles_1m))  # type: ignore[attr-defined]
             )
             _enforce_trigger_frame_matches_events(trigger_frame=trigger_frame, events=raw_events)
             cascade_result = suppress_event_cascade(raw_events, horizon_minutes=strategy.metadata.horizon_minutes)
@@ -186,15 +196,15 @@ def _protocol_rows(
             message="symbol_universe_by_day.csv has rows" if universe_rows_present else "symbol_universe_by_day.csv is empty because no dated symbol data was available",
         ),
         ProtocolAuditRow(
-            check_name="broad_anomaly_detector_written",
+            check_name="strategy_events_written",
             status=AuditStatus.FAIL if event_error else AuditStatus.PASS,
-            message=event_error or f"anomaly_events.csv written with {event_count} accepted broad detector rows from {raw_event_count} raw trigger rows",
+            message=event_error or f"anomaly_events.csv written with {event_count} accepted strategy event rows from {raw_event_count} raw trigger rows",
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
             check_name="detector_not_trade_setup",
             status=AuditStatus.PASS,
-            message="detector uses only current closed 1m candle plus earlier same-symbol baseline candles; no entry/exit/trade rules",
+            message="strategy trigger generation uses only point-in-time market_frame_asof rows; no entry/exit/trade rules",
             artifact="anomaly_events.csv",
         ),
         ProtocolAuditRow(
@@ -321,7 +331,7 @@ def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, o
 
 def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[RunConfigRow]:
     config = strategy.config
-    return [
+    rows = [
         RunConfigRow(key="command", value="run-mvp1-events", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
@@ -333,16 +343,37 @@ def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[R
         ),
         RunConfigRow(key="stage", value="mvp1_events", source="runtime"),
         *strategy_metadata_run_config_rows(strategy),
-        RunConfigRow(key="detector_version", value=config.detector_version, source="runtime"),
-        RunConfigRow(key="detector_baseline_bars", value=str(config.baseline_bars), source="runtime"),
-        RunConfigRow(key="detector_min_baseline_bars", value=str(config.min_baseline_bars), source="runtime"),
-        RunConfigRow(key="detector_min_abs_return_pct", value=str(config.min_abs_return_pct), source="runtime"),
-        RunConfigRow(key="detector_min_quote_volume_zscore", value=str(config.min_quote_volume_zscore), source="runtime"),
-        RunConfigRow(key="detector_min_volume_zscore", value=str(config.min_volume_zscore), source="runtime"),
-        RunConfigRow(key="detector_min_trade_count_zscore", value=str(config.min_trade_count_zscore), source="runtime"),
-        RunConfigRow(key="detector_min_range_zscore", value=str(config.min_range_zscore), source="runtime"),
-        RunConfigRow(key="detector_cooldown_minutes", value=str(config.cooldown_minutes), source="runtime"),
+        RunConfigRow(key="detector_version", value=str(config.detector_version), source="runtime"),
     ]
+    if isinstance(config, BroadAnomalyDetectorConfig):
+        rows.extend(
+            [
+                RunConfigRow(key="detector_baseline_bars", value=str(config.baseline_bars), source="runtime"),
+                RunConfigRow(key="detector_min_baseline_bars", value=str(config.min_baseline_bars), source="runtime"),
+                RunConfigRow(key="detector_min_abs_return_pct", value=str(config.min_abs_return_pct), source="runtime"),
+                RunConfigRow(key="detector_min_quote_volume_zscore", value=str(config.min_quote_volume_zscore), source="runtime"),
+                RunConfigRow(key="detector_min_volume_zscore", value=str(config.min_volume_zscore), source="runtime"),
+                RunConfigRow(key="detector_min_trade_count_zscore", value=str(config.min_trade_count_zscore), source="runtime"),
+                RunConfigRow(key="detector_min_range_zscore", value=str(config.min_range_zscore), source="runtime"),
+                RunConfigRow(key="detector_cooldown_minutes", value=str(config.cooldown_minutes), source="runtime"),
+            ]
+        )
+    else:
+        rows.extend(
+            [
+                RunConfigRow(
+                    key="detector_min_daily_return_asof_t",
+                    value=str(getattr(config, "min_daily_return_asof_t")),
+                    source="runtime",
+                ),
+                RunConfigRow(
+                    key="detector_min_trade_count_market_percentile_asof_t",
+                    value=str(getattr(config, "min_trade_count_market_percentile_asof_t")),
+                    source="runtime",
+                ),
+            ]
+        )
+    return rows
 
 
 def _run_id() -> str:

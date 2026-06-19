@@ -45,6 +45,8 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "technical_noise_shock",
             "raw_candle_gap_minutes",
             "excluded_by_data_quality_gate",
+            "daily_return_asof_t",
+            "trade_count_market_percentile_asof_t",
             "detector_version",
         ),
         description="Anomaly event lifecycle trigger frame; detector output, not trade setups.",

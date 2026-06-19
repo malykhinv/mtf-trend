@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -125,6 +126,8 @@ _TRIGGER_FRAME_SCHEMA: dict[str, pl.DataType] = {
     "technical_noise_shock": pl.Boolean,
     "raw_candle_gap_minutes": pl.Float64,
     "excluded_by_data_quality_gate": pl.Boolean,
+    "daily_return_asof_t": pl.Float64,
+    "trade_count_market_percentile_asof_t": pl.Float64,
     "detector_version": pl.String,
 }
 
@@ -147,6 +150,21 @@ def anomaly_strategy_metadata(strategy_name: str) -> StrategyMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class PostPumpDistributionConfig:
+    detector_version: str = "post_pump_distribution_v1"
+    min_daily_return_asof_t: float = 0.30
+    min_trade_count_market_percentile_asof_t: float = 0.99
+
+    def __post_init__(self) -> None:
+        if not self.detector_version:
+            raise ValueError("detector_version is required")
+        if self.min_daily_return_asof_t <= 0.0:
+            raise ValueError("min_daily_return_asof_t must be positive")
+        if not 0.0 <= self.min_trade_count_market_percentile_asof_t <= 1.0:
+            raise ValueError("min_trade_count_market_percentile_asof_t must be in [0, 1]")
+
+
+@dataclass(frozen=True, slots=True)
 class BroadAnomalyStrategy(BaseStrategy):
     config: BroadAnomalyDetectorConfig = BroadAnomalyDetectorConfig()
     _metadata: StrategyMetadata = field(default_factory=lambda: anomaly_strategy_metadata("broad_anomaly_v1_h30"))
@@ -166,12 +184,42 @@ class BroadAnomalyStrategy(BaseStrategy):
         pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
         candles = normalize_candles_1m(pandas_frame)
         events = self.generate_events(candles)
-        trigger_frame = _events_to_trigger_frame(events)
+        trigger_frame = events_to_trigger_frame(events)
         validate_trigger_frame(trigger_frame)
         return trigger_frame
 
     def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
         return detect_broad_anomaly_events(candles_1m, config=self.config)
+
+    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+        return pl.DataFrame()
+
+
+@dataclass(frozen=True, slots=True)
+class PostPumpDistributionStrategy(BaseStrategy):
+    config: PostPumpDistributionConfig = PostPumpDistributionConfig()
+    _metadata: StrategyMetadata = field(default_factory=lambda: anomaly_strategy_metadata("post_pump_distribution_v1_h120"))
+
+    @property
+    def metadata(self) -> StrategyMetadata:
+        return self._metadata
+
+    @property
+    def required_data_streams(self) -> Mapping[str, bool]:
+        validate_required_data_streams(POST_PUMP_REQUIRED_DATA_STREAMS)
+        return POST_PUMP_REQUIRED_DATA_STREAMS
+
+    def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+        if market_frame_asof.height == 0:
+            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+        pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
+        events = self.generate_events(normalize_candles_1m(pandas_frame))
+        trigger_frame = events_to_trigger_frame(events)
+        validate_trigger_frame(trigger_frame)
+        return trigger_frame
+
+    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
+        return detect_post_pump_distribution_events(candles_1m, config=self.config)
 
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         return pl.DataFrame()
@@ -190,7 +238,89 @@ def make_broad_anomaly_strategy(
     )
 
 
-def _events_to_trigger_frame(events: Sequence[AnomalyEvent]) -> pl.DataFrame:
+def make_post_pump_distribution_strategy(
+    *,
+    strategy_name: str,
+    config: PostPumpDistributionConfig | None = None,
+) -> PostPumpDistributionStrategy:
+    if not strategy_name.startswith("post_pump_distribution_v1_h"):
+        raise ValueError(f"not a post-pump distribution strategy variant: {strategy_name!r}")
+    return PostPumpDistributionStrategy(
+        config=config or PostPumpDistributionConfig(),
+        _metadata=anomaly_strategy_metadata(strategy_name),
+    )
+
+
+def detect_post_pump_distribution_events(
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    *,
+    config: PostPumpDistributionConfig | None = None,
+) -> tuple[AnomalyEvent, ...]:
+    """Detect post-pump distribution states using only as-of candles.
+
+    The trigger matches the strategy spec: daily_return_asof_t > 30% and the
+    current closed 1m trade_count is above the same-minute point-in-time market
+    percentile threshold. Only the first trigger per symbol/UTC-day is emitted.
+    """
+    cfg = config or PostPumpDistributionConfig()
+    rows = sorted(tuple(candles_1m), key=lambda item: (item.open_time_ms, item.symbol))
+    if not rows:
+        return ()
+
+    first_open_by_symbol_day: dict[tuple[str, int], float] = {}
+    emitted_symbol_days: set[tuple[str, int]] = set()
+    by_time: dict[int, list[Candle1m]] = {}
+    for candle in rows:
+        by_time.setdefault(candle.open_time_ms, []).append(candle)
+
+    events: list[AnomalyEvent] = []
+    for open_time_ms in sorted(by_time):
+        same_minute = sorted(by_time[open_time_ms], key=lambda item: item.symbol)
+        trade_percentiles = _same_minute_trade_count_percentiles(same_minute)
+        for candle in same_minute:
+            symbol_day = (candle.symbol, _utc_day_start_ms(candle.open_time_ms))
+            first_open_by_symbol_day.setdefault(symbol_day, candle.open)
+            if symbol_day in emitted_symbol_days:
+                continue
+            day_open = first_open_by_symbol_day[symbol_day]
+            daily_return_asof_t = (candle.close / day_open) - 1.0
+            trade_count_percentile = trade_percentiles.get(candle.symbol)
+            if trade_count_percentile is None:
+                continue
+            if daily_return_asof_t <= cfg.min_daily_return_asof_t:
+                continue
+            if trade_count_percentile <= cfg.min_trade_count_market_percentile_asof_t:
+                continue
+            events.append(
+                AnomalyEvent(
+                    event_id=_post_pump_event_id(cfg.detector_version, candle.symbol, candle.open_time_ms),
+                    symbol=candle.symbol,
+                    event_start_time_ms=candle.open_time_ms,
+                    event_detection_time_ms=candle.available_time_ms,
+                    seed_time_ms=candle.open_time_ms,
+                    seed_open=candle.open,
+                    seed_high=candle.high,
+                    seed_low=candle.low,
+                    seed_close=candle.close,
+                    initial_move_pct=daily_return_asof_t,
+                    initial_volume_zscore=None,
+                    initial_quote_volume_zscore=None,
+                    initial_trade_count_zscore=None,
+                    trigger_component="post_pump_distribution",
+                    trigger_components=("post_pump_distribution", "daily_return_asof_t", "trade_count_market_percentile_asof_t"),
+                    technical_noise_shock=False,
+                    raw_candle_gap_minutes=None,
+                    excluded_by_data_quality_gate=False,
+                    daily_return_asof_t=daily_return_asof_t,
+                    trade_count_market_percentile_asof_t=trade_count_percentile,
+                    detector_version=cfg.detector_version,
+                )
+            )
+            emitted_symbol_days.add(symbol_day)
+    return tuple(events)
+
+
+def events_to_trigger_frame(events: Sequence[AnomalyEvent]) -> pl.DataFrame:
     rows = [_event_to_trigger_row(event) for event in events]
     if not rows:
         return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
@@ -221,5 +351,32 @@ def _event_to_trigger_row(event: AnomalyEvent) -> dict[str, object]:
         "technical_noise_shock": event.technical_noise_shock,
         "raw_candle_gap_minutes": event.raw_candle_gap_minutes,
         "excluded_by_data_quality_gate": event.excluded_by_data_quality_gate,
+        "daily_return_asof_t": event.daily_return_asof_t,
+        "trade_count_market_percentile_asof_t": event.trade_count_market_percentile_asof_t,
         "detector_version": event.detector_version,
     }
+
+
+def _same_minute_trade_count_percentiles(candles: Sequence[Candle1m]) -> dict[str, float]:
+    values = [(candle.symbol, candle.number_of_trades) for candle in candles if candle.number_of_trades is not None]
+    if not values:
+        return {}
+    sorted_values = sorted(values, key=lambda item: (float(item[1]), item[0]))
+    denominator = max(len(sorted_values) - 1, 1)
+    percentiles: dict[str, float] = {}
+    for rank, (symbol, value) in enumerate(sorted_values):
+        # Average rank for ties; deterministic and computed from this closed minute only.
+        tied_ranks = [idx for idx, (_, other) in enumerate(sorted_values) if float(other) == float(value)]
+        average_rank = sum(tied_ranks) / len(tied_ranks)
+        percentiles[symbol] = average_rank / denominator if len(sorted_values) > 1 else 1.0
+    return percentiles
+
+
+def _utc_day_start_ms(timestamp_ms: int) -> int:
+    return timestamp_ms - (timestamp_ms % (24 * 60 * ONE_MINUTE_MS))
+
+
+def _post_pump_event_id(detector_version: str, symbol: str, seed_time_ms: int) -> str:
+    raw = f"{detector_version}|{symbol}|{seed_time_ms}".encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:16]
+    return f"evt_{digest}"

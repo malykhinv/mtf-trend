@@ -296,6 +296,8 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
         "technical_noise_shock",
         "raw_candle_gap_minutes",
         "excluded_by_data_quality_gate",
+        "daily_return_asof_t",
+        "trade_count_market_percentile_asof_t",
         "detector_version",
     ]
 

@@ -107,6 +107,8 @@ def events_to_artifact(events: Sequence[AnomalyEvent]) -> list[dict[str, object]
                 "technical_noise_shock": event.technical_noise_shock,
                 "raw_candle_gap_minutes": _csv_value(event.raw_candle_gap_minutes),
                 "excluded_by_data_quality_gate": event.excluded_by_data_quality_gate,
+                "daily_return_asof_t": _csv_value(event.daily_return_asof_t),
+                "trade_count_market_percentile_asof_t": _csv_value(event.trade_count_market_percentile_asof_t),
                 "detector_version": event.detector_version,
             }
         )

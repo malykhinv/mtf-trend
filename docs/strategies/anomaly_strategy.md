@@ -67,9 +67,9 @@ Horizon suffix не является свободным параметром: st
 | post_anomaly_extension_v1_h60 | 60 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 2.5 ATR / SL 1.3 ATR |
 | post_anomaly_extension_v1_h120 | 120 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 3.0 ATR / SL 1.5 ATR |
 | post_anomaly_extension_v1_h180 | 180 | specified, not implemented until explicit patch | OI optional by default, liquidations optional by default | TP 4.0 ATR / SL 2.0 ATR |
-| post_pump_distribution_v1_h60 | 60 | specified, not implemented until explicit patch | OI required, liquidations required | TP 2.0 ATR / SL 1.2 ATR |
-| post_pump_distribution_v1_h120 | 120 | specified, not implemented until explicit patch | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
-| post_pump_distribution_v1_h180 | 180 | specified, not implemented until explicit patch | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
+| post_pump_distribution_v1_h60 | 60 | implemented | OI required, liquidations required | TP 2.0 ATR / SL 1.2 ATR |
+| post_pump_distribution_v1_h120 | 120 | implemented | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
+| post_pump_distribution_v1_h180 | 180 | implemented | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
 
 Semantic horizon metadata:
 
@@ -240,6 +240,15 @@ seed_time >= event_start_time
 ```text
 daily_return_asof_t > 0.30
 and trade_count_market_percentile_asof_t > 0.99
+```
+
+Executable implementation rule:
+
+```text
+daily_return_asof_t = current closed 1m close / first available open of the same UTC day - 1
+trade_count_market_percentile_asof_t = same-minute cross-sectional percentile from closed 1m trade_count only
+only the first trigger per symbol per UTC day is emitted
+open_interest and liquidations are required streams before trigger generation
 ```
 
 Правило:
@@ -517,7 +526,7 @@ broad_anomaly_v1_h60              extended broad anomaly horizon
 post_anomaly_extension_v1_h60     specified-only до реализации late-state trigger
 post_anomaly_extension_v1_h120
 post_anomaly_extension_v1_h180
-post_pump_distribution_v1_h60     specified-only до реализации post-pump trigger
+post_pump_distribution_v1_h60     executable causal post-pump trigger
 post_pump_distribution_v1_h120
 post_pump_distribution_v1_h180
 ```

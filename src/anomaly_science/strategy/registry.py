@@ -5,7 +5,13 @@ from dataclasses import dataclass
 
 from anomaly_science.contracts.horizons import validate_supported_research_horizon
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
-from anomaly_science.strategy.anomaly import ANOMALY_STRATEGY_DEFAULTS, BroadAnomalyStrategy, make_broad_anomaly_strategy
+from anomaly_science.strategy.anomaly import (
+    ANOMALY_STRATEGY_DEFAULTS,
+    BroadAnomalyStrategy,
+    PostPumpDistributionStrategy,
+    make_broad_anomaly_strategy,
+    make_post_pump_distribution_strategy,
+)
 from anomaly_science.strategy.base import BaseStrategy
 
 
@@ -40,7 +46,13 @@ BROAD_ANOMALY_VARIANTS: tuple[str, ...] = (
     "broad_anomaly_v1_h60",
 )
 
-EXECUTABLE_STRATEGY_NAMES: tuple[str, ...] = BROAD_ANOMALY_VARIANTS
+POST_PUMP_DISTRIBUTION_VARIANTS: tuple[str, ...] = (
+    "post_pump_distribution_v1_h60",
+    "post_pump_distribution_v1_h120",
+    "post_pump_distribution_v1_h180",
+)
+
+EXECUTABLE_STRATEGY_NAMES: tuple[str, ...] = BROAD_ANOMALY_VARIANTS + POST_PUMP_DISTRIBUTION_VARIANTS
 SPECIFIED_NOT_IMPLEMENTED_STRATEGY_NAMES: tuple[str, ...] = tuple(
     strategy_name for strategy_name in ANOMALY_STRATEGY_DEFAULTS if strategy_name not in EXECUTABLE_STRATEGY_NAMES
 )
@@ -53,15 +65,26 @@ def available_strategies() -> tuple[StrategyRegistryEntry, ...]:
     implementation-status artifact but must never be instantiated through a
     default or broad-anomaly fallback factory.
     """
-    return tuple(
-        StrategyRegistryEntry(
-            strategy_name=strategy_name,
-            strategy_family="anomaly",
-            strategy_contract_version="base_strategy_v1",
-            factory=lambda strategy_name=strategy_name: make_broad_anomaly_strategy(strategy_name=strategy_name),
+    rows: list[StrategyRegistryEntry] = []
+    for strategy_name in BROAD_ANOMALY_VARIANTS:
+        rows.append(
+            StrategyRegistryEntry(
+                strategy_name=strategy_name,
+                strategy_family="anomaly",
+                strategy_contract_version="base_strategy_v1",
+                factory=lambda strategy_name=strategy_name: make_broad_anomaly_strategy(strategy_name=strategy_name),
+            )
         )
-        for strategy_name in EXECUTABLE_STRATEGY_NAMES
-    )
+    for strategy_name in POST_PUMP_DISTRIBUTION_VARIANTS:
+        rows.append(
+            StrategyRegistryEntry(
+                strategy_name=strategy_name,
+                strategy_family="anomaly",
+                strategy_contract_version="base_strategy_v1",
+                factory=lambda strategy_name=strategy_name: make_post_pump_distribution_strategy(strategy_name=strategy_name),
+            )
+        )
+    return tuple(rows)
 
 
 def executable_strategy_names() -> tuple[str, ...]:
@@ -137,3 +160,7 @@ def get_broad_anomaly_strategy(
     strategy_name: str = "broad_anomaly_v1_h30",
 ) -> BroadAnomalyStrategy:
     return make_broad_anomaly_strategy(strategy_name=strategy_name, config=config)
+
+
+def get_post_pump_distribution_strategy(*, strategy_name: str = "post_pump_distribution_v1_h120") -> PostPumpDistributionStrategy:
+    return make_post_pump_distribution_strategy(strategy_name=strategy_name)

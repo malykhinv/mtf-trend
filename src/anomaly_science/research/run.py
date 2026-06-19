@@ -91,7 +91,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
     )
 
     run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
-    events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events")
+    events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events", strategy_name=config.strategy_name)
     state_dir = run_mvp1_state(
         input_dir=input_dir,
         events_path=events_dir / "strategy_events.csv",

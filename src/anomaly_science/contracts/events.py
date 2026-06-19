@@ -27,6 +27,8 @@ class AnomalyEvent:
     technical_noise_shock: bool = False
     raw_candle_gap_minutes: float | None = None
     excluded_by_data_quality_gate: bool = False
+    daily_return_asof_t: float | None = None
+    trade_count_market_percentile_asof_t: float | None = None
 
     def __post_init__(self) -> None:
         if not self.event_id:
@@ -56,6 +58,12 @@ class AnomalyEvent:
             raise MarketDataContractError("raw_candle_gap_minutes must be positive when present")
         if self.technical_noise_shock and not self.excluded_by_data_quality_gate:
             raise MarketDataContractError("technical_noise_shock events must be excluded by data-quality gate")
+        for field_name in ("daily_return_asof_t", "trade_count_market_percentile_asof_t"):
+            value = getattr(self, field_name)
+            if value is not None and (not isinstance(value, (int, float)) or value != value):
+                raise MarketDataContractError(f"{field_name} must be finite when present")
+        if self.trade_count_market_percentile_asof_t is not None and not 0.0 <= self.trade_count_market_percentile_asof_t <= 1.0:
+            raise MarketDataContractError("trade_count_market_percentile_asof_t must be in [0, 1] when present")
         for field_name in ("seed_open", "seed_high", "seed_low", "seed_close"):
             value = getattr(self, field_name)
             if value <= 0:

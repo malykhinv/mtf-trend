@@ -67,6 +67,8 @@ def load_anomaly_events_csv(path: str | Path) -> tuple[AnomalyEvent, ...]:
                     technical_noise_shock=_optional_bool(row, "technical_noise_shock", default=False),
                     raw_candle_gap_minutes=_optional_float(row, "raw_candle_gap_minutes"),
                     excluded_by_data_quality_gate=_optional_bool(row, "excluded_by_data_quality_gate", default=False),
+                    daily_return_asof_t=_optional_float(row, "daily_return_asof_t"),
+                    trade_count_market_percentile_asof_t=_optional_float(row, "trade_count_market_percentile_asof_t"),
                 )
             )
         except (TypeError, ValueError) as exc:

@@ -7,7 +7,7 @@ import pytest
 
 from anomaly_science.strategy import StrategyContractError, StrategyMetadata, validate_trigger_frame
 from anomaly_science.strategy.registry import available_strategies, get_strategy, specified_not_implemented_strategy_names
-from anomaly_science.strategy.anomaly import BroadAnomalyStrategy
+from anomaly_science.strategy.anomaly import BroadAnomalyStrategy, PostPumpDistributionStrategy
 
 
 BASE_TS = 1_704_067_200_000
@@ -17,12 +17,12 @@ def _dt(value_ms: int) -> datetime:
     return datetime.fromtimestamp(value_ms / 1000, tz=timezone.utc)
 
 
-def _candle_row(index: int, *, close: float, quote_volume: float = 100.0) -> dict[str, object]:
+def _candle_row(index: int, *, close: float, quote_volume: float = 100.0, symbol: str = "AAA/USDT:USDT", number_of_trades: float = 10.0) -> dict[str, object]:
     open_time_ms = BASE_TS + index * 60_000
     high = max(100.0, close) + 0.10
     low = min(100.0, close) - 0.10
     return {
-        "symbol": "AAA/USDT:USDT",
+        "symbol": symbol,
         "open_time_ms": open_time_ms,
         "available_time_ms": open_time_ms + 60_000,
         "open": 100.0,
@@ -31,7 +31,7 @@ def _candle_row(index: int, *, close: float, quote_volume: float = 100.0) -> dic
         "close": close,
         "volume": 1.0,
         "quote_volume": quote_volume,
-        "number_of_trades": 10.0,
+        "number_of_trades": number_of_trades,
         "taker_buy_quote_volume": quote_volume * 0.5,
     }
 
@@ -153,6 +153,33 @@ def test_broad_anomaly_strategy_wraps_detector_behind_base_contract() -> None:
     assert custom_features.columns == []
 
 
+def test_post_pump_distribution_strategy_uses_causal_daily_return_and_same_minute_cross_section() -> None:
+    strategy = PostPumpDistributionStrategy()
+    rows: list[dict[str, object]] = []
+    for index in range(3):
+        rows.append(_candle_row(index, symbol="AAA/USDT:USDT", close=100.0 + index, number_of_trades=10.0))
+        rows.append(_candle_row(index, symbol="BBB/USDT:USDT", close=100.0, number_of_trades=20.0))
+        rows.append(_candle_row(index, symbol="CCC/USDT:USDT", close=100.0, number_of_trades=30.0))
+    rows.append(_candle_row(3, symbol="AAA/USDT:USDT", close=131.0, number_of_trades=1_000.0))
+    rows.append(_candle_row(3, symbol="BBB/USDT:USDT", close=100.0, number_of_trades=20.0))
+    rows.append(_candle_row(3, symbol="CCC/USDT:USDT", close=100.0, number_of_trades=30.0))
+    rows.append(_candle_row(4, symbol="AAA/USDT:USDT", close=132.0, number_of_trades=1_100.0))
+    rows.append(_candle_row(4, symbol="BBB/USDT:USDT", close=100.0, number_of_trades=20.0))
+    rows.append(_candle_row(4, symbol="CCC/USDT:USDT", close=100.0, number_of_trades=30.0))
+
+    trigger_frame = strategy.generate_triggers(pl.DataFrame(rows))
+
+    validate_trigger_frame(trigger_frame)
+    assert strategy.metadata.strategy_name == "post_pump_distribution_v1_h120"
+    assert strategy.metadata.allowed_horizons == (60, 120, 180)
+    assert strategy.required_data_streams == {"open_interest": True, "liquidations": True}
+    assert trigger_frame.height == 1
+    assert trigger_frame["symbol"].to_list() == ["AAA/USDT:USDT"]
+    assert trigger_frame["trigger_component"].to_list() == ["post_pump_distribution"]
+    assert trigger_frame["daily_return_asof_t"].to_list()[0] == pytest.approx(0.31)
+    assert trigger_frame["trade_count_market_percentile_asof_t"].to_list()[0] == pytest.approx(1.0)
+
+
 def test_trigger_frame_rejects_internal_unix_ms_time_columns() -> None:
     frame = pl.DataFrame({
         "symbol": ["AAA"],
@@ -249,14 +276,17 @@ def test_strategy_registry_exposes_broad_anomaly_by_contract_name() -> None:
         "broad_anomaly_v1_h15",
         "broad_anomaly_v1_h30",
         "broad_anomaly_v1_h60",
+        "post_pump_distribution_v1_h60",
+        "post_pump_distribution_v1_h120",
+        "post_pump_distribution_v1_h180",
     ]
     assert strategy.metadata.strategy_name == "broad_anomaly_v1_h30"
     assert strategy.metadata.strategy_contract_version == "base_strategy_v1"
+    post_pump = get_strategy("post_pump_distribution_v1_h120")
+    assert post_pump.metadata.strategy_name == "post_pump_distribution_v1_h120"
+    assert post_pump.required_data_streams == {"open_interest": True, "liquidations": True}
     assert specified_not_implemented_strategy_names() == (
         "post_anomaly_extension_v1_h60",
         "post_anomaly_extension_v1_h120",
         "post_anomaly_extension_v1_h180",
-        "post_pump_distribution_v1_h60",
-        "post_pump_distribution_v1_h120",
-        "post_pump_distribution_v1_h180",
     )
