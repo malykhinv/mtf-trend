@@ -83,7 +83,7 @@ class FeatureCatalogRow:
 
 
 @dataclass(frozen=True, slots=True)
-class AnomalyFeatureMatrixRow:
+class StrategyFeatureMatrixRow:
     feature_schema_version: str
     feature_matrix_version: str
     event_id: str
@@ -313,3 +313,6 @@ class AnomalyFeatureMatrixRow:
                     raise MarketDataContractError(
                         f"{field_name} must be null when cross_section_available is false"
                     )
+
+
+AnomalyFeatureMatrixRow = StrategyFeatureMatrixRow

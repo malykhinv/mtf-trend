@@ -14,11 +14,11 @@ from anomaly_science.contracts.labels import (
     ATR_LABEL_SOURCE,
     MISSING_FUTURE_SCENARIO,
     TEMPORAL_LABEL_CONTRACT,
-    AnomalyOutcomeLabelRow,
+    StrategyOutcomeLabelRow,
 )
 from anomaly_science.contracts.market import MarketDataContractError
-from anomaly_science.contracts.state import AnomalyState1mRow
-from anomaly_science.future import load_anomaly_future_paths_csv, load_anomaly_state_1m_csv
+from anomaly_science.contracts.state import StrategyState1mRow
+from anomaly_science.future import load_strategy_future_paths_csv, load_strategy_state_1m_csv
 from anomaly_science.labels.config import OutcomeLabelConfig
 
 
@@ -32,7 +32,7 @@ class OutcomeLabelArtifactError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class OutcomeLabelInputRow:
-    state: AnomalyState1mRow
+    state: StrategyState1mRow
     future: FuturePathRow
 
 
@@ -43,14 +43,14 @@ def load_outcome_label_inputs(
 ) -> tuple[OutcomeLabelInputRow, ...]:
     """Load state and future artifacts through strict schema boundaries."""
     return build_outcome_label_inputs(
-        state_rows=load_anomaly_state_1m_csv(state_path),
-        future_rows=load_anomaly_future_paths_csv(future_path),
+        state_rows=load_strategy_state_1m_csv(state_path),
+        future_rows=load_strategy_future_paths_csv(future_path),
     )
 
 
 def build_outcome_label_inputs(
     *,
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
     future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
 ) -> tuple[OutcomeLabelInputRow, ...]:
     states = tuple(state_rows)
@@ -78,23 +78,26 @@ def build_outcome_label_inputs(
     return tuple(rows)
 
 
-def build_anomaly_outcome_labels(
+def build_strategy_outcome_labels(
     *,
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
     future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
     config: OutcomeLabelConfig | None = None,
-) -> tuple[AnomalyOutcomeLabelRow, ...]:
+) -> tuple[StrategyOutcomeLabelRow, ...]:
     inputs = build_outcome_label_inputs(state_rows=state_rows, future_rows=future_rows)
-    return build_anomaly_outcome_labels_from_inputs(inputs=inputs, config=config)
+    return build_strategy_outcome_labels_from_inputs(inputs=inputs, config=config)
 
 
-def build_anomaly_outcome_labels_from_inputs(
+build_anomaly_outcome_labels = build_strategy_outcome_labels
+
+
+def build_strategy_outcome_labels_from_inputs(
     *,
     inputs: Sequence[OutcomeLabelInputRow] | Iterable[OutcomeLabelInputRow],
     config: OutcomeLabelConfig | None = None,
-) -> tuple[AnomalyOutcomeLabelRow, ...]:
+) -> tuple[StrategyOutcomeLabelRow, ...]:
     cfg = config or OutcomeLabelConfig()
-    rows: list[AnomalyOutcomeLabelRow] = []
+    rows: list[StrategyOutcomeLabelRow] = []
     for input_row in inputs:
         future = input_row.future
         scenario_15m = assign_future_nature_scenario(future=future, horizon_minutes=15, config=cfg)
@@ -103,7 +106,7 @@ def build_anomaly_outcome_labels_from_inputs(
         scenario_120m = assign_future_nature_scenario(future=future, horizon_minutes=120, config=cfg)
         scenario_180m = assign_future_nature_scenario(future=future, horizon_minutes=180, config=cfg)
         rows.append(
-            AnomalyOutcomeLabelRow(
+            StrategyOutcomeLabelRow(
                 label_schema_version=cfg.label_schema_version,
                 atr_window_minutes=cfg.atr_window_minutes,
                 core_atr_1440=future.core_atr_1440,
@@ -130,6 +133,9 @@ def build_anomaly_outcome_labels_from_inputs(
             )
         )
     return tuple(rows)
+
+
+build_anomaly_outcome_labels_from_inputs = build_strategy_outcome_labels_from_inputs
 
 
 def assign_future_nature_scenario(
@@ -178,7 +184,7 @@ def assign_future_nature_scenario(
     return "unclear"
 
 
-def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLabelRow, ...]:
+def load_strategy_outcome_labels_csv(path: str | Path) -> tuple[StrategyOutcomeLabelRow, ...]:
     """Read anomaly_outcome_labels.csv through the declared strict artifact schema."""
     labels_path = Path(path)
     if not labels_path.exists():
@@ -193,11 +199,11 @@ def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLab
             f"outcome labels artifact columns must match {expected_columns}, got {actual_columns}"
         )
 
-    rows: list[AnomalyOutcomeLabelRow] = []
+    rows: list[StrategyOutcomeLabelRow] = []
     for row_index, row in frame.iterrows():
         try:
             rows.append(
-                AnomalyOutcomeLabelRow(
+                StrategyOutcomeLabelRow(
                     label_schema_version=_required_str(row, "label_schema_version"),
                     atr_window_minutes=_required_int(row, "atr_window_minutes"),
                     core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
@@ -228,7 +234,10 @@ def load_anomaly_outcome_labels_csv(path: str | Path) -> tuple[AnomalyOutcomeLab
     return tuple(rows)
 
 
-def outcome_label_rows_to_artifact(rows: Sequence[AnomalyOutcomeLabelRow]) -> list[dict[str, object]]:
+load_anomaly_outcome_labels_csv = load_strategy_outcome_labels_csv
+
+
+def outcome_label_rows_to_artifact(rows: Sequence[StrategyOutcomeLabelRow]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for row in rows:
         payload = _with_core_atr_csv_alias(asdict(row))
@@ -280,7 +289,7 @@ def _label_available(scenario: str) -> bool:
 
 
 def _unique_by_join_key(
-    rows: Iterable[AnomalyState1mRow] | Iterable[FuturePathRow],
+    rows: Iterable[StrategyState1mRow] | Iterable[FuturePathRow],
     *,
     artifact_name: str,
 ) -> dict[tuple[str, str, int, int], object]:
@@ -293,11 +302,11 @@ def _unique_by_join_key(
     return result
 
 
-def _join_key(row: AnomalyState1mRow | FuturePathRow) -> tuple[str, str, int, int]:
+def _join_key(row: StrategyState1mRow | FuturePathRow) -> tuple[str, str, int, int]:
     return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
 
 
-def _enforce_label_temporal_contract(*, state: AnomalyState1mRow, future: FuturePathRow) -> None:
+def _enforce_label_temporal_contract(*, state: StrategyState1mRow, future: FuturePathRow) -> None:
     if state.snapshot_time_ms != future.snapshot_time_ms:
         raise MarketDataContractError("label join requires equal state/future snapshot_time_ms")
     if state.feature_cutoff_time_ms != future.feature_cutoff_time_ms:

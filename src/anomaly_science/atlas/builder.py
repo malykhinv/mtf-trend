@@ -14,17 +14,19 @@ from anomaly_science.contracts.atlas import (
     AtlasNatureRow,
     AtlasResponseSurfaceRow,
 )
-from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
+from anomaly_science.contracts.features import StrategyFeatureMatrixRow
 from anomaly_science.contracts.future import BARRIER_RESOLUTION_STOP_LOSS_FIRST, FuturePathRow
 from anomaly_science.contracts.market import MarketDataContractError
-from anomaly_science.contracts.state import AnomalyState1mRow
-from anomaly_science.features.matrix import load_anomaly_feature_matrix_csv
+from anomaly_science.contracts.state import StrategyState1mRow
+from anomaly_science.features.matrix import load_strategy_feature_matrix_csv
 from anomaly_science.future.builder import (
     AnomalyFutureArtifactError,
     AnomalyStateArtifactError,
-    load_anomaly_future_paths_csv,
-    load_anomaly_state_1m_csv,
+    load_strategy_future_paths_csv,
+    load_strategy_state_1m_csv,
 )
+
+load_anomaly_future_paths_csv = load_strategy_future_paths_csv
 
 TEMPORAL_CONTRACT_TEXT = "feature_cutoff_time_ms<=snapshot_time_ms<future_start_time_ms"
 OUTCOME_COORDINATE_ATR = "ATR_normalized_30m"
@@ -36,9 +38,9 @@ class AtlasInputError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class AtlasInputRow:
-    state: AnomalyState1mRow
+    state: StrategyState1mRow
     future: FuturePathRow
-    feature: AnomalyFeatureMatrixRow
+    feature: StrategyFeatureMatrixRow
     contexts: tuple[tuple[str, str], ...]
     atlas_outcome_bins: tuple[tuple[int, str], ...]
 
@@ -60,17 +62,17 @@ def load_atlas_inputs(
 ) -> tuple[AtlasInputRow, ...]:
     """Load state, future and feature matrix artifacts through strict boundaries."""
     cfg = config or AtlasConfig()
-    state_rows = load_anomaly_state_1m_csv(state_path)
-    future_rows = load_anomaly_future_paths_csv(future_path)
-    feature_rows = load_anomaly_feature_matrix_csv(feature_matrix_path)
+    state_rows = load_strategy_state_1m_csv(state_path)
+    future_rows = load_strategy_future_paths_csv(future_path)
+    feature_rows = load_strategy_feature_matrix_csv(feature_matrix_path)
     return build_atlas_inputs(state_rows=state_rows, future_rows=future_rows, feature_rows=feature_rows, config=cfg)
 
 
 def build_atlas_inputs(
     *,
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
     future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
-    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow],
+    feature_rows: Sequence[StrategyFeatureMatrixRow] | Iterable[StrategyFeatureMatrixRow],
     config: AtlasConfig | None = None,
 ) -> tuple[AtlasInputRow, ...]:
     cfg = config or AtlasConfig()
@@ -105,9 +107,9 @@ def build_atlas_inputs(
         state = state_by_key[key]
         future = future_by_key[key]
         feature = feature_by_key[key]
-        if not isinstance(state, AnomalyState1mRow) or not isinstance(future, FuturePathRow):
+        if not isinstance(state, StrategyState1mRow) or not isinstance(future, FuturePathRow):
             raise AtlasInputError("atlas join loaded unexpected row types")
-        if not isinstance(feature, AnomalyFeatureMatrixRow):
+        if not isinstance(feature, StrategyFeatureMatrixRow):
             raise AtlasInputError("feature matrix join loaded unexpected row type")
         _enforce_atlas_temporal_contract(state=state, future=future, feature=feature)
         rows.append(
@@ -127,9 +129,9 @@ def build_atlas_inputs(
 
 def build_atlas_artifacts(
     *,
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
     future_rows: Sequence[FuturePathRow] | Iterable[FuturePathRow],
-    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow],
+    feature_rows: Sequence[StrategyFeatureMatrixRow] | Iterable[StrategyFeatureMatrixRow],
     config: AtlasConfig | None = None,
 ) -> AtlasArtifacts:
     cfg = config or AtlasConfig()
@@ -153,9 +155,9 @@ def build_atlas_artifacts_from_inputs(
 
 
 def assign_atlas_contexts(
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     *,
-    feature: AnomalyFeatureMatrixRow,
+    feature: StrategyFeatureMatrixRow,
 ) -> tuple[tuple[str, str], ...]:
     """Assign atlas context bins from state/feature as-of fields only."""
     base_contexts: list[tuple[str, str]] = [
@@ -394,7 +396,7 @@ def _build_market_shock_groups(*, rows: Sequence[AtlasInputRow], config: AtlasCo
     return tuple(result)
 
 
-def _price_shape_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatrixRow) -> str:
+def _price_shape_atr_bin(state: StrategyState1mRow, feature: StrategyFeatureMatrixRow) -> str:
     value = feature.range_since_start_atr
     if value is None:
         return "missing_range_since_start_atr"
@@ -405,7 +407,7 @@ def _price_shape_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatrix
     return "muted_range_expansion_atr"
 
 
-def _high_position_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatrixRow) -> str:
+def _high_position_atr_bin(state: StrategyState1mRow, feature: StrategyFeatureMatrixRow) -> str:
     value = feature.distance_to_running_high_atr
     if value is None:
         return "missing_distance_to_running_high_atr"
@@ -418,7 +420,7 @@ def _high_position_atr_bin(state: AnomalyState1mRow, feature: AnomalyFeatureMatr
     return "far_below_running_high_atr"
 
 
-def _detection_maturity_bin(state: AnomalyState1mRow) -> str:
+def _detection_maturity_bin(state: StrategyState1mRow) -> str:
     value = state.minutes_since_detection
     if value <= 2:
         return "early_after_detection"
@@ -427,7 +429,7 @@ def _detection_maturity_bin(state: AnomalyState1mRow) -> str:
     return "late_after_detection"
 
 
-def _speed_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _speed_regime_bin(feature: StrategyFeatureMatrixRow) -> str:
     value = feature.price_speed_atr
     if value is None:
         return "missing_speed_regime"
@@ -449,7 +451,7 @@ def _utc_session_bin(snapshot_time_ms: int) -> str:
     return "late_us_utc"
 
 
-def _market_context_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _market_context_bin(feature: StrategyFeatureMatrixRow) -> str:
     if feature.systemic_cluster_regime == "systemic_beta_shock":
         return "systemic_beta_shock"
     btc_regime = _btc_relative_regime_bin(feature)
@@ -496,7 +498,7 @@ def _signed_atr_bin(value: float | None, *, missing: str, negative_prefix: str, 
     return f"{positive_prefix}_far"
 
 
-def _initial_pump_height_atr_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _initial_pump_height_atr_bin(feature: StrategyFeatureMatrixRow) -> str:
     value = feature.initial_pump_height_core_atr_1440
     if value is None:
         return "missing_initial_pump_height_atr"
@@ -509,7 +511,7 @@ def _initial_pump_height_atr_bin(feature: AnomalyFeatureMatrixRow) -> str:
     return "muted_initial_pump_atr"
 
 
-def _consolidation_width_ratio_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _consolidation_width_ratio_bin(feature: StrategyFeatureMatrixRow) -> str:
     value = feature.consolidation_width_ratio
     if value is None:
         return "missing_consolidation_width_ratio"
@@ -522,7 +524,7 @@ def _consolidation_width_ratio_bin(feature: AnomalyFeatureMatrixRow) -> str:
     return "loose_or_noisy_consolidation"
 
 
-def _shelf_position_atr_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _shelf_position_atr_bin(feature: StrategyFeatureMatrixRow) -> str:
     return _signed_atr_bin(
         feature.current_close_minus_shelf_low_core_atr_1440,
         missing="missing_shelf_position_atr",
@@ -531,7 +533,7 @@ def _shelf_position_atr_bin(feature: AnomalyFeatureMatrixRow) -> str:
     )
 
 
-def _shelf_break_risk_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _shelf_break_risk_bin(feature: StrategyFeatureMatrixRow) -> str:
     value = feature.current_low_minus_shelf_low_core_atr_1440
     if value is None:
         return "missing_shelf_break_risk"
@@ -544,7 +546,7 @@ def _shelf_break_risk_bin(feature: AnomalyFeatureMatrixRow) -> str:
     return "clear_above_shelf_low_asof"
 
 
-def _shelf_reclaim_state_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _shelf_reclaim_state_bin(feature: StrategyFeatureMatrixRow) -> str:
     value = feature.minutes_since_reclaim
     if value is None:
         return "no_reclaim_observed_asof"
@@ -555,7 +557,7 @@ def _shelf_reclaim_state_bin(feature: AnomalyFeatureMatrixRow) -> str:
     return "stale_reclaim_asof"
 
 
-def _sweep_flow_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _sweep_flow_regime_bin(feature: StrategyFeatureMatrixRow) -> str:
     pct_bin = _percentile_bin(feature.volume_on_sweep_percentile, missing="missing_sweep_volume_rank")
     liq = feature.liq_intensity_during_sweep
     if liq is None:
@@ -567,7 +569,7 @@ def _sweep_flow_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
     return f"{pct_bin}_no_liq_sweep"
 
 
-def _liquidation_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _liquidation_regime_bin(feature: StrategyFeatureMatrixRow) -> str:
     pct_bin = _percentile_bin(feature.liq_intensity_market_percentile, missing="missing_liq_rank")
     imbalance = feature.liquidation_imbalance
     if imbalance is None:
@@ -579,7 +581,7 @@ def _liquidation_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
     return f"{pct_bin}_balanced_liq"
 
 
-def _cvd_divergence_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _cvd_divergence_regime_bin(feature: StrategyFeatureMatrixRow) -> str:
     if feature.price_up_cvd_down_flag:
         return "price_up_cvd_down"
     if feature.price_down_cvd_up_flag:
@@ -596,7 +598,7 @@ def _cvd_divergence_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
     return "cvd_confirmed_or_neutral"
 
 
-def _btc_relative_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
+def _btc_relative_regime_bin(feature: StrategyFeatureMatrixRow) -> str:
     score = feature.idiosyncratic_momentum_score
     if score is not None and score >= 1.0:
         return "strong_idiosyncratic_momentum"
@@ -611,7 +613,7 @@ def _btc_relative_regime_bin(feature: AnomalyFeatureMatrixRow) -> str:
 
 
 def _unique_by_join_key(
-    rows: Iterable[AnomalyState1mRow] | Iterable[FuturePathRow] | Iterable[AnomalyFeatureMatrixRow],
+    rows: Iterable[StrategyState1mRow] | Iterable[FuturePathRow] | Iterable[StrategyFeatureMatrixRow],
     *,
     artifact_name: str,
 ) -> dict[tuple[str, str, int, int], object]:
@@ -626,9 +628,9 @@ def _unique_by_join_key(
 
 def _enforce_atlas_temporal_contract(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     future: FuturePathRow,
-    feature: AnomalyFeatureMatrixRow,
+    feature: StrategyFeatureMatrixRow,
 ) -> None:
     if state.snapshot_time_ms != future.snapshot_time_ms:
         raise AtlasInputError("state and future snapshot_time_ms must match")

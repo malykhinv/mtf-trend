@@ -8,7 +8,7 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.labels.builder import (
-    build_anomaly_outcome_labels_from_inputs,
+    build_strategy_outcome_labels_from_inputs,
     load_outcome_label_inputs,
     outcome_label_rows_to_artifact,
 )
@@ -30,7 +30,7 @@ def run_mvp1_labels(
     cfg = config or OutcomeLabelConfig()
 
     inputs = load_outcome_label_inputs(state_path=state_artifact_path, future_path=future_artifact_path)
-    label_rows = build_anomaly_outcome_labels_from_inputs(inputs=inputs, config=cfg)
+    label_rows = build_strategy_outcome_labels_from_inputs(inputs=inputs, config=cfg)
     protocol_rows = _protocol_rows(input_row_count=len(inputs), label_row_count=len(label_rows))
     run_config_rows = _run_config_rows(
         state_path=state_artifact_path,

@@ -8,9 +8,9 @@ from typing import Iterable, Mapping, Sequence
 import pandas as pd
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
-from anomaly_science.contracts.events import AnomalyEvent
+from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import Candle1m, MarketDataContractError, ONE_MINUTE_MS
-from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
 from anomaly_science.state.config import OnlineStateBuilderConfig
@@ -19,11 +19,14 @@ STRUCTURAL_PIVOT_LEFT_CANDLES = 2
 STRUCTURAL_PIVOT_RIGHT_CANDLES = 1
 
 
-class AnomalyEventsArtifactError(ValueError):
+class StrategyEventsArtifactError(ValueError):
     """Raised when anomaly_events.csv violates its strict artifact boundary."""
 
 
-def load_anomaly_events_csv(path: str | Path) -> tuple[AnomalyEvent, ...]:
+AnomalyEventsArtifactError = StrategyEventsArtifactError
+
+
+def load_strategy_events_csv(path: str | Path) -> tuple[StrategyEvent, ...]:
     """Read anomaly_events.csv through the declared MVP1 artifact schema.
 
     The boundary is intentionally strict: the file must have exactly the schema
@@ -32,22 +35,22 @@ def load_anomaly_events_csv(path: str | Path) -> tuple[AnomalyEvent, ...]:
     """
     event_path = Path(path)
     if not event_path.exists():
-        raise AnomalyEventsArtifactError(f"events artifact is missing: {event_path}")
+        raise StrategyEventsArtifactError(f"events artifact is missing: {event_path}")
 
     frame = pd.read_csv(event_path)
     schema = get_artifact_schema("anomaly_events.csv")
     expected_columns = list(schema.required_columns)
     actual_columns = list(frame.columns)
     if actual_columns != expected_columns:
-        raise AnomalyEventsArtifactError(
+        raise StrategyEventsArtifactError(
             f"events artifact columns must match {expected_columns}, got {actual_columns}"
         )
 
-    events: list[AnomalyEvent] = []
+    events: list[StrategyEvent] = []
     for row_index, row in frame.iterrows():
         try:
             events.append(
-                AnomalyEvent(
+                StrategyEvent(
                     event_id=_required_str(row, "event_id"),
                     symbol=_required_str(row, "symbol"),
                     event_start_time_ms=_required_int(row, "event_start_time_ms"),
@@ -72,16 +75,19 @@ def load_anomaly_events_csv(path: str | Path) -> tuple[AnomalyEvent, ...]:
                 )
             )
         except (TypeError, ValueError) as exc:
-            raise AnomalyEventsArtifactError(f"invalid anomaly_events.csv row {row_index}: {exc}") from exc
+            raise StrategyEventsArtifactError(f"invalid anomaly_events.csv row {row_index}: {exc}") from exc
     return tuple(events)
 
 
-def build_online_anomaly_state_1m(
+load_anomaly_events_csv = load_strategy_events_csv
+
+
+def build_online_strategy_state_1m(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
-    events: Sequence[AnomalyEvent] | Iterable[AnomalyEvent],
+    events: Sequence[StrategyEvent] | Iterable[StrategyEvent],
     config: OnlineStateBuilderConfig | None = None,
-) -> tuple[AnomalyState1mRow, ...]:
+) -> tuple[StrategyState1mRow, ...]:
     """Build one online state row per available closed 1m candle per event.
 
     A state row at time t uses only candles whose available_time_ms <= t.
@@ -95,7 +101,7 @@ def build_online_anomaly_state_1m(
     for symbol in candles_by_symbol:
         candles_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
 
-    rows: list[AnomalyState1mRow] = []
+    rows: list[StrategyState1mRow] = []
     for event in sorted(events, key=lambda item: (item.symbol, item.event_detection_time_ms, item.event_id)):
         if event.technical_noise_shock or event.excluded_by_data_quality_gate:
             continue
@@ -106,25 +112,31 @@ def build_online_anomaly_state_1m(
     return tuple(rows)
 
 
-def build_online_anomaly_state_1m_from_source(
+build_online_anomaly_state_1m = build_online_strategy_state_1m
+
+
+def build_online_strategy_state_1m_from_source(
     *,
     source: MarketDataSource,
     events_path: str | Path,
     config: OnlineStateBuilderConfig | None = None,
-) -> tuple[AnomalyState1mRow, ...]:
+) -> tuple[StrategyState1mRow, ...]:
     """Load normalized 1m candles via DataSource and events via artifact boundary."""
     frame = source.read_frame("candles_1m", required=True)
     if frame is None:
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
-    events = load_anomaly_events_csv(events_path)
-    return build_online_anomaly_state_1m(
+    events = load_strategy_events_csv(events_path)
+    return build_online_strategy_state_1m(
         candles_1m=normalize_candles_1m(frame),
         events=events,
         config=config,
     )
 
 
-def state_rows_to_artifact(rows: Sequence[AnomalyState1mRow]) -> list[dict[str, object]]:
+build_online_anomaly_state_1m_from_source = build_online_strategy_state_1m_from_source
+
+
+def state_rows_to_artifact(rows: Sequence[StrategyState1mRow]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for row in rows:
         payload = asdict(row)
@@ -134,10 +146,10 @@ def state_rows_to_artifact(rows: Sequence[AnomalyState1mRow]) -> list[dict[str, 
 
 def _build_event_rows(
     *,
-    event: AnomalyEvent,
+    event: StrategyEvent,
     candles: Sequence[Candle1m],
     config: OnlineStateBuilderConfig,
-) -> list[AnomalyState1mRow]:
+) -> list[StrategyState1mRow]:
     candidate_candles = [
         candle
         for candle in candles
@@ -146,7 +158,7 @@ def _build_event_rows(
         and _minutes_between(event.event_detection_time_ms, candle.available_time_ms)
         <= config.max_state_minutes_after_detection
     ]
-    event_rows: list[AnomalyState1mRow] = []
+    event_rows: list[StrategyState1mRow] = []
     for current in candidate_candles:
         state_time_ms = current.available_time_ms
         asof_candles = [
@@ -161,7 +173,7 @@ def _build_event_rows(
         running_low = min(asof_candles, key=lambda item: (item.low, item.open_time_ms))
         structural_low = _latest_confirmed_structural_low(asof_candles)
         structural_high = _latest_confirmed_structural_high(asof_candles)
-        row = AnomalyState1mRow(
+        row = StrategyState1mRow(
             event_id=event.event_id,
             symbol=event.symbol,
             state_time_ms=state_time_ms,

@@ -8,7 +8,7 @@ from .time import enforce_snapshot_contract, validate_timestamp_ms
 
 
 @dataclass(frozen=True, slots=True)
-class AnomalyState1mRow:
+class StrategyState1mRow:
     event_id: str
     symbol: str
     state_time_ms: int
@@ -93,3 +93,6 @@ class AnomalyState1mRow:
         elif self.structural_high_time_asof_t_ms is not None:
             raise MarketDataContractError("structural_high_time_asof_t_ms requires structural_high_asof_t")
             raise MarketDataContractError("running_low_time_asof_t_ms must be <= state_time_ms")
+
+
+AnomalyState1mRow = StrategyState1mRow

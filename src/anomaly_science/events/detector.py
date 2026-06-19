@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from statistics import fmean, pstdev
 from typing import Iterable, Sequence
 
-from anomaly_science.contracts.events import AnomalyEvent
+from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
 
@@ -25,7 +25,7 @@ def detect_broad_anomaly_events(
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
     *,
     config: BroadAnomalyDetectorConfig | None = None,
-) -> tuple[AnomalyEvent, ...]:
+) -> tuple[StrategyEvent, ...]:
     """Detect broad 1m anomaly events from closed candles only.
 
     Every decision for a seed candle uses only earlier candles of the same symbol
@@ -46,7 +46,7 @@ def detect_broad_anomaly_events(
         all_contexts.extend(contexts)
     market_wide_times = _market_wide_impulse_times(all_contexts, cfg)
 
-    events: list[AnomalyEvent] = []
+    events: list[StrategyEvent] = []
     for symbol in sorted(contexts_by_symbol):
         last_event_start_ms: int | None = None
         for context in contexts_by_symbol[symbol]:
@@ -62,7 +62,7 @@ def detect_broad_anomaly_events(
             if not trigger_components:
                 continue
 
-            event = AnomalyEvent(
+            event = StrategyEvent(
                 event_id=_event_id(cfg.detector_version, candle.symbol, candle.open_time_ms),
                 symbol=candle.symbol,
                 event_start_time_ms=candle.open_time_ms,
@@ -88,7 +88,7 @@ def detect_broad_anomaly_events(
     return tuple(events)
 
 
-def events_to_artifact(events: Sequence[AnomalyEvent]) -> list[dict[str, object]]:
+def events_to_artifact(events: Sequence[StrategyEvent]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for event in sorted(events, key=lambda item: (item.event_detection_time_ms, item.symbol, item.event_id)):
         state_time_ms = event.event_detection_time_ms

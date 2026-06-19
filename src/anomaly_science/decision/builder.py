@@ -12,13 +12,13 @@ from anomaly_science.contracts.decision import (
     ExpectedValueMetricRow,
     ExpectedValueRow,
 )
-from anomaly_science.contracts.labels import AnomalyOutcomeLabelRow
+from anomaly_science.contracts.labels import StrategyOutcomeLabelRow
 from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.prediction import OosPredictionRow
-from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.decision.config import ExpectedValueConfig
-from anomaly_science.future import load_anomaly_state_1m_csv
-from anomaly_science.labels import load_anomaly_outcome_labels_csv
+from anomaly_science.future import load_strategy_state_1m_csv
+from anomaly_science.labels import load_strategy_outcome_labels_csv
 from anomaly_science.prediction import load_anomaly_oos_predictions_csv
 from anomaly_science.strategy.base import StrategyMetadata
 from anomaly_science.strategy.registry import get_strategy
@@ -40,8 +40,8 @@ def load_expected_value_inputs(
     config: ExpectedValueConfig | None = None,
 ) -> tuple[ExpectedValueRow, ...]:
     return build_expected_value_rows(
-        state_rows=load_anomaly_state_1m_csv(state_path),
-        label_rows=load_anomaly_outcome_labels_csv(labels_path),
+        state_rows=load_strategy_state_1m_csv(state_path),
+        label_rows=load_strategy_outcome_labels_csv(labels_path),
         prediction_rows=load_anomaly_oos_predictions_csv(predictions_path),
         config=config,
     )
@@ -49,8 +49,8 @@ def load_expected_value_inputs(
 
 def build_expected_value_rows(
     *,
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
-    label_rows: Sequence[AnomalyOutcomeLabelRow] | Iterable[AnomalyOutcomeLabelRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
+    label_rows: Sequence[StrategyOutcomeLabelRow] | Iterable[StrategyOutcomeLabelRow],
     prediction_rows: Sequence[OosPredictionRow] | Iterable[OosPredictionRow],
     config: ExpectedValueConfig | None = None,
 ) -> tuple[ExpectedValueRow, ...]:
@@ -156,8 +156,8 @@ def load_anomaly_ev_metrics_csv(path: str | Path) -> tuple[ExpectedValueMetricRo
 
 def _build_row(
     *,
-    state: AnomalyState1mRow,
-    label: AnomalyOutcomeLabelRow,
+    state: StrategyState1mRow,
+    label: StrategyOutcomeLabelRow,
     prediction: OosPredictionRow,
     config: ExpectedValueConfig,
     strategy_metadata: StrategyMetadata,
@@ -221,8 +221,8 @@ def _build_row(
 
 def _enforce_ev_input_temporal_contract(
     *,
-    state: AnomalyState1mRow,
-    label: AnomalyOutcomeLabelRow,
+    state: StrategyState1mRow,
+    label: StrategyOutcomeLabelRow,
     prediction: OosPredictionRow,
 ) -> None:
     if _join_key(state) != _join_key(label) or _join_key(state) != _join_key(prediction):
@@ -235,7 +235,7 @@ def _enforce_ev_input_temporal_contract(
         raise ExpectedValueInputError("EV prediction target_scenario must match label scenario for the selected horizon")
 
 
-def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> str:
+def _target_for_horizon(label: StrategyOutcomeLabelRow, horizon_minutes: int) -> str:
     if horizon_minutes == 15:
         return label.scenario_15m
     if horizon_minutes == 30:
@@ -261,7 +261,7 @@ def _best_action(*, EV_long: float, EV_short: float, EV_wait: float, EV_no_trade
 
 
 def _unique_by_join_key(
-    rows: Iterable[AnomalyState1mRow] | Iterable[AnomalyOutcomeLabelRow],
+    rows: Iterable[StrategyState1mRow] | Iterable[StrategyOutcomeLabelRow],
     *,
     artifact_name: str,
 ) -> dict[tuple[str, str, int, int], object]:
@@ -274,7 +274,7 @@ def _unique_by_join_key(
     return result
 
 
-def _join_key(row: AnomalyState1mRow | AnomalyOutcomeLabelRow | OosPredictionRow) -> tuple[str, str, int, int]:
+def _join_key(row: StrategyState1mRow | StrategyOutcomeLabelRow | OosPredictionRow) -> tuple[str, str, int, int]:
     return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
 
 

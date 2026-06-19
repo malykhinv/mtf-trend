@@ -14,7 +14,7 @@ from anomaly_science.contracts.future import (
     FuturePathRow,
 )
 from anomaly_science.contracts.market import Candle1m, MarketDataContractError, ONE_MINUTE_MS
-from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
 from anomaly_science.future.atr import AtrAsOfResult, compute_atr_1d_asof
@@ -29,7 +29,11 @@ class AnomalyFutureArtifactError(ValueError):
     """Raised when anomaly_future_paths.csv violates its strict artifact boundary."""
 
 
-def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]:
+StrategyStateArtifactError = AnomalyStateArtifactError
+StrategyFutureArtifactError = AnomalyFutureArtifactError
+
+
+def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ...]:
     """Read anomaly_state_1m.csv through the declared MVP1 artifact schema.
 
     The boundary is intentionally strict: the file must have exactly the schema
@@ -49,11 +53,11 @@ def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]
             f"state artifact columns must match {expected_columns}, got {actual_columns}"
         )
 
-    rows: list[AnomalyState1mRow] = []
+    rows: list[StrategyState1mRow] = []
     for row_index, row in frame.iterrows():
         try:
             rows.append(
-                AnomalyState1mRow(
+                StrategyState1mRow(
                     event_id=_required_str(row, "event_id"),
                     symbol=_required_str(row, "symbol"),
                     state_time_ms=_required_int(row, "state_time_ms"),
@@ -84,7 +88,10 @@ def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]
     return tuple(rows)
 
 
-def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]:
+load_anomaly_state_1m_csv = load_strategy_state_1m_csv
+
+
+def load_strategy_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]:
     """Read anomaly_future_paths.csv through the declared MVP1 artifact schema."""
     future_path = Path(path)
     if not future_path.exists():
@@ -175,14 +182,17 @@ def load_anomaly_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]
     return tuple(rows)
 
 
+load_anomaly_future_paths_csv = load_strategy_future_paths_csv
+
+
 def _read_artifact_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, low_memory=False)
 
 
-def build_anomaly_future_paths(
+def build_strategy_future_paths(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
     config: FuturePathBuilderConfig | None = None,
 ) -> tuple[FuturePathRow, ...]:
     """Build raw future paths strictly after each online state snapshot.
@@ -217,7 +227,10 @@ def build_anomaly_future_paths(
     return tuple(rows)
 
 
-def build_anomaly_future_paths_from_source(
+build_anomaly_future_paths = build_strategy_future_paths
+
+
+def build_strategy_future_paths_from_source(
     *,
     source: MarketDataSource,
     state_path: str | Path,
@@ -227,12 +240,15 @@ def build_anomaly_future_paths_from_source(
     frame = source.read_frame("candles_1m", required=True)
     if frame is None:
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
-    state_rows = load_anomaly_state_1m_csv(state_path)
-    return build_anomaly_future_paths(
+    state_rows = load_strategy_state_1m_csv(state_path)
+    return build_strategy_future_paths(
         candles_1m=normalize_candles_1m(frame),
         state_rows=state_rows,
         config=config,
     )
+
+
+build_anomaly_future_paths_from_source = build_strategy_future_paths_from_source
 
 
 def future_rows_to_artifact(rows: Sequence[FuturePathRow]) -> list[dict[str, object]]:
@@ -249,7 +265,7 @@ def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
 
 def _build_state_future_path(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     max_horizon: int,
     atr_window_minutes: int,
@@ -391,13 +407,13 @@ def _build_state_future_path(
     )
 
 
-def _window(state: AnomalyState1mRow, candles: Sequence[Candle1m], horizon_minutes: int) -> list[Candle1m]:
+def _window(state: StrategyState1mRow, candles: Sequence[Candle1m], horizon_minutes: int) -> list[Candle1m]:
     horizon_end_ms = state.snapshot_time_ms + horizon_minutes * ONE_MINUTE_MS
     return [candle for candle in candles if candle.available_time_ms <= horizon_end_ms]
 
 
 def _exact_horizon_candle(
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
 ) -> Candle1m | None:
@@ -410,7 +426,7 @@ def _exact_horizon_candle(
 
 def _future_return(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
 ) -> float | None:
@@ -422,7 +438,7 @@ def _future_return(
 
 def _future_max(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
 ) -> float | None:
@@ -434,7 +450,7 @@ def _future_max(
 
 def _future_min(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
 ) -> float | None:
@@ -446,7 +462,7 @@ def _future_min(
 
 def _future_return_atr(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
     atr_value: float | None,
@@ -461,7 +477,7 @@ def _future_return_atr(
 
 def _future_max_atr(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
     atr_value: float | None,
@@ -476,7 +492,7 @@ def _future_max_atr(
 
 def _future_min_atr(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
     atr_value: float | None,
@@ -492,7 +508,7 @@ def _future_min_atr(
 
 def _intracandle_double_barrier(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
     atr_value: float | None,
@@ -518,7 +534,7 @@ def _barrier_resolution(hit: bool | None) -> str | None:
 
 def _compute_atr_when_history_available(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     atr_window_minutes: int,
 ) -> AtrAsOfResult | None:
@@ -539,7 +555,7 @@ def _compute_atr_when_history_available(
 
 def _reclaimed_running_high(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     horizon_minutes: int,
 ) -> bool | None:
@@ -549,7 +565,7 @@ def _reclaimed_running_high(
     return any(candle.high > state.running_high_asof_t for candle in window)
 
 
-def _time_to_new_high_minutes(*, state: AnomalyState1mRow, candles: Sequence[Candle1m]) -> int | None:
+def _time_to_new_high_minutes(*, state: StrategyState1mRow, candles: Sequence[Candle1m]) -> int | None:
     for candle in candles:
         if candle.high > state.running_high_asof_t:
             return _minutes_between(state.snapshot_time_ms, candle.available_time_ms)

@@ -19,7 +19,7 @@ ATR_LABEL_SOURCE = "atr_normalized_future_paths_only"
 
 
 @dataclass(frozen=True, slots=True)
-class AnomalyOutcomeLabelRow:
+class StrategyOutcomeLabelRow:
     label_schema_version: str
     atr_window_minutes: int
     core_atr_1440: float | None
@@ -88,3 +88,6 @@ def _check_label_available(scenario: str, available: bool, field_name: str) -> N
     expected = scenario != MISSING_FUTURE_SCENARIO
     if available != expected:
         raise MarketDataContractError(f"{field_name} must be false only for missing_future")
+
+
+AnomalyOutcomeLabelRow = StrategyOutcomeLabelRow

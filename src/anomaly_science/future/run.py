@@ -9,9 +9,9 @@ from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.data.source import CsvDirectoryDataSource
 from anomaly_science.future.builder import (
-    build_anomaly_future_paths_from_source,
+    build_strategy_future_paths_from_source,
     future_rows_to_artifact,
-    load_anomaly_state_1m_csv,
+    load_strategy_state_1m_csv,
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
 
@@ -31,8 +31,8 @@ def run_mvp1_future(
     cfg = config or FuturePathBuilderConfig()
 
     source = CsvDirectoryDataSource(input_path)
-    state_rows = load_anomaly_state_1m_csv(state_artifact_path)
-    future_rows = build_anomaly_future_paths_from_source(
+    state_rows = load_strategy_state_1m_csv(state_artifact_path)
+    future_rows = build_strategy_future_paths_from_source(
         source=source,
         state_path=state_artifact_path,
         config=cfg,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-from anomaly_science.contracts.events import AnomalyEvent
+from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import ONE_MINUTE_MS
 
 
@@ -13,12 +13,12 @@ class TriggerCascadeError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class TriggerCascadeSuppressionResult:
-    accepted_events: tuple[AnomalyEvent, ...]
-    suppressed_events: tuple[AnomalyEvent, ...]
+    accepted_events: tuple[StrategyEvent, ...]
+    suppressed_events: tuple[StrategyEvent, ...]
 
 
 def suppress_event_cascade(
-    events: Sequence[AnomalyEvent] | Iterable[AnomalyEvent],
+    events: Sequence[StrategyEvent] | Iterable[StrategyEvent],
     *,
     horizon_minutes: int,
 ) -> TriggerCascadeSuppressionResult:
@@ -33,8 +33,8 @@ def suppress_event_cascade(
 
     horizon_ms = horizon_minutes * ONE_MINUTE_MS
     cooldown_until_by_symbol: dict[str, int] = {}
-    accepted: list[AnomalyEvent] = []
-    suppressed: list[AnomalyEvent] = []
+    accepted: list[StrategyEvent] = []
+    suppressed: list[StrategyEvent] = []
 
     for event in sorted(events, key=lambda item: (item.symbol, item.event_detection_time_ms, item.event_id)):
         cooldown_until_ms = cooldown_until_by_symbol.get(event.symbol)

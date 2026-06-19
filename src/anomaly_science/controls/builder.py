@@ -13,9 +13,9 @@ from anomaly_science.contracts.controls import (
     BaselineComparisonRow,
     PlaceboTestRow,
 )
-from anomaly_science.contracts.labels import AnomalyOutcomeLabelRow, MISSING_FUTURE_SCENARIO
+from anomaly_science.contracts.labels import StrategyOutcomeLabelRow, MISSING_FUTURE_SCENARIO
 from anomaly_science.contracts.prediction import OosPredictionRow, PREDICTED_SCENARIOS
-from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.controls.config import ControlsConfig
 from anomaly_science.prediction.builder import PredictionInputRow, build_walk_forward_predictions
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
@@ -161,7 +161,7 @@ def build_baseline_comparison_rows(
             )
         )
 
-    rule_specs: tuple[tuple[str, str, Callable[[AnomalyState1mRow], str], str], ...] = (
+    rule_specs: tuple[tuple[str, str, Callable[[StrategyState1mRow], str], str], ...] = (
         ("always_follow_anomaly", "anomaly_direction_rule", _always_follow_anomaly, "anomaly-specific rule baseline: always predict follow-through"),
         ("always_fade_anomaly", "anomaly_direction_rule", _always_fade_anomaly, "anomaly-specific rule baseline: always predict fade"),
         ("fade_only_after_extension", "anomaly_extension_rule", _fade_only_after_extension, "anomaly-specific rule baseline: fade only after online extension"),
@@ -333,7 +333,7 @@ def _evaluate_static_rule_model(
     *,
     rows: Sequence[PredictionInputRow],
     target_by_key: Mapping[tuple[str, str, int, int], str],
-    rule_fn: Callable[[AnomalyState1mRow], str],
+    rule_fn: Callable[[StrategyState1mRow], str],
 ) -> ControlEvaluation:
     evaluated: list[tuple[str, dict[str, float], str]] = []
     for row in rows:
@@ -460,7 +460,7 @@ def _replace_targets(
     return tuple(result)
 
 
-def _label_with_target(*, label: AnomalyOutcomeLabelRow, horizon_minutes: int, target: str) -> AnomalyOutcomeLabelRow:
+def _label_with_target(*, label: StrategyOutcomeLabelRow, horizon_minutes: int, target: str) -> StrategyOutcomeLabelRow:
     if target not in PREDICTED_SCENARIOS:
         raise ControlsArtifactError(f"placebo target must be predictable in MVP1, got {target!r}")
     if horizon_minutes == 15:
@@ -514,7 +514,7 @@ def _symbol_shuffled_label_map(*, rows: Sequence[PredictionInputRow], cfg: Contr
     return result
 
 
-def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> str:
+def _target_for_horizon(label: StrategyOutcomeLabelRow, horizon_minutes: int) -> str:
     if horizon_minutes == 15:
         return label.scenario_15m
     if horizon_minutes == 30:
@@ -576,21 +576,21 @@ def _btc_relative_feature_key(row: PredictionInputRow) -> str:
     return f"btc_relative|{corr}|{rel_return}"
 
 
-def _always_follow_anomaly(state: AnomalyState1mRow) -> str:
+def _always_follow_anomaly(state: StrategyState1mRow) -> str:
     return "long_continuation"
 
 
-def _always_fade_anomaly(state: AnomalyState1mRow) -> str:
+def _always_fade_anomaly(state: StrategyState1mRow) -> str:
     return "short_fade"
 
 
-def _fade_only_after_extension(state: AnomalyState1mRow) -> str:
+def _fade_only_after_extension(state: StrategyState1mRow) -> str:
     if state.current_return_from_start >= 0.02 or state.distance_to_running_high >= -0.001:
         return "short_fade"
     return "static_or_chop"
 
 
-def _follow_only_early_squeeze(state: AnomalyState1mRow) -> str:
+def _follow_only_early_squeeze(state: StrategyState1mRow) -> str:
     if state.minutes_since_detection <= 3 and state.distance_to_running_high >= -0.001:
         return "long_continuation"
     return "static_or_chop"

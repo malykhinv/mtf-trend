@@ -1,5 +1,19 @@
 # Patch log
 
+## methodology: neutralize core contract names
+
+Status: APPLIED.
+
+Intent:
+- Promote strategy-neutral Core contract names: `StrategyEvent`, `StrategyState1mRow`, `StrategyFeatureMatrixRow`, and `StrategyOutcomeLabelRow`.
+- Add strategy-neutral loader/builder entrypoints for Core stages while keeping `Anomaly*` and `load_anomaly_*` compatibility aliases for documented anomaly artifacts.
+- Move Strategy/Core separation ledger row to implemented without changing canonical/alias artifact schemas.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src main.py tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_contracts.py tests\test_state_builder.py tests\test_future_paths.py tests\test_labels.py tests\test_feature_matrix.py tests\test_prediction.py tests\test_decision_expected_value.py tests\test_atlas.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## methodology: complete final forensic protocol audit coverage
 
 Status: APPLIED.

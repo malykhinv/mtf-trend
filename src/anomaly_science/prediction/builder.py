@@ -13,8 +13,8 @@ from catboost import CatBoostClassifier
 from sklearn.isotonic import IsotonicRegression
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
-from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
-from anomaly_science.contracts.labels import AnomalyOutcomeLabelRow, MISSING_FUTURE_SCENARIO
+from anomaly_science.contracts.features import StrategyFeatureMatrixRow
+from anomaly_science.contracts.labels import StrategyOutcomeLabelRow, MISSING_FUTURE_SCENARIO
 from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.prediction import (
     PREDICTED_SCENARIOS,
@@ -27,11 +27,11 @@ from anomaly_science.contracts.prediction import (
     OosPredictionRow,
     PredictionMetricRow,
 )
-from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.features.catalog import build_default_feature_catalog
-from anomaly_science.features.matrix import load_anomaly_feature_matrix_csv
-from anomaly_science.future import load_anomaly_state_1m_csv
-from anomaly_science.labels import load_anomaly_outcome_labels_csv
+from anomaly_science.features.matrix import load_strategy_feature_matrix_csv
+from anomaly_science.future import load_strategy_state_1m_csv
+from anomaly_science.labels import load_strategy_outcome_labels_csv
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
 from anomaly_science.strategy.registry import get_strategy
 
@@ -99,9 +99,9 @@ class WalkForwardPredictionResult:
 
 @dataclass(frozen=True, slots=True)
 class PredictionInputRow:
-    state: AnomalyState1mRow
-    label: AnomalyOutcomeLabelRow
-    features: AnomalyFeatureMatrixRow
+    state: StrategyState1mRow
+    label: StrategyOutcomeLabelRow
+    features: StrategyFeatureMatrixRow
 
     @property
     def target_scenario_15m(self) -> str:
@@ -132,17 +132,17 @@ def load_prediction_inputs(
 ) -> tuple[PredictionInputRow, ...]:
     """Load prediction inputs through strict state, label, and feature schema boundaries."""
     return build_prediction_inputs(
-        state_rows=load_anomaly_state_1m_csv(state_path),
-        label_rows=load_anomaly_outcome_labels_csv(labels_path),
-        feature_rows=load_anomaly_feature_matrix_csv(feature_matrix_path),
+        state_rows=load_strategy_state_1m_csv(state_path),
+        label_rows=load_strategy_outcome_labels_csv(labels_path),
+        feature_rows=load_strategy_feature_matrix_csv(feature_matrix_path),
     )
 
 
 def build_prediction_inputs(
     *,
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
-    label_rows: Sequence[AnomalyOutcomeLabelRow] | Iterable[AnomalyOutcomeLabelRow],
-    feature_rows: Sequence[AnomalyFeatureMatrixRow] | Iterable[AnomalyFeatureMatrixRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
+    label_rows: Sequence[StrategyOutcomeLabelRow] | Iterable[StrategyOutcomeLabelRow],
+    feature_rows: Sequence[StrategyFeatureMatrixRow] | Iterable[StrategyFeatureMatrixRow],
 ) -> tuple[PredictionInputRow, ...]:
     states = tuple(state_rows)
     labels = tuple(label_rows)
@@ -510,7 +510,7 @@ class _EmpiricalStateBinModel:
             partial_counts=dict(partial_counts),
         )
 
-    def predict(self, state: AnomalyState1mRow) -> tuple[dict[str, float], str, int]:
+    def predict(self, state: StrategyState1mRow) -> tuple[dict[str, float], str, int]:
         bins = _state_bins(state)
         exact_key = _exact_model_key(bins)
         partial_key = _partial_model_key(bins)
@@ -772,7 +772,7 @@ def _metric_from_mapping(row: Mapping[str, object]) -> PredictionMetricRow:
     )
 
 
-def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> str:
+def _target_for_horizon(label: StrategyOutcomeLabelRow, horizon_minutes: int) -> str:
     if horizon_minutes == 15:
         return label.scenario_15m
     if horizon_minutes == 30:
@@ -796,7 +796,7 @@ def _validate_strategy_horizon(*, config: WalkForwardPredictionConfig) -> None:
 
 
 def _unique_by_join_key(
-    rows: Iterable[AnomalyState1mRow] | Iterable[AnomalyOutcomeLabelRow] | Iterable[AnomalyFeatureMatrixRow],
+    rows: Iterable[StrategyState1mRow] | Iterable[StrategyOutcomeLabelRow] | Iterable[StrategyFeatureMatrixRow],
     *,
     artifact_name: str,
 ) -> dict[tuple[str, str, int, int], object]:
@@ -809,15 +809,15 @@ def _unique_by_join_key(
     return result
 
 
-def _join_key(row: AnomalyState1mRow | AnomalyOutcomeLabelRow | AnomalyFeatureMatrixRow) -> tuple[str, str, int, int]:
+def _join_key(row: StrategyState1mRow | StrategyOutcomeLabelRow | StrategyFeatureMatrixRow) -> tuple[str, str, int, int]:
     return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
 
 
 def _enforce_prediction_input_temporal_contract(
     *,
-    state: AnomalyState1mRow,
-    label: AnomalyOutcomeLabelRow,
-    feature: AnomalyFeatureMatrixRow,
+    state: StrategyState1mRow,
+    label: StrategyOutcomeLabelRow,
+    feature: StrategyFeatureMatrixRow,
 ) -> None:
     if state.snapshot_time_ms != label.snapshot_time_ms:
         raise MarketDataContractError("prediction join requires equal state/label snapshot_time_ms")
@@ -837,7 +837,7 @@ def _enforce_prediction_input_temporal_contract(
         raise MarketDataContractError("prediction feature feature_cutoff_time_ms must be <= snapshot_time_ms")
 
 
-def _state_bins(state: AnomalyState1mRow) -> dict[str, str]:
+def _state_bins(state: StrategyState1mRow) -> dict[str, str]:
     return {
         "maturity": _integer_bucket(state.minutes_since_detection, ((0, 2, "detect_0_2m"), (3, 5, "detect_3_5m"), (6, 10, "detect_6_10m")), "detect_11m_plus"),
         "event_age": _integer_bucket(state.minutes_since_event_start, ((0, 5, "age_0_5m"), (6, 15, "age_6_15m"), (16, 30, "age_16_30m")), "age_31m_plus"),
@@ -970,7 +970,7 @@ def _feature_vector(row: PredictionInputRow, *, feature_names: tuple[str, ...]) 
     return values
 
 
-def _state_feature_values(state: AnomalyState1mRow) -> dict[str, float]:
+def _state_feature_values(state: StrategyState1mRow) -> dict[str, float]:
     return {
         "minutes_since_event_start": float(state.minutes_since_event_start),
         "minutes_since_detection": float(state.minutes_since_detection),
@@ -986,7 +986,7 @@ def _state_feature_values(state: AnomalyState1mRow) -> dict[str, float]:
     }
 
 
-def _feature_matrix_value(row: AnomalyFeatureMatrixRow, field_name: str) -> float:
+def _feature_matrix_value(row: StrategyFeatureMatrixRow, field_name: str) -> float:
     value = getattr(row, field_name)
     if value is None:
         return math.nan

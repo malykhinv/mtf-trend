@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 import polars as pl
 
-from anomaly_science.contracts.events import AnomalyEvent
+from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
@@ -212,7 +212,7 @@ class BroadAnomalyStrategy(BaseStrategy):
         validate_trigger_frame(trigger_frame)
         return trigger_frame
 
-    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
+    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
         return detect_broad_anomaly_events(candles_1m, config=self.config)
 
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
@@ -242,7 +242,7 @@ class PostAnomalyExtensionStrategy(BaseStrategy):
         validate_trigger_frame(trigger_frame)
         return trigger_frame
 
-    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
+    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
         return detect_post_anomaly_extension_events(candles_1m, config=self.config)
 
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
@@ -272,7 +272,7 @@ class PostPumpDistributionStrategy(BaseStrategy):
         validate_trigger_frame(trigger_frame)
         return trigger_frame
 
-    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[AnomalyEvent, ...]:
+    def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
         return detect_post_pump_distribution_events(candles_1m, config=self.config)
 
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
@@ -322,7 +322,7 @@ def detect_post_anomaly_extension_events(
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
     *,
     config: PostAnomalyExtensionConfig | None = None,
-) -> tuple[AnomalyEvent, ...]:
+) -> tuple[StrategyEvent, ...]:
     """Detect late extension states after a causal broad anomaly seed.
 
     The source anomaly is found by the broad detector. The extension trigger is
@@ -340,7 +340,7 @@ def detect_post_anomaly_extension_events(
     for candle in rows:
         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
 
-    events: list[AnomalyEvent] = []
+    events: list[StrategyEvent] = []
     blocked_until_by_symbol: dict[str, int] = {}
     for source_event in sorted(broad_events, key=lambda item: (item.symbol, item.event_start_time_ms, item.event_id)):
         if source_event.event_start_time_ms <= blocked_until_by_symbol.get(source_event.symbol, -1):
@@ -364,7 +364,7 @@ def detect_post_anomaly_extension_events(
                 continue
             direction_component = "upside_extension" if direction > 0 else "downside_extension"
             events.append(
-                AnomalyEvent(
+                StrategyEvent(
                     event_id=_post_anomaly_extension_event_id(
                         cfg.detector_version,
                         source_event.symbol,
@@ -402,7 +402,7 @@ def detect_post_pump_distribution_events(
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
     *,
     config: PostPumpDistributionConfig | None = None,
-) -> tuple[AnomalyEvent, ...]:
+) -> tuple[StrategyEvent, ...]:
     """Detect post-pump distribution states using only as-of candles.
 
     The trigger matches the strategy spec: daily_return_asof_t > 30% and the
@@ -420,7 +420,7 @@ def detect_post_pump_distribution_events(
     for candle in rows:
         by_time.setdefault(candle.open_time_ms, []).append(candle)
 
-    events: list[AnomalyEvent] = []
+    events: list[StrategyEvent] = []
     for open_time_ms in sorted(by_time):
         same_minute = sorted(by_time[open_time_ms], key=lambda item: item.symbol)
         trade_percentiles = _same_minute_trade_count_percentiles(same_minute)
@@ -439,7 +439,7 @@ def detect_post_pump_distribution_events(
             if trade_count_percentile <= cfg.min_trade_count_market_percentile_asof_t:
                 continue
             events.append(
-                AnomalyEvent(
+                StrategyEvent(
                     event_id=_post_pump_event_id(cfg.detector_version, candle.symbol, candle.open_time_ms),
                     symbol=candle.symbol,
                     event_start_time_ms=candle.open_time_ms,
@@ -467,14 +467,14 @@ def detect_post_pump_distribution_events(
     return tuple(events)
 
 
-def events_to_trigger_frame(events: Sequence[AnomalyEvent]) -> pl.DataFrame:
+def events_to_trigger_frame(events: Sequence[StrategyEvent]) -> pl.DataFrame:
     rows = [_event_to_trigger_row(event) for event in events]
     if not rows:
         return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
     return pl.DataFrame(rows, schema=_TRIGGER_FRAME_SCHEMA, orient="row")
 
 
-def _event_to_trigger_row(event: AnomalyEvent) -> dict[str, object]:
+def _event_to_trigger_row(event: StrategyEvent) -> dict[str, object]:
     state_time_ms = event.event_detection_time_ms
     return {
         "event_id": event.event_id,
@@ -504,7 +504,7 @@ def _event_to_trigger_row(event: AnomalyEvent) -> dict[str, object]:
     }
 
 
-def _seed_direction(event: AnomalyEvent) -> int:
+def _seed_direction(event: StrategyEvent) -> int:
     return 1 if event.seed_close >= event.seed_open else -1
 
 

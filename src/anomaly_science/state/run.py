@@ -9,8 +9,8 @@ from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.data.source import CsvDirectoryDataSource
 from anomaly_science.state.builder import (
-    build_online_anomaly_state_1m_from_source,
-    load_anomaly_events_csv,
+    build_online_strategy_state_1m_from_source,
+    load_strategy_events_csv,
     state_rows_to_artifact,
 )
 from anomaly_science.state.config import OnlineStateBuilderConfig
@@ -31,8 +31,8 @@ def run_mvp1_state(
     cfg = config or OnlineStateBuilderConfig()
 
     source = CsvDirectoryDataSource(input_path)
-    events = load_anomaly_events_csv(events_artifact_path)
-    state_rows = build_online_anomaly_state_1m_from_source(
+    events = load_strategy_events_csv(events_artifact_path)
+    state_rows = build_online_strategy_state_1m_from_source(
         source=source,
         events_path=events_artifact_path,
         config=cfg,

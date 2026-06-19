@@ -7,7 +7,7 @@ from .time import validate_timestamp_ms
 
 
 @dataclass(frozen=True, slots=True)
-class AnomalyEvent:
+class StrategyEvent:
     event_id: str
     symbol: str
     event_start_time_ms: int
@@ -72,3 +72,6 @@ class AnomalyEvent:
             raise MarketDataContractError("seed_high must be >= max(seed_open, seed_close)")
         if self.seed_low > min(self.seed_open, self.seed_close):
             raise MarketDataContractError("seed_low must be <= min(seed_open, seed_close)")
+
+
+AnomalyEvent = StrategyEvent

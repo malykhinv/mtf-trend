@@ -123,7 +123,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Required anomaly controls | IMPLEMENTED | Anomaly-specific controls include always-follow, always-fade, fade-after-extension, follow-early-squeeze, no-CVD/no-OI/no-liquidation ablations, and idiosyncratic/systemic subsets. Forensic audit verifies the complete required set in `strategy_baseline_comparison.csv`. | Keep required-control forensic tests as permanent gate. |
 | Reject reasons | IMPLEMENTED | `strategy_rejection_funnel.csv` / `anomaly_rejection_funnel.csv` now records artifact-driven lineage across data quality, universe, events, state, future paths, labels, prediction, decision, and simulation. Excluded rows require explicit `reason_code`; forensic audit fails if the funnel is missing, empty, has invalid statuses, or omits a required stage. | Keep funnel completeness and explicit reason-code tests as permanent gates. |
 | Strategy-specific artifact aliases | IMPLEMENTED | Strategy-owned stages write canonical `strategy_*` artifacts first and keep `anomaly_*` only as compatibility aliases, with schema/writer tests. | Keep canonical-first writer tests as permanent gate. |
-| Strategy/Core separation | PARTIAL | Artifact boundaries are strategy-neutral. Some internal module/function names remain anomaly-specific and should be generalized after registry/status cleanup. | Refactor internal names after higher-priority governance/audit gaps. |
+| Strategy/Core separation | IMPLEMENTED | Artifact boundaries are strategy-neutral. Core contracts now expose strategy-neutral `StrategyEvent`, `StrategyState1mRow`, `StrategyFeatureMatrixRow`, and `StrategyOutcomeLabelRow` names, with old `Anomaly*` names retained only as compatibility aliases. Core loaders/builders now expose and use `strategy_*` entrypoints while `anomaly_*` functions remain compatibility wrappers for documented alias artifacts. | Keep compatibility alias tests and avoid adding strategy-specific branches inside Core. |
 
 ## Patch queue implied by this ledger
 
@@ -152,6 +152,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 23. `methodology: complete rejection funnel and docs sync` - implemented.
 24. `strategy: complete broad anomaly trigger breadth` - implemented.
 25. `methodology: complete final forensic protocol audit coverage` - implemented.
+26. `methodology: neutralize core contract names` - implemented.
 
 Rule:
 

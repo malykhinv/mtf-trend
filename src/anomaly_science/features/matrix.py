@@ -12,16 +12,16 @@ from typing import Iterable, Mapping, Sequence
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
+from anomaly_science.contracts.features import StrategyFeatureMatrixRow
 from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
-from anomaly_science.contracts.state import AnomalyState1mRow
+from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.contracts.time import utc_ms_to_datetime
 from anomaly_science.data.normalized import normalize_candles_1m, normalize_liquidations, normalize_open_interest_5m, normalize_symbol_universe_by_day
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource, MarketDataSource
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION, build_default_feature_catalog, feature_rows_to_artifact
 from anomaly_science.features.config import FeatureMatrixConfig
 from anomaly_science.future.atr import AtrComputationError, compute_atr_1d_asof
-from anomaly_science.future.builder import load_anomaly_state_1m_csv
+from anomaly_science.future.builder import load_strategy_state_1m_csv
 
 EPS = 1e-12
 
@@ -103,12 +103,12 @@ class _CandleSeries:
 def build_price_time_feature_matrix(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
-    state_rows: Sequence[AnomalyState1mRow] | Iterable[AnomalyState1mRow],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
     open_interest_5m: Sequence[OpenInterest5m] | Iterable[OpenInterest5m] | None = None,
     liquidations: Sequence[LiquidationEvent] | Iterable[LiquidationEvent] | None = None,
     symbol_universe_by_day: Sequence[SymbolDayUniverseRow] | Iterable[SymbolDayUniverseRow] | None = None,
     config: FeatureMatrixConfig | None = None,
-) -> tuple[AnomalyFeatureMatrixRow, ...]:
+) -> tuple[StrategyFeatureMatrixRow, ...]:
     """Build as-of feature rows from state rows.
 
     This builder deliberately does not read `anomaly_future_paths.csv`. ATR and
@@ -143,11 +143,11 @@ def build_price_time_feature_matrix(
             liquidations_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.event_time_ms))
 
     universe_by_day = _universe_symbols_by_day(symbol_universe_by_day)
-    states_by_snapshot: dict[int, list[AnomalyState1mRow]] = {}
+    states_by_snapshot: dict[int, list[StrategyState1mRow]] = {}
     for state in state_rows:
         states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
 
-    rows: list[AnomalyFeatureMatrixRow] = []
+    rows: list[StrategyFeatureMatrixRow] = []
     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
         symbol_candles = candles_by_symbol.get(state.symbol, [])
         rows.append(
@@ -174,14 +174,14 @@ def build_price_time_feature_matrix_from_source(
     source: MarketDataSource,
     state_path: str | Path,
     config: FeatureMatrixConfig | None = None,
-) -> tuple[AnomalyFeatureMatrixRow, ...]:
+) -> tuple[StrategyFeatureMatrixRow, ...]:
     frame = source.read_frame("candles_1m", required=True)
     if frame is None:
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
     oi_frame = source.read_frame("open_interest_5m", required=False)
     liquidation_frame = source.read_frame("liquidations", required=False)
     universe_frame = source.read_frame("symbol_universe_by_day", required=False)
-    state_rows = load_anomaly_state_1m_csv(state_path)
+    state_rows = load_strategy_state_1m_csv(state_path)
     return build_price_time_feature_matrix(
         candles_1m=normalize_candles_1m(frame),
         open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
@@ -192,7 +192,7 @@ def build_price_time_feature_matrix_from_source(
     )
 
 
-def feature_matrix_rows_to_artifact(rows: Sequence[AnomalyFeatureMatrixRow]) -> list[dict[str, object]]:
+def feature_matrix_rows_to_artifact(rows: Sequence[StrategyFeatureMatrixRow]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for row in rows:
         payload = _with_core_atr_csv_alias(asdict(row))
@@ -208,7 +208,10 @@ class AnomalyFeatureMatrixArtifactError(ValueError):
     """Raised when anomaly_feature_matrix.csv violates its declared schema."""
 
 
-def load_anomaly_feature_matrix_csv(path: str | Path) -> tuple[AnomalyFeatureMatrixRow, ...]:
+StrategyFeatureMatrixArtifactError = AnomalyFeatureMatrixArtifactError
+
+
+def load_strategy_feature_matrix_csv(path: str | Path) -> tuple[StrategyFeatureMatrixRow, ...]:
     """Read anomaly_feature_matrix.csv through the strict artifact schema."""
     feature_path = Path(path)
     if not feature_path.exists():
@@ -223,7 +226,7 @@ def load_anomaly_feature_matrix_csv(path: str | Path) -> tuple[AnomalyFeatureMat
             raise AnomalyFeatureMatrixArtifactError(
                 f"feature matrix artifact columns must match {expected_columns}, got {actual_columns}"
             )
-        rows: list[AnomalyFeatureMatrixRow] = []
+        rows: list[StrategyFeatureMatrixRow] = []
         for row_index, row in enumerate(reader):
             try:
                 rows.append(_feature_matrix_row_from_csv(row))
@@ -234,8 +237,11 @@ def load_anomaly_feature_matrix_csv(path: str | Path) -> tuple[AnomalyFeatureMat
     return tuple(rows)
 
 
-def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> AnomalyFeatureMatrixRow:
-    return AnomalyFeatureMatrixRow(
+load_anomaly_feature_matrix_csv = load_strategy_feature_matrix_csv
+
+
+def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> StrategyFeatureMatrixRow:
+    return StrategyFeatureMatrixRow(
         feature_schema_version=_required_str(row, "feature_schema_version"),
         feature_matrix_version=_required_str(row, "feature_matrix_version"),
         event_id=_required_str(row, "event_id"),
@@ -330,7 +336,7 @@ def run_mvp1_feature_matrix(
     cfg = config or FeatureMatrixConfig()
 
     source = CsvDirectoryDataSource(input_path)
-    state_rows = load_anomaly_state_1m_csv(state_artifact_path)
+    state_rows = load_strategy_state_1m_csv(state_artifact_path)
     matrix_rows = build_price_time_feature_matrix_from_source(
         source=source,
         state_path=state_artifact_path,
@@ -380,7 +386,7 @@ def run_mvp1_feature_matrix(
 
 def _build_state_feature_row(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     open_interest_rows: Sequence[OpenInterest5m] | None,
     liquidation_rows: Sequence[LiquidationEvent] | None,
@@ -388,9 +394,9 @@ def _build_state_feature_row(
     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
     universe_by_day: Mapping[str, set[str]],
-    states_at_snapshot: Sequence[AnomalyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow],
     config: FeatureMatrixConfig,
-) -> AnomalyFeatureMatrixRow:
+) -> StrategyFeatureMatrixRow:
     atr_value: float | None = None
     atr_pct_value: float | None = None
     range_since_start_atr: float | None = None
@@ -480,7 +486,7 @@ def _build_state_feature_row(
     clock_maturity = state.time_since_running_high_minutes / max(time_to_running_high, 1)
     event_age_ratio = state.minutes_since_detection / max(config.expected_event_lifetime_minutes, 1)
 
-    return AnomalyFeatureMatrixRow(
+    return StrategyFeatureMatrixRow(
         feature_schema_version=FEATURE_SCHEMA_VERSION,
         feature_matrix_version=config.feature_matrix_version,
         event_id=state.event_id,
@@ -637,7 +643,7 @@ class _RelaxedGeometryFeatures:
 def _relaxed_geometry_features(
     *,
     candles: Sequence[Candle1m],
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     atr_value: float | None,
     oi_features: _OiFeatures,
     liquidation_features: _LiquidationFeatures,
@@ -778,7 +784,7 @@ class _VolumeFeatures:
         self.quote_volume_zscore = quote_volume_zscore
 
 
-def _volume_features(*, candles: Sequence[Candle1m], state: AnomalyState1mRow, config: FeatureMatrixConfig) -> _VolumeFeatures:
+def _volume_features(*, candles: Sequence[Candle1m], state: StrategyState1mRow, config: FeatureMatrixConfig) -> _VolumeFeatures:
     current = _current_candle(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
     if current is None:
         return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
@@ -877,7 +883,7 @@ def _liquidation_features(
     *,
     candles: Sequence[Candle1m],
     liquidation_rows: Sequence[LiquidationEvent] | None,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
 ) -> _LiquidationFeatures:
     if liquidation_rows is None:
         return _missing_liquidation_features()
@@ -949,7 +955,7 @@ class _CvdFeatures:
 def _cvd_features(
     *,
     candles: Sequence[Candle1m],
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     atr_value: float | None,
     windows_minutes: tuple[int, ...],
 ) -> _CvdFeatures:
@@ -1028,7 +1034,7 @@ def _current_candle(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> Ca
     return current
 
 
-def _event_start_time_ms(state: AnomalyState1mRow) -> int:
+def _event_start_time_ms(state: StrategyState1mRow) -> int:
     return state.snapshot_time_ms - max(state.minutes_since_event_start, 0) * ONE_MINUTE_MS
 
 
@@ -1109,12 +1115,12 @@ class _CrossSectionFeatures:
 
 def _cross_section_features(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     candles_by_symbol: Mapping[str, Sequence[Candle1m]],
     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
     universe_by_day: Mapping[str, set[str]],
-    states_at_snapshot: Sequence[AnomalyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow],
     min_cross_section_symbols: int,
 ) -> _CrossSectionFeatures:
     trade_date = utc_ms_to_datetime(state.snapshot_time_ms).date().isoformat()
@@ -1234,7 +1240,7 @@ def _minute_liq_intensity(
 
 def _return_from_event_percentile(
     *,
-    states_at_snapshot: Sequence[AnomalyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow],
     symbol: str,
     min_cross_section_symbols: int,
 ) -> float | None:
@@ -1299,10 +1305,10 @@ class _MarketContextFeatures:
 
 def _market_context_features(
     *,
-    state: AnomalyState1mRow,
+    state: StrategyState1mRow,
     symbol_candles: Sequence[Candle1m],
     btc_candles: Sequence[Candle1m],
-    states_at_snapshot: Sequence[AnomalyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow],
     cross_section_symbol_count: int,
     volume_market_percentile: float | None,
     ATR_1d_pct_asof_t: float | None,

@@ -4,7 +4,9 @@ import pytest
 
 from anomaly_science.audit import TemporalAuditInput, audit_temporal_contract
 from anomaly_science.contracts import (
+    AnomalyEvent,
     AnomalyFeatureMatrixRow,
+    AnomalyOutcomeLabelRow,
     AnomalyState1mRow,
     AuditStatus,
     Candle1m,
@@ -15,11 +17,22 @@ from anomaly_science.contracts import (
     FuturePathRow,
     LiquidationEvent,
     OpenInterest5m,
+    StrategyEvent,
+    StrategyFeatureMatrixRow,
+    StrategyOutcomeLabelRow,
+    StrategyState1mRow,
     SymbolDayUniverseRow,
     TemporalContractError,
 )
 from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.time import SnapshotTiming
+
+
+def test_strategy_neutral_contract_names_keep_anomaly_aliases() -> None:
+    assert AnomalyEvent is StrategyEvent
+    assert AnomalyState1mRow is StrategyState1mRow
+    assert AnomalyFeatureMatrixRow is StrategyFeatureMatrixRow
+    assert AnomalyOutcomeLabelRow is StrategyOutcomeLabelRow
 
 
 def test_snapshot_timing_enforces_feature_cutoff_before_snapshot() -> None:
