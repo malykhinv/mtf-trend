@@ -202,7 +202,6 @@ def test_baseline_comparison_defers_volume_without_proxy_fields() -> None:
         "follow_only_early_squeeze",
         "volume_only",
         "btc_eth_only",
-        "always_no_trade",
         "strategy_specific_heuristic",
         "no_cvd_features_ablation",
         "no_oi_features_ablation",
@@ -216,7 +215,6 @@ def test_baseline_comparison_defers_volume_without_proxy_fields() -> None:
     assert by_name["follow_only_early_squeeze"].status == CONTROL_STATUS_OK
     assert by_name["volume_only"].status == CONTROL_STATUS_DEFERRED
     assert by_name["btc_eth_only"].status == CONTROL_STATUS_DEFERRED
-    assert by_name["always_no_trade"].status == CONTROL_STATUS_DEFERRED
     assert by_name["strategy_specific_heuristic"].status == CONTROL_STATUS_DEFERRED
     assert by_name["no_cvd_features_ablation"].status == CONTROL_STATUS_DEFERRED
     assert by_name["no_oi_features_ablation"].status == CONTROL_STATUS_DEFERRED

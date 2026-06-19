@@ -256,6 +256,11 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["funding_rate_boundary"]["status"] == "WARN"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
+    with (out_dir / "anomaly_trade_simulation_metrics.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        metrics_by_name = {row["metric_name"]: row for row in csv.DictReader(file_obj)}
+    assert metrics_by_name["always_no_trade_baseline_net_pnl"]["metric_value"] == "0"
+    assert "delta_vs_always_no_trade_net_pnl" in metrics_by_name
+
     with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"

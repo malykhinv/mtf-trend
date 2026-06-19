@@ -242,7 +242,6 @@ def build_baseline_comparison_rows(
             ("idiosyncratic_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy idiosyncratic subset is emitted"),
             ("systemic_cluster_only_subset", "market_shock_subset", "deferred cleanly: anomaly_feature_matrix.csv was not supplied, so no proxy systemic subset is emitted"),
         )),
-        ("always_no_trade", "decision_baseline", "deferred cleanly: always no-trade baseline belongs to decision/simulation artifacts, not scenario prediction probabilities"),
         ("strategy_specific_heuristic", "strategy_heuristic", "deferred cleanly: no pre-registered strategy-specific heuristic baseline exists for MVP1 controls"),
     )
     for baseline_name, feature_family, notes in deferred_specs:
