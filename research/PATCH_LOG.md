@@ -1,5 +1,21 @@
 # Patch log
 
+## methodology: enforce real holdout lock
+
+Status: PROPOSED; patch generated after `methodology: hard-gate run-research on forensic audit`.
+
+Intent:
+- Add explicit `is` and `frozen_holdout` research modes to `run-research`.
+- Make default `is` mode exclude the final locked holdout from downstream input before audit/events/state/features/prediction.
+- Require `protocol_freeze_id` for `frozen_holdout` and record an approved holdout access row.
+- Add holdout mode fields to run summary and governance run config.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_enforce_real_holdout_lock.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_holdout_governance.py tests/test_research_run.py` must be run in the project venv because this sandbox lacks `polars`.
+
+
 ## methodology: hard-gate run-research on forensic audit
 
 Status: PROPOSED; patch generated after `methodology: add independent forensic protocol audit`.

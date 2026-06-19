@@ -23,9 +23,10 @@ Primary MVP1 research command:
 ```bash
 python main.py run-research broad_anomaly_v1_h30
 python main.py run-research broad_anomaly_v1_h30 --days 380
+python main.py run-research broad_anomaly_v1_h30 --research-mode frozen_holdout --protocol-freeze-id protocol_freeze_v1
 ```
 
-`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, runs the full research pipeline through simulation, then writes an independent forensic protocol audit and fails the run if that audit emits any `FAIL` row. If `--days` is omitted, it uses the full available cache period.
+`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, applies the holdout lock, runs the full research pipeline through simulation, then writes an independent forensic protocol audit and fails the run if that audit emits any `FAIL` row. Default `--research-mode is` excludes the final holdout from downstream research stages. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records explicit approved holdout access. If `--days` is omitted, it uses the full available cache period.
 
 Low-level MVP1 stage commands remain available for debugging:
 
@@ -44,6 +45,7 @@ python main.py run-mvp1-controls --state tmp/mvp1_state/strategy_state_1m.csv --
 python main.py run-mvp1-expected-value --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --predictions tmp/mvp1_prediction/strategy_oos_predictions.csv --out tmp/mvp1_ev --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
 python main.py run-mvp1-trade-simulation --input tests/fixtures/minimal_market_data --decision-timing tmp/mvp1_ev/strategy_decision_timing.csv --out tmp/mvp1_simulation --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
 python main.py run-mvp1-holdout-governance --out tmp/mvp1_governance --start-date 2024-01-01 --end-date 2024-12-15 --freeze-id protocol_freeze_v1
+python main.py run-mvp1-holdout-governance --out tmp/mvp1_governance_holdout --start-date 2024-01-01 --end-date 2024-12-15 --freeze-id protocol_freeze_v1 --research-mode frozen_holdout --holdout-access-artifact manual_review
 ```
 
 `run-mvp1-state` builds `strategy_state_1m.csv` from normalized closed 1m candles and a strict `strategy_events.csv` artifact boundary. It updates state only at times greater than or equal to `event_detection_time_ms`, and state features use only candles with `available_time_ms <= state_time_ms`.

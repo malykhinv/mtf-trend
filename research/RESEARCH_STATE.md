@@ -7,7 +7,7 @@ Active rule:
 - New code must not import legacy modules.
 - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
 - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
-- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
 - Future paths remain raw outcomes.
 - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
 - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
@@ -34,6 +34,13 @@ Current forensic audit patch generated from uploaded snapshot `project_20260619_
 Current forensic hard-gate patch generated after the independent forensic audit patch:
 - `methodology: hard-gate run-research on forensic audit`
   - Runs forensic audit after simulation, writes `stages/forensic_audit/strategy_protocol_audit.csv`, records summary status/counts, and exits non-zero on forensic FAIL.
+  - Patch status: PROPOSED until applied and verified locally.
+
+Current holdout lock patch generated after the forensic hard-gate patch:
+- `methodology: enforce real holdout lock`
+  - Adds `is` and `frozen_holdout` modes to `run-research`.
+  - Default `is` mode filters out final holdout rows before downstream research stages.
+  - `frozen_holdout` requires an explicit protocol freeze id and writes an approved holdout access row.
   - Patch status: PROPOSED until applied and verified locally.
 
 Current horizon audit patch generated from uploaded snapshot `project_20260619_111337.zip` plus H2 v2, H3, H4 v2, H5, and H6:

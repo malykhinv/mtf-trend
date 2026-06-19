@@ -97,6 +97,23 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional cache directory override. Default: Binance Vision enriched 1m cache.",
     )
+    research.add_argument(
+        "--research-mode",
+        choices=("is", "frozen_holdout"),
+        default="is",
+        help="Research data access mode. Default: is excludes the final holdout from downstream stages.",
+    )
+    research.add_argument(
+        "--holdout-days",
+        type=int,
+        default=60,
+        help="Final locked holdout length in calendar days. Default: 60.",
+    )
+    research.add_argument(
+        "--protocol-freeze-id",
+        default="",
+        help="Required for --research-mode frozen_holdout. Optional explicit freeze id for IS governance.",
+    )
 
     data_audit = subparsers.add_parser(
         "run-mvp1-data-audit",
@@ -245,6 +262,17 @@ def build_parser() -> argparse.ArgumentParser:
     governance.add_argument("--end-date", required=True, help="Research period end date YYYY-MM-DD.")
     governance.add_argument("--freeze-id", required=True, help="Explicit protocol freeze identifier.")
     governance.add_argument("--holdout-days", type=int, default=60, help="Final locked holdout length in calendar days. Default: 60.")
+    governance.add_argument(
+        "--research-mode",
+        choices=("is", "frozen_holdout"),
+        default="is",
+        help="Governance access mode. Default: is keeps holdout_access_log.csv empty.",
+    )
+    governance.add_argument(
+        "--holdout-access-artifact",
+        default="",
+        help="Artifact or boundary being accessed when --research-mode frozen_holdout is used.",
+    )
 
     cache = subparsers.add_parser(
         "build-binance-vision-cache",
@@ -335,6 +363,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 strategy_name=args.strategy,
                 cache_dir=cache_dir,
                 days=args.days,
+                research_mode=args.research_mode,
+                holdout_days=args.holdout_days,
+                protocol_freeze_id=args.protocol_freeze_id,
             )
         )
         print(f"research pipeline written: {output_dir}")
@@ -484,6 +515,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             end_date=datetime.strptime(args.end_date, "%Y-%m-%d").date(),
             protocol_freeze_id=args.freeze_id,
             holdout_days=args.holdout_days,
+            research_mode=args.research_mode,
+            holdout_access_artifact=args.holdout_access_artifact,
         )
         print(f"mvp1 holdout governance artifacts written: {output_dir}")
         return 0

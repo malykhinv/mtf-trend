@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 
@@ -35,12 +36,21 @@ class ResearchRunConfig:
     cache_dir: Path
     days: int | None = None
     output_root: Path = DEFAULT_RESEARCH_OUTPUT_ROOT
+    research_mode: Literal["is", "frozen_holdout"] = "is"
+    holdout_days: int = 60
+    protocol_freeze_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.strategy_name:
             raise ValueError("strategy_name is required")
         if self.days is not None and self.days <= 0:
             raise ValueError("days must be positive when provided")
+        if self.research_mode not in {"is", "frozen_holdout"}:
+            raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
+        if self.holdout_days <= 0:
+            raise ValueError("holdout_days must be positive")
+        if self.research_mode == "frozen_holdout" and not self.protocol_freeze_id:
+            raise ValueError("protocol_freeze_id is required for frozen_holdout mode")
 
 
 def run_research_pipeline(config: ResearchRunConfig) -> Path:
@@ -56,12 +66,27 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             days=config.days,
         )
     )
-    start_date, end_date = _input_date_range(input_dir / "candles_1m.csv")
+    full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
+    protocol_freeze_id = config.protocol_freeze_id or _protocol_freeze_id(
+        strategy_name=config.strategy_name,
+        start_date=full_start_date,
+        end_date=full_end_date,
+    )
     governance_dir = run_mvp1_holdout_governance(
         out_dir=stages_dir / "holdout_governance",
-        start_date=start_date,
-        end_date=end_date,
-        protocol_freeze_id=_protocol_freeze_id(strategy_name=config.strategy_name, start_date=start_date, end_date=end_date),
+        start_date=full_start_date,
+        end_date=full_end_date,
+        protocol_freeze_id=protocol_freeze_id,
+        holdout_days=config.holdout_days,
+        research_mode=config.research_mode,
+        holdout_access_artifact="run-research downstream input boundary",
+    )
+    research_start_date, research_end_date = _apply_holdout_lock_to_input(
+        input_dir=input_dir,
+        full_start_date=full_start_date,
+        full_end_date=full_end_date,
+        holdout_days=config.holdout_days,
+        research_mode=config.research_mode,
     )
 
     run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
@@ -136,9 +161,10 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
     _write_summary(
         run_dir=run_dir,
         config=config,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=research_start_date,
+        end_date=research_end_date,
         governance_dir=governance_dir,
+        protocol_freeze_id=protocol_freeze_id,
         forensic_audit_dir=forensic_audit_dir,
         forensic_status=forensic_status,
         forensic_fail_count=forensic_fail_count,
@@ -159,6 +185,7 @@ def _write_summary(
     start_date: date,
     end_date: date,
     governance_dir: Path,
+    protocol_freeze_id: str,
     forensic_audit_dir: Path,
     forensic_status: str,
     forensic_fail_count: int,
@@ -177,6 +204,9 @@ def _write_summary(
         f"input_max_open_time_ms,{max_time}",
         f"research_start_date,{start_date.isoformat()}",
         f"research_end_date,{end_date.isoformat()}",
+        f"research_mode,{config.research_mode}",
+        f"holdout_days,{config.holdout_days}",
+        f"protocol_freeze_id,{protocol_freeze_id}",
         f"holdout_governance_dir,{governance_dir}",
         f"forensic_audit_dir,{forensic_audit_dir}",
         f"forensic_audit_status,{forensic_status}",
@@ -200,6 +230,60 @@ def _write_forensic_audit(run_dir: Path) -> tuple[Path, str, int, int, str]:
     status = "FAIL" if fail_count else "WARN" if warn_count else "PASS"
     failed_checks = ", ".join(row.check_name for row in rows if row.status is AuditStatus.FAIL)
     return forensic_audit_dir, status, fail_count, warn_count, failed_checks
+
+
+def _apply_holdout_lock_to_input(
+    *,
+    input_dir: Path,
+    full_start_date: date,
+    full_end_date: date,
+    holdout_days: int,
+    research_mode: str,
+) -> tuple[date, date]:
+    final_holdout_start = _final_holdout_start_date(
+        start_date=full_start_date,
+        end_date=full_end_date,
+        holdout_days=holdout_days,
+    )
+    if research_mode == "frozen_holdout":
+        return full_start_date, full_end_date
+    if research_mode != "is":
+        raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
+
+    research_end_date = final_holdout_start - timedelta(days=1)
+    if research_end_date < full_start_date:
+        raise ValueError(
+            "IS research mode has no non-holdout rows: "
+            f"full_start_date={full_start_date.isoformat()} "
+            f"full_end_date={full_end_date.isoformat()} holdout_days={holdout_days}. "
+            "Use frozen_holdout mode with an explicit protocol_freeze_id to run on this period."
+        )
+    _filter_input_csv_by_end_date(input_dir / "candles_1m.csv", time_column="open_time_ms", end_date=research_end_date)
+    _filter_input_csv_by_end_date(input_dir / "candles_5m.csv", time_column="open_time_ms", end_date=research_end_date)
+    _filter_input_csv_by_end_date(input_dir / "open_interest_5m.csv", time_column="timestamp_ms", end_date=research_end_date)
+    return _input_date_range(input_dir / "candles_1m.csv")
+
+
+def _filter_input_csv_by_end_date(path: Path, *, time_column: str, end_date: date) -> None:
+    frame = pd.read_csv(path)
+    if frame.empty:
+        frame.to_csv(path, index=False)
+        return
+    if time_column not in frame.columns:
+        raise ValueError(f"{path} is missing required time column {time_column!r}")
+    end_exclusive_ms = int(
+        datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    filtered = frame[frame[time_column].astype("int64") < end_exclusive_ms].copy()
+    if path.name == "candles_1m.csv" and filtered.empty:
+        raise ValueError(f"holdout lock removed all rows from required input artifact: {path}")
+    filtered.to_csv(path, index=False)
+
+
+def _final_holdout_start_date(*, start_date: date, end_date: date, holdout_days: int) -> date:
+    if holdout_days <= 0:
+        raise ValueError("holdout_days must be positive")
+    return max(start_date, end_date - timedelta(days=holdout_days - 1))
 
 
 def _input_date_range(candles_path: Path) -> tuple[date, date]:

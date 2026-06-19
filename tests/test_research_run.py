@@ -35,6 +35,8 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
             strategy_name="broad_anomaly_v1_h30",
             cache_dir=cache_dir,
             output_root=tmp_path / "runs",
+            research_mode="frozen_holdout",
+            protocol_freeze_id="smoke-freeze",
         )
     )
 
@@ -52,16 +54,19 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert (run_dir / "research_run_summary.csv").is_file()
 
     ledger = pd.read_csv(run_dir / "stages" / "holdout_governance" / "research_ledger.csv")
-    assert ledger.loc[0, "protocol_freeze_id"] == "run_research_broad_anomaly_v1_h30_2024-01-01_2024-01-01_protocol_freeze_v1"
+    assert ledger.loc[0, "protocol_freeze_id"] == "smoke-freeze"
     assert ledger.loc[0, "final_holdout_start_date"] == "2024-01-01"
 
     access_log = pd.read_csv(run_dir / "stages" / "holdout_governance" / "holdout_access_log.csv")
-    assert access_log.empty
+    assert len(access_log) == 1
+    assert bool(access_log.loc[0, "access_approved"])
 
     summary = pd.read_csv(run_dir / "research_run_summary.csv")
     summary_by_key = dict(zip(summary["key"], summary["value"], strict=True))
     assert summary_by_key["research_start_date"] == "2024-01-01"
     assert summary_by_key["research_end_date"] == "2024-01-01"
+    assert summary_by_key["research_mode"] == "frozen_holdout"
+    assert summary_by_key["protocol_freeze_id"] == "smoke-freeze"
     assert summary_by_key["forensic_audit_dir"].endswith("stages/forensic_audit") or summary_by_key["forensic_audit_dir"].endswith("stages\\forensic_audit")
     assert summary_by_key["forensic_audit_status"] in {"PASS", "WARN"}
     assert summary_by_key["forensic_audit_fail_count"] == "0"
@@ -73,3 +78,66 @@ def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
     assert args.command == "run-research"
     assert args.strategy == "broad_anomaly_v1_h30"
     assert args.days == 30
+    assert args.research_mode == "is"
+    assert args.holdout_days == 60
+
+
+def test_run_research_config_requires_freeze_id_for_frozen_holdout(tmp_path: Path) -> None:
+    try:
+        ResearchRunConfig(
+            strategy_name="broad_anomaly_v1_h30",
+            cache_dir=tmp_path,
+            research_mode="frozen_holdout",
+        )
+    except ValueError as exc:
+        assert "protocol_freeze_id" in str(exc)
+    else:
+        raise AssertionError("frozen_holdout mode must require protocol_freeze_id")
+
+
+def test_is_mode_holdout_lock_filters_downstream_input(tmp_path: Path) -> None:
+    from anomaly_science.research.run import _apply_holdout_lock_to_input
+
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    first_day = 1704067200000
+    second_day = first_day + 86_400_000
+    candles = pd.DataFrame(
+        {
+            "symbol": ["AAAUSDT", "AAAUSDT"],
+            "open_time_ms": [first_day, second_day],
+            "available_time_ms": [first_day + 60_000, second_day + 60_000],
+            "open": [1.0, 2.0],
+            "high": [1.1, 2.1],
+            "low": [0.9, 1.9],
+            "close": [1.0, 2.0],
+            "volume": [1.0, 1.0],
+            "quote_volume": [1.0, 1.0],
+            "number_of_trades": [1, 1],
+            "taker_buy_quote_volume": [0.5, 0.5],
+        }
+    )
+    candles.to_csv(input_dir / "candles_1m.csv", index=False)
+    candles.to_csv(input_dir / "candles_5m.csv", index=False)
+    pd.DataFrame(
+        {
+            "symbol": ["AAAUSDT", "AAAUSDT"],
+            "timestamp_ms": [first_day, second_day],
+            "available_time_ms": [first_day + 300_000, second_day + 300_000],
+            "open_interest": [1.0, 2.0],
+            "source": ["fixture", "fixture"],
+        }
+    ).to_csv(input_dir / "open_interest_5m.csv", index=False)
+
+    start_date, end_date = _apply_holdout_lock_to_input(
+        input_dir=input_dir,
+        full_start_date=pd.to_datetime(first_day, unit="ms", utc=True).date(),
+        full_end_date=pd.to_datetime(second_day, unit="ms", utc=True).date(),
+        holdout_days=1,
+        research_mode="is",
+    )
+
+    assert start_date.isoformat() == "2024-01-01"
+    assert end_date.isoformat() == "2024-01-01"
+    filtered = pd.read_csv(input_dir / "candles_1m.csv")
+    assert filtered["open_time_ms"].tolist() == [first_day]

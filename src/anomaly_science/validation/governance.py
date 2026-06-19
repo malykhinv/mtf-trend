@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.audit import build_methodology_v2_audit_rows
@@ -19,11 +19,17 @@ def run_mvp1_holdout_governance(
     end_date: date,
     protocol_freeze_id: str,
     holdout_days: int = 60,
+    research_mode: Literal["is", "frozen_holdout"] = "is",
+    holdout_access_artifact: str = "",
 ) -> Path:
     if end_date < start_date:
         raise ValueError("end_date must be >= start_date")
     if holdout_days <= 0:
         raise ValueError("holdout_days must be positive")
+    if research_mode not in {"is", "frozen_holdout"}:
+        raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
+    if research_mode == "frozen_holdout" and not protocol_freeze_id:
+        raise ValueError("protocol_freeze_id is required for frozen_holdout mode")
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     final_holdout_start = max(start_date, end_date - timedelta(days=holdout_days - 1))
@@ -42,8 +48,19 @@ def run_mvp1_holdout_governance(
             final_holdout_end_date=end_date.isoformat(),
         )
     ]
-    access_rows: tuple[HoldoutAccessLogRow, ...] = ()
-    protocol_rows = _protocol_rows(ledger_row_count=len(ledger_rows), access_row_count=len(access_rows))
+    access_rows = _holdout_access_rows(
+        research_mode=research_mode,
+        protocol_freeze_id=protocol_freeze_id,
+        created_at=created_at,
+        artifact=holdout_access_artifact or "final holdout research boundary",
+        final_holdout_start=final_holdout_start,
+        final_holdout_end=end_date,
+    )
+    protocol_rows = _protocol_rows(
+        ledger_row_count=len(ledger_rows),
+        access_row_count=len(access_rows),
+        research_mode=research_mode,
+    )
     run_config_rows = _run_config_rows(
         output_path=output_path,
         start_date=start_date,
@@ -51,6 +68,7 @@ def run_mvp1_holdout_governance(
         final_holdout_start=final_holdout_start,
         protocol_freeze_id=protocol_freeze_id,
         holdout_days=holdout_days,
+        research_mode=research_mode,
     )
 
     written: list[Path] = []
@@ -75,7 +93,7 @@ def run_mvp1_holdout_governance(
     return output_path
 
 
-def _protocol_rows(*, ledger_row_count: int, access_row_count: int) -> list[ProtocolAuditRow]:
+def _protocol_rows(*, ledger_row_count: int, access_row_count: int, research_mode: str) -> list[ProtocolAuditRow]:
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_holdout_governance_scope",
@@ -89,9 +107,11 @@ def _protocol_rows(*, ledger_row_count: int, access_row_count: int) -> list[Prot
             artifact="research_ledger.csv",
         ),
         ProtocolAuditRow(
-            check_name="holdout_access_log_initialized_empty",
-            status=AuditStatus.PASS if access_row_count == 0 else AuditStatus.FAIL,
-            message=f"holdout_access_log.csv initialized with {access_row_count} access rows before holdout read",
+            check_name="holdout_access_log_matches_research_mode",
+            status=AuditStatus.PASS
+            if (research_mode == "is" and access_row_count == 0) or (research_mode == "frozen_holdout" and access_row_count > 0)
+            else AuditStatus.FAIL,
+            message=f"research_mode={research_mode} produced {access_row_count} holdout access rows",
             artifact="holdout_access_log.csv",
         ),
         ProtocolAuditRow(
@@ -104,7 +124,11 @@ def _protocol_rows(*, ledger_row_count: int, access_row_count: int) -> list[Prot
         ProtocolAuditRow(
             check_name="final_holdout_not_accessed_before_protocol_freeze",
             status=AuditStatus.PASS,
-            message="protocol freeze ledger and empty access log are written before any holdout access can be recorded",
+            message=(
+                "IS mode keeps access log empty before final holdout reads"
+                if research_mode == "is"
+                else "frozen_holdout mode records explicit approved access after protocol freeze"
+            ),
             artifact="holdout_access_log.csv",
         )
     ]
@@ -120,6 +144,32 @@ def _protocol_rows_to_artifact(rows: Sequence[ProtocolAuditRow]) -> list[dict[st
     return result
 
 
+def _holdout_access_rows(
+    *,
+    research_mode: str,
+    protocol_freeze_id: str,
+    created_at: str,
+    artifact: str,
+    final_holdout_start: date,
+    final_holdout_end: date,
+) -> list[HoldoutAccessLogRow]:
+    if research_mode == "is":
+        return []
+    return [
+        HoldoutAccessLogRow(
+            access_id=f"{protocol_freeze_id}:frozen_holdout_access_v1",
+            protocol_freeze_id=protocol_freeze_id,
+            accessed_at_utc=created_at,
+            actor="run-research",
+            reason="explicit frozen_holdout mode requested after protocol freeze",
+            artifact=artifact,
+            final_holdout_start_date=final_holdout_start.isoformat(),
+            final_holdout_end_date=final_holdout_end.isoformat(),
+            access_approved=True,
+        )
+    ]
+
+
 def _run_config_rows(
     *,
     output_path: Path,
@@ -128,6 +178,7 @@ def _run_config_rows(
     final_holdout_start: date,
     protocol_freeze_id: str,
     holdout_days: int,
+    research_mode: str,
 ) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-holdout-governance", source="cli"),
@@ -140,6 +191,7 @@ def _run_config_rows(
                 "research_start_date": start_date.isoformat(),
                 "research_end_date": end_date.isoformat(),
                 "holdout_days": holdout_days,
+                "research_mode": research_mode,
             },
         ),
         RunConfigRow(key="stage", value="mvp1_governance", source="runtime"),
@@ -147,7 +199,13 @@ def _run_config_rows(
         RunConfigRow(key="research_start_date", value=start_date.isoformat(), source="cli"),
         RunConfigRow(key="research_end_date", value=end_date.isoformat(), source="cli"),
         RunConfigRow(key="holdout_days", value=str(holdout_days), source="cli"),
+        RunConfigRow(key="research_mode", value=research_mode, source="cli"),
         RunConfigRow(key="final_holdout_start_date", value=final_holdout_start.isoformat(), source="runtime"),
         RunConfigRow(key="final_holdout_end_date", value=end_date.isoformat(), source="runtime"),
         RunConfigRow(key="holdout_scope", value="locked_until_explicit_access_log", source="runtime"),
+        RunConfigRow(
+            key="holdout_access_required",
+            value=str(research_mode == "frozen_holdout"),
+            source="runtime",
+        ),
     ]
