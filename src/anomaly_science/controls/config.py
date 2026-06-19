@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from anomaly_science.contracts.horizons import validate_supported_research_horizon
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
+from anomaly_science.strategy.registry import validate_strategy_horizon
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +33,7 @@ class ControlsConfig:
             object.__setattr__(self, "active_strategy_names", (self.strategy_name,))
         if self.strategy_name not in self.active_strategy_names:
             raise ValueError("active_strategy_names must include strategy_name")
-        validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
+        validate_strategy_horizon(self.strategy_name, self.target_horizon_minutes)
         if self.purge_horizon_minutes < self.target_horizon_minutes:
             raise ValueError("active strategy H_max must be >= target_horizon_minutes")
         if self.min_train_rows <= 0:

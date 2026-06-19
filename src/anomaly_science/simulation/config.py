@@ -18,7 +18,8 @@ class TradeSimulationConfig:
             raise ValueError("simulation_version is required")
         if not self.strategy_name:
             raise ValueError("strategy_name is required")
-        validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
+        from anomaly_science.strategy.registry import validate_strategy_horizon
+        validate_strategy_horizon(self.strategy_name, self.target_horizon_minutes)
         if self.toxic_entry_atr_1m_fraction < 0.0:
             raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")
         if self.random_seed < 0:

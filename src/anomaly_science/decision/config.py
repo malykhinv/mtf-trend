@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from anomaly_science.strategy.registry import validate_strategy_horizon
+
 
 @dataclass(frozen=True, slots=True)
 class ExpectedValueConfig:
@@ -20,8 +22,7 @@ class ExpectedValueConfig:
             raise ValueError("ev_version is required")
         if not self.strategy_name:
             raise ValueError("strategy_name is required")
-        if self.target_horizon_minutes <= 0:
-            raise ValueError("target_horizon_minutes must be positive")
+        validate_strategy_horizon(self.strategy_name, self.target_horizon_minutes)
         if self.fee_bps < 0.0:
             raise ValueError("fee_bps must be non-negative")
         if self.slippage_bps < 0.0:

@@ -1,6 +1,24 @@
 # Patch log
 
 
+## methodology: enforce registry horizon compatibility
+
+Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying H2 v2 and H3.
+
+Intent:
+- Add registry-level `validate_strategy_horizon(strategy_name, horizon_minutes)`.
+- Reject arbitrary horizons such as h11/h32 at the registry boundary.
+- Reject mismatched executable pairs such as `broad_anomaly_v1_h30` with target h60.
+- Reject unknown strategy names such as `broad_anomaly_v1_h180`.
+- Reject specified-but-not-implemented variants such as `post_pump_distribution_v1_h120`.
+- Make prediction, controls, EV, and simulation configs validate the executable strategy/horizon pair before running downstream stages.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_enforce_registry_horizon_compatibility.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_horizon_contract.py tests/test_strategy_contract.py tests/test_strategy_registry.py` was attempted in this sandbox but collection requires missing third-party dependency `polars`; run it in the project venv.
+
+
 ## methodology: add StrategyMetadata horizon semantics
 
 Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying `methodology_add_core_supported_horizon_constants_v2.patch`.

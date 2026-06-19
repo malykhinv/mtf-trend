@@ -84,8 +84,8 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Legacy quarantine boundary | IMPLEMENTED | New code is under `src/anomaly_science`; tests include no-legacy-import checks. | Keep as permanent gate. |
 | BaseStrategy contract | IMPLEMENTED | Strategy metadata and trigger/custom-feature contract exist. | Keep stable unless explicit contract version bump. |
 | Strategy registry for broad anomaly | IMPLEMENTED | `broad_anomaly_v1_h15/h30/h60` are registry-backed. | Keep registry honest. |
-| Strategy registry truthfulness for specified-only variants | PARTIAL | Registry rejects specified-but-not-implemented variants and emitted registry rows now include allowed/default horizons, but registry-level strategy/horizon pair validation is not complete. | Add registry/status tests, compatibility validator, and generated docs check. |
-| Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata now stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, and validates them against the Core whitelist. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Next patch should add registry-level strategy/horizon compatibility validation. |
+| Strategy registry truthfulness for specified-only variants | PARTIAL | Registry rejects specified-but-not-implemented variants, emitted registry rows include allowed/default horizons, and registry-level `validate_strategy_horizon()` rejects unknown, arbitrary, mismatched, and specified-but-not-implemented strategy/horizon pairs. | Add generated docs/status self-audit before marking this complete. |
+| Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, validates them against the Core whitelist, and registry-level `validate_strategy_horizon()` now enforces executable strategy/horizon compatibility before prediction, controls, EV, and simulation configs are accepted. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Keep horizon compatibility tests as permanent regression gate. |
 | Data source boundary / normalized market data | PARTIAL | Binance Vision cache and normalized CSV boundary exist. Full all-symbol 380d resource envelope is not proven here. | Add run manifest, cache/data snapshot hashes, and resource smoke docs. |
 | Data quality gates | PARTIAL | Gaps, bad candles, technical noise, and explicit failure flags exist. Need stricter evidence that every downstream stage excludes the same bad rows. | Add shared `DataQualityMask` and cross-stage exclusion tests. |
 | Point-in-time universe | PARTIAL | Universe skeleton exists. Listing/delisting confidence and anti-survivorship proof are not complete. | Harden universe artifact and tests for delisted/missing symbols. |
@@ -133,14 +133,15 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 4. `methodology: integrate holdout freeze into run-research` - implemented in this patch.
 5. `methodology: document horizon ownership contract` - implemented in this patch.
 6. `methodology: add Core supported horizon constants` - implemented in this patch.
-7. `methodology: add independent forensic protocol audit`.
-8. `strategy: make registry status self-auditing`.
-9. `strategy: complete broad anomaly trigger component accounting`.
-10. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
-11. `strategy: implement post-pump distribution variants`.
-12. `strategy: implement post-anomaly extension variants`.
-13. `features: add structural state and relaxed geometry features`.
-14. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+7. `methodology: enforce registry horizon compatibility` - implemented in this patch.
+8. `methodology: add independent forensic protocol audit`.
+9. `strategy: make registry status self-auditing`.
+10. `strategy: complete broad anomaly trigger component accounting`.
+11. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
+12. `strategy: implement post-pump distribution variants`.
+13. `strategy: implement post-anomaly extension variants`.
+14. `features: add structural state and relaxed geometry features`.
+15. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 

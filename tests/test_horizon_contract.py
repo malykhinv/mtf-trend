@@ -15,6 +15,7 @@ from anomaly_science.future.config import FuturePathBuilderConfig
 from anomaly_science.labels.config import OutcomeLabelConfig
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
 from anomaly_science.simulation.config import TradeSimulationConfig
+from anomaly_science.strategy.registry import StrategyRegistryError, validate_strategy_horizon
 
 
 def test_core_supported_research_horizons_are_single_whitelist() -> None:
@@ -50,7 +51,24 @@ def test_future_and_label_configs_read_core_horizon_constants() -> None:
         OutcomeLabelConfig(horizons_minutes=(15, 30, 60))
 
 
-def test_target_horizon_configs_reject_arbitrary_minutes() -> None:
+def test_registry_validates_executable_strategy_horizon_pairs() -> None:
+    validate_strategy_horizon("broad_anomaly_v1_h30", 30)
+    validate_strategy_horizon("broad_anomaly_v1_h60", 60)
+
+    with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
+        validate_strategy_horizon("broad_anomaly_v1_h30", 60)
+
+    with pytest.raises(StrategyRegistryError, match="must be one of 15, 30, 60, 120, 180"):
+        validate_strategy_horizon("broad_anomaly_v1_h30", 32)
+
+    with pytest.raises(StrategyRegistryError, match="unknown strategy_name"):
+        validate_strategy_horizon("broad_anomaly_v1_h180", 180)
+
+    with pytest.raises(StrategyRegistryError, match="specified but not implemented yet"):
+        validate_strategy_horizon("post_pump_distribution_v1_h120", 120)
+
+
+def test_target_horizon_configs_validate_strategy_horizon_pair() -> None:
     config_types = (
         WalkForwardPredictionConfig,
         ControlsConfig,
@@ -58,6 +76,17 @@ def test_target_horizon_configs_reject_arbitrary_minutes() -> None:
         TradeSimulationConfig,
     )
     for config_type in config_types:
-        config_type(target_horizon_minutes=180)
-        with pytest.raises(ValueError, match="target_horizon_minutes must be one of 15, 30, 60, 120, 180"):
+        config_type(target_horizon_minutes=30)
+        config_type(strategy_name="broad_anomaly_v1_h60", target_horizon_minutes=60)
+
+        with pytest.raises(StrategyRegistryError, match="must be one of 15, 30, 60, 120, 180"):
             config_type(target_horizon_minutes=32)
+
+        with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
+            config_type(strategy_name="broad_anomaly_v1_h30", target_horizon_minutes=60)
+
+        with pytest.raises(StrategyRegistryError, match="unknown strategy_name"):
+            config_type(strategy_name="broad_anomaly_v1_h180", target_horizon_minutes=180)
+
+        with pytest.raises(StrategyRegistryError, match="specified but not implemented yet"):
+            config_type(strategy_name="post_pump_distribution_v1_h120", target_horizon_minutes=120)
