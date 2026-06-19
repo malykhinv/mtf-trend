@@ -1,5 +1,19 @@
 # Patch log
 
+## docs: synchronize executable strategy status
+
+Status: APPLIED.
+
+Intent:
+- Align README, COMMANDS, and RESEARCH_STATE with the current executable anomaly registry.
+- Document `broad_anomaly_v1_h15/h30/h60`, `post_anomaly_extension_v1_h60/h120/h180`, and `post_pump_distribution_v1_h60/h120/h180` as executable offline research variants.
+- Remove stale current-state notes that still described post-extension/post-pump variants as specified-only or pending.
+- Keep the data-source boundary explicitly PARTIAL until full 380d all-symbol cache/export proof artifacts are recorded.
+
+Validation:
+- Documentation-only patch; no runtime behavior changed.
+- `git apply --check` against the uploaded snapshot.
+
 ## methodology: prove cache export boundary
 
 Status: APPLIED.
@@ -225,7 +239,7 @@ Validation for this proposed patch:
 
 ## methodology: clean up strategy executable horizon status
 
-Status: PROPOSED
+Status: SUPERSEDED by executable post-anomaly extension and post-pump distribution registry patches.
 
 Changes:
 - Add `strategy_implementation_status.csv` as a registry truth table covering executable and specified-only anomaly variants.
@@ -661,7 +675,7 @@ Validation for this proposed patch:
 
 ## methodology: add implementation gap ledger
 
-Status: PROPOSED; patch generated from uploaded snapshot `project_20260619_084329.zip`; GitHub head was not available inside the uploaded archive, so this patch is against the snapshot contents only.
+Status: APPLIED.
 
 Intent:
 - Add `research/METHODOLOGY_GAP_LEDGER.md` as the explicit source of truth for what is implemented, partial, missing, or out of scope in the offline research methodology.
@@ -675,7 +689,7 @@ Validation for this proposed patch:
 
 ## strategy: complete broad anomaly trigger component accounting
 
-Status: PROPOSED
+Status: APPLIED.
 
 Changes:
 - Adds strict `trigger_component` and `trigger_components` fields to `AnomalyEvent` and the canonical/alias events artifact schema.
@@ -688,7 +702,7 @@ Validation in this environment:
 - Targeted pytest collection is blocked here by missing runtime dependency `polars`.
 ## features: add structural state and relaxed geometry features
 
-Status: PROPOSED
+Status: APPLIED.
 
 Changes:
 - Adds causal confirmed structural high/low levels and timestamps to `AnomalyState1mRow` and the canonical/alias state artifact schema.
@@ -706,7 +720,7 @@ Full CLI/audit pytest still needs the project venv because this sandbox lacks `p
 
 ## strategy: implement post-pump distribution variants
 
-Status: PROPOSED
+Status: APPLIED.
 
 Changes:
 - Makes `post_pump_distribution_v1_h60/h120/h180` executable registry variants.
@@ -721,7 +735,7 @@ Validation in this environment:
 
 ## strategy: implement post-anomaly extension variants
 
-Status: PROPOSED
+Status: APPLIED.
 
 Changes:
 - Makes `post_anomaly_extension_v1_h60/h120/h180` executable registry variants.
@@ -736,7 +750,7 @@ Validation in this environment:
 
 ## methodology: add artifact-driven rejection funnel
 
-Status: PROPOSED
+Status: APPLIED.
 
 Changes:
 - Adds canonical `strategy_rejection_funnel.csv` with `anomaly_rejection_funnel.csv` alias.
@@ -754,7 +768,7 @@ Full pytest still needs the project venv because this sandbox may lack project r
 
 ## methodology: add calibration breakdown audit
 
-Status: PROPOSED
+Status: APPLIED.
 
 Changes:
 - Adds canonical `strategy_calibration_breakdown.csv` with `anomaly_calibration_breakdown.csv` alias.
@@ -771,7 +785,7 @@ Prediction/forensic pytest collection still needs the project venv because this 
 
 ## methodology: expand atlas multi-horizon geometry slices
 
-Status: PROPOSED
+Status: APPLIED.
 
 Changes:
 - Expands atlas output from fixed 30m to configured 15/30/60/120/180m ATR-normalized descriptive outcomes.

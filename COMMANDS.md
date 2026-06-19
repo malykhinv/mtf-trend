@@ -12,10 +12,12 @@ MVP1 data audit:
 python main.py run-mvp1-data-audit --input tests/fixtures/minimal_market_data --out tmp/mvp1_audit
 ```
 
-MVP1 broad anomaly events:
+MVP1 strategy events:
 
 ```bash
-python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out tmp/mvp1_events
+python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out tmp/mvp1_events --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
+python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out tmp/mvp1_post_extension_events --strategy-name post_anomaly_extension_v1_h120 --horizon-minutes 120
+python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out tmp/mvp1_post_pump_events --strategy-name post_pump_distribution_v1_h120 --horizon-minutes 120
 ```
 
 MVP1 online 1m anomaly state:
@@ -42,7 +44,7 @@ MVP1 strategy registry truth table:
 python main.py run-mvp1-strategy-registry --out tmp/mvp1_strategy_registry
 ```
 
-`strategy_registry.csv` contains executable variants only. `strategy_implementation_status.csv` also lists specified-only variants that must fail explicitly until implemented.
+`strategy_registry.csv` contains executable variants only. `strategy_implementation_status.csv` is the generated truth table for all declared variants. The current anomaly spec has no remaining specified-only variants: broad anomaly h15/h30/h60, post-anomaly extension h60/h120/h180, and post-pump distribution h60/h120/h180 are executable.
 
 MVP1 as-of feature matrix:
 
@@ -63,7 +65,7 @@ python main.py run-mvp1-labels --state tmp/mvp1_state/strategy_state_1m.csv --fu
 ```
 
 
-Low-level target-horizon commands use the same horizon contract as `run-research`: `--horizon-minutes` must be one of `15/30/60/120/180`, and the selected `--strategy-name` must be an executable registry variant that semantically allows that horizon. Omitting `--strategy-name` resolves to `broad_anomaly_v1_h{horizon}` for compatibility, so `120/180` are rejected until a matching strategy is implemented.
+Low-level target-horizon commands use the same horizon contract as `run-research`: `--horizon-minutes` must be one of `15/30/60/120/180`, and the selected `--strategy-name` must be an executable registry variant that semantically allows that horizon. Omitting `--strategy-name` resolves to `broad_anomaly_v1_h{horizon}` for compatibility; use explicit post-anomaly/post-pump strategy names for executable `120/180` research.
 
 `run-research` defaults to `--research-mode is`, which excludes the final holdout from downstream research stages before data audit/events/state/features/prediction. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records an explicit approved holdout access row. `run-research` writes `stages/forensic_audit/strategy_protocol_audit.csv` after simulation and exits non-zero if the independent forensic audit has any `FAIL` row. `research_run_summary.csv` records holdout mode plus forensic audit status/counts.
 
@@ -71,6 +73,8 @@ MVP1 weekly CatBoost+Isotonic calibrated prediction:
 
 ```bash
 python main.py run-mvp1-prediction --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_prediction --strategy-name broad_anomaly_v1_h30 --horizon-minutes 30
+python main.py run-mvp1-prediction --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_prediction_post_extension --strategy-name post_anomaly_extension_v1_h120 --horizon-minutes 120
+python main.py run-mvp1-prediction --state tmp/mvp1_state/strategy_state_1m.csv --labels tmp/mvp1_labels/strategy_outcome_labels.csv --features tmp/mvp1_feature_matrix/strategy_feature_matrix.csv --out tmp/mvp1_prediction_post_pump --strategy-name post_pump_distribution_v1_h120 --horizon-minutes 120
 ```
 
 MVP1 placebo/control checks:
