@@ -16,6 +16,7 @@ from anomaly_science.decision import expected_value_rows_to_artifact
 from anomaly_science.simulation import (
     TradeSimulationConfig,
     TradeSimulationInputError,
+    build_random_entry_time_control_rows,
     build_trade_simulation_rows,
     load_anomaly_trade_simulation_csv,
     run_mvp1_trade_simulation,
@@ -121,6 +122,30 @@ def test_trade_simulation_debits_funding_inside_hold() -> None:
     row = rows[0]
     assert row.funding_cost > 0.0
     assert row.net_pnl == row.gross_pnl - row.total_cost - row.funding_cost
+
+
+def test_random_entry_time_control_rows_are_deterministic() -> None:
+    first = _decision("first")
+    second = _decision("second")
+    object.__setattr__(second, "state_time_ms", BASE_MS + ONE_MINUTE_MS)
+    object.__setattr__(second, "snapshot_time_ms", BASE_MS + ONE_MINUTE_MS)
+    object.__setattr__(second, "feature_cutoff_time_ms", BASE_MS + ONE_MINUTE_MS)
+    object.__setattr__(second, "future_start_time_ms", BASE_MS + 2 * ONE_MINUTE_MS)
+
+    candles = [
+        _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+        _candle(1, open_price=101.0, high=101.5, low=100.5, close=101.0),
+        _candle(2, open_price=102.0, high=105.0, low=101.5, close=104.0),
+        _candle(31, open_price=103.0, high=103.5, low=102.5, close=103.0),
+    ]
+    config = TradeSimulationConfig(target_horizon_minutes=30, random_seed=7)
+
+    rows = build_random_entry_time_control_rows(candles_1m=candles, decision_rows=[first, second], config=config)
+    repeated = build_random_entry_time_control_rows(candles_1m=candles, decision_rows=[first, second], config=config)
+
+    assert rows
+    assert [row.event_id for row in rows] == [row.event_id for row in repeated]
+    assert all(row.event_id.endswith("::random_entry_time") for row in rows)
 
 
 def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant() -> None:
@@ -260,6 +285,8 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
         metrics_by_name = {row["metric_name"]: row for row in csv.DictReader(file_obj)}
     assert metrics_by_name["always_no_trade_baseline_net_pnl"]["metric_value"] == "0"
     assert "delta_vs_always_no_trade_net_pnl" in metrics_by_name
+    assert "random_entry_time_control_rows" in metrics_by_name
+    assert "delta_vs_random_entry_time_net_pnl" in metrics_by_name
 
     with (out_dir / "anomaly_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}

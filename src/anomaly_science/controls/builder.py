@@ -58,7 +58,7 @@ def build_placebo_test_rows(
                 status=CONTROL_STATUS_SKIPPED,
                 notes="not enough non-missing labels for placebo shuffling",
             )
-            for name in ("random_labels", "time_shuffled_labels", "symbol_shuffled_labels", "random_entry_times")
+            for name in ("random_labels", "time_shuffled_labels", "symbol_shuffled_labels")
         )
 
     placebo_maps: list[tuple[str, dict[tuple[str, str, int, int], str], str]] = [
@@ -96,16 +96,6 @@ def build_placebo_test_rows(
             reference_brier=reference_brier,
             status=symbol_status if symbol_evaluation.oos_prediction_rows > 0 else CONTROL_STATUS_SKIPPED,
             notes=symbol_notes if symbol_evaluation.oos_prediction_rows > 0 else symbol_notes,
-        )
-    )
-    result.append(
-        _placebo_row(
-            cfg=cfg,
-            control_name="random_entry_times",
-            evaluation=ControlEvaluation(len(rows), 0, 0.0, 0.0, 0.0),
-            reference_brier=reference_brier,
-            status=CONTROL_STATUS_DEFERRED,
-            notes="deferred cleanly: random entry-time controls belong to trade simulation and require simulated entry artifacts",
         )
     )
     return tuple(result)

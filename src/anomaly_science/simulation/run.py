@@ -11,6 +11,7 @@ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunCo
 from anomaly_science.data.source import CsvDirectoryDataSource
 from anomaly_science.decision import load_anomaly_decision_timing_csv
 from anomaly_science.simulation.builder import (
+    build_random_entry_time_control_from_source,
     build_trade_simulation_from_source,
     build_trade_simulation_metric_rows,
     trade_simulation_metric_rows_to_artifact,
@@ -41,7 +42,17 @@ def run_mvp1_trade_simulation(
         decision_timing_path=decision_artifact_path,
         config=cfg,
     )
-    metric_rows = build_trade_simulation_metric_rows(decision_rows=decision_rows, simulation_rows=simulation_rows, config=cfg)
+    random_entry_control_rows = build_random_entry_time_control_from_source(
+        source=source,
+        decision_timing_path=decision_artifact_path,
+        config=cfg,
+    )
+    metric_rows = build_trade_simulation_metric_rows(
+        decision_rows=decision_rows,
+        simulation_rows=simulation_rows,
+        random_entry_time_control_rows=random_entry_control_rows,
+        config=cfg,
+    )
     protocol_rows = _protocol_rows(
         decision_row_count=len(decision_rows),
         simulation_row_count=len(simulation_rows),
@@ -206,6 +217,7 @@ def _run_config_rows(
         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),
+        RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
         RunConfigRow(key="require_prediction_confident", value=str(config.require_prediction_confident), source="runtime"),
         RunConfigRow(key="require_rr_acceptable", value=str(config.require_rr_acceptable), source="runtime"),
         RunConfigRow(key="simulation_scope", value="simplified_pessimistic_not_live_execution", source="runtime"),

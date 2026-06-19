@@ -178,9 +178,8 @@ def test_placebo_controls_emit_negative_control_rows() -> None:
     inputs = build_prediction_inputs(state_rows=states, label_rows=labels)
     rows = build_placebo_test_rows(inputs=inputs, config=ControlsConfig(min_train_rows=2, min_group_rows=1, smoothing_strength=1.0))
 
-    assert {row.control_name for row in rows} == {"random_labels", "time_shuffled_labels", "symbol_shuffled_labels", "random_entry_times"}
+    assert {row.control_name for row in rows} == {"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"}
     assert {row.control_name for row in rows if row.status == CONTROL_STATUS_OK} == {"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"}
-    assert {row.control_name for row in rows if row.status == CONTROL_STATUS_DEFERRED} == {"random_entry_times"}
     assert all(row.oos_prediction_rows > 0 for row in rows if row.status == CONTROL_STATUS_OK)
     assert all(row.reference_real_brier >= 0.0 for row in rows)
 

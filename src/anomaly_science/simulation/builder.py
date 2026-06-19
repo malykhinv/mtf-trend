@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import random
 from dataclasses import asdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -47,6 +49,24 @@ def build_trade_simulation_from_source(
     )
 
 
+def build_random_entry_time_control_from_source(
+    *,
+    source: MarketDataSource,
+    decision_timing_path: str | Path,
+    config: TradeSimulationConfig | None = None,
+) -> tuple[TradeSimulationRow, ...]:
+    frame = source.read_frame("candles_1m", required=True)
+    if frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    funding_frame = source.read_frame("funding_rate", required=False)
+    return build_random_entry_time_control_rows(
+        candles_1m=normalize_candles_1m(frame),
+        funding_rates=normalize_funding_rates(funding_frame),
+        decision_rows=load_anomaly_decision_timing_csv(decision_timing_path),
+        config=config,
+    )
+
+
 def build_trade_simulation_rows(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
@@ -56,16 +76,8 @@ def build_trade_simulation_rows(
 ) -> tuple[TradeSimulationRow, ...]:
     cfg = config or TradeSimulationConfig()
     _validate_strategy_horizon(config=cfg)
-    candles_by_symbol: dict[str, list[Candle1m]] = {}
-    for candle in candles_1m:
-        candles_by_symbol.setdefault(candle.symbol, []).append(candle)
-    for candles in candles_by_symbol.values():
-        candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
-    funding_by_symbol: dict[str, list[FundingRate]] = {}
-    for funding_rate in funding_rates:
-        funding_by_symbol.setdefault(funding_rate.symbol, []).append(funding_rate)
-    for rates in funding_by_symbol.values():
-        rates.sort(key=lambda item: item.timestamp_ms)
+    candles_by_symbol = _candles_by_symbol(candles_1m)
+    funding_by_symbol = _funding_by_symbol(funding_rates)
 
     rows: list[TradeSimulationRow] = []
     active_until_by_strategy_symbol: dict[tuple[str, str, str], int] = {}
@@ -92,10 +104,84 @@ def build_trade_simulation_rows(
     return tuple(rows)
 
 
+def _candles_by_symbol(candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> dict[str, list[Candle1m]]:
+    candles_by_symbol: dict[str, list[Candle1m]] = {}
+    for candle in candles_1m:
+        candles_by_symbol.setdefault(candle.symbol, []).append(candle)
+    for candles in candles_by_symbol.values():
+        candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    return candles_by_symbol
+
+
+def _funding_by_symbol(funding_rates: Sequence[FundingRate] | Iterable[FundingRate]) -> dict[str, list[FundingRate]]:
+    funding_by_symbol: dict[str, list[FundingRate]] = {}
+    for funding_rate in funding_rates:
+        funding_by_symbol.setdefault(funding_rate.symbol, []).append(funding_rate)
+    for rates in funding_by_symbol.values():
+        rates.sort(key=lambda item: item.timestamp_ms)
+    return funding_by_symbol
+
+
+def build_random_entry_time_control_rows(
+    *,
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    decision_rows: Sequence[ExpectedValueRow] | Iterable[ExpectedValueRow],
+    funding_rates: Sequence[FundingRate] | Iterable[FundingRate] = (),
+    config: TradeSimulationConfig | None = None,
+) -> tuple[TradeSimulationRow, ...]:
+    cfg = config or TradeSimulationConfig()
+    _validate_strategy_horizon(config=cfg)
+    candles_by_symbol = _candles_by_symbol(candles_1m)
+    funding_by_symbol = _funding_by_symbol(funding_rates)
+    candidates_by_symbol: dict[str, list[ExpectedValueRow]] = {}
+    for decision in decision_rows:
+        if decision.target_horizon_minutes != cfg.target_horizon_minutes:
+            continue
+        if decision.strategy_version != cfg.strategy_version:
+            continue
+        if not _is_simulatable_decision(decision, config=cfg):
+            continue
+        candidates_by_symbol.setdefault(decision.symbol, []).append(decision)
+
+    rng = random.Random(cfg.random_seed)
+    rows: list[TradeSimulationRow] = []
+    active_until_by_strategy_symbol: dict[tuple[str, str, str], int] = {}
+    for symbol in sorted(candidates_by_symbol):
+        decisions = sorted(candidates_by_symbol[symbol], key=lambda item: (item.snapshot_time_ms, item.event_id))
+        shuffled_snapshots = [decision.snapshot_time_ms for decision in decisions]
+        rng.shuffle(shuffled_snapshots)
+        for decision, random_snapshot_time_ms in zip(decisions, shuffled_snapshots):
+            control_decision = replace(
+                decision,
+                event_id=f"{decision.event_id}::random_entry_time",
+                state_time_ms=random_snapshot_time_ms,
+                snapshot_time_ms=random_snapshot_time_ms,
+                feature_cutoff_time_ms=random_snapshot_time_ms,
+                future_start_time_ms=random_snapshot_time_ms + ONE_MINUTE_MS,
+            )
+            key = (control_decision.strategy_name, control_decision.strategy_version, control_decision.symbol)
+            active_until_ms = active_until_by_strategy_symbol.get(key)
+            if active_until_ms is not None and control_decision.snapshot_time_ms <= active_until_ms:
+                continue
+            try:
+                row = _simulate_decision(
+                    decision=control_decision,
+                    candles=candles_by_symbol.get(control_decision.symbol, []),
+                    funding_rates=funding_by_symbol.get(control_decision.symbol, []),
+                    config=cfg,
+                )
+            except TradeSimulationInputError:
+                continue
+            rows.append(row)
+            active_until_by_strategy_symbol[key] = row.exit_time_ms
+    return tuple(rows)
+
+
 def build_trade_simulation_metric_rows(
     *,
     decision_rows: Sequence[ExpectedValueRow] | Iterable[ExpectedValueRow],
     simulation_rows: Sequence[TradeSimulationRow] | Iterable[TradeSimulationRow],
+    random_entry_time_control_rows: Sequence[TradeSimulationRow] | Iterable[TradeSimulationRow] = (),
     config: TradeSimulationConfig | None = None,
 ) -> tuple[TradeSimulationMetricRow, ...]:
     cfg = config or TradeSimulationConfig()
@@ -106,6 +192,7 @@ def build_trade_simulation_metric_rows(
         if row.target_horizon_minutes == cfg.target_horizon_minutes and row.strategy_version == cfg.strategy_version
     )
     trades = tuple(simulation_rows)
+    random_entry_trades = tuple(random_entry_time_control_rows)
     metrics: list[TradeSimulationMetricRow] = []
 
     def add(name: str, value: str | float | int, row_count: int, notes: str) -> None:
@@ -124,6 +211,9 @@ def build_trade_simulation_metric_rows(
     add("simulated_trade_rows", len(trades), len(trades), "executed long/short rows with pessimistic fills")
     add("non_trade_decision_rows", len(decisions) - len(trades), len(decisions), "decision rows skipped by no_trade/wait/flags or missing future candles")
     add("always_no_trade_baseline_net_pnl", 0.0, len(decisions), "always no-trade baseline: no entries, no costs, net PnL fixed at zero")
+    random_entry_total_net_pnl = sum(row.net_pnl for row in random_entry_trades)
+    add("random_entry_time_control_rows", len(random_entry_trades), len(decisions), "deterministic random-entry-time simulated rows for the same strategy decisions")
+    add("random_entry_time_control_total_net_pnl", random_entry_total_net_pnl, len(random_entry_trades), "sum net PnL for deterministic random-entry-time control rows")
     if trades:
         total_net_pnl = sum(row.net_pnl for row in trades)
         add("win_rate", _mean(1.0 if row.net_pnl > 0.0 else 0.0 for row in trades), len(trades), "share of positive net_pnl simulated trades")
@@ -131,6 +221,7 @@ def build_trade_simulation_metric_rows(
         add("mean_net_pnl_r", _mean(row.net_pnl_r for row in trades), len(trades), "mean net PnL in stop-distance R units")
         add("total_net_pnl", total_net_pnl, len(trades), "sum net PnL in price units")
         add("delta_vs_always_no_trade_net_pnl", total_net_pnl, len(decisions), "simulation total net PnL minus always no-trade baseline net PnL")
+        add("delta_vs_random_entry_time_net_pnl", total_net_pnl - random_entry_total_net_pnl, len(decisions), "simulation total net PnL minus random-entry-time control net PnL")
         add("stop_loss_share", _mean(1.0 if row.exit_reason == "stop_loss" else 0.0 for row in trades), len(trades), "share exited by stop loss")
         add("target_hit_share", _mean(1.0 if row.exit_reason == "target_hit" else 0.0 for row in trades), len(trades), "share exited by target")
     return tuple(metrics)

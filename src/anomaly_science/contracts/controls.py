@@ -9,7 +9,7 @@ CONTROL_STATUS_SKIPPED = "SKIPPED"
 CONTROL_STATUS_DEFERRED = "DEFERRED"
 VALID_CONTROL_STATUSES = frozenset({CONTROL_STATUS_OK, CONTROL_STATUS_SKIPPED, CONTROL_STATUS_DEFERRED})
 
-PLACEBO_CONTROL_NAMES = frozenset({"random_labels", "time_shuffled_labels", "symbol_shuffled_labels", "random_entry_times"})
+PLACEBO_CONTROL_NAMES = frozenset({"random_labels", "time_shuffled_labels", "symbol_shuffled_labels"})
 BASELINE_NAMES = frozenset(
     {
         "global_prior_only",

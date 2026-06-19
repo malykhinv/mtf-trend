@@ -11,6 +11,7 @@ class TradeSimulationConfig:
     require_prediction_confident: bool = True
     require_rr_acceptable: bool = True
     toxic_entry_atr_1m_fraction: float = 0.2
+    random_seed: int = 1729
 
     def __post_init__(self) -> None:
         if not self.simulation_version:
@@ -21,3 +22,5 @@ class TradeSimulationConfig:
             raise ValueError("target_horizon_minutes must be positive")
         if self.toxic_entry_atr_1m_fraction < 0.0:
             raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")
+        if self.random_seed < 0:
+            raise ValueError("random_seed must be non-negative")
