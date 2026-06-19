@@ -1,5 +1,17 @@
 # Patch log
 
+## methodology: strengthen simulation forensic audit
+
+Status: APPLIED.
+
+Intent:
+- Add independent artifact-level forensic checks for EV/simulation alignment.
+- Verify simulation execution model, entry basis, cost model, pessimistic side-aware prices, fee costs, barrier resolution, and no same-symbol overlapping positions from CSV artifacts.
+- Add PASS/FAIL regression tests for simulation forensic assumptions.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_forensic_audit.py tests\test_trade_simulation.py tests\test_research_run.py`
+
 ## methodology: align EV and simulation execution reference
 
 Status: APPLIED.

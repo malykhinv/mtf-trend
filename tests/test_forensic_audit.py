@@ -8,21 +8,36 @@ from anomaly_science.audit import build_independent_forensic_audit_rows
 from anomaly_science.research.run import _write_forensic_audit
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus
+from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT
+from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
+from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
 
 
 def _write_artifact(path: Path, artifact_name: str, overrides: dict[str, object]) -> None:
+    _write_artifact_rows(path, artifact_name, [overrides])
+
+
+def _write_artifact_rows(path: Path, artifact_name: str, rows: list[dict[str, object]]) -> None:
     schema = get_artifact_schema(artifact_name)
-    row = {column: "" for column in schema.required_columns}
-    row.update(overrides)
+    payload = []
+    for row in rows:
+        item = {column: "" for column in schema.required_columns}
+        item.update(row)
+        payload.append(item)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=list(schema.required_columns))
         writer.writeheader()
-        writer.writerow(row)
+        writer.writerows(payload)
 
 
 def _copy_text(source: Path, target: Path) -> None:
     target.write_text(source.read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
+
+
+def _read_csv_payload(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+        return list(csv.DictReader(file_obj))
 
 
 def _write_root_research_manifest(root: Path) -> None:
@@ -133,6 +148,91 @@ def _write_valid_minimal_forensic_fixture(root: Path) -> None:
         },
     )
     _copy_text(prediction / "strategy_protocol_audit.csv", prediction / "anomaly_protocol_audit.csv")
+    decision = root / "stages" / "decision"
+    _write_artifact(
+        decision / "strategy_decision_timing.csv",
+        "strategy_decision_timing.csv",
+        {
+            "ev_version": "mvp1_expected_value_oos_calibrated_proxy_v1",
+            "strategy_name": "broad_anomaly_v1_h30",
+            "strategy_version": "v1",
+            "event_id": "e1",
+            "symbol": "AAAUSDT",
+            "state_time_ms": 1_800_000,
+            "snapshot_time_ms": 1_800_000,
+            "feature_cutoff_time_ms": 1_800_000,
+            "future_start_time_ms": 1_860_000,
+            "target_horizon_minutes": 30,
+            "execution_reference_model": EV_EXECUTION_REFERENCE_MODEL,
+            "entry_price_basis": EV_ENTRY_PRICE_BASIS,
+            "entry_reference_price": 100.0,
+            "ATR_1d_asof_t": 2.0,
+            "stop_distance": 2.0,
+            "target_distance": 3.0,
+            "fee_bps": 4.0,
+            "slippage_bps": 2.0,
+            "cost_model": ROUND_TRIP_COST_MODEL,
+            "cost_penalty": 0.0812077584,
+            "p_follow_through_long": 0.8,
+            "p_adverse_long": 0.1,
+            "p_follow_through_short": 0.1,
+            "p_adverse_short": 0.8,
+            "confidence_calibrated": 0.8,
+            "RR_long_proxy": 1.5,
+            "RR_short_proxy": 1.5,
+            "EV_long": 2.0,
+            "EV_short": -1.0,
+            "EV_wait": 0.0,
+            "EV_no_trade": 0.0,
+            "best_action": "long",
+            "is_prediction_confident": "True",
+            "is_RR_still_acceptable": "True",
+            "temporal_contract": EXPECTED_VALUE_TEMPORAL_CONTRACT,
+        },
+    )
+    _copy_text(decision / "strategy_decision_timing.csv", decision / "anomaly_decision_timing.csv")
+    simulation = root / "stages" / "simulation"
+    _write_artifact(
+        simulation / "strategy_trade_simulation.csv",
+        "strategy_trade_simulation.csv",
+        {
+            "simulation_version": "mvp1_trade_simulation_pessimistic_v1",
+            "strategy_name": "broad_anomaly_v1_h30",
+            "strategy_version": "v1",
+            "event_id": "e1",
+            "symbol": "AAAUSDT",
+            "snapshot_time_ms": 1_800_000,
+            "feature_cutoff_time_ms": 1_800_000,
+            "target_horizon_minutes": 30,
+            "execution_reference_model": EV_EXECUTION_REFERENCE_MODEL,
+            "entry_price_basis": SIMULATION_ENTRY_PRICE_BASIS,
+            "decision_action": "long",
+            "simulated_side": "long",
+            "entry_reference_time_ms": 1_860_000,
+            "entry_reference_open": 100.0,
+            "entry_price": 100.02,
+            "ATR_1d_asof_t": 2.0,
+            "stop_distance": 2.0,
+            "target_distance": 3.0,
+            "stop_price": 98.02,
+            "target_price": 103.02,
+            "fee_bps": 4.0,
+            "slippage_bps": 2.0,
+            "cost_model": ROUND_TRIP_COST_MODEL,
+            "total_cost": 0.0812077584,
+            "funding_cost": 0.0,
+            "exit_time_ms": 1_920_000,
+            "exit_price": 102.999396,
+            "exit_reason": "target_hit",
+            "gross_pnl": 2.979396,
+            "net_pnl": 2.8981882416,
+            "net_pnl_r": 1.4490941208,
+            "net_return": 0.0289760852,
+            "barrier_resolution": "single_barrier",
+            "temporal_contract": TRADE_SIMULATION_TEMPORAL_CONTRACT,
+        },
+    )
+    _copy_text(simulation / "strategy_trade_simulation.csv", simulation / "anomaly_trade_simulation.csv")
 
 
 def _by_name(rows):
@@ -152,6 +252,9 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_prediction_rows_are_oos_after_train_cutoff"].status is AuditStatus.PASS
     assert by_name["forensic_prediction_model_horizon_identity_consistent"].status is AuditStatus.PASS
     assert by_name["forensic_canonical_alias_artifacts_match"].status is AuditStatus.PASS
+    assert by_name["forensic_simulation_decision_contract_alignment_verified"].status is AuditStatus.PASS
+    assert by_name["forensic_simulation_pessimistic_prices_and_costs_verified"].status is AuditStatus.PASS
+    assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.PASS
     assert by_name["forensic_stage_protocol_audit_has_no_fail_rows"].status is AuditStatus.PASS
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.PASS
 
@@ -194,6 +297,53 @@ def test_independent_forensic_audit_fails_alias_drift(tmp_path: Path) -> None:
     by_name = _by_name(rows)
 
     assert by_name["forensic_canonical_alias_artifacts_match"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_independent_forensic_audit_fails_non_pessimistic_simulation_entry(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "simulation" / "strategy_trade_simulation.csv"
+    rows = _read_csv_payload(path)
+    rows[0]["entry_price"] = "99.99"
+    rows[0]["stop_price"] = "97.99"
+    rows[0]["target_price"] = "102.99"
+    _write_artifact_rows(path, "strategy_trade_simulation.csv", [dict(rows[0])])
+    _copy_text(path, tmp_path / "stages" / "simulation" / "anomaly_trade_simulation.csv")
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_simulation_pessimistic_prices_and_costs_verified"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_independent_forensic_audit_fails_parallel_simulation_positions(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    decision_path = tmp_path / "stages" / "decision" / "strategy_decision_timing.csv"
+    decision_rows = _read_csv_payload(decision_path)
+    second_decision = dict(decision_rows[0])
+    second_decision["event_id"] = "e2"
+    second_decision["snapshot_time_ms"] = "1810000"
+    second_decision["feature_cutoff_time_ms"] = "1810000"
+    second_decision["future_start_time_ms"] = "1870000"
+    _write_artifact_rows(decision_path, "strategy_decision_timing.csv", [dict(decision_rows[0]), second_decision])
+    _copy_text(decision_path, tmp_path / "stages" / "decision" / "anomaly_decision_timing.csv")
+
+    simulation_path = tmp_path / "stages" / "simulation" / "strategy_trade_simulation.csv"
+    simulation_rows = _read_csv_payload(simulation_path)
+    second_simulation = dict(simulation_rows[0])
+    second_simulation["event_id"] = "e2"
+    second_simulation["snapshot_time_ms"] = "1810000"
+    second_simulation["feature_cutoff_time_ms"] = "1810000"
+    second_simulation["entry_reference_time_ms"] = "1870000"
+    second_simulation["exit_time_ms"] = "1930000"
+    _write_artifact_rows(simulation_path, "strategy_trade_simulation.csv", [dict(simulation_rows[0]), second_simulation])
+    _copy_text(simulation_path, tmp_path / "stages" / "simulation" / "anomaly_trade_simulation.csv")
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.FAIL
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
 

@@ -6,6 +6,7 @@ from typing import Iterable, Mapping
 
 from anomaly_science.contracts.artifacts import MVP1_ARTIFACT_SCHEMAS, STRATEGY_ARTIFACT_ALIASES
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow
+from anomaly_science.contracts.execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 
 
 _CANONICAL_AUDIT_ARTIFACT = "strategy_protocol_audit.csv"
@@ -38,6 +39,9 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_prediction_oos_cutoff_row(found))
     rows.append(_prediction_model_horizon_identity_row(found))
     rows.append(_canonical_alias_consistency_row(root))
+    rows.append(_simulation_decision_contract_alignment_row(found))
+    rows.append(_simulation_pessimistic_prices_and_costs_row(found))
+    rows.append(_simulation_no_parallel_symbol_positions_row(found))
     rows.append(_stage_audit_fail_summary_row(found))
     rows.append(_forensic_gate_row(rows))
     return rows
@@ -368,6 +372,270 @@ def _canonical_alias_consistency_row(root: Path) -> ProtocolAuditRow:
     )
 
 
+def _simulation_decision_contract_alignment_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    decisions: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    duplicate_keys: list[str] = []
+    failures: list[str] = []
+    for path in found.get("strategy_decision_timing.csv", ()):
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            key = _decision_simulation_key(row)
+            if key is None:
+                failures.append(f"{path}:{row_index} has incomplete decision/simulation key")
+                continue
+            if key in decisions:
+                duplicate_keys.append("|".join(key))
+            decisions[key] = row
+    if duplicate_keys:
+        failures.append("duplicate decision keys: " + ", ".join(sorted(set(duplicate_keys))[:5]))
+
+    checked = 0
+    for path in found.get("strategy_trade_simulation.csv", ()):
+        for row_index, simulation in enumerate(_read_csv_rows(path), start=2):
+            key = _decision_simulation_key(simulation)
+            if key is None:
+                failures.append(f"{path}:{row_index} has incomplete decision/simulation key")
+                continue
+            decision = decisions.get(key)
+            if decision is None:
+                failures.append(f"{path}:{row_index} has no matching strategy_decision_timing.csv row for key {'|'.join(key)}")
+                continue
+            checked += 1
+            field_pairs = (
+                ("execution_reference_model", "execution_reference_model"),
+                ("cost_model", "cost_model"),
+                ("target_horizon_minutes", "target_horizon_minutes"),
+                ("decision_action", "best_action"),
+            )
+            for simulation_field, decision_field in field_pairs:
+                if simulation.get(simulation_field) != decision.get(decision_field):
+                    failures.append(
+                        f"{path}:{row_index} {simulation_field}={simulation.get(simulation_field)!r} "
+                        f"differs from decision {decision_field}={decision.get(decision_field)!r}"
+                    )
+            numeric_pairs = (
+                ("fee_bps", "fee_bps"),
+                ("slippage_bps", "slippage_bps"),
+                ("stop_distance", "stop_distance"),
+                ("target_distance", "target_distance"),
+                ("ATR_1d_asof_t", "ATR_1d_asof_t"),
+            )
+            for simulation_field, decision_field in numeric_pairs:
+                simulation_value = _to_float(simulation.get(simulation_field))
+                decision_value = _to_float(decision.get(decision_field))
+                if simulation_value is None or decision_value is None:
+                    failures.append(f"{path}:{row_index} has non-numeric {simulation_field}/{decision_field}")
+                elif not _float_equal(simulation_value, decision_value):
+                    failures.append(
+                        f"{path}:{row_index} {simulation_field}={simulation_value} differs from decision {decision_field}={decision_value}"
+                    )
+    if failures:
+        return _row(
+            "forensic_simulation_decision_contract_alignment_verified",
+            AuditStatus.FAIL,
+            f"{len(failures)} simulation/decision contract mismatch(es): " + "; ".join(failures[:5]),
+            artifact="strategy_decision_timing.csv;strategy_trade_simulation.csv",
+        )
+    if checked == 0:
+        return _row(
+            "forensic_simulation_decision_contract_alignment_verified",
+            AuditStatus.WARN,
+            "no joined decision/simulation rows were available for independent contract verification",
+            artifact="strategy_decision_timing.csv;strategy_trade_simulation.csv",
+        )
+    return _row(
+        "forensic_simulation_decision_contract_alignment_verified",
+        AuditStatus.PASS,
+        f"verified EV decision/simulation execution, cost, horizon, action, and distance contracts for {checked} row(s)",
+        artifact="strategy_decision_timing.csv;strategy_trade_simulation.csv",
+    )
+
+
+def _simulation_pessimistic_prices_and_costs_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    checked = 0
+    failures: list[str] = []
+    for path in found.get("strategy_trade_simulation.csv", ()):
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            checked += 1
+            side = row.get("simulated_side")
+            if row.get("execution_reference_model") != EV_EXECUTION_REFERENCE_MODEL:
+                failures.append(f"{path}:{row_index} has unexpected execution_reference_model={row.get('execution_reference_model')!r}")
+            if row.get("entry_price_basis") != SIMULATION_ENTRY_PRICE_BASIS:
+                failures.append(f"{path}:{row_index} has unexpected entry_price_basis={row.get('entry_price_basis')!r}")
+            if row.get("cost_model") != ROUND_TRIP_COST_MODEL:
+                failures.append(f"{path}:{row_index} has unexpected cost_model={row.get('cost_model')!r}")
+            if side not in {"long", "short"} or row.get("decision_action") != side:
+                failures.append(f"{path}:{row_index} has invalid side/action pair {row.get('decision_action')!r}/{side!r}")
+                continue
+
+            values = {
+                name: _to_float(row.get(name))
+                for name in (
+                    "entry_reference_open",
+                    "entry_price",
+                    "stop_distance",
+                    "target_distance",
+                    "stop_price",
+                    "target_price",
+                    "fee_bps",
+                    "total_cost",
+                    "exit_price",
+                )
+            }
+            if any(value is None for value in values.values()):
+                failures.append(f"{path}:{row_index} has non-numeric simulation price/cost field(s)")
+                continue
+            entry_open = values["entry_reference_open"]
+            entry_price = values["entry_price"]
+            stop_distance = values["stop_distance"]
+            target_distance = values["target_distance"]
+            stop_price = values["stop_price"]
+            target_price = values["target_price"]
+            fee_bps = values["fee_bps"]
+            total_cost = values["total_cost"]
+            exit_price = values["exit_price"]
+            assert entry_open is not None
+            assert entry_price is not None
+            assert stop_distance is not None
+            assert target_distance is not None
+            assert stop_price is not None
+            assert target_price is not None
+            assert fee_bps is not None
+            assert total_cost is not None
+            assert exit_price is not None
+
+            snapshot = _to_int(row.get("snapshot_time_ms"))
+            entry_time = _to_int(row.get("entry_reference_time_ms"))
+            exit_time = _to_int(row.get("exit_time_ms"))
+            if snapshot is None or entry_time is None or exit_time is None or entry_time <= snapshot or exit_time < entry_time:
+                failures.append(f"{path}:{row_index} violates simulation entry/exit time ordering")
+            if stop_distance <= 0.0 or target_distance <= 0.0:
+                failures.append(f"{path}:{row_index} has non-positive stop/target distance")
+            if side == "long":
+                if entry_price < entry_open:
+                    failures.append(f"{path}:{row_index} long entry_price is below entry_reference_open")
+                if target_price <= entry_price or stop_price >= entry_price:
+                    failures.append(f"{path}:{row_index} long stop/target geometry is invalid")
+            else:
+                if entry_price > entry_open:
+                    failures.append(f"{path}:{row_index} short entry_price is above entry_reference_open")
+                if target_price >= entry_price or stop_price <= entry_price:
+                    failures.append(f"{path}:{row_index} short stop/target geometry is invalid")
+
+            expected_total_cost = (entry_price + exit_price) * (fee_bps / 10_000.0)
+            if not _float_equal(total_cost, expected_total_cost):
+                failures.append(f"{path}:{row_index} total_cost={total_cost} differs from fee model {expected_total_cost}")
+            _append_exit_resolution_failures(failures, path=path, row_index=row_index, row=row, side=side, exit_price=exit_price, stop_price=stop_price, target_price=target_price)
+    if failures:
+        return _row(
+            "forensic_simulation_pessimistic_prices_and_costs_verified",
+            AuditStatus.FAIL,
+            f"{len(failures)} pessimistic simulation violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_trade_simulation.csv",
+        )
+    if checked == 0:
+        return _row(
+            "forensic_simulation_pessimistic_prices_and_costs_verified",
+            AuditStatus.WARN,
+            "no strategy_trade_simulation.csv rows were available for independent price/cost verification",
+            artifact="strategy_trade_simulation.csv",
+        )
+    return _row(
+        "forensic_simulation_pessimistic_prices_and_costs_verified",
+        AuditStatus.PASS,
+        f"verified next-open entry basis, pessimistic side-aware prices, fee costs, and barrier resolution for {checked} simulation row(s)",
+        artifact="strategy_trade_simulation.csv",
+    )
+
+
+def _simulation_no_parallel_symbol_positions_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    checked = 0
+    failures: list[str] = []
+    positions: dict[tuple[str, str, str], list[tuple[int, int, Path, int]]] = {}
+    for path in found.get("strategy_trade_simulation.csv", ()):
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            entry_time = _to_int(row.get("entry_reference_time_ms"))
+            exit_time = _to_int(row.get("exit_time_ms"))
+            key = (row.get("strategy_name", ""), row.get("strategy_version", ""), row.get("symbol", ""))
+            if entry_time is None or exit_time is None or not all(key):
+                failures.append(f"{path}:{row_index} has incomplete position interval key")
+                continue
+            checked += 1
+            positions.setdefault(key, []).append((entry_time, exit_time, path, row_index))
+    for key, intervals in sorted(positions.items()):
+        previous: tuple[int, int, Path, int] | None = None
+        for interval in sorted(intervals):
+            if previous is not None and interval[0] <= previous[1]:
+                failures.append(
+                    f"{interval[2]}:{interval[3]} overlaps previous same strategy/symbol position "
+                    f"{previous[2]}:{previous[3]} for {'|'.join(key)}"
+                )
+            previous = interval
+    if failures:
+        return _row(
+            "forensic_simulation_no_parallel_symbol_positions_verified",
+            AuditStatus.FAIL,
+            f"{len(failures)} parallel-position violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_trade_simulation.csv",
+        )
+    if checked == 0:
+        return _row(
+            "forensic_simulation_no_parallel_symbol_positions_verified",
+            AuditStatus.WARN,
+            "no strategy_trade_simulation.csv rows were available for independent no-parallel-position verification",
+            artifact="strategy_trade_simulation.csv",
+        )
+    return _row(
+        "forensic_simulation_no_parallel_symbol_positions_verified",
+        AuditStatus.PASS,
+        f"verified no overlapping positions per strategy/version/symbol across {checked} simulation row(s)",
+        artifact="strategy_trade_simulation.csv",
+    )
+
+
+def _decision_simulation_key(row: Mapping[str, str]) -> tuple[str, str, str, str] | None:
+    event_id = row.get("event_id", "")
+    symbol = row.get("symbol", "")
+    snapshot_time_ms = row.get("snapshot_time_ms", "")
+    feature_cutoff_time_ms = row.get("feature_cutoff_time_ms", "")
+    if not event_id or not symbol or not snapshot_time_ms or not feature_cutoff_time_ms:
+        return None
+    return (event_id, symbol, snapshot_time_ms, feature_cutoff_time_ms)
+
+
+def _append_exit_resolution_failures(
+    failures: list[str],
+    *,
+    path: Path,
+    row_index: int,
+    row: Mapping[str, str],
+    side: str,
+    exit_price: float,
+    stop_price: float,
+    target_price: float,
+) -> None:
+    exit_reason = row.get("exit_reason")
+    barrier_resolution = row.get("barrier_resolution")
+    if exit_reason == "stop_loss":
+        if barrier_resolution not in {"single_barrier", "stop_loss_first"}:
+            failures.append(f"{path}:{row_index} stop_loss has invalid barrier_resolution={barrier_resolution!r}")
+        if side == "long" and exit_price > stop_price:
+            failures.append(f"{path}:{row_index} long stop_loss exit is better than stop_price")
+        if side == "short" and exit_price < stop_price:
+            failures.append(f"{path}:{row_index} short stop_loss exit is better than stop_price")
+    elif exit_reason == "target_hit":
+        if barrier_resolution != "single_barrier":
+            failures.append(f"{path}:{row_index} target_hit has invalid barrier_resolution={barrier_resolution!r}")
+        if side == "long" and exit_price > target_price:
+            failures.append(f"{path}:{row_index} long target_hit exit is better than target_price")
+        if side == "short" and exit_price < target_price:
+            failures.append(f"{path}:{row_index} short target_hit exit is better than target_price")
+    elif exit_reason == "horizon_close":
+        if barrier_resolution != "horizon_close":
+            failures.append(f"{path}:{row_index} horizon_close has invalid barrier_resolution={barrier_resolution!r}")
+    else:
+        failures.append(f"{path}:{row_index} has invalid exit_reason={exit_reason!r}")
+
+
 def _stage_audit_fail_summary_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     checked = 0
     fail_rows: list[str] = []
@@ -442,6 +710,20 @@ def _to_int(value: object) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _to_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_equal(left: float, right: float) -> bool:
+    tolerance = max(1e-9, abs(right) * 1e-9)
+    return abs(left - right) <= tolerance
 
 
 def _row(check_name: str, status: AuditStatus, message: str, artifact: str = _CANONICAL_AUDIT_ARTIFACT) -> ProtocolAuditRow:

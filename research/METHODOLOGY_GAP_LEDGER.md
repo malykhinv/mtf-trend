@@ -100,9 +100,9 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Sample weighting | IMPLEMENTED | Prediction config now requires explicit `sample_weight_policy="uniform_v1"`, CatBoost receives validated fit-split sample weights, model metadata and training diagnostics record the policy and weight sums, run config records the policy, and prediction protocol audit emits `sample_weight_policy_explicit_and_asof_safe`. Tests reject unknown policies and verify artifact/audit output. | Keep policy-version tests as permanent gate; add a new version before any non-uniform weighting. |
 | Decision timing | IMPLEMENTED | Decision timing writes canonical `strategy_decision_timing.csv` / `anomaly_decision_timing.csv` with explicit `execution_reference_model`, EV entry price basis, and cost model fields. The EV stage run config and protocol audit record `execution_reference_model_aligned_between_ev_and_simulation`, and tests verify artifact roundtrip/run output. | Keep execution-reference schema tests as permanent gate. |
 | Expected utility | IMPLEMENTED | EV is computed before simulation from OOS probabilities, ATR stop/target distances, fees, slippage, and the shared execution/cost model contract. Simulation validates the decision row execution/cost model before consuming it, and tests cover the EV/simulation alignment fields. | Keep EV/simulation alignment tests as permanent gate. |
-| Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
+| Pessimistic trade simulation | IMPLEMENTED | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Forensic audit now independently verifies EV/simulation contract alignment, execution/cost model fields, side-aware pessimistic entry/exit prices, fee costs, barrier resolution, and no same-symbol overlapping positions from written artifacts. | Keep simulation forensic tests as permanent gate. |
 | Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
-| Protocol audit | PARTIAL | Protocol audit exists, prediction-stage horizon consistency is audited, and `run-research` now writes an independent artifact-driven forensic audit after simulation and exits non-zero on any forensic `FAIL`. Holdout mode is enforced before downstream stages, and forensic audit checks root run-manifest completeness. Remaining gap: the forensic layer is still an initial proof set, not yet the full final research-ready audit of data-quality mask, universe, feature catalog, controls, EV/simulation alignment, and rejection funnel. | Keep expanding forensic checks as later methodology gaps become implemented. |
+| Protocol audit | PARTIAL | Protocol audit exists, prediction-stage horizon consistency is audited, and `run-research` now writes an independent artifact-driven forensic audit after simulation and exits non-zero on any forensic `FAIL`. Holdout mode is enforced before downstream stages. Forensic audit checks root run-manifest completeness, EV/simulation alignment, pessimistic simulation price/cost assumptions, and no-parallel simulation positions. Remaining gap: the forensic layer is not yet the full final research-ready audit of data-quality mask, universe, feature catalog, controls, and rejection funnel. | Keep expanding forensic checks as later methodology gaps become implemented. |
 | Reproducibility ledger | IMPLEMENTED | `run-research` writes a root-level `strategy_run_config.csv` / `anomaly_run_config.csv` with strategy identity, target horizon, active H_max, holdout/protocol freeze metadata, forensic audit status, data snapshot hash, config hash, dependency versions, methodology ledger status, and a root `artifact_manifest.json` covering run artifacts. Forensic audit checks root manifest completeness. | Keep manifest completeness as a permanent forensic gate. |
 | Final holdout governance | IMPLEMENTED | `run-research` now has explicit `is` and `frozen_holdout` modes. Default `is` mode filters downstream input to exclude the final locked holdout. `frozen_holdout` requires an explicit `protocol_freeze_id` and records an approved holdout access row before downstream stages can read the full period. | Keep run-research governance and holdout-lock tests as permanent gates. |
 | Live/shadow/production | OUT_OF_SCOPE | Intentionally absent. | Do not implement in this phase. |
@@ -140,13 +140,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 11. `methodology: enforce feature catalog membership before prediction` - implemented.
 12. `methodology: add explicit sample weight policy` - implemented.
 13. `methodology: align EV and simulation execution reference` - implemented.
-14. `strategy: make registry status self-auditing`.
-15. `strategy: complete broad anomaly trigger component accounting`.
-16. `strategy: add 180m horizon support or remove 180m promises` - implemented.
-17. `strategy: implement post-pump distribution variants`.
-18. `strategy: implement post-anomaly extension variants`.
-19. `features: add structural state and relaxed geometry features`.
-20. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+14. `methodology: strengthen simulation forensic audit` - implemented.
+15. `strategy: make registry status self-auditing`.
+16. `strategy: complete broad anomaly trigger component accounting`.
+17. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+18. `strategy: implement post-pump distribution variants`.
+19. `strategy: implement post-anomaly extension variants`.
+20. `features: add structural state and relaxed geometry features`.
+21. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 
