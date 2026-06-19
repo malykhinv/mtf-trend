@@ -65,6 +65,68 @@ _REQUIRED_MARKET_CONTEXT_FEATURES: dict[str, tuple[str, str]] = {
     "market_shock_id": ("signal_clustering_systemic_beta", "point_in_time_id"),
 }
 
+_MASK_ENFORCED_DATA_QUALITY_CHECKS = frozenset(
+    (
+        "candles_1m_duplicate_symbol_time",
+        "candles_1m_positive_prices",
+        "candles_1m_valid_ohlc",
+        "candles_1m_impossible_close_return",
+        "candles_1m_volume_non_negative",
+        "candles_1m_quote_volume_non_negative",
+        "candles_1m_taker_buy_quote_lte_quote_volume",
+    )
+)
+_FEATURE_MATRIX_NON_CATALOG_COLUMNS = frozenset(
+    (
+        "feature_schema_version",
+        "feature_matrix_version",
+        "snapshot_time_ms",
+        "feature_cutoff_time_ms",
+        "feature_source_status",
+    )
+)
+_ALLOWED_FEATURE_FAMILIES = frozenset(
+    (
+        "price_path",
+        "speed_time",
+        "volume",
+        "flow",
+        "open_interest",
+        "liquidation",
+        "cvd_divergence",
+        "cross_sectional_market_relative",
+        "signal_clustering_systemic_beta",
+        "market_context",
+        "structure",
+        "data_quality",
+    )
+)
+_ALLOWED_FEATURE_NORMALIZATIONS = frozenset(
+    (
+        "raw_audit_only",
+        "atr_normalized",
+        "self_history_relative",
+        "market_relative",
+        "btc_relative",
+        "dimensionless_ratio",
+        "boolean_flag",
+        "categorical_bucket",
+        "time_relative",
+        "point_in_time_id",
+    )
+)
+_ALLOWED_FEATURE_MISSING_POLICIES = frozenset(
+    (
+        "not_null",
+        "null_if_insufficient_history",
+        "null_if_source_missing",
+        "false_if_condition_absent",
+        "audit_only_nullable",
+    )
+)
+_ALLOWED_UNIVERSE_SOURCE_STATUS = frozenset(("observed_on_day", "inferred_missing_day_between_observations"))
+_ALLOWED_LISTING_CONFIDENCE = frozenset(("data_observed", "data_inferred_between_observations"))
+
 
 _REQUIRED_SIMULATION_CONTROL_METRICS = frozenset(
     (
@@ -99,6 +161,8 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows: list[ProtocolAuditRow] = []
     rows.append(_schema_columns_row(found))
     rows.append(_root_run_manifest_completeness_row(root))
+    rows.append(_data_quality_mask_enforcement_row(found))
+    rows.append(_point_in_time_universe_row(found))
     rows.append(_temporal_contract_row(found))
     rows.append(_model_metadata_purge_row(found))
     rows.append(_prediction_oos_cutoff_row(found))
@@ -110,6 +174,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_required_controls_completeness_row(found))
     rows.append(_calibration_breakdown_completeness_row(found))
     rows.append(_rejection_funnel_completeness_row(found))
+    rows.append(_feature_catalog_full_coverage_row(found))
     rows.append(_market_context_feature_coverage_row(found))
     rows.append(_stage_audit_fail_summary_row(found))
     rows.append(_forensic_gate_row(rows))
@@ -220,6 +285,194 @@ def _root_run_manifest_completeness_row(root: Path) -> ProtocolAuditRow:
         f"root research manifest has {len(required_keys)} required reproducibility key(s) and artifact_manifest.json is present",
         artifact="strategy_run_config.csv",
     )
+
+
+def _data_quality_mask_enforcement_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    paths = found.get("strategy_data_quality.csv", ())
+    if not paths:
+        return _row(
+            "forensic_data_quality_mask_enforced",
+            AuditStatus.FAIL,
+            "missing strategy_data_quality.csv; pre-trigger data-quality mask enforcement is not independently auditable",
+            artifact="strategy_data_quality.csv;strategy_events.csv",
+        )
+
+    failures: list[str] = []
+    checked_rows = 0
+    mask_rows: list[tuple[Path, int, Mapping[str, str]]] = []
+    maskable_fail_rows = 0
+    for path in paths:
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            checked_rows += 1
+            check_name = row.get("check_name", "")
+            status = row.get("status", "")
+            severity = row.get("severity", "")
+            affected_rows = _to_int(row.get("affected_rows"))
+            excluded_from_detector = _to_bool(row.get("excluded_from_detector"))
+            excluded_from_ml_dataset = _to_bool(row.get("excluded_from_ml_dataset"))
+            technical_noise = _to_bool(row.get("technical_noise_shock"))
+
+            if status not in {"PASS", "WARN", "FAIL"}:
+                failures.append(f"{path}:{row_index} has invalid status={status!r}")
+            if severity not in {"critical", "warning", "info"}:
+                failures.append(f"{path}:{row_index} has invalid severity={severity!r}")
+            if affected_rows is None or affected_rows < 0:
+                failures.append(f"{path}:{row_index} has invalid affected_rows={row.get('affected_rows')!r}")
+            if excluded_from_detector and not excluded_from_ml_dataset:
+                failures.append(f"{path}:{row_index} detector exclusion is not mirrored into ML-dataset exclusion")
+            if technical_noise:
+                if not excluded_from_detector or not excluded_from_ml_dataset:
+                    failures.append(f"{path}:{row_index} technical-noise row is not excluded from detector and ML dataset")
+                gap_minutes = _to_float(row.get("gap_minutes"))
+                if row.get("check_name") == "candles_1m_technical_noise_shock" and (gap_minutes is None or gap_minutes <= 3.0):
+                    failures.append(f"{path}:{row_index} technical-noise shock has invalid gap_minutes={row.get('gap_minutes')!r}")
+            if check_name == "candles_1m_pre_trigger_quality_mask":
+                mask_rows.append((path, row_index, row))
+            if (
+                check_name in _MASK_ENFORCED_DATA_QUALITY_CHECKS
+                and status == AuditStatus.FAIL.value
+                and severity == "critical"
+                and affected_rows is not None
+                and affected_rows > 0
+            ):
+                maskable_fail_rows += affected_rows
+
+    if not mask_rows:
+        failures.append("missing candles_1m_pre_trigger_quality_mask row")
+    for path, row_index, row in mask_rows:
+        affected_rows = _to_int(row.get("affected_rows"))
+        excluded_from_detector = _to_bool(row.get("excluded_from_detector"))
+        excluded_from_ml_dataset = _to_bool(row.get("excluded_from_ml_dataset"))
+        if row.get("status") not in {"PASS", "WARN"}:
+            failures.append(f"{path}:{row_index} mask row status must be PASS or WARN")
+        if affected_rows is None:
+            failures.append(f"{path}:{row_index} mask row affected_rows must be an integer")
+            continue
+        if affected_rows > 0:
+            if row.get("reason") != "pre_trigger_quality_mask":
+                failures.append(f"{path}:{row_index} mask row with exclusions must use reason='pre_trigger_quality_mask'")
+            if not excluded_from_detector or not excluded_from_ml_dataset:
+                failures.append(f"{path}:{row_index} mask row with exclusions must set detector/ML exclusion flags")
+        elif excluded_from_detector or excluded_from_ml_dataset:
+            failures.append(f"{path}:{row_index} zero-row mask must not set detector/ML exclusion flags")
+    if maskable_fail_rows and not any((_to_int(row.get("affected_rows")) or 0) > 0 for _, _, row in mask_rows):
+        failures.append("maskable critical candle failures exist but pre-trigger mask affected_rows is zero")
+
+    for path in found.get("strategy_events.csv", ()):
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            if _to_bool(row.get("technical_noise_shock")) or _to_bool(row.get("excluded_by_data_quality_gate")):
+                failures.append(f"{path}:{row_index} excluded/noise event leaked into strategy_events.csv")
+
+    if failures:
+        return _row(
+            "forensic_data_quality_mask_enforced",
+            AuditStatus.FAIL,
+            f"{len(failures)} data-quality mask violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_data_quality.csv;strategy_events.csv",
+        )
+    if checked_rows == 0:
+        return _row(
+            "forensic_data_quality_mask_enforced",
+            AuditStatus.WARN,
+            "strategy_data_quality.csv exists but contains no rows",
+            artifact="strategy_data_quality.csv;strategy_events.csv",
+        )
+    return _row(
+        "forensic_data_quality_mask_enforced",
+        AuditStatus.PASS,
+        f"verified pre-trigger quality-mask row, exclusion flags, and no excluded events across {checked_rows} data-quality row(s)",
+        artifact="strategy_data_quality.csv;strategy_events.csv",
+    )
+
+
+def _point_in_time_universe_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    paths = found.get("symbol_universe_by_day.csv", ())
+    if not paths:
+        return _row(
+            "forensic_point_in_time_universe_enforced",
+            AuditStatus.FAIL,
+            "missing symbol_universe_by_day.csv; point-in-time universe is not independently auditable",
+            artifact="symbol_universe_by_day.csv",
+        )
+
+    failures: list[str] = []
+    checked_rows = 0
+    for path in paths:
+        seen_keys: set[tuple[str, str]] = set()
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            checked_rows += 1
+            trade_date = row.get("trade_date", "")
+            symbol = row.get("symbol", "")
+            key = (trade_date, symbol)
+            if not trade_date or not symbol:
+                failures.append(f"{path}:{row_index} has empty trade_date or symbol")
+            elif key in seen_keys:
+                failures.append(f"{path}:{row_index} duplicate universe row for {trade_date}|{symbol}")
+            seen_keys.add(key)
+
+            bools = {
+                field_name: _to_bool(row.get(field_name))
+                for field_name in (
+                    "listed_asof_day",
+                    "delisted_asof_day",
+                    "tradable_on_day",
+                    "has_1m_data",
+                    "has_5m_data",
+                    "has_oi_data",
+                    "has_liquidation_data",
+                    "liquidity_eligible_on_day",
+                    "eligible_for_cross_section",
+                )
+            }
+            for field_name, value in bools.items():
+                if value is None:
+                    failures.append(f"{path}:{row_index} {field_name} must be boolean")
+            first_seen = _to_int(row.get("first_seen_data_time_ms"))
+            last_seen = _to_int(row.get("last_seen_data_time_ms"))
+            if first_seen is None or last_seen is None:
+                failures.append(f"{path}:{row_index} first/last seen timestamps must be integers")
+            elif first_seen > last_seen:
+                failures.append(f"{path}:{row_index} first_seen_data_time_ms > last_seen_data_time_ms")
+
+            tradable = bools["tradable_on_day"]
+            has_1m = bools["has_1m_data"]
+            has_5m = bools["has_5m_data"]
+            liquidity = bools["liquidity_eligible_on_day"]
+            eligible = bools["eligible_for_cross_section"]
+            if tradable and not (has_1m and has_5m and liquidity):
+                failures.append(f"{path}:{row_index} tradable row lacks 1m/5m/liquidity eligibility evidence")
+            if eligible and not (tradable and has_1m and liquidity):
+                failures.append(f"{path}:{row_index} cross-section eligible row is not tradable/liquid with 1m data")
+            if tradable is False and not row.get("reason_if_excluded", ""):
+                failures.append(f"{path}:{row_index} non-tradable row has empty reason_if_excluded")
+            if row.get("data_source_symbol_status", "") not in _ALLOWED_UNIVERSE_SOURCE_STATUS:
+                failures.append(f"{path}:{row_index} invalid data_source_symbol_status={row.get('data_source_symbol_status')!r}")
+            if row.get("listing_confidence", "") not in _ALLOWED_LISTING_CONFIDENCE:
+                failures.append(f"{path}:{row_index} invalid listing_confidence={row.get('listing_confidence')!r}")
+            if not row.get("delisting_confidence", ""):
+                failures.append(f"{path}:{row_index} empty delisting_confidence")
+
+    if failures:
+        return _row(
+            "forensic_point_in_time_universe_enforced",
+            AuditStatus.FAIL,
+            f"{len(failures)} universe violation(s): " + "; ".join(failures[:5]),
+            artifact="symbol_universe_by_day.csv",
+        )
+    if checked_rows == 0:
+        return _row(
+            "forensic_point_in_time_universe_enforced",
+            AuditStatus.WARN,
+            "symbol_universe_by_day.csv exists but contains no rows",
+            artifact="symbol_universe_by_day.csv",
+        )
+    return _row(
+        "forensic_point_in_time_universe_enforced",
+        AuditStatus.PASS,
+        f"verified point-in-time universe uniqueness, eligibility, lifecycle confidence, and exclusion reasons across {checked_rows} row(s)",
+        artifact="symbol_universe_by_day.csv",
+    )
+
 
 def _temporal_contract_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     checked = 0
@@ -902,6 +1155,129 @@ def _rejection_funnel_completeness_row(found: Mapping[str, tuple[Path, ...]]) ->
         f"verified strategy_rejection_funnel.csv coverage for {len(stages)} stage(s), {checked} row(s), and {excluded_reason_rows} explicit exclusion row(s)",
         artifact="strategy_rejection_funnel.csv",
     )
+
+
+def _feature_catalog_full_coverage_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    catalog_paths = found.get("strategy_feature_catalog.csv", ())
+    if not catalog_paths:
+        return _row(
+            "forensic_feature_catalog_full_coverage_verified",
+            AuditStatus.FAIL,
+            "missing strategy_feature_catalog.csv; feature catalog coverage is not independently auditable",
+            artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv;strategy_model_metadata.csv",
+        )
+
+    failures: list[str] = []
+    catalog_by_name: dict[str, dict[str, str]] = {}
+    for path in catalog_paths:
+        seen_in_path: set[str] = set()
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            feature_name = row.get("feature_name", "")
+            if not feature_name:
+                failures.append(f"{path}:{row_index} has empty feature_name")
+                continue
+            if feature_name in seen_in_path:
+                failures.append(f"{path}:{row_index} duplicate feature catalog row for {feature_name!r}")
+            seen_in_path.add(feature_name)
+            catalog_by_name[feature_name] = row
+            failures.extend(_feature_catalog_row_failures(path=path, row_index=row_index, row=row))
+
+    for path in found.get("strategy_feature_matrix.csv", ()):
+        header = _read_csv_header(path)
+        expected_feature_columns = [
+            column
+            for column in MVP1_ARTIFACT_SCHEMAS["strategy_feature_matrix.csv"].required_columns
+            if column not in _FEATURE_MATRIX_NON_CATALOG_COLUMNS
+        ]
+        missing_from_file = sorted(set(expected_feature_columns) - set(header))
+        if missing_from_file:
+            failures.append(f"{path} missing required feature-matrix columns: " + ", ".join(missing_from_file))
+        missing_from_catalog = sorted(column for column in expected_feature_columns if column not in catalog_by_name)
+        if missing_from_catalog:
+            failures.append("feature-matrix columns missing from feature catalog: " + ", ".join(missing_from_catalog))
+
+    model_features_checked = 0
+    for path in found.get("strategy_model_metadata.csv", ()):
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            for raw_name in _split_pipe_list(row.get("model_feature_names", "")):
+                model_features_checked += 1
+                feature_name = _normalize_model_feature_name(raw_name)
+                catalog_row = catalog_by_name.get(feature_name)
+                if catalog_row is None:
+                    failures.append(f"{path}:{row_index} model feature {raw_name!r} is missing from strategy_feature_catalog.csv")
+                    continue
+                if _to_bool(catalog_row.get("is_model_feature")) is not True:
+                    failures.append(f"{path}:{row_index} model feature {raw_name!r} is cataloged but not marked is_model_feature=true")
+
+    if failures:
+        return _row(
+            "forensic_feature_catalog_full_coverage_verified",
+            AuditStatus.FAIL,
+            f"{len(failures)} feature-catalog coverage violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv;strategy_model_metadata.csv",
+        )
+    if not catalog_by_name:
+        return _row(
+            "forensic_feature_catalog_full_coverage_verified",
+            AuditStatus.WARN,
+            "strategy_feature_catalog.csv exists but contains no feature rows",
+            artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv;strategy_model_metadata.csv",
+        )
+    return _row(
+        "forensic_feature_catalog_full_coverage_verified",
+        AuditStatus.PASS,
+        f"verified {len(catalog_by_name)} catalog row(s), feature-matrix column coverage, and {model_features_checked} model metadata feature reference(s)",
+        artifact="strategy_feature_catalog.csv;strategy_feature_matrix.csv;strategy_model_metadata.csv",
+    )
+
+
+def _feature_catalog_row_failures(*, path: Path, row_index: int, row: Mapping[str, str]) -> list[str]:
+    failures: list[str] = []
+    for field_name in (
+        "feature_schema_version",
+        "feature_family",
+        "source_artifact",
+        "available_asof_time",
+        "normalization_type",
+        "missing_policy",
+        "dtype",
+        "description",
+    ):
+        if not row.get(field_name, ""):
+            failures.append(f"{path}:{row_index} {field_name} is required")
+    if row.get("feature_family") not in _ALLOWED_FEATURE_FAMILIES:
+        failures.append(f"{path}:{row_index} invalid feature_family={row.get('feature_family')!r}")
+    if row.get("normalization_type") not in _ALLOWED_FEATURE_NORMALIZATIONS:
+        failures.append(f"{path}:{row_index} invalid normalization_type={row.get('normalization_type')!r}")
+    if row.get("missing_policy") not in _ALLOWED_FEATURE_MISSING_POLICIES:
+        failures.append(f"{path}:{row_index} invalid missing_policy={row.get('missing_policy')!r}")
+    uses_future = _to_bool(row.get("uses_future_data"))
+    is_model = _to_bool(row.get("is_model_feature"))
+    is_audit = _to_bool(row.get("is_audit_field"))
+    if uses_future is not False:
+        failures.append(f"{path}:{row_index} uses_future_data must be false")
+    if is_model is None:
+        failures.append(f"{path}:{row_index} is_model_feature must be boolean")
+    if is_audit is None:
+        failures.append(f"{path}:{row_index} is_audit_field must be boolean")
+    if is_model is False and is_audit is False:
+        failures.append(f"{path}:{row_index} feature must be model, audit, or both")
+    if is_model is True and row.get("normalization_type") == "raw_audit_only":
+        failures.append(f"{path}:{row_index} raw_audit_only feature cannot be a model feature")
+    if is_model is True and row.get("missing_policy") == "audit_only_nullable":
+        failures.append(f"{path}:{row_index} audit_only_nullable cannot be a model feature")
+    return failures
+
+
+def _split_pipe_list(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split("|") if item.strip())
+
+
+def _normalize_model_feature_name(value: str) -> str:
+    for prefix in ("feature_matrix.", "state.", "event."):
+        if value.startswith(prefix):
+            return value[len(prefix) :]
+    return value
 
 
 def _market_context_feature_coverage_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:

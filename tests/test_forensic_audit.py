@@ -11,6 +11,7 @@ from anomaly_science.contracts.audit import AuditStatus
 from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT
 from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
+from anomaly_science.features.catalog import build_default_feature_catalog, feature_rows_to_artifact
 
 
 def _write_artifact(path: Path, artifact_name: str, overrides: dict[str, object]) -> None:
@@ -74,48 +75,68 @@ def _write_root_research_manifest(root: Path) -> None:
 
 def _write_valid_minimal_forensic_fixture(root: Path) -> None:
     _write_root_research_manifest(root)
+    events = root / "stages" / "events"
+    _write_artifact_rows(
+        events / "strategy_data_quality.csv",
+        "strategy_data_quality.csv",
+        [
+            {
+                "check_name": "candles_1m_present",
+                "status": "PASS",
+                "severity": "info",
+                "affected_rows": 0,
+                "message": "required dataset candles_1m is present",
+                "technical_noise_shock": "",
+                "excluded_from_detector": "",
+                "excluded_from_ml_dataset": "",
+                "reason": "",
+                "artifact": "anomaly_data_quality.csv",
+            },
+            {
+                "check_name": "candles_1m_pre_trigger_quality_mask",
+                "status": "PASS",
+                "severity": "info",
+                "affected_rows": 0,
+                "message": "pre-trigger data-quality mask had no candle rows to exclude",
+                "technical_noise_shock": "False",
+                "excluded_from_detector": "False",
+                "excluded_from_ml_dataset": "False",
+                "reason": "",
+                "artifact": "anomaly_data_quality.csv",
+            },
+        ],
+    )
+    _copy_text(events / "strategy_data_quality.csv", events / "anomaly_data_quality.csv")
+    _write_artifact_rows(
+        events / "symbol_universe_by_day.csv",
+        "symbol_universe_by_day.csv",
+        [
+            {
+                "trade_date": "2026-01-02",
+                "symbol": "AAAUSDT",
+                "listed_asof_day": "True",
+                "delisted_asof_day": "False",
+                "tradable_on_day": "True",
+                "has_1m_data": "True",
+                "has_5m_data": "True",
+                "has_oi_data": "True",
+                "has_liquidation_data": "True",
+                "liquidity_eligible_on_day": "True",
+                "eligible_for_cross_section": "True",
+                "first_seen_data_time_ms": 1_000_000,
+                "last_seen_data_time_ms": 2_000_000,
+                "data_source_symbol_status": "observed_on_day",
+                "listing_confidence": "data_observed",
+                "delisting_confidence": "unknown_without_external_metadata",
+                "reason_if_excluded": "",
+            }
+        ],
+    )
     features = root / "stages" / "features"
-    market_context_catalog_specs = {
-        "volume_market_percentile": ("cross_sectional_market_relative", "market_relative"),
-        "quote_volume_market_percentile": ("cross_sectional_market_relative", "market_relative"),
-        "return_1m_market_percentile": ("cross_sectional_market_relative", "market_relative"),
-        "return_from_event_market_percentile": ("cross_sectional_market_relative", "market_relative"),
-        "oi_growth_market_percentile": ("open_interest", "market_relative"),
-        "liq_intensity_market_percentile": ("liquidation", "market_relative"),
-        "range_expansion_market_percentile": ("cross_sectional_market_relative", "market_relative"),
-        "cross_section_available": ("cross_sectional_market_relative", "boolean_flag"),
-        "cross_section_symbol_count": ("cross_sectional_market_relative", "point_in_time_id"),
-        "corr_with_btc_15m": ("market_context", "btc_relative"),
-        "corr_with_btc_30m": ("market_context", "btc_relative"),
-        "corr_with_btc_60m": ("market_context", "btc_relative"),
-        "symbol_return_minus_btc_return_5m": ("market_context", "btc_relative"),
-        "symbol_return_minus_btc_return_15m": ("market_context", "btc_relative"),
-        "idiosyncratic_momentum_score": ("market_context", "dimensionless_ratio"),
-        "simultaneous_anomalies_count_1m": ("signal_clustering_systemic_beta", "point_in_time_id"),
-        "simultaneous_anomalies_share_1m": ("signal_clustering_systemic_beta", "dimensionless_ratio"),
-        "systemic_cluster_regime": ("signal_clustering_systemic_beta", "categorical_bucket"),
-        "market_shock_id": ("signal_clustering_systemic_beta", "point_in_time_id"),
-    }
     _write_artifact_rows(
         features / "strategy_feature_catalog.csv",
         "strategy_feature_catalog.csv",
-        [
-            {
-                "feature_schema_version": "feature_schema_v1_relative_asof",
-                "feature_name": feature_name,
-                "feature_family": feature_family,
-                "source_artifact": "anomaly_feature_matrix.csv",
-                "available_asof_time": "computed from point-in-time market context available <= snapshot_time_ms",
-                "uses_future_data": "False",
-                "normalization_type": normalization_type,
-                "is_model_feature": "False" if feature_name == "market_shock_id" else "True",
-                "is_audit_field": "True",
-                "missing_policy": "null_if_source_missing",
-                "dtype": "str" if feature_name in {"systemic_cluster_regime", "market_shock_id"} else "float64",
-                "description": "fixture market context feature",
-            }
-            for feature_name, (feature_family, normalization_type) in market_context_catalog_specs.items()
-        ],
+        feature_rows_to_artifact(build_default_feature_catalog()),
     )
     _copy_text(features / "strategy_feature_catalog.csv", features / "anomaly_feature_catalog.csv")
     feature_matrix = root / "stages" / "feature_matrix"
@@ -252,7 +273,7 @@ def _write_valid_minimal_forensic_fixture(root: Path) -> None:
             "calibration_row_count": 20,
             "best_iteration": 12,
             "class_order": "long_continuation|short_fade|static_or_chop|unclear",
-            "model_feature_names": "feature_a|feature_b",
+            "model_feature_names": "feature_matrix.volume_zscore|feature_matrix.quote_volume_zscore",
             "calibration_method": "isotonic",
         },
     )
@@ -492,6 +513,8 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
 
     assert by_name["forensic_artifact_schema_columns_verified"].status is AuditStatus.PASS
     assert by_name["forensic_root_research_run_manifest_complete"].status is AuditStatus.PASS
+    assert by_name["forensic_data_quality_mask_enforced"].status is AuditStatus.PASS
+    assert by_name["forensic_point_in_time_universe_enforced"].status is AuditStatus.PASS
     assert by_name["forensic_temporal_contract_verified_from_artifacts"].status is AuditStatus.PASS
     assert by_name["forensic_model_metadata_purge_hmax_verified"].status is AuditStatus.PASS
     assert by_name["forensic_prediction_rows_are_oos_after_train_cutoff"].status is AuditStatus.PASS
@@ -503,6 +526,7 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_required_controls_complete"].status is AuditStatus.PASS
     assert by_name["forensic_calibration_breakdowns_complete"].status is AuditStatus.PASS
     assert by_name["forensic_rejection_funnel_complete"].status is AuditStatus.PASS
+    assert by_name["forensic_feature_catalog_full_coverage_verified"].status is AuditStatus.PASS
     assert by_name["forensic_market_context_feature_coverage_verified"].status is AuditStatus.PASS
     assert by_name["forensic_stage_protocol_audit_has_no_fail_rows"].status is AuditStatus.PASS
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.PASS
@@ -620,6 +644,50 @@ def test_independent_forensic_audit_fails_missing_market_context_catalog_row(tmp
     by_name = _by_name(result)
 
     assert by_name["forensic_market_context_feature_coverage_verified"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_independent_forensic_audit_fails_missing_quality_mask_row(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "events" / "strategy_data_quality.csv"
+    rows = [row for row in _read_csv_payload(path) if row["check_name"] != "candles_1m_pre_trigger_quality_mask"]
+    _write_artifact_rows(path, "strategy_data_quality.csv", [dict(row) for row in rows])
+    _copy_text(path, tmp_path / "stages" / "events" / "anomaly_data_quality.csv")
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_data_quality_mask_enforced"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_independent_forensic_audit_fails_invalid_universe_eligibility(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "events" / "symbol_universe_by_day.csv"
+    rows = _read_csv_payload(path)
+    rows[0]["eligible_for_cross_section"] = "True"
+    rows[0]["tradable_on_day"] = "False"
+    rows[0]["reason_if_excluded"] = ""
+    _write_artifact_rows(path, "symbol_universe_by_day.csv", [dict(rows[0])])
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_point_in_time_universe_enforced"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_independent_forensic_audit_fails_feature_matrix_column_missing_from_catalog(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "features" / "strategy_feature_catalog.csv"
+    rows = [row for row in _read_csv_payload(path) if row["feature_name"] != "ATR_1d_asof_t"]
+    _write_artifact_rows(path, "strategy_feature_catalog.csv", [dict(row) for row in rows])
+    _copy_text(path, tmp_path / "stages" / "features" / "anomaly_feature_catalog.csv")
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_feature_catalog_full_coverage_verified"].status is AuditStatus.FAIL
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
 

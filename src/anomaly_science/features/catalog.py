@@ -104,6 +104,17 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             description="Raw ATR unit computed as-of snapshot for audit and normalization reproducibility only.",
         ),
         _row(
+            name="ATR_1d_asof_t",
+            family=FeatureFamily.PRICE_PATH,
+            source="anomaly_feature_matrix.csv",
+            asof=ASOF_SNAPSHOT,
+            norm=FeatureNormalization.RAW_AUDIT_ONLY,
+            model=False,
+            audit=True,
+            missing=FeatureMissingPolicy.AUDIT_ONLY_NULLABLE,
+            description="Artifact boundary alias for core_atr_1440; raw ATR audit field, not a model feature.",
+        ),
+        _row(
             name="ATR_1d_pct_asof_t",
             family=FeatureFamily.PRICE_PATH,
             source="anomaly_future_paths.csv",

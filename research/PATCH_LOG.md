@@ -1,5 +1,19 @@
 # Patch log
 
+## methodology: complete final forensic protocol audit coverage
+
+Status: APPLIED.
+
+Intent:
+- Add independent forensic checks for pre-trigger data-quality mask enforcement, point-in-time universe eligibility, and full feature-catalog coverage.
+- Require `strategy_feature_catalog.csv` to cover feature-matrix columns and model metadata feature references while forbidding future/raw model features.
+- Add missing `ATR_1d_asof_t` audit-only catalog row so feature matrix schema and catalog agree.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_forensic_audit.py tests\test_feature_catalog.py -q`
+- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_feature_matrix.py tests\test_prediction.py tests\test_artifact_schemas.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## strategy: complete broad anomaly trigger breadth
 
 Status: APPLIED.
