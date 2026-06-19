@@ -1,5 +1,20 @@
 # Patch log
 
+## methodology: harden cache export proof gates
+
+Status: PROPOSED.
+
+Intent:
+- Add explicit cache export validation gates for expected global calendar span, missing UTC days, missing 1m rows, duplicate 1m rows, and optional missing open interest.
+- Extend `cache_export_coverage.csv` with per-symbol unique/expected/missing/duplicate 1m row diagnostics, gap diagnostics, partial UTC day count, and complete-span flag.
+- Extend `cache_export_manifest.json` with validation config, validation summary, and failure reasons while still writing proof artifacts before raising validation errors.
+- Document the 380d proof command while keeping the data-source boundary `PARTIAL` until the real local all-symbol proof run is recorded.
+
+Validation:
+- `python -m pytest tests/test_cache_export.py -q`
+- `python -m pytest tests/test_cache_export.py tests/test_binance_vision_cache.py tests/test_binance_vision_cache_delivery_symbols.py tests/test_binance_vision_cache_startup.py -q`
+- `python -m compileall -q src/anomaly_science/cache_export.py src/anomaly_science/cli.py tests/test_cache_export.py`
+
 ## docs: synchronize executable strategy status
 
 Status: APPLIED.

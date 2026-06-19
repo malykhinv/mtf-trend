@@ -342,6 +342,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_cache.add_argument("--cache-dir", required=True, help="Directory containing {symbol}.parquet cache files.")
     export_cache.add_argument("--symbols", default="", help="Optional comma-separated symbols. Empty means discover all cache parquet files.")
     export_cache.add_argument("--days", type=int, default=None, help="Optional lookback days. Omit to export the full available cache period.")
+    export_cache.add_argument("--expected-days", type=int, default=None, help="Optional validation gate: require the exported global calendar span to be at least this many days.")
+    export_cache.add_argument("--fail-on-missing-utc-days", action="store_true", help="Fail after writing proof artifacts if any symbol has missing UTC days inside its exported first/last date span.")
+    export_cache.add_argument("--fail-on-missing-1m-rows", action="store_true", help="Fail after writing proof artifacts if any symbol has missing 1m timestamps inside its exported first/last minute span.")
+    export_cache.add_argument("--fail-on-missing-open-interest", action="store_true", help="Fail after writing proof artifacts if any exported symbol has no open_interest samples.")
     export_cache.add_argument("--out", required=True, help="Directory where MVP1 CSV files will be written.")
 
 
@@ -572,6 +576,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 out_dir=Path(args.out),
                 symbols=symbols,
                 days=args.days,
+                expected_days=args.expected_days,
+                fail_on_missing_utc_days=args.fail_on_missing_utc_days,
+                fail_on_missing_1m_rows=args.fail_on_missing_1m_rows,
+                fail_on_missing_open_interest=args.fail_on_missing_open_interest,
             )
         )
         print(f"mvp1 csv export written: {output_dir}")

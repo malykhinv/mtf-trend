@@ -5,8 +5,13 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+
+ONE_MINUTE_MS = 60_000
+ONE_DAY_MS = 86_400_000
+FULL_UTC_DAY_1M_ROWS = 1_440
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,11 +20,19 @@ class CacheMvp1CsvExportConfig:
     out_dir: Path
     symbols: tuple[str, ...] = ()
     days: int | None = None
+    expected_days: int | None = None
+    fail_on_missing_utc_days: bool = False
+    fail_on_missing_1m_rows: bool = False
+    fail_on_missing_open_interest: bool = False
+
+    def __post_init__(self) -> None:
+        if self.days is not None and self.days <= 0:
+            raise ValueError("days must be positive when provided")
+        if self.expected_days is not None and self.expected_days <= 0:
+            raise ValueError("expected_days must be positive when provided")
 
 
 def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
-    if config.days is not None and config.days <= 0:
-        raise ValueError("days must be positive when provided")
     config.out_dir.mkdir(parents=True, exist_ok=True)
     symbols = config.symbols or discover_cache_symbols(config.cache_dir)
     if not symbols:
@@ -40,6 +53,7 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
     candles_5m.to_csv(candles_5m_path, index=False)
     open_interest_5m.to_csv(open_interest_5m_path, index=False)
     coverage = _build_cache_export_coverage(candles_1m, cache_dir=config.cache_dir)
+    validation = _build_cache_export_validation(config=config, coverage=coverage, candles_1m=candles_1m)
     coverage.to_csv(coverage_path, index=False)
     _write_cache_export_manifest(
         manifest_path,
@@ -47,8 +61,10 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
         symbols=tuple(symbols),
         candles_1m=candles_1m,
         coverage=coverage,
+        validation=validation,
         artifact_paths=(candles_1m_path, candles_5m_path, open_interest_5m_path, coverage_path),
     )
+    _raise_for_validation_failures(validation)
     return config.out_dir
 
 
@@ -81,7 +97,7 @@ def _read_symbol_cache(cache_dir: Path, symbol: str) -> pd.DataFrame:
         {
             "symbol": symbol,
             "open_time_ms": frame["timestamp"].astype("int64"),
-            "available_time_ms": frame["timestamp"].astype("int64") + 60_000,
+            "available_time_ms": frame["timestamp"].astype("int64") + ONE_MINUTE_MS,
             "open": frame["open"],
             "high": frame["high"],
             "low": frame["low"],
@@ -100,8 +116,8 @@ def _filter_days(frame: pd.DataFrame, *, days: int | None) -> pd.DataFrame:
     if days is None or frame.empty:
         return frame
     end_ms = int(frame["open_time_ms"].max())
-    end_day_start_ms = (end_ms // 86_400_000) * 86_400_000
-    start_ms = end_day_start_ms - (days - 1) * 86_400_000
+    end_day_start_ms = (end_ms // ONE_DAY_MS) * ONE_DAY_MS
+    start_ms = end_day_start_ms - (days - 1) * ONE_DAY_MS
     return frame[frame["open_time_ms"] >= start_ms].copy()
 
 
@@ -152,12 +168,28 @@ def _build_cache_export_coverage(candles_1m: pd.DataFrame, *, cache_dir: Path) -
     rows: list[dict[str, object]] = []
     for symbol, frame in candles_1m.groupby("symbol", sort=True):
         ordered = frame.sort_values("open_time_ms")
-        first_ms = int(ordered["open_time_ms"].iloc[0])
-        last_ms = int(ordered["open_time_ms"].iloc[-1])
-        observed_days = {
-            datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).date()
-            for value in ordered["open_time_ms"].tolist()
-        }
+        timestamps = ordered["open_time_ms"].astype("int64")
+        unique_timestamps = timestamps.drop_duplicates().sort_values()
+        first_ms = int(unique_timestamps.iloc[0])
+        last_ms = int(unique_timestamps.iloc[-1])
+        expected_rows_1m_by_span = ((last_ms - first_ms) // ONE_MINUTE_MS) + 1
+        duplicate_rows_1m = int(len(timestamps) - len(unique_timestamps))
+        missing_rows_1m_by_span = int(expected_rows_1m_by_span - len(unique_timestamps))
+        unique_diffs = unique_timestamps.diff().dropna().astype("int64")
+        non_1m_step_count = int((unique_diffs != ONE_MINUTE_MS).sum())
+        max_gap_minutes = 0
+        first_gap_after_open_time_ms: int | None = None
+        if not unique_diffs.empty:
+            max_step_ms = int(unique_diffs.max())
+            max_gap_minutes = max(0, (max_step_ms // ONE_MINUTE_MS) - 1)
+            gap_positions = unique_diffs[unique_diffs != ONE_MINUTE_MS]
+            if not gap_positions.empty:
+                first_gap_index = int(gap_positions.index[0])
+                first_gap_after_open_time_ms = int(unique_timestamps.loc[first_gap_index - 1])
+        open_dates = pd.to_datetime(timestamps, unit="ms", utc=True).dt.date
+        observed_days = set(open_dates.tolist())
+        day_row_counts = open_dates.value_counts()
+        partial_utc_days = int((day_row_counts != FULL_UTC_DAY_1M_ROWS).sum())
         first_date = datetime.fromtimestamp(first_ms / 1000, tz=timezone.utc).date()
         last_date = datetime.fromtimestamp(last_ms / 1000, tz=timezone.utc).date()
         calendar_days = (last_date - first_date).days + 1
@@ -165,6 +197,13 @@ def _build_cache_export_coverage(candles_1m: pd.DataFrame, *, cache_dir: Path) -
             {
                 "symbol": symbol,
                 "rows_1m": int(len(ordered)),
+                "unique_rows_1m": int(len(unique_timestamps)),
+                "expected_rows_1m_by_span": int(expected_rows_1m_by_span),
+                "missing_rows_1m_by_span": missing_rows_1m_by_span,
+                "duplicate_rows_1m": duplicate_rows_1m,
+                "non_1m_step_count": non_1m_step_count,
+                "max_gap_minutes": max_gap_minutes,
+                "first_gap_after_open_time_ms": first_gap_after_open_time_ms,
                 "first_open_time_ms": first_ms,
                 "last_open_time_ms": last_ms,
                 "first_date": first_date.isoformat(),
@@ -172,7 +211,11 @@ def _build_cache_export_coverage(candles_1m: pd.DataFrame, *, cache_dir: Path) -
                 "calendar_days": calendar_days,
                 "observed_utc_days": len(observed_days),
                 "missing_utc_days": calendar_days - len(observed_days),
+                "partial_utc_days": partial_utc_days,
                 "has_open_interest": bool(ordered["open_interest"].notna().any()),
+                "has_complete_1m_span": bool(
+                    missing_rows_1m_by_span == 0 and duplicate_rows_1m == 0 and non_1m_step_count == 0
+                ),
                 "source_path": str(cache_dir / f"{symbol}.parquet"),
             }
         )
@@ -181,6 +224,13 @@ def _build_cache_export_coverage(candles_1m: pd.DataFrame, *, cache_dir: Path) -
         columns=[
             "symbol",
             "rows_1m",
+            "unique_rows_1m",
+            "expected_rows_1m_by_span",
+            "missing_rows_1m_by_span",
+            "duplicate_rows_1m",
+            "non_1m_step_count",
+            "max_gap_minutes",
+            "first_gap_after_open_time_ms",
             "first_open_time_ms",
             "last_open_time_ms",
             "first_date",
@@ -188,10 +238,64 @@ def _build_cache_export_coverage(candles_1m: pd.DataFrame, *, cache_dir: Path) -
             "calendar_days",
             "observed_utc_days",
             "missing_utc_days",
+            "partial_utc_days",
             "has_open_interest",
+            "has_complete_1m_span",
             "source_path",
         ],
     )
+
+
+def _build_cache_export_validation(
+    *,
+    config: CacheMvp1CsvExportConfig,
+    coverage: pd.DataFrame,
+    candles_1m: pd.DataFrame,
+) -> dict[str, Any]:
+    timestamps = pd.to_datetime(candles_1m["open_time_ms"].astype("int64"), unit="ms", utc=True)
+    effective_calendar_days = (timestamps.max().date() - timestamps.min().date()).days + 1
+    duplicate_1m_rows_total = int(coverage["duplicate_rows_1m"].sum())
+    missing_rows_1m_total = int(coverage["missing_rows_1m_by_span"].sum())
+    missing_utc_days_total = int(coverage["missing_utc_days"].sum())
+    symbols_without_open_interest = coverage.loc[~coverage["has_open_interest"].astype(bool), "symbol"].tolist()
+    failures: list[str] = []
+    if config.expected_days is not None and effective_calendar_days < config.expected_days:
+        failures.append(
+            "effective_calendar_days_below_expected: "
+            f"expected>={config.expected_days} actual={effective_calendar_days}"
+        )
+    if duplicate_1m_rows_total > 0:
+        failures.append(f"duplicate_1m_rows_present: total={duplicate_1m_rows_total}")
+    if config.fail_on_missing_utc_days and missing_utc_days_total > 0:
+        failures.append(f"missing_utc_days_present: total={missing_utc_days_total}")
+    if config.fail_on_missing_1m_rows and missing_rows_1m_total > 0:
+        failures.append(f"missing_1m_rows_present: total={missing_rows_1m_total}")
+    if config.fail_on_missing_open_interest and symbols_without_open_interest:
+        failures.append(
+            "symbols_without_open_interest: " + ",".join(str(symbol) for symbol in symbols_without_open_interest)
+        )
+    return {
+        "validation_passed": not failures,
+        "validation_failures": failures,
+        "expected_days": config.expected_days,
+        "effective_calendar_days": effective_calendar_days,
+        "exported_symbol_count": int(coverage["symbol"].nunique()),
+        "duplicate_1m_rows_total": duplicate_1m_rows_total,
+        "missing_1m_rows_total": missing_rows_1m_total,
+        "symbols_with_missing_1m_rows": coverage.loc[
+            coverage["missing_rows_1m_by_span"] > 0, "symbol"
+        ].tolist(),
+        "missing_utc_days_total": missing_utc_days_total,
+        "symbols_with_missing_utc_days": coverage.loc[coverage["missing_utc_days"] > 0, "symbol"].tolist(),
+        "partial_utc_days_total": int(coverage["partial_utc_days"].sum()),
+        "symbols_without_open_interest": symbols_without_open_interest,
+    }
+
+
+def _raise_for_validation_failures(validation: dict[str, Any]) -> None:
+    failures = validation.get("validation_failures", [])
+    if failures:
+        raise ValueError("cache export validation failed: " + "; ".join(str(item) for item in failures))
 
 
 def _write_cache_export_manifest(
@@ -201,6 +305,7 @@ def _write_cache_export_manifest(
     symbols: tuple[str, ...],
     candles_1m: pd.DataFrame,
     coverage: pd.DataFrame,
+    validation: dict[str, Any],
     artifact_paths: tuple[Path, ...],
 ) -> None:
     timestamps = pd.to_datetime(candles_1m["open_time_ms"].astype("int64"), unit="ms", utc=True)
@@ -212,12 +317,17 @@ def _write_cache_export_manifest(
         "requested_symbols": list(config.symbols),
         "exported_symbols": list(symbols),
         "requested_days": config.days,
+        "expected_days": config.expected_days,
+        "fail_on_missing_utc_days": config.fail_on_missing_utc_days,
+        "fail_on_missing_1m_rows": config.fail_on_missing_1m_rows,
+        "fail_on_missing_open_interest": config.fail_on_missing_open_interest,
         "effective_start_date": timestamps.min().date().isoformat(),
         "effective_end_date": timestamps.max().date().isoformat(),
         "effective_calendar_days": (timestamps.max().date() - timestamps.min().date()).days + 1,
         "rows_1m": int(len(candles_1m)),
         "symbols_with_missing_utc_days": coverage.loc[coverage["missing_utc_days"] > 0, "symbol"].tolist(),
         "missing_utc_days_total": int(coverage["missing_utc_days"].sum()),
+        "validation": validation,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "artifacts": [
             {

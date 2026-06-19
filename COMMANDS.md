@@ -115,9 +115,10 @@ Export local cache into the normalized MVP1 CSV boundary:
 python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input
 python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input --days 30
 python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input --symbols BTCUSDT,ETHUSDT --days 7
+python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input_380d --days 380 --expected-days 380 --fail-on-missing-utc-days --fail-on-missing-1m-rows
 ```
 
-If `--days` is omitted, the export uses the full available cache period. If `--symbols` is omitted, it exports every `{symbol}.parquet` file discovered in the cache. The export writes `cache_export_coverage.csv` and `cache_export_manifest.json` next to `candles_1m.csv`, `candles_5m.csv`, and `open_interest_5m.csv`.
+If `--days` is omitted, the export uses the full available cache period. If `--symbols` is omitted, it exports every `{symbol}.parquet` file discovered in the cache. The export writes `cache_export_coverage.csv` and `cache_export_manifest.json` next to `candles_1m.csv`, `candles_5m.csv`, and `open_interest_5m.csv`. Use `--expected-days 380 --fail-on-missing-utc-days --fail-on-missing-1m-rows` for the full local 380d proof gate. `--fail-on-missing-open-interest` is intentionally separate because some historical/delisted symbols can have absent optional OI archives; enable it only when that is the intended hard requirement.
 
 Smoke test on a small subset:
 
