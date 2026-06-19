@@ -21,6 +21,8 @@ class AnomalyEvent:
     initial_volume_zscore: float | None
     initial_quote_volume_zscore: float | None
     initial_trade_count_zscore: float | None
+    trigger_component: str
+    trigger_components: tuple[str, ...]
     detector_version: str
     technical_noise_shock: bool = False
     raw_candle_gap_minutes: float | None = None
@@ -38,6 +40,16 @@ class AnomalyEvent:
             raise MarketDataContractError("event_detection_time_ms must be >= event_start_time_ms")
         if self.seed_time_ms < self.event_start_time_ms:
             raise MarketDataContractError("seed_time_ms must be >= event_start_time_ms")
+        if not self.trigger_component:
+            raise MarketDataContractError("trigger_component is required")
+        if not self.trigger_components:
+            raise MarketDataContractError("trigger_components is required")
+        if self.trigger_component != self.trigger_components[0]:
+            raise MarketDataContractError("trigger_component must equal first trigger_components item")
+        if any(not component for component in self.trigger_components):
+            raise MarketDataContractError("trigger_components must not contain empty values")
+        if len(set(self.trigger_components)) != len(self.trigger_components):
+            raise MarketDataContractError("trigger_components must not contain duplicates")
         if not self.detector_version:
             raise MarketDataContractError("detector_version is required")
         if self.raw_candle_gap_minutes is not None and self.raw_candle_gap_minutes <= 0:

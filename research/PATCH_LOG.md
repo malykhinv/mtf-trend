@@ -601,3 +601,18 @@ Intent:
 
 Validation for this proposed patch:
 - `python -m compileall -q main.py src tests zip_project.py`
+
+
+## strategy: complete broad anomaly trigger component accounting
+
+Status: PROPOSED
+
+Changes:
+- Adds strict `trigger_component` and `trigger_components` fields to `AnomalyEvent` and the canonical/alias events artifact schema.
+- Persists deterministic causal component tags for the current broad detector: `one_shot_spike`, `range_expansion`, `quote_volume_spike`, `base_volume_spike`, `trade_count_spike`, and derived `volume_only_anomaly`.
+- Carries component tags through the BaseStrategy trigger frame and state artifact loader boundary.
+- Adds tests for one-shot, volume-only, artifact persistence, trigger-frame exposure, and schema/header updates.
+
+Validation in this environment:
+- `python -m compileall src main.py tests zip_project.py`
+- Targeted pytest collection is blocked here by missing runtime dependency `polars`.

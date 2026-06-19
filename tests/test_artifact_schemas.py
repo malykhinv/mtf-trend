@@ -154,6 +154,8 @@ def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
             "initial_volume_zscore": "",
             "initial_quote_volume_zscore": "",
             "initial_trade_count_zscore": "",
+            "trigger_component": "one_shot_spike",
+            "trigger_components": "one_shot_spike",
             "technical_noise_shock": False,
             "raw_candle_gap_minutes": "",
             "excluded_by_data_quality_gate": False,

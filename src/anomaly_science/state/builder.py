@@ -58,6 +58,8 @@ def load_anomaly_events_csv(path: str | Path) -> tuple[AnomalyEvent, ...]:
                     initial_volume_zscore=_optional_float(row, "initial_volume_zscore"),
                     initial_quote_volume_zscore=_optional_float(row, "initial_quote_volume_zscore"),
                     initial_trade_count_zscore=_optional_float(row, "initial_trade_count_zscore"),
+                    trigger_component=_required_str(row, "trigger_component"),
+                    trigger_components=_required_components(row, "trigger_components"),
                     detector_version=_required_str(row, "detector_version"),
                     technical_noise_shock=_optional_bool(row, "technical_noise_shock", default=False),
                     raw_candle_gap_minutes=_optional_float(row, "raw_candle_gap_minutes"),
@@ -210,6 +212,16 @@ def _required_float(row: Mapping[str, object], name: str) -> float:
     if not math.isfinite(result):
         raise ValueError(f"{name} must be finite")
     return result
+
+
+def _required_components(row: Mapping[str, object], name: str) -> tuple[str, ...]:
+    raw_value = _required_str(row, name)
+    values = tuple(component for component in raw_value.split(";") if component)
+    if not values:
+        raise ValueError(f"{name} must contain at least one component")
+    if len(set(values)) != len(values):
+        raise ValueError(f"{name} must not contain duplicate components")
+    return values
 
 
 def _optional_float(row: Mapping[str, object], name: str) -> float | None:

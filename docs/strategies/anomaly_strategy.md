@@ -178,6 +178,8 @@ initial_move_pct
 initial_volume_zscore
 initial_quote_volume_zscore
 initial_trade_count_zscore
+trigger_component
+trigger_components
 technical_noise_shock
 raw_candle_gap_minutes
 excluded_by_data_quality_gate
@@ -762,10 +764,31 @@ initial_move_pct
 initial_volume_zscore
 initial_quote_volume_zscore
 initial_trade_count_zscore
+trigger_component
+trigger_components
 technical_noise_shock
 raw_candle_gap_minutes
 excluded_by_data_quality_gate
 detector_version
+```
+
+Allowed persisted trigger component tags for the current broad detector:
+
+```text
+one_shot_spike
+range_expansion
+quote_volume_spike
+base_volume_spike
+trade_count_spike
+volume_only_anomaly
+```
+
+Rule:
+
+```text
+trigger_component = first primary component from trigger_components.
+trigger_components are audit metadata explaining why the broad detector accepted the seed candle.
+They must be computed only from the seed candle and as-of baseline, and must not be interpreted as trade direction or PnL logic.
 ```
 
 Правило:

@@ -40,6 +40,8 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "initial_volume_zscore",
             "initial_quote_volume_zscore",
             "initial_trade_count_zscore",
+            "trigger_component",
+            "trigger_components",
             "technical_noise_shock",
             "raw_candle_gap_minutes",
             "excluded_by_data_quality_gate",

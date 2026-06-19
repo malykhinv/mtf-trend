@@ -147,6 +147,8 @@ def test_broad_anomaly_strategy_wraps_detector_behind_base_contract() -> None:
     assert "minutes_since_start" in trigger_frame.columns
     assert trigger_frame["minutes_since_start"].to_list() == [1]
     assert trigger_frame["is_trigger"].to_list() == [True]
+    assert trigger_frame["trigger_component"].to_list() == ["one_shot_spike"]
+    assert "one_shot_spike" in trigger_frame["trigger_components"].to_list()[0]
     assert custom_features.height == 0
     assert custom_features.columns == []
 

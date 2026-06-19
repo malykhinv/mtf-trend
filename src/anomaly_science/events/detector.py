@@ -48,7 +48,8 @@ def detect_broad_anomaly_events(
                 continue
 
             metrics = _seed_metrics(candle, baseline)
-            if not _is_broad_activity(metrics, cfg):
+            trigger_components = _broad_activity_components(metrics, cfg)
+            if not trigger_components:
                 detector_baseline.append(candle)
                 continue
 
@@ -66,6 +67,8 @@ def detect_broad_anomaly_events(
                 initial_volume_zscore=metrics["volume_zscore"],
                 initial_quote_volume_zscore=metrics["quote_volume_zscore"],
                 initial_trade_count_zscore=metrics["trade_count_zscore"],
+                trigger_component=trigger_components[0],
+                trigger_components=trigger_components,
                 technical_noise_shock=False,
                 raw_candle_gap_minutes=raw_gap_minutes,
                 excluded_by_data_quality_gate=False,
@@ -99,6 +102,8 @@ def events_to_artifact(events: Sequence[AnomalyEvent]) -> list[dict[str, object]
                 "initial_volume_zscore": _csv_value(event.initial_volume_zscore),
                 "initial_quote_volume_zscore": _csv_value(event.initial_quote_volume_zscore),
                 "initial_trade_count_zscore": _csv_value(event.initial_trade_count_zscore),
+                "trigger_component": event.trigger_component,
+                "trigger_components": _trigger_components_csv(event.trigger_components),
                 "technical_noise_shock": event.technical_noise_shock,
                 "raw_candle_gap_minutes": _csv_value(event.raw_candle_gap_minutes),
                 "excluded_by_data_quality_gate": event.excluded_by_data_quality_gate,
@@ -123,19 +128,38 @@ def _seed_metrics(candle: Candle1m, baseline: Sequence[Candle1m]) -> dict[str, f
     }
 
 
-def _is_broad_activity(metrics: dict[str, float | None], config: BroadAnomalyDetectorConfig) -> bool:
+def _broad_activity_components(metrics: dict[str, float | None], config: BroadAnomalyDetectorConfig) -> tuple[str, ...]:
+    """Return deterministic causal trigger components for the current seed candle.
+
+    These tags explain why the broad detector accepted the row. They are audit
+    metadata, not trade rules. Every component is computed from the current
+    closed seed candle and the already-built same-symbol baseline only.
+    """
+    price_components: list[str] = []
+    flow_components: list[str] = []
+
     move_pct = metrics["move_pct"]
     if move_pct is not None and abs(move_pct) >= config.min_abs_return_pct:
-        return True
-    return any(
-        _at_least(metrics[name], threshold)
-        for name, threshold in (
-            ("quote_volume_zscore", config.min_quote_volume_zscore),
-            ("volume_zscore", config.min_volume_zscore),
-            ("trade_count_zscore", config.min_trade_count_zscore),
-            ("range_zscore", config.min_range_zscore),
-        )
-    )
+        price_components.append("one_shot_spike")
+    if _at_least(metrics["range_zscore"], config.min_range_zscore):
+        price_components.append("range_expansion")
+
+    if _at_least(metrics["quote_volume_zscore"], config.min_quote_volume_zscore):
+        flow_components.append("quote_volume_spike")
+    if _at_least(metrics["volume_zscore"], config.min_volume_zscore):
+        flow_components.append("base_volume_spike")
+    if _at_least(metrics["trade_count_zscore"], config.min_trade_count_zscore):
+        flow_components.append("trade_count_spike")
+
+    derived_components: list[str] = []
+    if flow_components and not price_components:
+        derived_components.append("volume_only_anomaly")
+
+    return tuple(_unique_preserve_order([*derived_components, *price_components, *flow_components]))
+
+
+def _is_broad_activity(metrics: dict[str, float | None], config: BroadAnomalyDetectorConfig) -> bool:
+    return bool(_broad_activity_components(metrics, config))
 
 
 def _range_pct(candle: Candle1m) -> float:
@@ -172,6 +196,21 @@ def _in_cooldown(open_time_ms: int, last_event_start_ms: int | None, cooldown_mi
     if last_event_start_ms is None or cooldown_minutes <= 0:
         return False
     return open_time_ms - last_event_start_ms < cooldown_minutes * ONE_MINUTE_MS
+
+
+def _unique_preserve_order(values: Sequence[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return tuple(result)
+
+
+def _trigger_components_csv(values: Sequence[str]) -> str:
+    return ";".join(values)
 
 
 def _event_id(detector_version: str, symbol: str, seed_time_ms: int) -> str:

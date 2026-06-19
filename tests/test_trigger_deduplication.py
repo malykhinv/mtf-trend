@@ -20,6 +20,8 @@ def _event(event_id: str, symbol: str, detection_ms: int) -> AnomalyEvent:
         initial_volume_zscore=None,
         initial_quote_volume_zscore=None,
         initial_trade_count_zscore=None,
+        trigger_component="one_shot_spike",
+        trigger_components=("one_shot_spike",),
         detector_version="test",
     )
 

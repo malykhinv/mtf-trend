@@ -304,6 +304,11 @@ def _enforce_trigger_frame_matches_events(*, trigger_frame: pl.DataFrame, events
         raise ValueError("strategy trigger frame event_id values must match materialized events")
     if trigger_frame.height and not all(trigger_frame["is_trigger"].to_list()):
         raise ValueError("strategy trigger frame must contain only active trigger rows")
+    if "trigger_component" in trigger_frame.columns:
+        frame_components = {row["event_id"]: row["trigger_component"] for row in trigger_frame.select(["event_id", "trigger_component"]).to_dicts()}
+        for event in events:
+            if frame_components.get(event.event_id) != event.trigger_component:
+                raise ValueError("strategy trigger frame trigger_component values must match materialized events")
 
 
 def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, object]]:

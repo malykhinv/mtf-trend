@@ -112,7 +112,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Area | Status | Current evidence / gap | Required patch direction |
 | :--- | :--- | :--- | :--- |
 | Broad anomaly strategy variants h15/h30/h60 | IMPLEMENTED | Variants are registry-backed and executable. | Keep tests around contract validation. |
-| Broad anomaly trigger breadth | PARTIAL | Detector exists, but component coverage should be explicit for one-shot, burst, grind, volume-only, breakout, session, and market-wide impulse. | Add explicit `trigger_component` accounting and tests. |
+| Broad anomaly trigger breadth | PARTIAL | Detector now persists causal `trigger_component` / `trigger_components` accounting for implemented seed-level components: one-shot spike, range expansion, quote/base volume spike, trade-count spike, and volume-only anomaly. Remaining gap: fast-burst, grind, breakout, session, and market-wide impulse are not separate executable trigger components yet. | Add missing advanced trigger-family detectors without turning trigger into a trade setup. |
 | Trigger deduplication / anti-pyramiding | IMPLEMENTED | Same-symbol cooldown/dedup policy exists. | Keep as permanent regression test. |
 | Anomaly event lifecycle | PARTIAL | Online state lifecycle exists. Structural state fields are incomplete. | Add structural high/low/break/compression fields. |
 | Running high/low as-of semantics | IMPLEMENTED | State uses data available only up to `state_time`. | Keep no-leakage tests. |
@@ -143,7 +143,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 14. `methodology: strengthen simulation forensic audit` - implemented.
 15. `methodology: audit required controls completeness` - implemented.
 16. `strategy: make registry status self-auditing`.
-17. `strategy: complete broad anomaly trigger component accounting`.
+17. `strategy: complete broad anomaly trigger component accounting` - implemented in this patch; broader trigger-family coverage remains tracked by the Broad anomaly trigger breadth PARTIAL row.
 18. `strategy: add 180m horizon support or remove 180m promises` - implemented.
 19. `strategy: implement post-pump distribution variants`.
 20. `strategy: implement post-anomaly extension variants`.

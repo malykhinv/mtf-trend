@@ -51,6 +51,8 @@ def _event(*, event_id: str, symbol: str, detection_offset_minutes: int) -> Anom
         initial_volume_zscore=None,
         initial_quote_volume_zscore=None,
         initial_trade_count_zscore=None,
+        trigger_component="one_shot_spike",
+        trigger_components=("one_shot_spike",),
         detector_version="test",
     )
 
@@ -86,6 +88,8 @@ def test_broad_detector_uses_current_closed_candle_and_past_baseline_only() -> N
     assert events[0].event_detection_time_ms == BASE_TS + 6 * 60_000
     assert events[0].seed_time_ms == events[0].event_start_time_ms
     assert events[0].initial_move_pct > 0.03
+    assert events[0].trigger_component == "one_shot_spike"
+    assert events[0].trigger_components == ("one_shot_spike",)
     assert events[0] == mutated_events[0]
 
 
@@ -126,6 +130,34 @@ def test_broad_detector_can_detect_volume_anomaly_without_return_threshold() -> 
     assert len(events) == 1
     assert events[0].initial_quote_volume_zscore is not None
     assert events[0].initial_quote_volume_zscore >= 4.0
+    assert events[0].trigger_component == "volume_only_anomaly"
+    assert events[0].trigger_components == ("volume_only_anomaly", "quote_volume_spike")
+
+
+def test_events_artifact_persists_trigger_component_accounting() -> None:
+    rows = events_to_artifact([
+        AnomalyEvent(
+            event_id="evt_components",
+            symbol="AAA/USDT:USDT",
+            event_start_time_ms=BASE_TS,
+            event_detection_time_ms=BASE_TS + 60_000,
+            seed_time_ms=BASE_TS,
+            seed_open=100.0,
+            seed_high=104.0,
+            seed_low=99.0,
+            seed_close=103.0,
+            initial_move_pct=0.03,
+            initial_volume_zscore=5.0,
+            initial_quote_volume_zscore=6.0,
+            initial_trade_count_zscore=None,
+            trigger_component="one_shot_spike",
+            trigger_components=("one_shot_spike", "quote_volume_spike"),
+            detector_version="test",
+        )
+    ])
+
+    assert rows[0]["trigger_component"] == "one_shot_spike"
+    assert rows[0]["trigger_components"] == "one_shot_spike;quote_volume_spike"
 
 
 def test_broad_detector_excludes_first_candle_after_raw_gap_from_candidates_and_baseline() -> None:
@@ -259,6 +291,8 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
         "initial_volume_zscore",
         "initial_quote_volume_zscore",
         "initial_trade_count_zscore",
+        "trigger_component",
+        "trigger_components",
         "technical_noise_shock",
         "raw_candle_gap_minutes",
         "excluded_by_data_quality_gate",

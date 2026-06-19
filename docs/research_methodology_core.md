@@ -1178,6 +1178,8 @@ is_trigger
 reason_if_excluded
 ```
 
+For the anomaly family, `trigger_component` and `trigger_components` may be persisted as declared strategy audit columns. They explain why the strategy accepted a seed row, but Core must not branch on their strategy-specific meaning.
+
 Optional strategy audit columns are allowed only if declared in that strategy artifact schema. Core may store them, but Core must not branch on their strategy-specific meaning.
 
 Запрещено:
