@@ -47,8 +47,8 @@ def _candle(index: int, *, open_price: float, high: float, low: float, close: fl
 def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
     return ExpectedValueRow(
         ev_version="mvp1_expected_value_oos_calibrated_proxy_v1",
-        strategy_name="anomaly",
-        strategy_version="broad_anomaly_v1_h30",
+        strategy_name="broad_anomaly_v1_h30",
+        strategy_version="1.0.0",
         event_id=event_id,
         symbol="AAA/USDT:USDT",
         state_time_ms=BASE_MS,
@@ -176,7 +176,7 @@ def test_trade_simulation_rejects_strategy_horizon_mismatch() -> None:
             candles_1m=[],
             decision_rows=[],
             config=TradeSimulationConfig(
-                strategy_version="broad_anomaly_v1_h30",
+                strategy_name="broad_anomaly_v1_h30",
                 target_horizon_minutes=60,
             ),
         )

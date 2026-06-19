@@ -350,7 +350,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-prediction":
         config = WalkForwardPredictionConfig(
-            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
         )
         output_dir = run_mvp1_prediction(
@@ -365,7 +365,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-controls":
         config = ControlsConfig(
-            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
         )
         output_dir = run_mvp1_controls(
@@ -380,7 +380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-expected-value":
         config = ExpectedValueConfig(
-            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
             fee_bps=args.fee_bps,
             slippage_bps=args.slippage_bps,
@@ -399,7 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-mvp1-trade-simulation":
         config = TradeSimulationConfig(
-            strategy_version=_broad_strategy_version_for_horizon(args.horizon_minutes),
+            strategy_name=_broad_strategy_version_for_horizon(args.horizon_minutes),
             target_horizon_minutes=args.horizon_minutes,
             require_prediction_confident=not bool(args.allow_unconfident),
             require_rr_acceptable=not bool(args.allow_low_rr),

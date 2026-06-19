@@ -249,7 +249,7 @@ def test_prediction_rejects_strategy_horizon_mismatch() -> None:
         build_walk_forward_predictions(
             inputs=[],
             config=WalkForwardPredictionConfig(
-                strategy_version="broad_anomaly_v1_h30",
+                strategy_name="broad_anomaly_v1_h30",
                 target_horizon_minutes=60,
             ),
         )

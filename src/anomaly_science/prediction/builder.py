@@ -673,7 +673,7 @@ def _target_for_horizon(label: AnomalyOutcomeLabelRow, horizon_minutes: int) -> 
 
 
 def _validate_strategy_horizon(*, config: WalkForwardPredictionConfig) -> None:
-    strategy = get_strategy(config.strategy_version)
+    strategy = get_strategy(config.strategy_name)
     if strategy.metadata.horizon_minutes != config.target_horizon_minutes:
         raise PredictionInputError(
             f"prediction target_horizon_minutes={config.target_horizon_minutes} "

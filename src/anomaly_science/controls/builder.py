@@ -237,7 +237,7 @@ def _available_rows(inputs: Sequence[PredictionInputRow] | Iterable[PredictionIn
 
 def _evaluate_reference_model(*, rows: Sequence[PredictionInputRow], config: ControlsConfig) -> ControlEvaluation:
     prediction_config = WalkForwardPredictionConfig(
-        strategy_version=config.strategy_version,
+        strategy_name=config.strategy_name,
         target_horizon_minutes=config.target_horizon_minutes,
         purge_horizon_minutes=config.purge_horizon_minutes,
         min_train_rows=config.min_train_rows,
@@ -255,7 +255,7 @@ def _evaluate_reference_model_with_exclusions(
     excluded_prefixes: Sequence[str],
 ) -> ControlEvaluation:
     prediction_config = WalkForwardPredictionConfig(
-        strategy_version=config.strategy_version,
+        strategy_name=config.strategy_name,
         target_horizon_minutes=config.target_horizon_minutes,
         purge_horizon_minutes=config.purge_horizon_minutes,
         min_train_rows=config.min_train_rows,

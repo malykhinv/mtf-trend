@@ -167,7 +167,7 @@ def _run_config_rows(
             extra_config={"command": "run-mvp1-expected-value", "stage": "mvp1_decision"},
         ),
         RunConfigRow(key="stage", value="mvp1_decision", source="runtime"),
-        *strategy_metadata_run_config_rows(strategy_name=config.strategy_version),
+        *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="ev_version", value=config.ev_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="fee_bps", value=str(config.fee_bps), source="runtime"),

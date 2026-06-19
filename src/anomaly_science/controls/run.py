@@ -213,7 +213,7 @@ def _run_config_rows(
             extra_config={"command": "run-mvp1-controls", "stage": "mvp1_controls"},
         ),
         RunConfigRow(key="stage", value="mvp1_controls", source="runtime"),
-        *strategy_metadata_run_config_rows(strategy_name=config.strategy_version),
+        *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="control_version", value=config.control_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="purge_horizon_minutes", value=str(config.purge_horizon_minutes), source="runtime"),

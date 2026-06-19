@@ -128,6 +128,8 @@ def test_expected_value_uses_oos_probabilities_atr_and_costs() -> None:
     assert row.best_action == "long"
     assert row.is_prediction_confident is True
     assert row.is_RR_still_acceptable is True
+    assert row.strategy_name == "broad_anomaly_v1_h30"
+    assert row.strategy_version == "1.0.0"
     assert row.temporal_contract == EXPECTED_VALUE_TEMPORAL_CONTRACT
 
 

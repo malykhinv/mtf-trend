@@ -55,7 +55,7 @@ def build_expected_value_rows(
     config: ExpectedValueConfig | None = None,
 ) -> tuple[ExpectedValueRow, ...]:
     cfg = config or ExpectedValueConfig()
-    strategy = get_strategy(cfg.strategy_version)
+    strategy = get_strategy(cfg.strategy_name)
     if strategy.metadata.horizon_minutes != cfg.target_horizon_minutes:
         raise ExpectedValueInputError(
             f"EV target_horizon_minutes={cfg.target_horizon_minutes} does not match strategy horizon {strategy.metadata.horizon_minutes}"
@@ -177,8 +177,8 @@ def _build_row(
     best_action = _best_action(EV_long=ev_long, EV_short=ev_short, EV_wait=ev_wait, EV_no_trade=ev_no_trade)
     return ExpectedValueRow(
         ev_version=config.ev_version,
-        strategy_name=config.strategy_name,
-        strategy_version=config.strategy_version,
+        strategy_name=strategy_metadata.strategy_name,
+        strategy_version=strategy_metadata.strategy_version,
         event_id=prediction.event_id,
         symbol=prediction.symbol,
         state_time_ms=state.state_time_ms,

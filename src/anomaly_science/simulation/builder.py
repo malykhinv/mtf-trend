@@ -81,10 +81,11 @@ def build_trade_simulation_rows(
 
     rows: list[TradeSimulationRow] = []
     active_until_by_strategy_symbol: dict[tuple[str, str, str], int] = {}
+    strategy = get_strategy(cfg.strategy_name)
     for decision in sorted(decision_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
         if decision.target_horizon_minutes != cfg.target_horizon_minutes:
             continue
-        if decision.strategy_version != cfg.strategy_version:
+        if decision.strategy_name != strategy.metadata.strategy_name or decision.strategy_version != strategy.metadata.strategy_version:
             continue
         if not _is_simulatable_decision(decision, config=cfg):
             continue
@@ -134,10 +135,11 @@ def build_random_entry_time_control_rows(
     candles_by_symbol = _candles_by_symbol(candles_1m)
     funding_by_symbol = _funding_by_symbol(funding_rates)
     candidates_by_symbol: dict[str, list[ExpectedValueRow]] = {}
+    strategy = get_strategy(cfg.strategy_name)
     for decision in decision_rows:
         if decision.target_horizon_minutes != cfg.target_horizon_minutes:
             continue
-        if decision.strategy_version != cfg.strategy_version:
+        if decision.strategy_name != strategy.metadata.strategy_name or decision.strategy_version != strategy.metadata.strategy_version:
             continue
         if not _is_simulatable_decision(decision, config=cfg):
             continue
@@ -186,10 +188,13 @@ def build_trade_simulation_metric_rows(
 ) -> tuple[TradeSimulationMetricRow, ...]:
     cfg = config or TradeSimulationConfig()
     _validate_strategy_horizon(config=cfg)
+    strategy = get_strategy(cfg.strategy_name)
     decisions = tuple(
         row
         for row in decision_rows
-        if row.target_horizon_minutes == cfg.target_horizon_minutes and row.strategy_version == cfg.strategy_version
+        if row.target_horizon_minutes == cfg.target_horizon_minutes
+        and row.strategy_name == strategy.metadata.strategy_name
+        and row.strategy_version == strategy.metadata.strategy_version
     )
     trades = tuple(simulation_rows)
     random_entry_trades = tuple(random_entry_time_control_rows)
@@ -263,7 +268,7 @@ def _is_simulatable_decision(decision: ExpectedValueRow, *, config: TradeSimulat
 
 
 def _validate_strategy_horizon(*, config: TradeSimulationConfig) -> None:
-    strategy = get_strategy(config.strategy_version)
+    strategy = get_strategy(config.strategy_name)
     if strategy.metadata.horizon_minutes != config.target_horizon_minutes:
         raise TradeSimulationInputError(
             f"simulation target_horizon_minutes={config.target_horizon_minutes} "
