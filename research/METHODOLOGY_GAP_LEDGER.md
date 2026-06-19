@@ -71,6 +71,7 @@ no strategy-specific if/else inside Core Engine
 no legacy_quarantine imports from new code
 no silent fallback for unknown data schemas
 H_max purge is enforced from active strategy horizons
+Horizon ownership contract is explicit: Core supports, Strategy selects via variants, Registry enforces
 final holdout cannot be read before protocol freeze
 protocol audit independently validates temporal and artifact invariants
 canonical strategy_* artifacts exist, with anomaly_* only as aliases
@@ -84,6 +85,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | BaseStrategy contract | IMPLEMENTED | Strategy metadata and trigger/custom-feature contract exist. | Keep stable unless explicit contract version bump. |
 | Strategy registry for broad anomaly | IMPLEMENTED | `broad_anomaly_v1_h15/h30/h60` are registry-backed. | Keep registry honest. |
 | Strategy registry truthfulness for specified-only variants | PARTIAL | Registry rejects specified-but-not-implemented variants, but docs/CLI/commands must stay synchronized. | Add registry/status tests and generated docs check. |
+| Horizon ownership contract | IMPLEMENTED | Core methodology now states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Implement the code-side single source of truth and validator in the next patch. |
 | Data source boundary / normalized market data | PARTIAL | Binance Vision cache and normalized CSV boundary exist. Full all-symbol 380d resource envelope is not proven here. | Add run manifest, cache/data snapshot hashes, and resource smoke docs. |
 | Data quality gates | PARTIAL | Gaps, bad candles, technical noise, and explicit failure flags exist. Need stricter evidence that every downstream stage excludes the same bad rows. | Add shared `DataQualityMask` and cross-stage exclusion tests. |
 | Point-in-time universe | PARTIAL | Universe skeleton exists. Listing/delisting confidence and anti-survivorship proof are not complete. | Harden universe artifact and tests for delisted/missing symbols. |
@@ -129,14 +131,15 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 2. `methodology: enforce active-horizon H_max purge` - implemented in this patch.
 3. `methodology: canonicalize strategy-neutral artifacts` - implemented in this patch.
 4. `methodology: integrate holdout freeze into run-research` - implemented in this patch.
-5. `methodology: add independent forensic protocol audit`.
-6. `strategy: make registry status self-auditing`.
-7. `strategy: complete broad anomaly trigger component accounting`.
-8. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
-9. `strategy: implement post-pump distribution variants`.
-10. `strategy: implement post-anomaly extension variants`.
-11. `features: add structural state and relaxed geometry features`.
-12. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+5. `methodology: document horizon ownership contract` - implemented in this patch.
+6. `methodology: add independent forensic protocol audit`.
+7. `strategy: make registry status self-auditing`.
+8. `strategy: complete broad anomaly trigger component accounting`.
+9. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
+10. `strategy: implement post-pump distribution variants`.
+11. `strategy: implement post-anomaly extension variants`.
+12. `features: add structural state and relaxed geometry features`.
+13. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 

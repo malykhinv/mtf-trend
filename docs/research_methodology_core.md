@@ -243,6 +243,53 @@ Strategy Registry обязан сохранять metadata variant-а в `strate
 читать TP/SL из simulation config в обход StrategyMetadata
 ```
 
+### 4.2.1. Research horizon ownership contract
+
+Core и Strategy делят ответственность за horizons, но не смешивают её.
+
+Core определяет только технически поддержанный research horizon set, то есть набор горизонтов, для которых платформа обязана уметь строить future paths, labels, schemas, prediction target dispatch, controls, EV, simulation, `H_max`, purge и audit.
+
+Утверждённый Core-supported research horizon set для текущего contract version:
+
+```text
+15m
+30m
+60m
+120m
+180m
+```
+
+Strategy Spec определяет смысловые горизонты конкретной гипотезы только через явные strategy variants. Horizon suffix `_h[minutes]` не является свободным параметром CLI или пользователя. Он валиден только если такой variant указан в Strategy Spec, входит в Core-supported horizon set и реализован или явно помечен как specified-but-not-implemented.
+
+Registry является enforcement layer между Core и Strategy. Перед запуском train/OOS/controls/EV/simulation Registry обязан проверить:
+
+```text
+strategy variant exists
+horizon_minutes входит в Core-supported research horizon set
+horizon_minutes соответствует horizon suffix зарегистрированного strategy_name
+strategy variant executable, либо run завершается явной ошибкой specified-but-not-implemented
+```
+
+Правило:
+
+```text
+Core может материализовать raw future/label artifacts для всех Core-supported horizons.
+Prediction, controls, EV и simulation выбирают target horizon только из валидированного strategy variant-а.
+H_max считается только по активным strategy variants конкретного run-а, а не по всем horizons, которые Core технически умеет считать.
+```
+
+Запрещено:
+
+```text
+добавлять arbitrary horizons вроде 11m, 32m или 47m только через Strategy Spec или CLI
+считать неизвестный suffix допустимым default horizon
+разрешать strategy variant, horizon которого отсутствует в Core-supported set
+смешивать artifact-supported horizons с executable strategy horizons
+использовать 120m/180m broad anomaly run только потому, что Core умеет посчитать 120m/180m labels
+```
+
+Добавление нового горизонта вне утверждённого set является Core contract/schema change и требует отдельного patch с обновлением future paths, labels, schemas, prediction/controls/EV/simulation, purge tests, audit и docs.
+
 ### 4.3. Trigger Frame validation contract
 
 `generate_triggers()` возвращает не торговый сигнал и не boolean mask, а lifecycle boundary между Strategy и Core.
@@ -964,6 +1011,10 @@ double-barrier resolved as stop_loss_first
 strategy/core separation enforced
 BaseStrategy contract valid
 one strategy instance has exactly one horizon_minutes
+horizon_minutes belongs to Core-supported research horizon set
+horizon suffix matches registered strategy variant metadata
+unsupported arbitrary horizons rejected before train/OOS
+H_max computed from active strategy variants only
 trigger frame schema valid and lifecycle timestamps ordered
 BaseStrategy trigger-frame timestamp columns are pl.Datetime[ms, UTC], not Int64 `_ms` columns
 trigger cascade suppression applied before dataset/simulation rows

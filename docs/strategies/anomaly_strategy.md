@@ -49,6 +49,8 @@ post_pump_distribution_v1_h180
 
 ```text
 Нельзя смешивать разные strategy_name/strategy_version в одном model_version без явного split.
+Horizon suffix не является свободным параметром: strategy variant разрешён только если он явно перечислен в этом Strategy Spec и входит в Core-supported research horizon set.
+Нельзя запускать `broad_anomaly_v1_h120`, `broad_anomaly_v1_h180`, `*_h11`, `*_h32` или любой другой неописанный suffix через default/fallback factory.
 ```
 
 
@@ -463,25 +465,38 @@ audit flag:
 
 Anomaly family поддерживает разные horizons только через отдельные strategy variants.
 
+Core-supported horizon set определён в `docs/research_methodology_core.md`. Этот файл выбирает только смысловые anomaly variants из Core-supported set. Он не имеет права добавлять произвольные horizons сам по себе.
+
 Правило:
 
 ```text
 Каждая комбинация торговой логики и временного горизонта регистрируется как самостоятельный изолированный инстанс стратегии.
 Запрещено смешивать разные горизонты прогнозирования внутри одной модели CatBoost.
 Один strategy_name/version = один horizon_minutes.
+Horizon suffix должен быть явно перечислен ниже; unknown suffix не может быть интерпретирован как default.
 ```
 
 Утверждённый список базовых инстансов платформы:
 
 ```text
-broad_anomaly_v1_h15              быстрый скальпинг импульса
-broad_anomaly_v1_h30
-broad_anomaly_v1_h60
+broad_anomaly_v1_h15              быстрый diagnostic horizon первичной реакции
+broad_anomaly_v1_h30              primary MVP horizon broad anomaly
+broad_anomaly_v1_h60              extended broad anomaly horizon
 post_anomaly_extension_v1_h60     торговля продолжения на часовом окне
 post_anomaly_extension_v1_h120
 post_pump_distribution_v1_h60     торговля полки распределения
 post_pump_distribution_v1_h120
 post_pump_distribution_v1_h180
+```
+
+Запрещённые anomaly horizon examples:
+
+```text
+broad_anomaly_v1_h120
+broad_anomaly_v1_h180
+post_anomaly_extension_v1_h15
+post_pump_distribution_v1_h15
+любые variants с h11, h32, h47 или другим horizon вне Core-supported set
 ```
 
 Правило:

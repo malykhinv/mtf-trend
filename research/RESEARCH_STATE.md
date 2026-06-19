@@ -16,12 +16,20 @@ Active rule:
 - Trade simulation is simplified and pessimistic; it is not shadow live or production execution.
 - Shadow live and production live are still intentionally absent.
 - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
+- Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
 
 Current local base commit before the active run-research holdout freeze patch: `db17b76a`, verified with `git rev-parse --short HEAD`.
 Last local validation on 2026-06-19:
 - `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
 - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
 - `.venv\Scripts\python.exe -m pytest`
+
+Current documentation-only patch generated from uploaded snapshot `project_20260619_103805.zip`:
+- `methodology: document horizon ownership contract`
+  - Clarifies that Core-supported horizons are fixed at 15/30/60/120/180 for the current contract.
+  - Clarifies that Strategy Spec selects explicit semantic variants only; arbitrary suffixes such as h11/h32 are invalid without a Core contract/schema patch.
+  - Clarifies that Registry is the enforcement layer.
+  - Patch status: PROPOSED until applied and verified locally.
 
 
 Pending local patches from uploaded snapshot `project_20260618_115220.zip`:

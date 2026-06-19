@@ -1,5 +1,20 @@
 # Patch log
 
+## methodology: document horizon ownership contract
+
+Status: PROPOSED; patch generated from uploaded snapshot `project_20260619_103805.zip`; GitHub head not checked in this environment.
+
+Intent:
+- Make horizon ownership explicit in Core methodology: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry enforces compatibility.
+- Document the current Core-supported horizon set: 15/30/60/120/180.
+- Clarify that arbitrary horizons such as h11/h32 require a Core contract/schema patch and cannot be introduced through Strategy Spec or CLI alone.
+- Clarify anomaly horizon validity: broad anomaly is limited to h15/h30/h60, while post-extension/post-pump h60/h120/h180 remain specified-only until implemented.
+- Update the methodology gap ledger and research state without changing code, thresholds, labels, triggers, ML, EV, simulation, or live behavior.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_document_horizon_ownership_contract.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+
 ## methodology: integrate holdout freeze into run-research
 
 Status: APPLIED in current local branch after direct code inspection of head `db17b76a`.
