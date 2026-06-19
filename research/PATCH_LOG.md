@@ -1,5 +1,21 @@
 # Patch log
 
+## methodology: add full research run manifest
+
+Status: PROPOSED; patch generated after `methodology: enforce real holdout lock`.
+
+Intent:
+- Write a root-level `strategy_run_config.csv` / `anomaly_run_config.csv` for `run-research`, not only per-stage run configs.
+- Include strategy identity, target horizon, active `H_max`, research/holdout mode, protocol freeze id, forensic audit status/counts, data snapshot hash, config hash, dependency versions, and methodology ledger status.
+- Write a root-level `artifact_manifest.json` covering run CSV/JSON artifacts.
+- Make forensic audit verify the root research run manifest exists and contains required reproducibility keys.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_add_full_research_run_manifest.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_forensic_audit.py tests/test_research_run.py` must be run in the project venv because this sandbox lacks `polars`.
+
+
 ## methodology: enforce real holdout lock
 
 Status: PROPOSED; patch generated after `methodology: hard-gate run-research on forensic audit`.

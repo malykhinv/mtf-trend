@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 from anomaly_science.audit import build_independent_forensic_audit_rows
@@ -24,7 +25,40 @@ def _copy_text(source: Path, target: Path) -> None:
     target.write_text(source.read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
 
 
+def _write_root_research_manifest(root: Path) -> None:
+    rows = [
+        {"key": "strategy_name", "value": "broad_anomaly_v1_h30", "source": "run_research"},
+        {"key": "strategy_version", "value": "v1", "source": "strategy_registry"},
+        {"key": "strategy_contract_version", "value": "base_strategy_v1", "source": "strategy_registry"},
+        {"key": "strategy_family", "value": "anomaly", "source": "strategy_registry"},
+        {"key": "target_horizon_minutes", "value": "30", "source": "run_research"},
+        {"key": "active_h_max_minutes", "value": "30", "source": "run_research"},
+        {"key": "research_mode", "value": "frozen_holdout", "source": "run_research"},
+        {"key": "holdout_days", "value": "60", "source": "run_research"},
+        {"key": "protocol_freeze_id", "value": "freeze", "source": "run_research"},
+        {"key": "research_start_date", "value": "2026-01-01", "source": "run_research"},
+        {"key": "research_end_date", "value": "2026-01-02", "source": "run_research"},
+        {"key": "forensic_audit_status", "value": "PENDING", "source": "run_research"},
+        {"key": "data_snapshot_hash", "value": "abc", "source": "runtime"},
+        {"key": "config_hash", "value": "def", "source": "runtime"},
+        {"key": "dependency_versions", "value": "pandas==fixture", "source": "runtime"},
+        {"key": "artifact_manifest_path", "value": str(root / "artifact_manifest.json"), "source": "run_research"},
+        {"key": "methodology_gap_ledger_status", "value": "MISSING=0;PARTIAL=0", "source": "research_ledger"},
+    ]
+    schema = get_artifact_schema("strategy_run_config.csv")
+    with (root / "strategy_run_config.csv").open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=list(schema.required_columns))
+        writer.writeheader()
+        writer.writerows(rows)
+    _copy_text(root / "strategy_run_config.csv", root / "anomaly_run_config.csv")
+    (root / "artifact_manifest.json").write_text(
+        json.dumps({"run_id": "fixture", "created_at_utc": "2026-01-01T00:00:00+00:00", "artifacts": []}) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_valid_minimal_forensic_fixture(root: Path) -> None:
+    _write_root_research_manifest(root)
     prediction = root / "stages" / "prediction"
     _write_artifact(
         prediction / "strategy_oos_predictions.csv",
@@ -112,6 +146,7 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     by_name = _by_name(rows)
 
     assert by_name["forensic_artifact_schema_columns_verified"].status is AuditStatus.PASS
+    assert by_name["forensic_root_research_run_manifest_complete"].status is AuditStatus.PASS
     assert by_name["forensic_temporal_contract_verified_from_artifacts"].status is AuditStatus.PASS
     assert by_name["forensic_model_metadata_purge_hmax_verified"].status is AuditStatus.PASS
     assert by_name["forensic_prediction_rows_are_oos_after_train_cutoff"].status is AuditStatus.PASS
@@ -159,6 +194,19 @@ def test_independent_forensic_audit_fails_alias_drift(tmp_path: Path) -> None:
     by_name = _by_name(rows)
 
     assert by_name["forensic_canonical_alias_artifacts_match"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+
+def test_independent_forensic_audit_fails_missing_root_manifest(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    (tmp_path / "strategy_run_config.csv").unlink()
+    (tmp_path / "anomaly_run_config.csv").unlink()
+
+    rows = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(rows)
+
+    assert by_name["forensic_root_research_run_manifest_complete"].status is AuditStatus.FAIL
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
 

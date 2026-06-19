@@ -32,6 +32,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     found = _index_known_csv_artifacts(root)
     rows: list[ProtocolAuditRow] = []
     rows.append(_schema_columns_row(found))
+    rows.append(_root_run_manifest_completeness_row(root))
     rows.append(_temporal_contract_row(found))
     rows.append(_model_metadata_purge_row(found))
     rows.append(_prediction_oos_cutoff_row(found))
@@ -82,6 +83,70 @@ def _schema_columns_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditR
         f"independently verified required/extra columns for {checked} known CSV artifact(s)",
     )
 
+
+
+def _root_run_manifest_completeness_row(root: Path) -> ProtocolAuditRow:
+    run_config_path = root / "strategy_run_config.csv"
+    manifest_path = root / "artifact_manifest.json"
+    if not run_config_path.exists():
+        return _row(
+            "forensic_root_research_run_manifest_complete",
+            AuditStatus.FAIL,
+            f"missing root research run manifest: {run_config_path}",
+            artifact="strategy_run_config.csv",
+        )
+    if not manifest_path.exists():
+        return _row(
+            "forensic_root_research_run_manifest_complete",
+            AuditStatus.FAIL,
+            f"missing root artifact manifest: {manifest_path}",
+            artifact="artifact_manifest.json",
+        )
+    required_keys = {
+        "strategy_name",
+        "strategy_version",
+        "strategy_contract_version",
+        "strategy_family",
+        "target_horizon_minutes",
+        "active_h_max_minutes",
+        "research_mode",
+        "holdout_days",
+        "protocol_freeze_id",
+        "research_start_date",
+        "research_end_date",
+        "forensic_audit_status",
+        "data_snapshot_hash",
+        "config_hash",
+        "dependency_versions",
+        "artifact_manifest_path",
+        "methodology_gap_ledger_status",
+    }
+    rows = tuple(_read_csv_rows(run_config_path))
+    keys = {row.get("key", "") for row in rows}
+    missing = sorted(required_keys - keys)
+    if missing:
+        return _row(
+            "forensic_root_research_run_manifest_complete",
+            AuditStatus.FAIL,
+            "root strategy_run_config.csv is missing required reproducibility keys: " + ", ".join(missing),
+            artifact="strategy_run_config.csv",
+        )
+    empty_required_values = sorted(
+        row.get("key", "") for row in rows if row.get("key", "") in required_keys and row.get("value", "") == ""
+    )
+    if empty_required_values:
+        return _row(
+            "forensic_root_research_run_manifest_complete",
+            AuditStatus.FAIL,
+            "root strategy_run_config.csv has empty required values: " + ", ".join(empty_required_values),
+            artifact="strategy_run_config.csv",
+        )
+    return _row(
+        "forensic_root_research_run_manifest_complete",
+        AuditStatus.PASS,
+        f"root research manifest has {len(required_keys)} required reproducibility key(s) and artifact_manifest.json is present",
+        artifact="strategy_run_config.csv",
+    )
 
 def _temporal_contract_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     checked = 0

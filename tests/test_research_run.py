@@ -52,6 +52,9 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert (run_dir / "stages" / "forensic_audit" / "strategy_protocol_audit.csv").is_file()
     assert (run_dir / "stages" / "events" / "anomaly_events.csv").is_file()
     assert (run_dir / "research_run_summary.csv").is_file()
+    assert (run_dir / "strategy_run_config.csv").is_file()
+    assert (run_dir / "anomaly_run_config.csv").is_file()
+    assert (run_dir / "artifact_manifest.json").is_file()
 
     ledger = pd.read_csv(run_dir / "stages" / "holdout_governance" / "research_ledger.csv")
     assert ledger.loc[0, "protocol_freeze_id"] == "smoke-freeze"
@@ -70,6 +73,15 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert summary_by_key["forensic_audit_dir"].endswith("stages/forensic_audit") or summary_by_key["forensic_audit_dir"].endswith("stages\\forensic_audit")
     assert summary_by_key["forensic_audit_status"] in {"PASS", "WARN"}
     assert summary_by_key["forensic_audit_fail_count"] == "0"
+
+    run_config = pd.read_csv(run_dir / "strategy_run_config.csv")
+    run_config_by_key = dict(zip(run_config["key"], run_config["value"].astype(str), strict=True))
+    assert run_config_by_key["strategy_name"] == "broad_anomaly_v1_h30"
+    assert run_config_by_key["target_horizon_minutes"] == "30"
+    assert run_config_by_key["active_h_max_minutes"] == "30"
+    assert run_config_by_key["forensic_audit_status"] in {"PASS", "WARN"}
+    assert run_config_by_key["data_snapshot_hash"]
+    assert run_config_by_key["config_hash"]
 
 
 def test_run_research_cli_accepts_strategy_and_optional_days() -> None:

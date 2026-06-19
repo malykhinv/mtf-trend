@@ -1083,11 +1083,14 @@ dependency versions
 run timestamp
 ```
 
-Artifact:
+Artifacts:
 
 ```text
 strategy_run_config.csv
+artifact_manifest.json
 ```
+
+For `run-research`, the root-level `strategy_run_config.csv` is the canonical run manifest. It must include strategy identity, target horizon, active `H_max`, research/holdout mode, protocol freeze id, data snapshot hash, config hash, dependency versions, methodology ledger status, and forensic audit status. Stage-level `strategy_run_config.csv` files may exist, but they do not replace the root run manifest.
 
 ## 24. Canonical artifact naming
 
