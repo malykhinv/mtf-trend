@@ -255,6 +255,47 @@ def _write_valid_minimal_forensic_fixture(root: Path) -> None:
         ],
     )
     _copy_text(simulation / "strategy_trade_simulation_metrics.csv", simulation / "anomaly_trade_simulation_metrics.csv")
+
+    rejection = root / "stages" / "rejection_funnel"
+    _write_artifact_rows(
+        rejection / "strategy_rejection_funnel.csv",
+        "strategy_rejection_funnel.csv",
+        [
+            {
+                "funnel_version": "strategy_rejection_funnel_v1",
+                "run_id": "fixture",
+                "strategy_name": "broad_anomaly_v1_h30",
+                "strategy_version": "v1",
+                "strategy_contract_version": "base_strategy_v1",
+                "target_horizon_minutes": 30,
+                "stage": stage,
+                "source_artifact": source_artifact,
+                "row_key": f"{stage}|fixture",
+                "event_id": "e1" if stage not in {"data_quality", "point_in_time_universe"} else "",
+                "symbol": "AAAUSDT" if stage != "data_quality" else "",
+                "snapshot_time_ms": 1_800_000 if stage not in {"data_quality", "point_in_time_universe"} else "",
+                "status": status,
+                "reason_code": "horizon_not_available" if status == "EXCLUDED" else "",
+                "reason_detail": "fixture",
+                "upstream_stage": "fixture",
+                "downstream_stage": "fixture",
+                "row_count": 1,
+                "temporal_contract": "artifact_driven_lineage_no_future_features",
+            }
+            for stage, source_artifact, status in (
+                ("data_quality", "strategy_data_quality.csv", "INCLUDED"),
+                ("point_in_time_universe", "symbol_universe_by_day.csv", "INCLUDED"),
+                ("events", "strategy_events.csv", "INCLUDED"),
+                ("state", "strategy_state_1m.csv", "INCLUDED"),
+                ("future_path", "strategy_future_paths.csv", "INCLUDED"),
+                ("labels", "strategy_outcome_labels.csv", "EXCLUDED"),
+                ("prediction", "strategy_oos_predictions.csv", "INCLUDED"),
+                ("decision", "strategy_decision_timing.csv", "INCLUDED"),
+                ("simulation", "strategy_trade_simulation.csv", "INCLUDED"),
+            )
+        ],
+    )
+    _copy_text(rejection / "strategy_rejection_funnel.csv", rejection / "anomaly_rejection_funnel.csv")
     controls = root / "stages" / "controls"
     _write_artifact_rows(
         controls / "strategy_placebo_tests.csv",
@@ -341,6 +382,7 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_simulation_pessimistic_prices_and_costs_verified"].status is AuditStatus.PASS
     assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.PASS
     assert by_name["forensic_required_controls_complete"].status is AuditStatus.PASS
+    assert by_name["forensic_rejection_funnel_complete"].status is AuditStatus.PASS
     assert by_name["forensic_stage_protocol_audit_has_no_fail_rows"].status is AuditStatus.PASS
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.PASS
 

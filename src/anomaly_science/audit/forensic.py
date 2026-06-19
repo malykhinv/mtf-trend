@@ -72,6 +72,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_simulation_pessimistic_prices_and_costs_row(found))
     rows.append(_simulation_no_parallel_symbol_positions_row(found))
     rows.append(_required_controls_completeness_row(found))
+    rows.append(_rejection_funnel_completeness_row(found))
     rows.append(_stage_audit_fail_summary_row(found))
     rows.append(_forensic_gate_row(rows))
     return rows
@@ -740,6 +741,75 @@ def _append_exit_resolution_failures(
     else:
         failures.append(f"{path}:{row_index} has invalid exit_reason={exit_reason!r}")
 
+
+
+def _rejection_funnel_completeness_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    paths = found.get("strategy_rejection_funnel.csv", ())
+    if not paths:
+        return _row(
+            "forensic_rejection_funnel_complete",
+            AuditStatus.FAIL,
+            "missing strategy_rejection_funnel.csv; row lineage and explicit exclusion reasons are not auditable",
+            artifact="strategy_rejection_funnel.csv",
+        )
+
+    checked = 0
+    failures: list[str] = []
+    stages: set[str] = set()
+    excluded_reason_rows = 0
+    required_base_stages = {
+        "data_quality",
+        "point_in_time_universe",
+        "events",
+        "state",
+        "future_path",
+        "labels",
+        "prediction",
+        "decision",
+        "simulation",
+    }
+    for path in paths:
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            checked += 1
+            stage = row.get("stage", "")
+            if stage and not stage.startswith("summary:"):
+                stages.add(stage)
+            status = row.get("status", "")
+            reason = row.get("reason_code", "")
+            if status not in {"INCLUDED", "EXCLUDED", "SKIPPED"}:
+                failures.append(f"{path}:{row_index} has invalid status={status!r}")
+            if status == "EXCLUDED":
+                if not reason:
+                    failures.append(f"{path}:{row_index} excluded row has empty reason_code")
+                else:
+                    excluded_reason_rows += 1
+            if not row.get("row_key", ""):
+                failures.append(f"{path}:{row_index} has empty row_key")
+            if not row.get("source_artifact", ""):
+                failures.append(f"{path}:{row_index} has empty source_artifact")
+    missing_stages = sorted(required_base_stages - stages)
+    if missing_stages:
+        failures.append("missing funnel stages: " + ", ".join(missing_stages))
+    if failures:
+        return _row(
+            "forensic_rejection_funnel_complete",
+            AuditStatus.FAIL,
+            f"{len(failures)} rejection-funnel violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_rejection_funnel.csv",
+        )
+    if checked == 0:
+        return _row(
+            "forensic_rejection_funnel_complete",
+            AuditStatus.FAIL,
+            "strategy_rejection_funnel.csv exists but contains no rows",
+            artifact="strategy_rejection_funnel.csv",
+        )
+    return _row(
+        "forensic_rejection_funnel_complete",
+        AuditStatus.PASS,
+        f"verified strategy_rejection_funnel.csv coverage for {len(stages)} stage(s), {checked} row(s), and {excluded_reason_rows} explicit exclusion row(s)",
+        artifact="strategy_rejection_funnel.csv",
+    )
 
 def _stage_audit_fail_summary_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     checked = 0

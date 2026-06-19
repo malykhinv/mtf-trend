@@ -1149,11 +1149,39 @@ strategy_feature_catalog.csv
 strategy_registry.csv
 strategy_feature_schema.csv
 strategy_data_quality.csv
+strategy_rejection_funnel.csv
 strategy_protocol_audit.csv
 strategy_oos_predictions.csv
 strategy_calibration.csv
 strategy_decision_timing.csv
 strategy_trade_simulation.csv
+```
+
+
+### 24.2. Canonical `strategy_rejection_funnel.csv` boundary
+
+`strategy_rejection_funnel.csv` is the canonical strategy-neutral lineage artifact for explicit row/event inclusion and exclusion reasons across the offline research pipeline.
+
+Minimum stage coverage:
+
+```text
+data_quality
+point_in_time_universe
+events
+state
+future_path
+labels
+prediction
+decision
+simulation
+```
+
+Rule:
+
+```text
+Every EXCLUDED row must have a non-empty reason_code.
+The funnel is artifact-driven and must not rerun strategy trigger logic, model training, thresholds, or trade simulation.
+It explains where rows disappeared; it must not decide new rows.
 ```
 
 

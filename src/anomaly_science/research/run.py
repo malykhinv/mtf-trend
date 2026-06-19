@@ -21,6 +21,7 @@ from anomaly_science.features import run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
+from anomaly_science.rejection import write_rejection_funnel
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes, strategy_metadata_run_config_rows
@@ -158,6 +159,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             target_horizon_minutes=strategy.metadata.horizon_minutes,
         ),
     )
+    write_rejection_funnel(run_dir=run_dir, out_dir=stages_dir / "rejection_funnel")
     _write_research_run_manifest(
         run_dir=run_dir,
         config=config,

@@ -782,6 +782,14 @@ generic reject без reason_if_excluded
 скрывать неизвестную схему данных под empty result без audit
 ```
 
+Правило rejection funnel:
+
+```text
+anomaly-specific reason codes may appear in strategy_rejection_funnel.csv,
+but the artifact contract remains Core-owned and strategy-neutral.
+```
+
+
 ## 14. Anomaly events artifact lifecycle structure
 
 `strategy_events.csv` формируется Core на основе trigger frame, возвращённого `generate_triggers()` выбранной стратегии. Это event/lifecycle seed artifact, а не полный поминутный state artifact. Строки упорядочиваются по `state_time`.
@@ -872,6 +880,7 @@ strategy_oos_predictions.csv     -> anomaly_oos_predictions.csv where strategy_f
 strategy_calibration.csv         -> anomaly_calibration.csv where strategy_family=anomaly
 strategy_decision_timing.csv     -> anomaly_decision_timing.csv where strategy_family=anomaly
 strategy_trade_simulation.csv    -> anomaly_trade_simulation.csv where strategy_family=anomaly
+strategy_rejection_funnel.csv    -> anomaly_rejection_funnel.csv where strategy_family=anomaly
 strategy_protocol_audit.csv      -> anomaly_protocol_audit.csv where strategy_family=anomaly
 ```
 

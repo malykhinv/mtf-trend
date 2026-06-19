@@ -663,3 +663,20 @@ Changes:
 Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
 - Full pytest still needs the project venv because this sandbox may lack project runtime dependencies.
+
+## methodology: add artifact-driven rejection funnel
+
+Status: PROPOSED
+
+Changes:
+- Adds canonical `strategy_rejection_funnel.csv` with `anomaly_rejection_funnel.csv` alias.
+- Builds the funnel from already-written artifacts after simulation inside `run-research`, without rerunning strategy logic, models, or thresholds.
+- Records included/excluded lineage across data quality, point-in-time universe, events, state, future paths, labels, prediction, decision, and simulation.
+- Requires explicit `reason_code` for excluded rows and adds independent forensic completeness checks.
+- Updates methodology ledger/docs/tests.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `pytest -q tests/test_rejection_funnel.py tests/test_artifact_schemas.py tests/test_forensic_audit.py`
+
+Full pytest still needs the project venv because this sandbox may lack project runtime dependencies.
