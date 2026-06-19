@@ -1,6 +1,22 @@
 # Patch log
 
 
+## methodology: audit horizon consistency
+
+Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying H2 v2, H3, H4 v2, H5, and H6.
+
+Intent:
+- Add explicit methodology audit checks for horizon consistency.
+- Make prediction protocol audit verify the Core horizon whitelist, registry strategy/horizon compatibility, target label column, active `H_max`, purge horizon, OOS prediction artifact identity, and model metadata horizon identity.
+- Add regression tests for passing horizon audit rows and FAIL rows when label column, H_max, purge, prediction, or model metadata drift.
+- Keep this patch limited to audit/metadata verification; no trigger, label threshold, ML, EV, simulation, or live behavior changes.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_audit_horizon_consistency.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_horizon_contract.py tests/test_prediction.py tests/test_contracts.py` was not run in this sandbox because collection requires missing third-party dependency `polars`; run it in the project venv.
+
+
 ## methodology: add prediction artifact horizon identity
 
 Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_111337.zip` after applying H2 v2, H3, H4 v2, and H5.

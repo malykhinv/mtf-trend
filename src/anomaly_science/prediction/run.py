@@ -7,7 +7,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.audit import build_methodology_v2_audit_rows
+from anomaly_science.audit import build_horizon_consistency_audit_rows, build_methodology_v2_audit_rows
 from anomaly_science.prediction.builder import (
     build_calibration_rows,
     build_prediction_metric_rows,
@@ -52,6 +52,8 @@ def run_mvp1_prediction(
     protocol_rows = _protocol_rows(
         input_row_count=len(inputs),
         prediction_row_count=len(predictions),
+        predictions=predictions,
+        model_metadata=prediction_result.model_metadata,
         config=cfg,
     )
     run_config_rows = _run_config_rows(
@@ -128,6 +130,8 @@ def _protocol_rows(
     *,
     input_row_count: int,
     prediction_row_count: int,
+    predictions: object,
+    model_metadata: object,
     config: WalkForwardPredictionConfig,
 ) -> list[ProtocolAuditRow]:
     base_rows = [
@@ -218,6 +222,17 @@ def _protocol_rows(
             status=AuditStatus.PASS,
             message=f"weekly CatBoost enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= weekly_model_freeze_time_ms",
             artifact="anomaly_oos_predictions.csv",
+        ),
+        *build_horizon_consistency_audit_rows(
+            stage="mvp1_prediction",
+            strategy_name=config.strategy_name,
+            target_horizon_minutes=config.target_horizon_minutes,
+            target_label_column=config.target_label_column,
+            active_strategy_names=config.active_strategy_names,
+            active_h_max_minutes=config.active_h_max_minutes,
+            purge_horizon_minutes=config.purge_horizon_minutes,
+            prediction_rows=predictions,
+            model_metadata_rows=model_metadata,
         ),
         ProtocolAuditRow(
             check_name="weekly_walk_forward_heavy_models_enforced",

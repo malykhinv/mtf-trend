@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow
+from anomaly_science.contracts.horizons import (
+    research_horizon_label_column,
+    validate_supported_research_horizon,
+)
 from anomaly_science.contracts.time import TemporalContractError, enforce_snapshot_contract
+from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
+from anomaly_science.strategy.registry import StrategyRegistryError, get_strategy, validate_strategy_horizon
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +38,13 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "simultaneous_anomalies_count_1m_point_in_time",
     "base_strategy_contract_valid",
     "purge_rule_snapshot_time_plus_Hmax_before_test_start",
+    "horizon_core_whitelist_enforced",
+    "horizon_strategy_allowed_horizon_enforced",
+    "horizon_target_label_column_matches_target_horizon",
+    "horizon_active_hmax_matches_active_strategy_horizons",
+    "horizon_purge_uses_active_hmax",
+    "horizon_prediction_artifact_identity_consistent",
+    "horizon_model_metadata_identity_consistent",
     "weekly_walk_forward_heavy_models_enforced",
     "frozen_weekly_model_used_for_daily_oos",
     "expected_value_computed_before_trade_simulation",
@@ -91,6 +104,13 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
         "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
         "fixed_percent_labels_forbidden",
         "purge_rule_snapshot_time_plus_Hmax_before_test_start",
+        "horizon_core_whitelist_enforced",
+        "horizon_strategy_allowed_horizon_enforced",
+        "horizon_target_label_column_matches_target_horizon",
+        "horizon_active_hmax_matches_active_strategy_horizons",
+        "horizon_purge_uses_active_hmax",
+        "horizon_prediction_artifact_identity_consistent",
+        "horizon_model_metadata_identity_consistent",
         "weekly_walk_forward_heavy_models_enforced",
         "frozen_weekly_model_used_for_daily_oos",
     ),
@@ -115,6 +135,216 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+
+def build_horizon_consistency_audit_rows(
+    *,
+    stage: str,
+    strategy_name: str,
+    target_horizon_minutes: int,
+    target_label_column: str,
+    active_strategy_names: Iterable[str],
+    active_h_max_minutes: int,
+    purge_horizon_minutes: int | None = None,
+    prediction_rows: Iterable[object] = (),
+    model_metadata_rows: Iterable[object] = (),
+) -> list[ProtocolAuditRow]:
+    """Build independent horizon-consistency audit rows.
+
+    These checks intentionally read only explicit config/artifact identity
+    fields. They do not trust a pipeline stage simply because the stage ran.
+    """
+    if not stage:
+        raise ValueError("stage is required")
+    active_names = tuple(active_strategy_names)
+    predictions = tuple(prediction_rows)
+    metadata_rows = tuple(model_metadata_rows)
+    expected_label_column = ""
+    rows: list[ProtocolAuditRow] = []
+
+    def add(check_name: str, status: AuditStatus, message: str, artifact: str = "strategy_protocol_audit.csv") -> None:
+        rows.append(ProtocolAuditRow(check_name=check_name, status=status, message=message, artifact=artifact))
+
+    try:
+        validate_supported_research_horizon(target_horizon_minutes, field_name="target_horizon_minutes")
+        expected_label_column = research_horizon_label_column(target_horizon_minutes)
+    except ValueError as exc:
+        add(
+            "horizon_core_whitelist_enforced",
+            AuditStatus.FAIL,
+            f"target horizon is outside the Core-supported research horizon whitelist: {exc}",
+        )
+    else:
+        add(
+            "horizon_core_whitelist_enforced",
+            AuditStatus.PASS,
+            f"target horizon h{target_horizon_minutes} is in the Core-supported research horizon whitelist",
+        )
+
+    try:
+        validate_strategy_horizon(strategy_name, target_horizon_minutes)
+        metadata = get_strategy(strategy_name).metadata
+        if metadata.default_horizon_minutes not in metadata.allowed_horizons:
+            raise StrategyRegistryError(
+                f"default horizon h{metadata.default_horizon_minutes} is not in allowed_horizons={metadata.allowed_horizons}"
+            )
+    except (StrategyRegistryError, ValueError) as exc:
+        add(
+            "horizon_strategy_allowed_horizon_enforced",
+            AuditStatus.FAIL,
+            f"strategy/horizon pair is not registry-valid: {exc}",
+        )
+    else:
+        add(
+            "horizon_strategy_allowed_horizon_enforced",
+            AuditStatus.PASS,
+            (
+                f"strategy {strategy_name!r} allows selected horizon h{target_horizon_minutes}; "
+                f"default h{metadata.default_horizon_minutes} is inside allowed_horizons={metadata.allowed_horizons}"
+            ),
+        )
+
+    if expected_label_column and target_label_column == expected_label_column:
+        add(
+            "horizon_target_label_column_matches_target_horizon",
+            AuditStatus.PASS,
+            f"target_label_column={target_label_column!r} matches h{target_horizon_minutes}",
+        )
+    else:
+        add(
+            "horizon_target_label_column_matches_target_horizon",
+            AuditStatus.FAIL,
+            (
+                f"target_label_column={target_label_column!r} does not match "
+                f"expected={expected_label_column!r} for h{target_horizon_minutes}"
+            ),
+        )
+
+    try:
+        expected_h_max = active_strategy_h_max_minutes(active_names)
+    except (StrategyRegistryError, ValueError) as exc:
+        add(
+            "horizon_active_hmax_matches_active_strategy_horizons",
+            AuditStatus.FAIL,
+            f"active strategy H_max cannot be computed from active_strategy_names={active_names!r}: {exc}",
+        )
+        expected_h_max = None
+    else:
+        if active_h_max_minutes == expected_h_max:
+            add(
+                "horizon_active_hmax_matches_active_strategy_horizons",
+                AuditStatus.PASS,
+                f"active_h_max_minutes={active_h_max_minutes} equals max selected horizons from active_strategy_names={active_names!r}",
+            )
+        else:
+            add(
+                "horizon_active_hmax_matches_active_strategy_horizons",
+                AuditStatus.FAIL,
+                f"active_h_max_minutes={active_h_max_minutes} but active_strategy_names imply H_max={expected_h_max}",
+            )
+
+    if purge_horizon_minutes is None:
+        add(
+            "horizon_purge_uses_active_hmax",
+            AuditStatus.NOT_IMPLEMENTED,
+            "purge horizon was not provided to the horizon audit",
+        )
+    elif expected_h_max is not None and purge_horizon_minutes == expected_h_max and purge_horizon_minutes == active_h_max_minutes:
+        add(
+            "horizon_purge_uses_active_hmax",
+            AuditStatus.PASS,
+            f"purge_horizon_minutes={purge_horizon_minutes} equals active H_max",
+        )
+    else:
+        add(
+            "horizon_purge_uses_active_hmax",
+            AuditStatus.FAIL,
+            (
+                f"purge_horizon_minutes={purge_horizon_minutes} must equal active_h_max_minutes={active_h_max_minutes} "
+                f"and computed H_max={expected_h_max}"
+            ),
+        )
+
+    prediction_errors = _horizon_identity_errors(
+        artifact_rows=predictions,
+        strategy_name=strategy_name,
+        target_horizon_minutes=target_horizon_minutes,
+        target_label_column=target_label_column,
+        active_h_max_minutes=active_h_max_minutes,
+    )
+    if prediction_errors:
+        add(
+            "horizon_prediction_artifact_identity_consistent",
+            AuditStatus.FAIL,
+            "; ".join(prediction_errors[:5]),
+            artifact="strategy_oos_predictions.csv",
+        )
+    elif predictions:
+        add(
+            "horizon_prediction_artifact_identity_consistent",
+            AuditStatus.PASS,
+            f"{len(predictions)} prediction rows carry matching strategy/horizon identity fields",
+            artifact="strategy_oos_predictions.csv",
+        )
+    else:
+        add(
+            "horizon_prediction_artifact_identity_consistent",
+            AuditStatus.WARN,
+            "no prediction rows were available for artifact horizon identity verification",
+            artifact="strategy_oos_predictions.csv",
+        )
+
+    metadata_errors = _horizon_identity_errors(
+        artifact_rows=metadata_rows,
+        strategy_name=strategy_name,
+        target_horizon_minutes=target_horizon_minutes,
+        target_label_column=target_label_column,
+        active_h_max_minutes=active_h_max_minutes,
+    )
+    if metadata_errors:
+        add(
+            "horizon_model_metadata_identity_consistent",
+            AuditStatus.FAIL,
+            "; ".join(metadata_errors[:5]),
+            artifact="strategy_model_metadata.csv",
+        )
+    elif metadata_rows:
+        add(
+            "horizon_model_metadata_identity_consistent",
+            AuditStatus.PASS,
+            f"{len(metadata_rows)} model metadata rows carry matching strategy/horizon identity fields",
+            artifact="strategy_model_metadata.csv",
+        )
+    else:
+        add(
+            "horizon_model_metadata_identity_consistent",
+            AuditStatus.WARN,
+            "no model metadata rows were available for artifact horizon identity verification",
+            artifact="strategy_model_metadata.csv",
+        )
+
+    return rows
+
+
+def _horizon_identity_errors(
+    *,
+    artifact_rows: Iterable[object],
+    strategy_name: str,
+    target_horizon_minutes: int,
+    target_label_column: str,
+    active_h_max_minutes: int,
+) -> list[str]:
+    errors: list[str] = []
+    for index, row in enumerate(artifact_rows):
+        for field_name, expected in (
+            ("strategy_name", strategy_name),
+            ("target_horizon_minutes", target_horizon_minutes),
+            ("target_label_column", target_label_column),
+            ("active_h_max_minutes", active_h_max_minutes),
+        ):
+            actual = getattr(row, field_name, None)
+            if actual != expected:
+                errors.append(f"row {index} {field_name}={actual!r}, expected {expected!r}")
+    return errors
 
 def audit_temporal_contract(rows: list[TemporalAuditInput]) -> list[ProtocolAuditRow]:
     """Audit no-lookahead timing for a collection of rows."""

@@ -192,3 +192,85 @@ def test_low_level_cli_accepts_explicit_matching_strategy_name() -> None:
 
     assert args.strategy_name == "broad_anomaly_v1_h60"
     assert args.horizon_minutes == 60
+
+
+def test_horizon_consistency_audit_rows_pass_for_matching_artifacts() -> None:
+    from types import SimpleNamespace
+
+    from anomaly_science.audit import build_horizon_consistency_audit_rows
+    from anomaly_science.contracts.audit import AuditStatus
+
+    rows = build_horizon_consistency_audit_rows(
+        stage="mvp1_prediction",
+        strategy_name="broad_anomaly_v1_h30",
+        target_horizon_minutes=30,
+        target_label_column="scenario_30m",
+        active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
+        active_h_max_minutes=60,
+        purge_horizon_minutes=60,
+        prediction_rows=(
+            SimpleNamespace(
+                strategy_name="broad_anomaly_v1_h30",
+                target_horizon_minutes=30,
+                target_label_column="scenario_30m",
+                active_h_max_minutes=60,
+            ),
+        ),
+        model_metadata_rows=(
+            SimpleNamespace(
+                strategy_name="broad_anomaly_v1_h30",
+                target_horizon_minutes=30,
+                target_label_column="scenario_30m",
+                active_h_max_minutes=60,
+            ),
+        ),
+    )
+
+    by_name = {row.check_name: row for row in rows}
+    assert by_name["horizon_core_whitelist_enforced"].status is AuditStatus.PASS
+    assert by_name["horizon_strategy_allowed_horizon_enforced"].status is AuditStatus.PASS
+    assert by_name["horizon_target_label_column_matches_target_horizon"].status is AuditStatus.PASS
+    assert by_name["horizon_active_hmax_matches_active_strategy_horizons"].status is AuditStatus.PASS
+    assert by_name["horizon_purge_uses_active_hmax"].status is AuditStatus.PASS
+    assert by_name["horizon_prediction_artifact_identity_consistent"].status is AuditStatus.PASS
+    assert by_name["horizon_model_metadata_identity_consistent"].status is AuditStatus.PASS
+
+
+def test_horizon_consistency_audit_rows_fail_for_drift() -> None:
+    from types import SimpleNamespace
+
+    from anomaly_science.audit import build_horizon_consistency_audit_rows
+    from anomaly_science.contracts.audit import AuditStatus
+
+    rows = build_horizon_consistency_audit_rows(
+        stage="mvp1_prediction",
+        strategy_name="broad_anomaly_v1_h30",
+        target_horizon_minutes=30,
+        target_label_column="scenario_60m",
+        active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
+        active_h_max_minutes=30,
+        purge_horizon_minutes=60,
+        prediction_rows=(
+            SimpleNamespace(
+                strategy_name="broad_anomaly_v1_h30",
+                target_horizon_minutes=30,
+                target_label_column="scenario_30m",
+                active_h_max_minutes=60,
+            ),
+        ),
+        model_metadata_rows=(
+            SimpleNamespace(
+                strategy_name="broad_anomaly_v1_h30",
+                target_horizon_minutes=60,
+                target_label_column="scenario_60m",
+                active_h_max_minutes=60,
+            ),
+        ),
+    )
+
+    by_name = {row.check_name: row for row in rows}
+    assert by_name["horizon_target_label_column_matches_target_horizon"].status is AuditStatus.FAIL
+    assert by_name["horizon_active_hmax_matches_active_strategy_horizons"].status is AuditStatus.FAIL
+    assert by_name["horizon_purge_uses_active_hmax"].status is AuditStatus.FAIL
+    assert by_name["horizon_prediction_artifact_identity_consistent"].status is AuditStatus.FAIL
+    assert by_name["horizon_model_metadata_identity_consistent"].status is AuditStatus.FAIL
