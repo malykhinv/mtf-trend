@@ -25,6 +25,18 @@ def _optional_float(row: pd.Series, name: str) -> float | None:
     return float(row[name])
 
 
+def _optional_int(row: pd.Series, name: str) -> int | None:
+    if name not in row or pd.isna(row[name]):
+        return None
+    return int(row[name])
+
+
+def _optional_str(row: pd.Series, name: str, default: str) -> str:
+    if name not in row or pd.isna(row[name]):
+        return default
+    return str(row[name])
+
+
 def _records(frame: pd.DataFrame) -> list[pd.Series]:
     return [row for _, row in frame.iterrows()]
 
@@ -141,6 +153,16 @@ def normalize_symbol_universe_by_day(frame: pd.DataFrame | None) -> tuple[Symbol
             has_oi_data=_bool_value(row["has_oi_data"]),
             has_liquidation_data=_bool_value(row["has_liquidation_data"]),
             liquidity_eligible_on_day=_bool_value(row["liquidity_eligible_on_day"]),
+            eligible_for_cross_section=(
+                _bool_value(row["eligible_for_cross_section"])
+                if "eligible_for_cross_section" in row and not pd.isna(row["eligible_for_cross_section"])
+                else None
+            ),
+            first_seen_data_time_ms=_optional_int(row, "first_seen_data_time_ms"),
+            last_seen_data_time_ms=_optional_int(row, "last_seen_data_time_ms"),
+            data_source_symbol_status=_optional_str(row, "data_source_symbol_status", "observed_on_day"),
+            listing_confidence=_optional_str(row, "listing_confidence", "data_observed"),
+            delisting_confidence=_optional_str(row, "delisting_confidence", "unknown_without_external_metadata"),
             reason_if_excluded="" if "reason_if_excluded" not in row or pd.isna(row["reason_if_excluded"]) else str(row["reason_if_excluded"]),
         )
         for row in _records(frame)

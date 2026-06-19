@@ -182,7 +182,7 @@ def test_state_row_running_high_low_must_be_asof_snapshot() -> None:
 
 
 def test_symbol_universe_requires_exclusion_reason_for_non_tradable_day() -> None:
-    SymbolDayUniverseRow(
+    row = SymbolDayUniverseRow(
         trade_date="2026-06-17",
         symbol="AAA/USDT:USDT",
         listed_asof_day=True,
@@ -193,7 +193,13 @@ def test_symbol_universe_requires_exclusion_reason_for_non_tradable_day() -> Non
         has_oi_data=False,
         has_liquidation_data=False,
         liquidity_eligible_on_day=True,
+        first_seen_data_time_ms=1_000,
+        last_seen_data_time_ms=2_000,
+        data_source_symbol_status="observed_on_day",
+        listing_confidence="data_observed",
+        delisting_confidence="unknown_without_external_metadata",
     )
+    assert row.eligible_for_cross_section is True
 
     with pytest.raises(MarketDataContractError):
         SymbolDayUniverseRow(
@@ -207,6 +213,24 @@ def test_symbol_universe_requires_exclusion_reason_for_non_tradable_day() -> Non
             has_oi_data=False,
             has_liquidation_data=False,
             liquidity_eligible_on_day=False,
+        )
+
+
+def test_symbol_universe_rejects_cross_section_eligibility_without_data() -> None:
+    with pytest.raises(MarketDataContractError):
+        SymbolDayUniverseRow(
+            trade_date="2026-06-17",
+            symbol="AAA/USDT:USDT",
+            listed_asof_day=True,
+            delisted_asof_day=False,
+            tradable_on_day=False,
+            has_1m_data=False,
+            has_5m_data=False,
+            has_oi_data=False,
+            has_liquidation_data=False,
+            liquidity_eligible_on_day=False,
+            eligible_for_cross_section=True,
+            reason_if_excluded="missing_1m_data;missing_5m_data",
         )
 
 

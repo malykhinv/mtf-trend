@@ -1,5 +1,19 @@
 # Patch log
 
+## methodology: harden point-in-time universe
+
+Status: PROPOSED; patch generated after `methodology: enforce data quality mask before trigger`.
+
+Intent:
+- Add anti-survivorship fields to `symbol_universe_by_day.csv`: first/last seen timestamps, source symbol status, listing/delisting confidence, and explicit `eligible_for_cross_section`.
+- Materialize missing days between a symbol's first and last observed data as non-tradable rows with explicit exclusion reasons.
+- Use `eligible_for_cross_section` for market-relative features so missing/inferred universe rows do not enter cross-sectional ranks.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_harden_point_in_time_universe.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_data_audit.py tests/test_feature_matrix.py tests/test_contracts.py` must be run in the project venv because this sandbox lacks `polars`.
+
 ## methodology: enforce data quality mask before trigger
 
 Status: PROPOSED; patch generated after `methodology: add full research run manifest`.

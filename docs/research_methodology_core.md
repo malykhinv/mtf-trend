@@ -583,6 +583,12 @@ has_5m_data
 has_oi_data
 has_liquidation_data
 liquidity_eligible_on_day
+eligible_for_cross_section
+first_seen_data_time_ms
+last_seen_data_time_ms
+data_source_symbol_status
+listing_confidence
+delisting_confidence
 reason_if_excluded
 ```
 
@@ -592,6 +598,17 @@ reason_if_excluded
 использовать статический список активных сегодня symbols для прошлых дат
 исключать delisted symbols только потому, что они не торгуются сейчас
 ранжировать cross-section по symbols, данных которых не было доступно <= t
+выдавать `delisted_asof_day=false` как доказанный факт, если нет внешней listing/delisting metadata
+добавлять symbol в cross-section только потому, что он есть в сегодняшнем universe
+```
+
+Правило data-inferred universe:
+
+```text
+Если внешняя listing/delisting metadata отсутствует, Core может строить conservative data-inferred universe.
+В этом случае first_seen/last_seen и confidence-поля обязательны, а unknown delisting должен быть явно помечен как unknown, не как доказанное отсутствие delisting.
+Дни без 1m/5m данных между first_seen и last_seen materialize-ятся как non-tradable rows с reason_if_excluded.
+Cross-section использует только eligible_for_cross_section=true.
 ```
 
 ## 9. Feature contract

@@ -995,7 +995,7 @@ def _universe_symbols_by_day(rows: Sequence[SymbolDayUniverseRow] | Iterable[Sym
     if rows is None:
         return result
     for row in rows:
-        if row.tradable_on_day and row.liquidity_eligible_on_day and row.has_1m_data:
+        if row.eligible_for_cross_section and row.tradable_on_day and row.liquidity_eligible_on_day and row.has_1m_data:
             result.setdefault(row.trade_date, set()).add(row.symbol)
     return result
 

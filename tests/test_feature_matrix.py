@@ -242,6 +242,45 @@ def test_feature_matrix_materializes_point_in_time_cross_section_percentiles() -
     assert 0.0 <= row.range_expansion_market_percentile <= 1.0
 
 
+def test_feature_matrix_excludes_universe_rows_not_cross_section_eligible() -> None:
+    aaa = list(_candles_for_symbol(symbol="AAAUSDT", count=1446, base_price=100.0, volume_base=20.0))
+    bbb = list(_candles_for_symbol(symbol="BBBUSDT", count=1446, base_price=80.0, volume_base=10.0))
+    ccc = list(_candles_for_symbol(symbol="CCCUSDT", count=1446, base_price=60.0, volume_base=30.0))
+    snapshot_time_ms = aaa[-1].available_time_ms
+    trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
+    states = [
+        _state(snapshot_time_ms=snapshot_time_ms, current_close=aaa[-1].close),
+        _state_for_symbol(event_id="e2", symbol="BBBUSDT", snapshot_time_ms=snapshot_time_ms, current_close=bbb[-1].close),
+    ]
+    universe = [
+        _universe_row(trade_date=trade_date, symbol="AAAUSDT"),
+        _universe_row(trade_date=trade_date, symbol="BBBUSDT"),
+        SymbolDayUniverseRow(
+            trade_date=trade_date,
+            symbol="CCCUSDT",
+            listed_asof_day=True,
+            delisted_asof_day=False,
+            tradable_on_day=True,
+            has_1m_data=True,
+            has_5m_data=True,
+            has_oi_data=False,
+            has_liquidation_data=False,
+            liquidity_eligible_on_day=True,
+            eligible_for_cross_section=False,
+        ),
+    ]
+
+    row = build_price_time_feature_matrix(
+        candles_1m=[*aaa, *bbb, *ccc],
+        state_rows=states,
+        symbol_universe_by_day=universe,
+        config=FeatureMatrixConfig(volume_baseline_window_minutes=10, min_cross_section_symbols=2),
+    )[0]
+
+    assert row.cross_section_available is True
+    assert row.cross_section_symbol_count == 2
+
+
 def test_feature_matrix_leaves_cross_section_null_when_universe_is_missing() -> None:
     candles = list(_candles(count=1442))
     state = _state(snapshot_time_ms=candles[-1].available_time_ms, current_close=candles[-1].close)

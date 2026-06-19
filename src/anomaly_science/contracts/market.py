@@ -212,10 +212,40 @@ class SymbolDayUniverseRow:
     has_liquidation_data: bool
     liquidity_eligible_on_day: bool
     reason_if_excluded: str = ""
+    first_seen_data_time_ms: int | None = None
+    last_seen_data_time_ms: int | None = None
+    data_source_symbol_status: str = "observed_on_day"
+    listing_confidence: str = "data_observed"
+    delisting_confidence: str = "unknown_without_external_metadata"
+    eligible_for_cross_section: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.trade_date:
             raise MarketDataContractError("trade_date is required")
         _validate_symbol(self.symbol)
+        if self.first_seen_data_time_ms is not None:
+            validate_timestamp_ms(self.first_seen_data_time_ms, field_name="first_seen_data_time_ms")
+        if self.last_seen_data_time_ms is not None:
+            validate_timestamp_ms(self.last_seen_data_time_ms, field_name="last_seen_data_time_ms")
+        if (
+            self.first_seen_data_time_ms is not None
+            and self.last_seen_data_time_ms is not None
+            and self.first_seen_data_time_ms > self.last_seen_data_time_ms
+        ):
+            raise MarketDataContractError("first_seen_data_time_ms must be <= last_seen_data_time_ms")
+        if not self.data_source_symbol_status:
+            raise MarketDataContractError("data_source_symbol_status is required")
+        if not self.listing_confidence:
+            raise MarketDataContractError("listing_confidence is required")
+        if not self.delisting_confidence:
+            raise MarketDataContractError("delisting_confidence is required")
+        if self.eligible_for_cross_section is None:
+            object.__setattr__(
+                self,
+                "eligible_for_cross_section",
+                self.tradable_on_day and self.liquidity_eligible_on_day and self.has_1m_data,
+            )
+        if self.eligible_for_cross_section and not (self.tradable_on_day and self.liquidity_eligible_on_day and self.has_1m_data):
+            raise MarketDataContractError("eligible_for_cross_section requires tradable, liquid, 1m data")
         if not self.tradable_on_day and not self.reason_if_excluded:
             raise MarketDataContractError("reason_if_excluded is required when tradable_on_day is False")
