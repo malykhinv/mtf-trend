@@ -407,6 +407,16 @@ liq_intensity_during_sweep
 
 Binary flags разрешены только как audit/debug fields.
 
+Implementation note:
+
+```text
+Текущая реализация materializes эти fields в strategy_feature_matrix.csv / anomaly_feature_matrix.csv.
+Подтверждённые shelf_low_asof_t / shelf_high_asof_t берутся из causal structural state:
+локальный swing-level становится известен только после закрытой правой подтверждающей свечи.
+Raw shelf price levels являются audit-only; модель должна читать ATR-normalized / percentile / relative coordinates.
+Если structural level ещё не подтверждён as-of state_time, соответствующие geometry fields остаются null.
+```
+
 ## 7. Liquidation / OI / CVD interpretation inside anomaly strategy
 
 Anomaly strategy использует эти семейства как объясняющие признаки, но не как ручные trade rules.

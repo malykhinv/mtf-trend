@@ -146,6 +146,21 @@ class AnomalyFeatureMatrixRow:
     simultaneous_anomalies_share_1m: float | None = None
     systemic_cluster_regime: str = "unknown"
     market_shock_id: str = "unknown"
+    initial_pump_height_core_atr_1440: float | None = None
+    post_pump_consolidation_minutes: int | None = None
+    consolidation_width_ratio: float | None = None
+    shelf_low_asof_t: float | None = None
+    shelf_high_asof_t: float | None = None
+    current_low_minus_shelf_low_core_atr_1440: float | None = None
+    current_close_minus_shelf_low_core_atr_1440: float | None = None
+    current_high_minus_shelf_high_core_atr_1440: float | None = None
+    minutes_spent_below_shelf: int | None = None
+    minutes_since_reclaim: int | None = None
+    volume_on_sweep_percentile: float | None = None
+    trade_count_on_sweep_percentile: float | None = None
+    cvd_change_during_sweep: float | None = None
+    oi_change_during_sweep: float | None = None
+    liq_intensity_during_sweep: float | None = None
 
     def __post_init__(self) -> None:
         if not self.feature_schema_version:
@@ -184,6 +199,7 @@ class AnomalyFeatureMatrixRow:
             "long_liq_intensity",
             "liquidation_imbalance",
             "cumulative_liq_intensity_since_event_start",
+            "initial_pump_height_core_atr_1440",
             "cvd_quote_since_event_start",
             "cvd_change_3m",
             "cvd_change_5m",
@@ -205,6 +221,18 @@ class AnomalyFeatureMatrixRow:
             "symbol_return_minus_btc_return_15m",
             "idiosyncratic_momentum_score",
             "simultaneous_anomalies_share_1m",
+            "initial_pump_height_core_atr_1440",
+            "consolidation_width_ratio",
+            "shelf_low_asof_t",
+            "shelf_high_asof_t",
+            "current_low_minus_shelf_low_core_atr_1440",
+            "current_close_minus_shelf_low_core_atr_1440",
+            "current_high_minus_shelf_high_core_atr_1440",
+            "volume_on_sweep_percentile",
+            "trade_count_on_sweep_percentile",
+            "cvd_change_during_sweep",
+            "oi_change_during_sweep",
+            "liq_intensity_during_sweep",
         ):
             value = getattr(self, field_name)
             if value is not None and not math.isfinite(value):
@@ -229,6 +257,14 @@ class AnomalyFeatureMatrixRow:
             value = getattr(self, field_name)
             if value is not None and value < 0:
                 raise MarketDataContractError(f"{field_name} must be non-negative")
+        for field_name in ("post_pump_consolidation_minutes", "minutes_spent_below_shelf", "minutes_since_reclaim"):
+            value = getattr(self, field_name)
+            if value is not None and value < 0:
+                raise MarketDataContractError(f"{field_name} must be non-negative")
+        for field_name in ("volume_on_sweep_percentile", "trade_count_on_sweep_percentile"):
+            value = getattr(self, field_name)
+            if value is not None and not 0.0 <= value <= 1.0:
+                raise MarketDataContractError(f"{field_name} must be within [0, 1] when present")
         if not self.alpha_decay_bucket:
             raise MarketDataContractError("alpha_decay_bucket is required")
         if self.alpha_decay_bucket not in {"0-2m", "3-5m", "6-10m", "11-20m", "21-40m", ">40m"}:

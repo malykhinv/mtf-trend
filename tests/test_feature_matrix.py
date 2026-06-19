@@ -179,6 +179,95 @@ def test_feature_matrix_materializes_volume_oi_liquidation_and_cvd_asof_only() -
     assert row.price_down_cvd_up_flag is False
 
 
+def test_feature_matrix_materializes_relaxed_geometry_asof_only() -> None:
+    candles = list(_candles(count=1446, with_taker=True, varying_volume=True))
+    snapshot_time_ms = candles[-1].available_time_ms
+    current = candles[-1]
+    previous = candles[-2]
+    shelf_low = current.close - 0.005
+    shelf_high = current.close + 0.75
+    assert previous.close < shelf_low < current.close
+    state = AnomalyState1mRow(
+        event_id="e_geometry",
+        symbol="AAAUSDT",
+        state_time_ms=snapshot_time_ms,
+        snapshot_time_ms=snapshot_time_ms,
+        feature_cutoff_time_ms=snapshot_time_ms,
+        minutes_since_event_start=10,
+        minutes_since_detection=5,
+        event_alive=True,
+        running_high_asof_t=current.close + 2.0,
+        running_high_time_asof_t_ms=snapshot_time_ms - 3 * ONE_MINUTE_MS,
+        running_low_asof_t=current.close - 3.0,
+        running_low_time_asof_t_ms=snapshot_time_ms - 9 * ONE_MINUTE_MS,
+        time_since_running_high_minutes=3,
+        current_close=current.close,
+        current_return_from_start=0.03,
+        distance_to_running_high=(current.close / (current.close + 2.0)) - 1.0,
+        distance_to_running_low=(current.close / (current.close - 3.0)) - 1.0,
+        distance_to_structural_low=(current.close / shelf_low) - 1.0,
+        distance_to_structural_high=(current.close / shelf_high) - 1.0,
+        structural_low_asof_t=shelf_low,
+        structural_low_time_asof_t_ms=snapshot_time_ms - 2 * ONE_MINUTE_MS,
+        structural_high_asof_t=shelf_high,
+        structural_high_time_asof_t_ms=snapshot_time_ms - 4 * ONE_MINUTE_MS,
+    )
+    open_interest = [
+        OpenInterest5m(
+            symbol="AAAUSDT",
+            timestamp_ms=snapshot_time_ms - 5 * ONE_MINUTE_MS,
+            available_time_ms=snapshot_time_ms,
+            open_interest=1210.0,
+            source="fixture",
+        ),
+        OpenInterest5m(
+            symbol="AAAUSDT",
+            timestamp_ms=snapshot_time_ms - 10 * ONE_MINUTE_MS,
+            available_time_ms=snapshot_time_ms - 5 * ONE_MINUTE_MS,
+            open_interest=1100.0,
+            source="fixture",
+        ),
+    ]
+    liquidations = [
+        LiquidationEvent(
+            symbol="AAAUSDT",
+            event_time_ms=snapshot_time_ms - 30_000,
+            available_time_ms=snapshot_time_ms - 20_000,
+            side="short",
+            price=current.close,
+            quantity=1.0,
+            quote_quantity=20.0,
+            source="fixture",
+        )
+    ]
+
+    row = build_price_time_feature_matrix(
+        candles_1m=candles,
+        state_rows=[state],
+        open_interest_5m=open_interest,
+        liquidations=liquidations,
+    )[0]
+
+    assert row.initial_pump_height_core_atr_1440 is not None
+    assert row.post_pump_consolidation_minutes == 3
+    assert row.consolidation_width_ratio is not None
+    assert row.shelf_low_asof_t == shelf_low
+    assert row.shelf_high_asof_t == shelf_high
+    assert row.current_low_minus_shelf_low_core_atr_1440 is not None
+    assert row.current_low_minus_shelf_low_core_atr_1440 < 0.0
+    assert row.current_close_minus_shelf_low_core_atr_1440 is not None
+    assert row.current_close_minus_shelf_low_core_atr_1440 > 0.0
+    assert row.current_high_minus_shelf_high_core_atr_1440 is not None
+    assert row.minutes_spent_below_shelf is not None
+    assert row.minutes_since_reclaim == 0
+    assert row.volume_on_sweep_percentile is not None
+    assert 0.0 <= row.volume_on_sweep_percentile <= 1.0
+    assert row.trade_count_on_sweep_percentile is not None
+    assert row.cvd_change_during_sweep is not None
+    assert row.oi_change_during_sweep == 110.0 / 1210.0
+    assert row.liq_intensity_during_sweep == 20.0 / current.quote_volume
+
+
 def test_feature_matrix_marks_missing_optional_flow_sources_without_fallback() -> None:
     candles = list(_candles(count=1442))
     state = _state(snapshot_time_ms=candles[-1].available_time_ms, current_close=candles[-1].close)
@@ -450,6 +539,7 @@ def _candles(*, count: int, with_taker: bool = False, varying_volume: bool = Fal
                 close=open_price + 0.2,
                 volume=volume,
                 quote_volume=quote_volume,
+                number_of_trades=float(10 + index % 7),
                 taker_buy_quote_volume=taker_buy_quote_volume,
             )
         )
@@ -498,6 +588,7 @@ def _candles_for_symbol(*, symbol: str, count: int, base_price: float, volume_ba
                 close=open_price + 0.2,
                 volume=volume,
                 quote_volume=quote_volume,
+                number_of_trades=float(10 + index % 7),
                 taker_buy_quote_volume=quote_volume * 0.5,
             )
         )

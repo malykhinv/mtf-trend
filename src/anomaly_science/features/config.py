@@ -15,7 +15,7 @@ class FeatureMatrixConfig:
     cluster context. It still does not train ML or make decisions.
     """
 
-    feature_matrix_version: str = "feature_matrix_v4_btc_systemic"
+    feature_matrix_version: str = "feature_matrix_v5_relaxed_geometry"
     atr_window_minutes: int = ATR_1D_WINDOW_MINUTES
     expected_event_lifetime_minutes: int = 60
     volume_baseline_window_minutes: int = 1440

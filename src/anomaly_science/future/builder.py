@@ -33,8 +33,8 @@ def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]
     """Read anomaly_state_1m.csv through the declared MVP1 artifact schema.
 
     The boundary is intentionally strict: the file must have exactly the schema
-    columns. Nullable structural fields may be empty, because Patch 5 did not
-    compute structural features and Patch 6 must not create proxy fields.
+    columns. Nullable structural fields stay empty until a causal swing level
+    is confirmed; they must not be proxied from running highs/lows.
     """
     state_path = Path(path)
     if not state_path.exists():
@@ -73,6 +73,10 @@ def load_anomaly_state_1m_csv(path: str | Path) -> tuple[AnomalyState1mRow, ...]
                     distance_to_running_low=_required_float(row, "distance_to_running_low"),
                     distance_to_structural_low=_optional_float(row, "distance_to_structural_low"),
                     distance_to_structural_high=_optional_float(row, "distance_to_structural_high"),
+                    structural_low_asof_t=_optional_float(row, "structural_low_asof_t"),
+                    structural_low_time_asof_t_ms=_optional_int(row, "structural_low_time_asof_t_ms"),
+                    structural_high_asof_t=_optional_float(row, "structural_high_asof_t"),
+                    structural_high_time_asof_t_ms=_optional_int(row, "structural_high_time_asof_t_ms"),
                 )
             )
         except (TypeError, ValueError) as exc:

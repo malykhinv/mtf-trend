@@ -114,12 +114,12 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Broad anomaly strategy variants h15/h30/h60 | IMPLEMENTED | Variants are registry-backed and executable. | Keep tests around contract validation. |
 | Broad anomaly trigger breadth | PARTIAL | Detector now persists causal `trigger_component` / `trigger_components` accounting for implemented seed-level components: one-shot spike, range expansion, quote/base volume spike, trade-count spike, and volume-only anomaly. Remaining gap: fast-burst, grind, breakout, session, and market-wide impulse are not separate executable trigger components yet. | Add missing advanced trigger-family detectors without turning trigger into a trade setup. |
 | Trigger deduplication / anti-pyramiding | IMPLEMENTED | Same-symbol cooldown/dedup policy exists. | Keep as permanent regression test. |
-| Anomaly event lifecycle | PARTIAL | Online state lifecycle exists. Structural state fields are incomplete. | Add structural high/low/break/compression fields. |
+| Anomaly event lifecycle | IMPLEMENTED | Online state lifecycle now materializes causal confirmed structural high/low levels, level timestamps, distances to those levels, and keeps missing levels explicit until confirmation. | Keep no-leakage tests around structural state. |
 | Running high/low as-of semantics | IMPLEMENTED | State uses data available only up to `state_time`. | Keep no-leakage tests. |
 | Post-anomaly extension strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
 | Post-pump distribution strategy | MISSING | Specified, but not implemented in registry. | Add dedicated strategy class and tests. |
 | 180m anomaly horizon | IMPLEMENTED | 180m fields are supported in future paths, labels, prediction target dispatch, controls, EV target dispatch, artifact schemas, and tests. | Keep post-pump/post-extension 180m blocked only by strategy implementation rows. |
-| Relaxed geometry features | MISSING | Shelf/sweep/consolidation continuous features are not fully implemented. | Add strategy-specific feature module and catalog rows. |
+| Relaxed geometry features | IMPLEMENTED | Feature matrix now materializes the required continuous shelf/sweep/consolidation geometry fields from data available <= state_time; raw shelf prices are audit-only and ATR/relative coordinates are cataloged as model features. | Keep point-in-time equivalence tests and anti-binary catalog checks. |
 | Required anomaly controls | IMPLEMENTED | Anomaly-specific controls include always-follow, always-fade, fade-after-extension, follow-early-squeeze, no-CVD/no-OI/no-liquidation ablations, and idiosyncratic/systemic subsets. Forensic audit verifies the complete required set in `strategy_baseline_comparison.csv`. | Keep required-control forensic tests as permanent gate. |
 | Reject reasons | PARTIAL | Reject constants exist, but funnel coverage is not complete across every stage. | Add rejection funnel artifact and tests. |
 | Strategy-specific artifact aliases | IMPLEMENTED | Strategy-owned stages write canonical `strategy_*` artifacts first and keep `anomaly_*` only as compatibility aliases, with schema/writer tests. | Keep canonical-first writer tests as permanent gate. |
@@ -147,7 +147,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 18. `strategy: add 180m horizon support or remove 180m promises` - implemented.
 19. `strategy: implement post-pump distribution variants`.
 20. `strategy: implement post-anomaly extension variants`.
-21. `features: add structural state and relaxed geometry features`.
+21. `features: add structural state and relaxed geometry features` - implemented in this patch.
 22. `methodology: complete rejection funnel and docs sync`.
 
 Rule:

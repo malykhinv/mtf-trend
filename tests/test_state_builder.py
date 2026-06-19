@@ -120,6 +120,35 @@ def test_state_builder_uses_only_closed_candles_available_asof_state_time() -> N
     assert rows[1].current_return_from_start == pytest.approx(0.03)
 
 
+def test_state_builder_materializes_only_confirmed_structural_levels() -> None:
+    candles = [
+        _candle(0, open_price=99.0, high=100.0, low=98.0, close=99.5),
+        _candle(1, open_price=100.0, high=101.0, low=99.0, close=100.5),
+        _candle(2, open_price=100.5, high=103.0, low=100.0, close=102.5),
+        _candle(3, open_price=102.5, high=106.0, low=101.0, close=105.0),
+        _candle(4, open_price=105.0, high=105.5, low=100.0, close=101.0),
+        _candle(5, open_price=101.0, high=103.0, low=97.0, close=98.0),
+        _candle(6, open_price=98.0, high=101.0, low=97.5, close=100.0),
+    ]
+
+    rows = build_online_anomaly_state_1m(
+        candles_1m=candles,
+        events=[_event()],
+        config=OnlineStateBuilderConfig(max_state_minutes_after_detection=5),
+    )
+
+    early_row = next(row for row in rows if row.state_time_ms == BASE_TS + 180_000)
+    final_row = rows[-1]
+    assert early_row.structural_high_asof_t is None
+    assert early_row.structural_low_asof_t is None
+    assert final_row.structural_high_asof_t == 106.0
+    assert final_row.structural_high_time_asof_t_ms == BASE_TS + 180_000
+    assert final_row.structural_low_asof_t == 97.0
+    assert final_row.structural_low_time_asof_t_ms == BASE_TS + 300_000
+    assert final_row.distance_to_structural_low == pytest.approx((100.0 / 97.0) - 1.0)
+    assert final_row.distance_to_structural_high == pytest.approx((100.0 / 106.0) - 1.0)
+
+
 def test_mutating_future_candles_does_not_change_already_built_past_state_rows() -> None:
     candles = [
         _candle(0, open_price=99.0, high=100.0, low=98.0, close=99.5),

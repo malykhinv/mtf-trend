@@ -616,3 +616,20 @@ Changes:
 Validation in this environment:
 - `python -m compileall src main.py tests zip_project.py`
 - Targeted pytest collection is blocked here by missing runtime dependency `polars`.
+## features: add structural state and relaxed geometry features
+
+Status: PROPOSED
+
+Changes:
+- Adds causal confirmed structural high/low levels and timestamps to `AnomalyState1mRow` and the canonical/alias state artifact schema.
+- Computes structural levels only from closed as-of event-window candles using left/right local swing confirmation; missing structure remains null instead of being proxied from running high/low.
+- Adds the required relaxed anomaly geometry fields to `AnomalyFeatureMatrixRow`, `strategy_feature_matrix.csv`, and `anomaly_feature_matrix.csv`.
+- Catalogs raw shelf levels as audit-only and exposes ATR-normalized / percentile / relative geometry coordinates as model features.
+- Adds regression tests for structural no-leakage timing, feature matrix materialization, artifact schema roundtrip, and catalog declaration.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `pytest -q tests/test_state_builder.py tests/test_feature_matrix.py tests/test_artifact_schemas.py -k 'not run_mvp1_state_cli_writes_state_artifacts and not run_mvp1_feature_matrix_writes_artifacts'`
+- `pytest -q tests/test_feature_catalog.py -k 'not run_mvp1_features_writes_catalog_and_audit'`
+
+Full CLI/audit pytest still needs the project venv because this sandbox lacks `polars`.

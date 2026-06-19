@@ -15,6 +15,9 @@ from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
 from anomaly_science.state.config import OnlineStateBuilderConfig
 
+STRUCTURAL_PIVOT_LEFT_CANDLES = 2
+STRUCTURAL_PIVOT_RIGHT_CANDLES = 1
+
 
 class AnomalyEventsArtifactError(ValueError):
     """Raised when anomaly_events.csv violates its strict artifact boundary."""
@@ -154,6 +157,8 @@ def _build_event_rows(
         first_candle = min(asof_candles, key=lambda item: item.open_time_ms)
         running_high = max(asof_candles, key=lambda item: (item.high, -item.open_time_ms))
         running_low = min(asof_candles, key=lambda item: (item.low, item.open_time_ms))
+        structural_low = _latest_confirmed_structural_low(asof_candles)
+        structural_high = _latest_confirmed_structural_high(asof_candles)
         row = AnomalyState1mRow(
             event_id=event.event_id,
             symbol=event.symbol,
@@ -172,13 +177,59 @@ def _build_event_rows(
             current_return_from_start=(current.close / first_candle.open) - 1.0,
             distance_to_running_high=(current.close / running_high.high) - 1.0,
             distance_to_running_low=(current.close / running_low.low) - 1.0,
-            distance_to_structural_low=None,
-            distance_to_structural_high=None,
+            distance_to_structural_low=None if structural_low is None else (current.close / structural_low.low) - 1.0,
+            distance_to_structural_high=None if structural_high is None else (current.close / structural_high.high) - 1.0,
+            structural_low_asof_t=None if structural_low is None else structural_low.low,
+            structural_low_time_asof_t_ms=None if structural_low is None else structural_low.open_time_ms,
+            structural_high_asof_t=None if structural_high is None else structural_high.high,
+            structural_high_time_asof_t_ms=None if structural_high is None else structural_high.open_time_ms,
         )
         if row.state_time_ms < event.event_detection_time_ms:
             raise MarketDataContractError("state_time_ms must be >= event_detection_time_ms")
         event_rows.append(row)
     return event_rows
+
+
+def _latest_confirmed_structural_low(asof_candles: Sequence[Candle1m]) -> Candle1m | None:
+    """Return the latest causally confirmed local swing low in an event window.
+
+    A structural pivot is confirmed only after the right-confirmation candle is
+    already closed and inside `asof_candles`. This avoids centered rolling,
+    future extrema, or replacing missing structure with running lows.
+    """
+    return _latest_confirmed_pivot(asof_candles=asof_candles, side="low")
+
+
+def _latest_confirmed_structural_high(asof_candles: Sequence[Candle1m]) -> Candle1m | None:
+    """Return the latest causally confirmed local swing high in an event window."""
+    return _latest_confirmed_pivot(asof_candles=asof_candles, side="high")
+
+
+def _latest_confirmed_pivot(*, asof_candles: Sequence[Candle1m], side: str) -> Candle1m | None:
+    required = STRUCTURAL_PIVOT_LEFT_CANDLES + STRUCTURAL_PIVOT_RIGHT_CANDLES + 1
+    if len(asof_candles) < required:
+        return None
+    confirmed: list[Candle1m] = []
+    last_candidate_index = len(asof_candles) - STRUCTURAL_PIVOT_RIGHT_CANDLES
+    for index in range(STRUCTURAL_PIVOT_LEFT_CANDLES, last_candidate_index):
+        candidate = asof_candles[index]
+        left = asof_candles[index - STRUCTURAL_PIVOT_LEFT_CANDLES : index]
+        right = asof_candles[index + 1 : index + 1 + STRUCTURAL_PIVOT_RIGHT_CANDLES]
+        if len(right) < STRUCTURAL_PIVOT_RIGHT_CANDLES:
+            continue
+        if side == "low":
+            if candidate.low <= min(candle.low for candle in left) and candidate.low < min(candle.low for candle in right):
+                confirmed.append(candidate)
+            continue
+        if side == "high":
+            if candidate.high >= max(candle.high for candle in left) and candidate.high > max(candle.high for candle in right):
+                confirmed.append(candidate)
+            continue
+        raise MarketDataContractError(f"unsupported structural pivot side: {side}")
+    if not confirmed:
+        return None
+    return max(confirmed, key=lambda item: (item.open_time_ms, item.available_time_ms))
+
 
 
 def _minutes_between(start_ms: int, end_ms: int) -> int:

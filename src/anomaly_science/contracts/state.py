@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 
 from dataclasses import dataclass
 
@@ -27,6 +28,10 @@ class AnomalyState1mRow:
     distance_to_running_low: float
     distance_to_structural_low: float | None
     distance_to_structural_high: float | None
+    structural_low_asof_t: float | None = None
+    structural_low_time_asof_t_ms: int | None = None
+    structural_high_asof_t: float | None = None
+    structural_high_time_asof_t_ms: int | None = None
 
     def __post_init__(self) -> None:
         if not self.event_id:
@@ -53,4 +58,38 @@ class AnomalyState1mRow:
         if self.running_high_time_asof_t_ms > self.state_time_ms:
             raise MarketDataContractError("running_high_time_asof_t_ms must be <= state_time_ms")
         if self.running_low_time_asof_t_ms > self.state_time_ms:
+            raise MarketDataContractError("running_low_time_asof_t_ms must be <= state_time_ms")
+        for field_name in (
+            "distance_to_structural_low",
+            "distance_to_structural_high",
+            "structural_low_asof_t",
+            "structural_high_asof_t",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, (int, float)):
+                raise MarketDataContractError(f"{field_name} must be numeric when present")
+        for field_name in ("distance_to_structural_low", "distance_to_structural_high"):
+            value = getattr(self, field_name)
+            if value is not None and not math.isfinite(float(value)):
+                raise MarketDataContractError(f"{field_name} must be finite when present")
+        if self.structural_low_asof_t is not None:
+            if self.structural_low_asof_t <= 0:
+                raise MarketDataContractError("structural_low_asof_t must be positive when present")
+            if self.structural_low_time_asof_t_ms is None:
+                raise MarketDataContractError("structural_low_time_asof_t_ms is required when structural_low_asof_t is present")
+            validate_timestamp_ms(self.structural_low_time_asof_t_ms, field_name="structural_low_time_asof_t_ms")
+            if self.structural_low_time_asof_t_ms > self.state_time_ms:
+                raise MarketDataContractError("structural_low_time_asof_t_ms must be <= state_time_ms")
+        elif self.structural_low_time_asof_t_ms is not None:
+            raise MarketDataContractError("structural_low_time_asof_t_ms requires structural_low_asof_t")
+        if self.structural_high_asof_t is not None:
+            if self.structural_high_asof_t <= 0:
+                raise MarketDataContractError("structural_high_asof_t must be positive when present")
+            if self.structural_high_time_asof_t_ms is None:
+                raise MarketDataContractError("structural_high_time_asof_t_ms is required when structural_high_asof_t is present")
+            validate_timestamp_ms(self.structural_high_time_asof_t_ms, field_name="structural_high_time_asof_t_ms")
+            if self.structural_high_time_asof_t_ms > self.state_time_ms:
+                raise MarketDataContractError("structural_high_time_asof_t_ms must be <= state_time_ms")
+        elif self.structural_high_time_asof_t_ms is not None:
+            raise MarketDataContractError("structural_high_time_asof_t_ms requires structural_high_asof_t")
             raise MarketDataContractError("running_low_time_asof_t_ms must be <= state_time_ms")
