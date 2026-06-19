@@ -44,8 +44,23 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert (run_dir / "stages" / "feature_matrix" / "strategy_feature_matrix.csv").is_file()
     assert (run_dir / "stages" / "prediction" / "strategy_oos_predictions.csv").is_file()
     assert (run_dir / "stages" / "simulation" / "strategy_trade_simulation.csv").is_file()
+    assert (run_dir / "stages" / "holdout_governance" / "research_ledger.csv").is_file()
+    assert (run_dir / "stages" / "holdout_governance" / "holdout_access_log.csv").is_file()
+    assert (run_dir / "stages" / "holdout_governance" / "strategy_protocol_audit.csv").is_file()
     assert (run_dir / "stages" / "events" / "anomaly_events.csv").is_file()
     assert (run_dir / "research_run_summary.csv").is_file()
+
+    ledger = pd.read_csv(run_dir / "stages" / "holdout_governance" / "research_ledger.csv")
+    assert ledger.loc[0, "protocol_freeze_id"] == "run_research_broad_anomaly_v1_h30_2024-01-01_2024-01-01_protocol_freeze_v1"
+    assert ledger.loc[0, "final_holdout_start_date"] == "2024-01-01"
+
+    access_log = pd.read_csv(run_dir / "stages" / "holdout_governance" / "holdout_access_log.csv")
+    assert access_log.empty
+
+    summary = pd.read_csv(run_dir / "research_run_summary.csv")
+    summary_by_key = dict(zip(summary["key"], summary["value"], strict=True))
+    assert summary_by_key["research_start_date"] == "2024-01-01"
+    assert summary_by_key["research_end_date"] == "2024-01-01"
 
 
 def test_run_research_cli_accepts_strategy_and_optional_days() -> None:

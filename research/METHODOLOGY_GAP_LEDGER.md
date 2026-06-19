@@ -102,7 +102,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
 | Protocol audit | PARTIAL | Protocol audit exists, but not all checks are independently recomputed from artifacts. | Add forensic audit that reads artifacts and can fail the run. |
 | Reproducibility ledger | PARTIAL | Run metadata/artifact manifest exist. Full dependency/data/config hash trail needs tightening. | Add full run manifest and config hash enforcement. |
-| Final holdout governance | PARTIAL | Holdout governance command/artifacts exist. `run-research` does not yet hard-enforce holdout access by default. | Integrate holdout lock/freeze into `run-research`. |
+| Final holdout governance | IMPLEMENTED | `run-research` derives the exported cache date range, writes protocol freeze governance artifacts before downstream reads, and initializes an empty final-holdout access log. | Keep run-research governance smoke tests as permanent gate. |
 | Live/shadow/production | OUT_OF_SCOPE | Intentionally absent. | Do not implement in this phase. |
 
 ## Anomaly strategy implementation matrix
@@ -128,7 +128,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 1. `methodology: add implementation gap ledger` — this patch.
 2. `methodology: enforce active-horizon H_max purge` - implemented in this patch.
 3. `methodology: canonicalize strategy-neutral artifacts` - implemented in this patch.
-4. `methodology: integrate holdout freeze into run-research`.
+4. `methodology: integrate holdout freeze into run-research` - implemented in this patch.
 5. `methodology: add independent forensic protocol audit`.
 6. `strategy: make registry status self-auditing`.
 7. `strategy: complete broad anomaly trigger component accounting`.

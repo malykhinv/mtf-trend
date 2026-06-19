@@ -1,5 +1,20 @@
 # Patch log
 
+## methodology: integrate holdout freeze into run-research
+
+Status: APPLIED in current local branch after direct code inspection of head `db17b76a`.
+
+Intent:
+- Make compact `run-research <strategy> [--days]` create holdout governance automatically.
+- Derive research start/end dates from exported `input/candles_1m.csv`.
+- Write protocol freeze ledger and empty `holdout_access_log.csv` before downstream research stages read data.
+- Record governance location and research date range in `research_run_summary.csv`.
+
+Validation for this patch:
+- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
+- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest`
+
 ## methodology: canonicalize strategy-neutral artifacts
 
 Status: APPLIED in current local branch after direct code inspection of head `f61c11e`.

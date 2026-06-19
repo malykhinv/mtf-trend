@@ -25,7 +25,7 @@ python main.py run-research broad_anomaly_v1_h30
 python main.py run-research broad_anomaly_v1_h30 --days 380
 ```
 
-`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, then runs the full research pipeline through simulation. If `--days` is omitted, it uses the full available cache period.
+`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, then runs the full research pipeline through simulation. If `--days` is omitted, it uses the full available cache period.
 
 Low-level MVP1 stage commands remain available for debugging:
 

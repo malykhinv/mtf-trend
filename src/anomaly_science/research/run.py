@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +19,7 @@ from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_pre
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 from anomaly_science.strategy.registry import get_strategy
+from anomaly_science.validation import run_mvp1_holdout_governance
 
 
 DEFAULT_RESEARCH_OUTPUT_ROOT = Path(".output/results/research_runs")
@@ -50,6 +51,13 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             out_dir=input_dir,
             days=config.days,
         )
+    )
+    start_date, end_date = _input_date_range(input_dir / "candles_1m.csv")
+    governance_dir = run_mvp1_holdout_governance(
+        out_dir=stages_dir / "holdout_governance",
+        start_date=start_date,
+        end_date=end_date,
+        protocol_freeze_id=_protocol_freeze_id(strategy_name=config.strategy_name, start_date=start_date, end_date=end_date),
     )
 
     run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
@@ -120,11 +128,11 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             target_horizon_minutes=strategy.metadata.horizon_minutes,
         ),
     )
-    _write_summary(run_dir=run_dir, config=config)
+    _write_summary(run_dir=run_dir, config=config, start_date=start_date, end_date=end_date, governance_dir=governance_dir)
     return run_dir
 
 
-def _write_summary(*, run_dir: Path, config: ResearchRunConfig) -> None:
+def _write_summary(*, run_dir: Path, config: ResearchRunConfig, start_date: date, end_date: date, governance_dir: Path) -> None:
     candles = pd.read_csv(run_dir / "input" / "candles_1m.csv", usecols=["open_time_ms"])
     min_time = int(candles["open_time_ms"].min()) if not candles.empty else 0
     max_time = int(candles["open_time_ms"].max()) if not candles.empty else 0
@@ -136,8 +144,23 @@ def _write_summary(*, run_dir: Path, config: ResearchRunConfig) -> None:
         f"run_dir,{run_dir}",
         f"input_min_open_time_ms,{min_time}",
         f"input_max_open_time_ms,{max_time}",
+        f"research_start_date,{start_date.isoformat()}",
+        f"research_end_date,{end_date.isoformat()}",
+        f"holdout_governance_dir,{governance_dir}",
     ]
     (run_dir / "research_run_summary.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _input_date_range(candles_path: Path) -> tuple[date, date]:
+    candles = pd.read_csv(candles_path, usecols=["open_time_ms"])
+    if candles.empty:
+        raise ValueError(f"cannot derive research date range from empty candles file: {candles_path}")
+    timestamps = pd.to_datetime(candles["open_time_ms"].astype("int64"), unit="ms", utc=True)
+    return timestamps.min().date(), timestamps.max().date()
+
+
+def _protocol_freeze_id(*, strategy_name: str, start_date: date, end_date: date) -> str:
+    return f"run_research_{strategy_name}_{start_date.isoformat()}_{end_date.isoformat()}_protocol_freeze_v1"
 
 
 def _run_id(*, strategy_name: str) -> str:

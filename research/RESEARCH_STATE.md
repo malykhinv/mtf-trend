@@ -7,7 +7,7 @@ Active rule:
 - New code must not import legacy modules.
 - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
 - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
-- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for 15/30/60/120/180m, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, holdout governance artifacts, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for 15/30/60/120/180m, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
 - Future paths remain raw outcomes.
 - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
 - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
@@ -17,9 +17,9 @@ Active rule:
 - Shadow live and production live are still intentionally absent.
 - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
 
-Current local base commit before the active canonical artifact patch: `f61c11e`, verified with `git rev-parse --short HEAD`.
+Current local base commit before the active run-research holdout freeze patch: `db17b76a`, verified with `git rev-parse --short HEAD`.
 Last local validation on 2026-06-19:
-- `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py tests\test_data_audit.py tests\test_events_detector.py tests\test_state_builder.py tests\test_future_paths.py tests\test_feature_catalog.py tests\test_feature_matrix.py tests\test_atlas.py tests\test_labels.py tests\test_prediction.py tests\test_controls.py tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_holdout_governance.py tests\test_strategy_registry.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
 - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
 - `.venv\Scripts\python.exe -m pytest`
 
