@@ -1,5 +1,20 @@
 # Patch log
 
+## methodology: hard-gate run-research on forensic audit
+
+Status: PROPOSED; patch generated after `methodology: add independent forensic protocol audit`.
+
+Intent:
+- Run the independent artifact-driven forensic audit after the `run-research` simulation stage.
+- Write `stages/forensic_audit/strategy_protocol_audit.csv` and the anomaly compatibility alias.
+- Add forensic audit status, FAIL count, and WARN count to `research_run_summary.csv`.
+- Exit non-zero if the forensic audit emits any `FAIL` row, while still writing the summary first.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_hard_gate_run_research_on_forensic_audit.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_forensic_audit.py tests/test_research_run.py` must be run in the project venv because this sandbox lacks `polars`.
+
 ## methodology: add independent forensic protocol audit
 
 Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_124016.zip`.

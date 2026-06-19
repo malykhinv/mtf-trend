@@ -102,7 +102,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Expected utility | PARTIAL | EV calculations exist and write canonical `strategy_decision_timing.csv` / `strategy_ev_metrics.csv`. Simulation alignment is still incomplete. | Align execution reference and store execution model fields. |
 | Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
 | Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
-| Protocol audit | PARTIAL | Protocol audit exists and prediction-stage horizon consistency is audited. Independent forensic audit module now re-reads written artifacts and checks schema columns, temporal contract, model metadata purge/H_max, OOS prediction cutoff, prediction/model horizon identity, canonical/alias artifact consistency, and stage audit FAIL rows. It is not yet wired as a hard `run-research` gate. | Next patch: run forensic audit after pipeline stages and fail `run-research` on forensic FAIL. |
+| Protocol audit | PARTIAL | Protocol audit exists, prediction-stage horizon consistency is audited, and `run-research` now writes an independent artifact-driven forensic audit after simulation and exits non-zero on any forensic `FAIL`. Remaining gap: the forensic layer is still an initial proof set, not yet the full final research-ready audit of data-quality mask, universe, feature catalog, holdout lock, controls, EV/simulation alignment, rejection funnel, and run manifest. | Keep expanding forensic checks as later methodology gaps become implemented. |
 | Reproducibility ledger | PARTIAL | Run metadata/artifact manifest exist. Full dependency/data/config hash trail needs tightening. | Add full run manifest and config hash enforcement. |
 | Final holdout governance | IMPLEMENTED | `run-research` derives the exported cache date range, writes protocol freeze governance artifacts before downstream reads, and initializes an empty final-holdout access log. | Keep run-research governance smoke tests as permanent gate. |
 | Live/shadow/production | OUT_OF_SCOPE | Intentionally absent. | Do not implement in this phase. |
@@ -135,14 +135,15 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 6. `methodology: add Core supported horizon constants` - implemented in this patch.
 7. `methodology: enforce registry horizon compatibility` - implemented in this patch.
 8. `methodology: add prediction artifact horizon identity` - implemented in this patch.
-9. `methodology: add independent forensic protocol audit`.
-10. `strategy: make registry status self-auditing`.
-11. `strategy: complete broad anomaly trigger component accounting`.
-12. `strategy: add 180m horizon support or remove 180m promises` - implemented in this patch.
-13. `strategy: implement post-pump distribution variants`.
-14. `strategy: implement post-anomaly extension variants`.
-15. `features: add structural state and relaxed geometry features`.
-16. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+9. `methodology: add independent forensic protocol audit` - implemented.
+10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
+11. `strategy: make registry status self-auditing`.
+12. `strategy: complete broad anomaly trigger component accounting`.
+13. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+14. `strategy: implement post-pump distribution variants`.
+15. `strategy: implement post-anomaly extension variants`.
+16. `features: add structural state and relaxed geometry features`.
+17. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 

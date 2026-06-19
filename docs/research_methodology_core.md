@@ -1054,7 +1054,7 @@ Core must provide an independent forensic audit layer that re-reads written arti
 Правило hard gate:
 
 ```text
-Before final research-ready status, run-research must fail if the independent forensic audit emits any FAIL row.
+`run-research` must write an independent forensic audit artifact after simulation, add its status/counts to the run summary, and fail the run if the independent forensic audit emits any FAIL row.
 ```
 
 

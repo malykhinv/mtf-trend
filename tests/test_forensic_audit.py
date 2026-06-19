@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 from anomaly_science.audit import build_independent_forensic_audit_rows
+from anomaly_science.research.run import _write_forensic_audit
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus
 
@@ -159,3 +160,31 @@ def test_independent_forensic_audit_fails_alias_drift(tmp_path: Path) -> None:
 
     assert by_name["forensic_canonical_alias_artifacts_match"].status is AuditStatus.FAIL
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
+
+
+def test_run_research_forensic_writer_persists_pass_rows(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+
+    audit_dir, status, fail_count, warn_count, failed_checks = _write_forensic_audit(tmp_path)
+
+    assert audit_dir == tmp_path / "stages" / "forensic_audit"
+    assert (audit_dir / "strategy_protocol_audit.csv").is_file()
+    assert status == "PASS"
+    assert fail_count == 0
+    assert warn_count == 0
+    assert failed_checks == ""
+
+
+def test_run_research_forensic_writer_reports_fail_rows(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "prediction" / "strategy_model_metadata.csv"
+    text = path.read_text(encoding="utf-8-sig")
+    text = text.replace(",2400000,600000,", ",2000000,600000,")
+    path.write_text(text, encoding="utf-8-sig")
+
+    audit_dir, status, fail_count, warn_count, failed_checks = _write_forensic_audit(tmp_path)
+
+    assert (audit_dir / "strategy_protocol_audit.csv").is_file()
+    assert status == "FAIL"
+    assert fail_count >= 1
+    assert "forensic_model_metadata_purge_hmax_verified" in failed_checks

@@ -65,6 +65,8 @@ python main.py run-mvp1-labels --state tmp/mvp1_state/strategy_state_1m.csv --fu
 
 Low-level target-horizon commands use the same horizon contract as `run-research`: `--horizon-minutes` must be one of `15/30/60/120/180`, and the selected `--strategy-name` must be an executable registry variant that semantically allows that horizon. Omitting `--strategy-name` resolves to `broad_anomaly_v1_h{horizon}` for compatibility, so `120/180` are rejected until a matching strategy is implemented.
 
+`run-research` writes `stages/forensic_audit/strategy_protocol_audit.csv` after simulation and exits non-zero if the independent forensic audit has any `FAIL` row. `research_run_summary.csv` records `forensic_audit_status`, `forensic_audit_fail_count`, and `forensic_audit_warn_count`.
+
 MVP1 weekly CatBoost+Isotonic calibrated prediction:
 
 ```bash

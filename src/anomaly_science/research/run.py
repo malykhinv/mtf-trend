@@ -7,6 +7,10 @@ from pathlib import Path
 import pandas as pd
 
 from anomaly_science.atlas import run_mvp1_atlas
+from anomaly_science.artifacts.writer import write_csv_artifact_with_aliases
+from anomaly_science.audit import build_independent_forensic_audit_rows
+from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.audit import AuditStatus
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.data import run_mvp1_data_audit
@@ -128,11 +132,38 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             target_horizon_minutes=strategy.metadata.horizon_minutes,
         ),
     )
-    _write_summary(run_dir=run_dir, config=config, start_date=start_date, end_date=end_date, governance_dir=governance_dir)
+    forensic_audit_dir, forensic_status, forensic_fail_count, forensic_warn_count, forensic_failed_checks = _write_forensic_audit(run_dir)
+    _write_summary(
+        run_dir=run_dir,
+        config=config,
+        start_date=start_date,
+        end_date=end_date,
+        governance_dir=governance_dir,
+        forensic_audit_dir=forensic_audit_dir,
+        forensic_status=forensic_status,
+        forensic_fail_count=forensic_fail_count,
+        forensic_warn_count=forensic_warn_count,
+    )
+    if forensic_fail_count:
+        raise RuntimeError(
+            f"independent forensic protocol audit failed for {run_dir}: "
+            f"{forensic_fail_count} FAIL row(s): {forensic_failed_checks}"
+        )
     return run_dir
 
 
-def _write_summary(*, run_dir: Path, config: ResearchRunConfig, start_date: date, end_date: date, governance_dir: Path) -> None:
+def _write_summary(
+    *,
+    run_dir: Path,
+    config: ResearchRunConfig,
+    start_date: date,
+    end_date: date,
+    governance_dir: Path,
+    forensic_audit_dir: Path,
+    forensic_status: str,
+    forensic_fail_count: int,
+    forensic_warn_count: int,
+) -> None:
     candles = pd.read_csv(run_dir / "input" / "candles_1m.csv", usecols=["open_time_ms"])
     min_time = int(candles["open_time_ms"].min()) if not candles.empty else 0
     max_time = int(candles["open_time_ms"].max()) if not candles.empty else 0
@@ -147,8 +178,28 @@ def _write_summary(*, run_dir: Path, config: ResearchRunConfig, start_date: date
         f"research_start_date,{start_date.isoformat()}",
         f"research_end_date,{end_date.isoformat()}",
         f"holdout_governance_dir,{governance_dir}",
+        f"forensic_audit_dir,{forensic_audit_dir}",
+        f"forensic_audit_status,{forensic_status}",
+        f"forensic_audit_fail_count,{forensic_fail_count}",
+        f"forensic_audit_warn_count,{forensic_warn_count}",
     ]
     (run_dir / "research_run_summary.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_forensic_audit(run_dir: Path) -> tuple[Path, str, int, int, str]:
+    rows = build_independent_forensic_audit_rows(run_dir)
+    forensic_audit_dir = run_dir / "stages" / "forensic_audit"
+    write_csv_artifact_with_aliases(
+        forensic_audit_dir / "strategy_protocol_audit.csv",
+        rows,
+        get_artifact_schema("strategy_protocol_audit.csv"),
+    )
+
+    fail_count = sum(1 for row in rows if row.status is AuditStatus.FAIL)
+    warn_count = sum(1 for row in rows if row.status is AuditStatus.WARN)
+    status = "FAIL" if fail_count else "WARN" if warn_count else "PASS"
+    failed_checks = ", ".join(row.check_name for row in rows if row.status is AuditStatus.FAIL)
+    return forensic_audit_dir, status, fail_count, warn_count, failed_checks
 
 
 def _input_date_range(candles_path: Path) -> tuple[date, date]:

@@ -47,6 +47,7 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert (run_dir / "stages" / "holdout_governance" / "research_ledger.csv").is_file()
     assert (run_dir / "stages" / "holdout_governance" / "holdout_access_log.csv").is_file()
     assert (run_dir / "stages" / "holdout_governance" / "strategy_protocol_audit.csv").is_file()
+    assert (run_dir / "stages" / "forensic_audit" / "strategy_protocol_audit.csv").is_file()
     assert (run_dir / "stages" / "events" / "anomaly_events.csv").is_file()
     assert (run_dir / "research_run_summary.csv").is_file()
 
@@ -61,6 +62,9 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     summary_by_key = dict(zip(summary["key"], summary["value"], strict=True))
     assert summary_by_key["research_start_date"] == "2024-01-01"
     assert summary_by_key["research_end_date"] == "2024-01-01"
+    assert summary_by_key["forensic_audit_dir"].endswith("stages/forensic_audit") or summary_by_key["forensic_audit_dir"].endswith("stages\\forensic_audit")
+    assert summary_by_key["forensic_audit_status"] in {"PASS", "WARN"}
+    assert summary_by_key["forensic_audit_fail_count"] == "0"
 
 
 def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
