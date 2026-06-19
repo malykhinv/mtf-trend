@@ -8,9 +8,11 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.prediction.builder import (
+    build_calibration_breakdown_rows,
     build_calibration_rows,
     build_prediction_metric_rows,
     build_walk_forward_prediction_result,
+    calibration_breakdown_rows_to_artifact,
     calibration_rows_to_artifact,
     feature_importance_rows_to_artifact,
     load_prediction_inputs,
@@ -47,6 +49,7 @@ def run_mvp1_prediction(
     prediction_result = build_walk_forward_prediction_result(inputs=inputs, config=cfg)
     predictions = prediction_result.predictions
     calibration_rows = build_calibration_rows(predictions=predictions)
+    calibration_breakdown_rows = build_calibration_breakdown_rows(inputs=inputs, predictions=predictions)
     metric_rows = build_prediction_metric_rows(inputs=inputs, predictions=predictions, config=cfg)
     protocol_rows = _protocol_rows(
         input_row_count=len(inputs),
@@ -76,6 +79,13 @@ def run_mvp1_prediction(
             output_path / "strategy_calibration.csv",
             calibration_rows_to_artifact(calibration_rows),
             get_artifact_schema("strategy_calibration.csv"),
+        )
+    )
+    written.extend(
+        write_csv_artifact_with_aliases(
+            output_path / "strategy_calibration_breakdown.csv",
+            calibration_breakdown_rows_to_artifact(calibration_breakdown_rows),
+            get_artifact_schema("strategy_calibration_breakdown.csv"),
         )
     )
     written.extend(
@@ -246,6 +256,12 @@ def _protocol_rows(
             status=AuditStatus.PASS,
             message="all OOS days inside an ISO week share the same weekly_freeze model identifier and train_cutoff_time_ms",
             artifact="anomaly_oos_predictions.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="calibration_breakdowns_written",
+            status=AuditStatus.PASS if prediction_row_count > 0 else AuditStatus.WARN,
+            message="strategy_calibration_breakdown.csv writes calibration reliability slices by session, week, month, symbol, systemic regime, market shock group, alpha decay, and trigger-age bucket",
+            artifact="strategy_calibration_breakdown.csv",
         ),
         ProtocolAuditRow(
             check_name="sample_weight_policy_explicit_and_asof_safe",

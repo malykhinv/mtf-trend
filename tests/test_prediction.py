@@ -19,9 +19,11 @@ from anomaly_science.prediction import (
     PredictionArtifactError,
     PredictionInputError,
     WalkForwardPredictionConfig,
+    build_calibration_breakdown_rows,
     build_prediction_inputs,
     build_prediction_metric_rows,
     build_walk_forward_predictions,
+    load_anomaly_calibration_breakdown_csv,
     load_anomaly_oos_predictions_csv,
     oos_prediction_rows_to_artifact,
     validate_model_feature_catalog_membership,
@@ -267,6 +269,53 @@ def test_missing_future_is_excluded_from_prediction_metrics() -> None:
     assert "test_long" in {row.event_id for row in predictions}
 
 
+
+def test_calibration_breakdowns_cover_required_context_slices() -> None:
+    states, labels = _training_and_test_rows()
+    features = [_feature_row(state=state) for state in states]
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
+    predictions = build_walk_forward_predictions(
+        inputs=inputs,
+        config=WalkForwardPredictionConfig(min_train_rows=1, min_group_rows=1, smoothing_strength=1.0),
+    )
+
+    rows = build_calibration_breakdown_rows(inputs=inputs, predictions=predictions)
+
+    assert {row.breakdown_name for row in rows} >= {
+        "session_utc",
+        "test_week",
+        "test_month",
+        "symbol",
+        "systemic_cluster_regime",
+        "market_shock_group",
+        "alpha_decay_bucket",
+        "minutes_since_trigger_bucket",
+    }
+    assert all(row.row_count > 0 for row in rows)
+    assert all(row.expected_calibration_error >= 0.0 for row in rows)
+    assert {row.breakdown_value for row in rows if row.breakdown_name == "systemic_cluster_regime"} == {"moderate_cluster"}
+    assert {row.breakdown_value for row in rows if row.breakdown_name == "market_shock_group"} == {"identified_market_shock"}
+
+
+def test_calibration_breakdown_artifact_roundtrip(tmp_path: Path) -> None:
+    states, labels = _training_and_test_rows()
+    features = [_feature_row(state=state) for state in states]
+    inputs = build_prediction_inputs(state_rows=states, label_rows=labels, feature_rows=features)
+    predictions = build_walk_forward_predictions(
+        inputs=inputs,
+        config=WalkForwardPredictionConfig(min_train_rows=1, min_group_rows=1, smoothing_strength=1.0),
+    )
+    rows = build_calibration_breakdown_rows(inputs=inputs, predictions=predictions)
+    path = tmp_path / "anomaly_calibration_breakdown.csv"
+    from anomaly_science.prediction import calibration_breakdown_rows_to_artifact
+
+    write_csv_artifact(path, calibration_breakdown_rows_to_artifact(rows), get_artifact_schema("anomaly_calibration_breakdown.csv"))
+
+    loaded = load_anomaly_calibration_breakdown_csv(path)
+
+    assert [row.breakdown_name for row in loaded] == [row.breakdown_name for row in rows]
+    assert loaded[0].expected_calibration_error == pytest.approx(rows[0].expected_calibration_error)
+
 def test_prediction_rejects_strategy_horizon_mismatch() -> None:
     with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
         WalkForwardPredictionConfig(
@@ -351,6 +400,8 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert "mvp1 walk-forward prediction artifacts written" in result.stdout
     assert (out_dir / "strategy_oos_predictions.csv").is_file()
     assert (out_dir / "strategy_calibration.csv").is_file()
+    assert (out_dir / "strategy_calibration_breakdown.csv").is_file()
+    assert (out_dir / "anomaly_calibration_breakdown.csv").is_file()
     assert (out_dir / "strategy_prediction_metrics.csv").is_file()
     assert (out_dir / "anomaly_oos_predictions.csv").is_file()
     assert (out_dir / "strategy_model_metadata.csv").is_file()
@@ -369,6 +420,7 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert audit_by_name["weekly_walk_forward_heavy_models_enforced"]["status"] == "PASS"
     assert audit_by_name["frozen_weekly_model_used_for_daily_oos"]["status"] == "PASS"
     assert audit_by_name["sample_weight_policy_explicit_and_asof_safe"]["status"] == "PASS"
+    assert audit_by_name["calibration_breakdowns_written"]["status"] == "PASS"
     assert audit_by_name["feature_matrix_artifact_schema_boundary"]["status"] == "PASS"
 
     with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
@@ -388,6 +440,10 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert rows[0]["target_horizon_minutes"] == "30"
     assert rows[0]["target_label_column"] == "scenario_30m"
     assert rows[0]["active_h_max_minutes"] == "30"
+
+    with (out_dir / "strategy_calibration_breakdown.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        calibration_breakdowns = list(csv.DictReader(file_obj))
+    assert {row["breakdown_name"] for row in calibration_breakdowns} >= {"session_utc", "symbol", "systemic_cluster_regime"}
 
     with (out_dir / "strategy_model_metadata.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         metadata_rows = list(csv.DictReader(file_obj))

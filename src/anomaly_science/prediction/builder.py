@@ -19,6 +19,7 @@ from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.prediction import (
     PREDICTED_SCENARIOS,
     PREDICTION_TEMPORAL_CONTRACT,
+    CalibrationBreakdownRow,
     CalibrationRow,
     FeatureImportanceRow,
     ModelMetadataRow,
@@ -316,6 +317,45 @@ def build_calibration_rows(
     return tuple(result)
 
 
+def build_calibration_breakdown_rows(
+    *,
+    inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow],
+    predictions: Sequence[OosPredictionRow] | Iterable[OosPredictionRow],
+) -> tuple[CalibrationBreakdownRow, ...]:
+    input_by_key = {_prediction_input_key(row): row for row in inputs}
+    grouped: dict[tuple[str, str, str, str], list[OosPredictionRow]] = defaultdict(list)
+    for row in predictions:
+        input_row = input_by_key.get(_prediction_row_key(row))
+        if input_row is None:
+            raise PredictionInputError(
+                "calibration breakdowns require matching prediction inputs for "
+                f"event_id={row.event_id!r}, symbol={row.symbol!r}, snapshot_time_ms={row.snapshot_time_ms}"
+            )
+        for breakdown_name, breakdown_value in _calibration_breakdown_values(row=row, input_row=input_row):
+            grouped[(breakdown_name, breakdown_value, row.predicted_scenario, _confidence_bucket(row.prediction_confidence))].append(row)
+
+    result: list[CalibrationBreakdownRow] = []
+    for (breakdown_name, breakdown_value, predicted_scenario, confidence_bucket), group in sorted(grouped.items()):
+        result.append(
+            CalibrationBreakdownRow(
+                prediction_version=group[0].prediction_version,
+                target_horizon_minutes=group[0].target_horizon_minutes,
+                breakdown_name=breakdown_name,
+                breakdown_value=breakdown_value,
+                predicted_scenario=predicted_scenario,
+                confidence_bucket=confidence_bucket,
+                row_count=len(group),
+                mean_confidence=_mean(row.prediction_confidence for row in group),
+                empirical_accuracy=_mean(1.0 if row.predicted_scenario == row.target_scenario else 0.0 for row in group),
+                multiclass_brier=_mean(_brier_score(row) for row in group),
+                log_loss=_mean(_log_loss(row) for row in group),
+                expected_calibration_error=_expected_calibration_error(group),
+                notes=_calibration_breakdown_notes(breakdown_name),
+            )
+        )
+    return tuple(result)
+
+
 def build_prediction_metric_rows(
     *,
     inputs: Sequence[PredictionInputRow] | Iterable[PredictionInputRow],
@@ -394,6 +434,10 @@ def calibration_rows_to_artifact(rows: Sequence[CalibrationRow]) -> list[dict[st
     return [asdict(row) for row in rows]
 
 
+def calibration_breakdown_rows_to_artifact(rows: Sequence[CalibrationBreakdownRow]) -> list[dict[str, object]]:
+    return [asdict(row) for row in rows]
+
+
 def prediction_metric_rows_to_artifact(rows: Sequence[PredictionMetricRow]) -> list[dict[str, object]]:
     return [asdict(row) for row in rows]
 
@@ -416,6 +460,10 @@ def load_anomaly_oos_predictions_csv(path: str | Path) -> tuple[OosPredictionRow
 
 def load_anomaly_calibration_csv(path: str | Path) -> tuple[CalibrationRow, ...]:
     return tuple(_load_prediction_artifact(path=path, schema_name="anomaly_calibration.csv", row_builder=_calibration_from_mapping))
+
+
+def load_anomaly_calibration_breakdown_csv(path: str | Path) -> tuple[CalibrationBreakdownRow, ...]:
+    return tuple(_load_prediction_artifact(path=path, schema_name="anomaly_calibration_breakdown.csv", row_builder=_calibration_breakdown_from_mapping))
 
 
 def load_anomaly_prediction_metrics_csv(path: str | Path) -> tuple[PredictionMetricRow, ...]:
@@ -692,6 +740,24 @@ def _calibration_from_mapping(row: Mapping[str, object]) -> CalibrationRow:
         empirical_accuracy=_required_float(row, "empirical_accuracy"),
         multiclass_brier=_required_float(row, "multiclass_brier"),
         log_loss=_required_float(row, "log_loss"),
+    )
+
+
+def _calibration_breakdown_from_mapping(row: Mapping[str, object]) -> CalibrationBreakdownRow:
+    return CalibrationBreakdownRow(
+        prediction_version=_required_str(row, "prediction_version"),
+        target_horizon_minutes=_required_int(row, "target_horizon_minutes"),
+        breakdown_name=_required_str(row, "breakdown_name"),
+        breakdown_value=_required_str(row, "breakdown_value"),
+        predicted_scenario=_required_str(row, "predicted_scenario"),
+        confidence_bucket=_required_str(row, "confidence_bucket"),
+        row_count=_required_int(row, "row_count"),
+        mean_confidence=_required_float(row, "mean_confidence"),
+        empirical_accuracy=_required_float(row, "empirical_accuracy"),
+        multiclass_brier=_required_float(row, "multiclass_brier"),
+        log_loss=_required_float(row, "log_loss"),
+        expected_calibration_error=_required_float(row, "expected_calibration_error"),
+        notes=_required_str(row, "notes"),
     )
 
 
@@ -1024,6 +1090,70 @@ def _confidence_bucket(confidence: float) -> str:
     return f"[{lower:.1f},{upper:.1f})" if upper < 1.0 else "[0.9,1.0]"
 
 
+def _prediction_input_key(row: PredictionInputRow) -> tuple[str, str, int, int]:
+    return (row.state.event_id, row.state.symbol, row.state.snapshot_time_ms, row.state.feature_cutoff_time_ms)
+
+
+def _prediction_row_key(row: OosPredictionRow) -> tuple[str, str, int, int]:
+    return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
+
+
+def _calibration_breakdown_values(*, row: OosPredictionRow, input_row: PredictionInputRow) -> tuple[tuple[str, str], ...]:
+    snapshot = datetime.fromtimestamp(row.snapshot_time_ms / 1000.0, tz=timezone.utc)
+    feature = input_row.features
+    return (
+        ("session_utc", _session_utc_bucket(snapshot.hour)),
+        ("test_week", _utc_week(row.snapshot_time_ms)),
+        ("test_month", _utc_month(row.snapshot_time_ms)),
+        ("symbol", row.symbol),
+        ("systemic_cluster_regime", feature.systemic_cluster_regime or "unknown"),
+        ("market_shock_group", _market_shock_group(feature.market_shock_id)),
+        ("alpha_decay_bucket", feature.alpha_decay_bucket),
+        ("minutes_since_trigger_bucket", _minutes_since_trigger_bucket(feature.minutes_since_trigger)),
+    )
+
+
+def _calibration_breakdown_notes(breakdown_name: str) -> str:
+    return {
+        "session_utc": "calibration by UTC session bucket",
+        "test_week": "calibration by OOS ISO week",
+        "test_month": "calibration by OOS UTC month",
+        "symbol": "calibration by symbol",
+        "systemic_cluster_regime": "calibration by systemic/idiosyncratic anomaly regime",
+        "market_shock_group": "calibration by market-shock identifier availability",
+        "alpha_decay_bucket": "calibration by as-of alpha decay bucket",
+        "minutes_since_trigger_bucket": "calibration by as-of minutes since trigger bucket",
+    }[breakdown_name]
+
+
+def _session_utc_bucket(hour: int) -> str:
+    if 0 <= hour <= 6:
+        return "utc_00_06"
+    if 7 <= hour <= 12:
+        return "utc_07_12"
+    if 13 <= hour <= 20:
+        return "utc_13_20"
+    return "utc_21_23"
+
+
+def _market_shock_group(market_shock_id: str) -> str:
+    return "unknown" if not market_shock_id or market_shock_id == "unknown" else "identified_market_shock"
+
+
+def _minutes_since_trigger_bucket(minutes: int) -> str:
+    if minutes <= 2:
+        return "0-2m"
+    if minutes <= 5:
+        return "3-5m"
+    if minutes <= 10:
+        return "6-10m"
+    if minutes <= 20:
+        return "11-20m"
+    if minutes <= 40:
+        return "21-40m"
+    return ">40m"
+
+
 def _expected_calibration_error(rows: Sequence[OosPredictionRow]) -> float:
     if not rows:
         return 0.0
@@ -1086,6 +1216,10 @@ def _utc_week(timestamp_ms: int) -> str:
     parsed = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
     iso_year, iso_week, _ = parsed.isocalendar()
     return f"{iso_year:04d}-W{iso_week:02d}"
+
+
+def _utc_month(timestamp_ms: int) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m")
 
 
 def _week_start_ms(week: str) -> int:

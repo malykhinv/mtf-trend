@@ -680,3 +680,21 @@ Validation in this environment:
 - `pytest -q tests/test_rejection_funnel.py tests/test_artifact_schemas.py tests/test_forensic_audit.py`
 
 Full pytest still needs the project venv because this sandbox may lack project runtime dependencies.
+
+
+## methodology: add calibration breakdown audit
+
+Status: PROPOSED
+
+Changes:
+- Adds canonical `strategy_calibration_breakdown.csv` with `anomaly_calibration_breakdown.csv` alias.
+- Writes OOS calibration reliability slices by UTC session, ISO week, UTC month, symbol, systemic cluster regime, market-shock group, alpha-decay bucket, and minutes-since-trigger bucket.
+- Computes row count, mean confidence, empirical accuracy, multiclass Brier, log loss, and expected calibration error for every slice.
+- Adds independent forensic completeness checks so research interpretation fails when required calibration breakdowns are absent or malformed.
+- Updates schema/docs/ledger/tests without changing model fitting, calibration method, thresholds, EV, or simulation logic.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `pytest -q tests/test_artifact_schemas.py`
+
+Prediction/forensic pytest collection still needs the project venv because this sandbox lacks `polars`.

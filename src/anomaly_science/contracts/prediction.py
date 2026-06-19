@@ -143,6 +143,53 @@ class CalibrationRow:
 
 
 @dataclass(frozen=True, slots=True)
+class CalibrationBreakdownRow:
+    prediction_version: str
+    target_horizon_minutes: int
+    breakdown_name: str
+    breakdown_value: str
+    predicted_scenario: str
+    confidence_bucket: str
+    row_count: int
+    mean_confidence: float
+    empirical_accuracy: float
+    multiclass_brier: float
+    log_loss: float
+    expected_calibration_error: float
+    notes: str
+
+    def __post_init__(self) -> None:
+        if not self.prediction_version:
+            raise MarketDataContractError("prediction_version is required")
+        try:
+            validate_supported_research_horizon(self.target_horizon_minutes, field_name="target_horizon_minutes")
+        except ValueError as exc:
+            raise MarketDataContractError(str(exc)) from exc
+        if not self.breakdown_name:
+            raise MarketDataContractError("breakdown_name is required")
+        if not self.breakdown_value:
+            raise MarketDataContractError("breakdown_value is required")
+        if self.predicted_scenario not in PREDICTED_SCENARIOS:
+            raise MarketDataContractError("predicted_scenario has unknown value")
+        if not self.confidence_bucket:
+            raise MarketDataContractError("confidence_bucket is required")
+        if self.row_count <= 0:
+            raise MarketDataContractError("row_count must be positive")
+        for field_name in (
+            "mean_confidence",
+            "empirical_accuracy",
+            "multiclass_brier",
+            "log_loss",
+            "expected_calibration_error",
+        ):
+            value = getattr(self, field_name)
+            if value < 0.0:
+                raise MarketDataContractError(f"{field_name} must be non-negative")
+        if not self.notes:
+            raise MarketDataContractError("notes is required")
+
+
+@dataclass(frozen=True, slots=True)
 class PredictionMetricRow:
     prediction_version: str
     target_horizon_minutes: int

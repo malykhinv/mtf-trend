@@ -30,6 +30,20 @@ _REQUIRED_BASELINE_CONTROLS = frozenset(
         "systemic_cluster_only_subset",
     )
 )
+_REQUIRED_CALIBRATION_BREAKDOWNS = frozenset(
+    (
+        "session_utc",
+        "test_week",
+        "test_month",
+        "symbol",
+        "systemic_cluster_regime",
+        "market_shock_group",
+        "alpha_decay_bucket",
+        "minutes_since_trigger_bucket",
+    )
+)
+
+
 _REQUIRED_SIMULATION_CONTROL_METRICS = frozenset(
     (
         "always_no_trade_baseline_net_pnl",
@@ -72,6 +86,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_simulation_pessimistic_prices_and_costs_row(found))
     rows.append(_simulation_no_parallel_symbol_positions_row(found))
     rows.append(_required_controls_completeness_row(found))
+    rows.append(_calibration_breakdown_completeness_row(found))
     rows.append(_rejection_funnel_completeness_row(found))
     rows.append(_stage_audit_fail_summary_row(found))
     rows.append(_forensic_gate_row(rows))
@@ -742,6 +757,60 @@ def _append_exit_resolution_failures(
         failures.append(f"{path}:{row_index} has invalid exit_reason={exit_reason!r}")
 
 
+
+def _calibration_breakdown_completeness_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    paths = found.get("strategy_calibration_breakdown.csv", ())
+    if not paths:
+        return _row(
+            "forensic_calibration_breakdowns_complete",
+            AuditStatus.FAIL,
+            "missing strategy_calibration_breakdown.csv; calibration is only auditable overall, not by regime/symbol/session",
+            artifact="strategy_calibration_breakdown.csv",
+        )
+
+    checked = 0
+    failures: list[str] = []
+    breakdowns: set[str] = set()
+    for path in paths:
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            checked += 1
+            name = row.get("breakdown_name", "")
+            if name:
+                breakdowns.add(name)
+            row_count = _to_int(row.get("row_count"))
+            if row_count is None or row_count <= 0:
+                failures.append(f"{path}:{row_index} has non-positive row_count={row.get('row_count')!r}")
+            for field_name in ("mean_confidence", "empirical_accuracy", "multiclass_brier", "log_loss", "expected_calibration_error"):
+                value = _to_float(row.get(field_name))
+                if value is None or value < 0.0:
+                    failures.append(f"{path}:{row_index} has invalid {field_name}={row.get(field_name)!r}")
+            if not row.get("breakdown_value", ""):
+                failures.append(f"{path}:{row_index} has empty breakdown_value")
+            if not row.get("confidence_bucket", ""):
+                failures.append(f"{path}:{row_index} has empty confidence_bucket")
+    missing = sorted(_REQUIRED_CALIBRATION_BREAKDOWNS - breakdowns)
+    if missing:
+        failures.append("missing calibration breakdowns: " + ", ".join(missing))
+    if failures:
+        return _row(
+            "forensic_calibration_breakdowns_complete",
+            AuditStatus.FAIL,
+            f"{len(failures)} calibration-breakdown violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_calibration_breakdown.csv",
+        )
+    if checked == 0:
+        return _row(
+            "forensic_calibration_breakdowns_complete",
+            AuditStatus.FAIL,
+            "strategy_calibration_breakdown.csv exists but contains no rows",
+            artifact="strategy_calibration_breakdown.csv",
+        )
+    return _row(
+        "forensic_calibration_breakdowns_complete",
+        AuditStatus.PASS,
+        f"verified {len(breakdowns)} required calibration breakdown(s) across {checked} row(s)",
+        artifact="strategy_calibration_breakdown.csv",
+    )
 
 def _rejection_funnel_completeness_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     paths = found.get("strategy_rejection_funnel.csv", ())

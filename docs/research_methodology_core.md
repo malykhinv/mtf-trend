@@ -872,6 +872,7 @@ multi-class log loss / binary log loss, depending on strategy target
 Expected Calibration Error
 reliability curves
 calibration by session/week/month/symbol/regime
+calibration by systemic_cluster_regime / market_shock_group / alpha_decay_bucket / trigger-age bucket
 ```
 
 Если стратегия использует multi-class target, class order должен быть frozen в model metadata.
@@ -1153,6 +1154,7 @@ strategy_rejection_funnel.csv
 strategy_protocol_audit.csv
 strategy_oos_predictions.csv
 strategy_calibration.csv
+strategy_calibration_breakdown.csv
 strategy_decision_timing.csv
 strategy_trade_simulation.csv
 ```

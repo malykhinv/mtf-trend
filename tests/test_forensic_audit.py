@@ -112,6 +112,35 @@ def _write_valid_minimal_forensic_fixture(root: Path) -> None:
         },
     )
     _copy_text(prediction / "strategy_oos_predictions.csv", prediction / "anomaly_oos_predictions.csv")
+    calibration_rows = [
+        {
+            "prediction_version": "wf_v1",
+            "target_horizon_minutes": 30,
+            "breakdown_name": breakdown_name,
+            "breakdown_value": breakdown_value,
+            "predicted_scenario": "long_continuation",
+            "confidence_bucket": "[0.7,0.8)",
+            "row_count": 1,
+            "mean_confidence": 0.7,
+            "empirical_accuracy": 1.0,
+            "multiclass_brier": 0.12,
+            "log_loss": 0.36,
+            "expected_calibration_error": 0.3,
+            "notes": "fixture",
+        }
+        for breakdown_name, breakdown_value in (
+            ("session_utc", "utc_00_06"),
+            ("test_week", "2026-W01"),
+            ("test_month", "2026-01"),
+            ("symbol", "AAAUSDT"),
+            ("systemic_cluster_regime", "moderate_cluster"),
+            ("market_shock_group", "identified_market_shock"),
+            ("alpha_decay_bucket", "3-5m"),
+            ("minutes_since_trigger_bucket", "3-5m"),
+        )
+    ]
+    _write_artifact_rows(prediction / "strategy_calibration_breakdown.csv", "strategy_calibration_breakdown.csv", calibration_rows)
+    _copy_text(prediction / "strategy_calibration_breakdown.csv", prediction / "anomaly_calibration_breakdown.csv")
     _write_artifact(
         prediction / "strategy_model_metadata.csv",
         "strategy_model_metadata.csv",
@@ -382,6 +411,7 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_simulation_pessimistic_prices_and_costs_verified"].status is AuditStatus.PASS
     assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.PASS
     assert by_name["forensic_required_controls_complete"].status is AuditStatus.PASS
+    assert by_name["forensic_calibration_breakdowns_complete"].status is AuditStatus.PASS
     assert by_name["forensic_rejection_funnel_complete"].status is AuditStatus.PASS
     assert by_name["forensic_stage_protocol_audit_has_no_fail_rows"].status is AuditStatus.PASS
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.PASS
@@ -474,6 +504,18 @@ def test_independent_forensic_audit_fails_parallel_simulation_positions(tmp_path
     assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.FAIL
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
+
+
+def test_independent_forensic_audit_fails_missing_calibration_breakdown(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    (tmp_path / "stages" / "prediction" / "strategy_calibration_breakdown.csv").unlink()
+    (tmp_path / "stages" / "prediction" / "anomaly_calibration_breakdown.csv").unlink()
+
+    result = build_independent_forensic_audit_rows(tmp_path)
+    by_name = _by_name(result)
+
+    assert by_name["forensic_calibration_breakdowns_complete"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
 def test_independent_forensic_audit_fails_missing_required_control(tmp_path: Path) -> None:
     _write_valid_minimal_forensic_fixture(tmp_path)
