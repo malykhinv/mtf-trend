@@ -70,7 +70,7 @@ Intent:
 - Read `anomaly_state_1m.csv` and `anomaly_future_paths.csv` through strict schema boundaries.
 - Join state/future rows one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`.
 - Write descriptive atlas artifacts without ML, calibrated labels, PnL, trade simulation, or decision logic.
-- Keep atlas grouping bins derived from state-only as-of fields; use future fields only for descriptive response summaries.
+- Keep atlas grouping bins derived from state plus feature-matrix as-of fields; use future fields only for descriptive response summaries.
 
 Validation for this proposed patch:
 - `python main.py doctor`
@@ -79,7 +79,8 @@ Validation for this proposed patch:
 - `python main.py run-mvp1-events --input tests/fixtures/minimal_market_data --out tmp/check_patch7/events`
 - `python main.py run-mvp1-state --input tests/fixtures/minimal_market_data --events tmp/check_patch7/events/anomaly_events.csv --out tmp/check_patch7/state`
 - `python main.py run-mvp1-future --input tests/fixtures/minimal_market_data --state tmp/check_patch7/state/anomaly_state_1m.csv --out tmp/check_patch7/future`
-- `python main.py run-mvp1-atlas --state tmp/check_patch7/state/anomaly_state_1m.csv --future tmp/check_patch7/future/anomaly_future_paths.csv --out tmp/check_patch7/atlas`
+- `python main.py run-mvp1-feature-matrix --input tests/fixtures/minimal_market_data --state tmp/check_patch7/state/anomaly_state_1m.csv --out tmp/check_patch7/feature_matrix`
+- `python main.py run-mvp1-atlas --state tmp/check_patch7/state/anomaly_state_1m.csv --future tmp/check_patch7/future/anomaly_future_paths.csv --features tmp/check_patch7/feature_matrix/anomaly_feature_matrix.csv --out tmp/check_patch7/atlas`
 
 ## feat: add MVP1 outcome label kernel
 
@@ -111,7 +112,7 @@ Intent:
 - Read `anomaly_state_1m.csv` and `anomaly_outcome_labels.csv` through strict schema boundaries.
 - Join state/label rows one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`.
 - Run daily prequential walk-forward prediction with purge: `train_snapshot_time_ms + H_max <= test_day_start_ms`.
-- Use a state-bin empirical calibrated baseline over state-only fields; labels are used only as train targets and OOS evaluation targets.
+- Use weekly CatBoost+Isotonic over state plus required feature-matrix fields; labels are used only as train targets and OOS evaluation targets.
 - Write `anomaly_oos_predictions.csv`, `anomaly_calibration.csv`, and `anomaly_prediction_metrics.csv`.
 - Keep this layer out of trading: no thresholds, EV, PnL, entry/exit, trade simulation, shadow live, or production live.
 

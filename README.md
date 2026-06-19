@@ -38,18 +38,18 @@ python main.py run-mvp1-holdout-governance --out tmp/mvp1_governance --start-dat
 
 `run-mvp1-future` builds `anomaly_future_paths.csv` from normalized closed 1m candles and a strict `anomaly_state_1m.csv` artifact boundary. Future outcomes use only candles with `available_time_ms > snapshot_time_ms`, and every row satisfies `feature_cutoff_time_ms <= snapshot_time_ms < future_start_time_ms`.
 
-`run-mvp1-atlas` reads `anomaly_state_1m.csv` and `anomaly_future_paths.csv` through strict schema boundaries, joins them one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`, and writes:
+`run-mvp1-atlas` reads `anomaly_state_1m.csv`, `anomaly_future_paths.csv`, and required `anomaly_feature_matrix.csv` through strict schema boundaries, joins them one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`, and writes:
 
 - `anomaly_nature_atlas.csv`
 - `anomaly_context_splits.csv`
 - `anomaly_response_surfaces.csv`
 - `anomaly_market_shock_groups.csv`
 
-Atlas grouping uses state-only as-of fields. Coarse 30m response bins are descriptive atlas bins only, not calibrated labels, entry logic, exit logic, EV, PnL, or trade simulation. Market-shock groups are only simultaneous `snapshot_time_ms` groups and do not claim market-beta independence.
+Atlas grouping uses state plus feature-matrix as-of fields. Coarse 30m response bins are descriptive atlas bins only, not calibrated labels, entry logic, exit logic, EV, PnL, or trade simulation. Market-shock groups use point-in-time `market_shock_id` and `systemic_cluster_regime` from the feature matrix.
 
 `run-mvp1-labels` reads the same state/future artifacts through strict boundaries, joins them one-to-one on `event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms`, and writes `anomaly_outcome_labels.csv` with `scenario_15m`, `scenario_30m`, `scenario_60m`, and `scenario_120m`. Scenario values are descriptive future-nature targets for later walk-forward prediction calibration: `long_continuation`, `short_fade`, `static_or_chop`, `unclear`, or explicit `missing_future`. Trap-like ambiguity maps to `unclear` in MVP1; a separate trap class requires a new label schema.
 
-`run-mvp1-prediction` reads `anomaly_state_1m.csv`, optional `anomaly_feature_matrix.csv`, and `anomaly_outcome_labels.csv` through strict boundaries, then runs weekly walk-forward CatBoost with one-vs-rest Isotonic calibration. OOS days inside a week use frozen weekly weights, best iteration, feature schema, and calibrators. It writes:
+`run-mvp1-prediction` reads `anomaly_state_1m.csv`, required `anomaly_feature_matrix.csv`, and `anomaly_outcome_labels.csv` through strict boundaries, then runs weekly walk-forward CatBoost with one-vs-rest Isotonic calibration. OOS days inside a week use frozen weekly weights, best iteration, feature schema, and calibrators. It writes:
 
 - `anomaly_oos_predictions.csv`
 - `anomaly_calibration.csv`
@@ -65,6 +65,6 @@ Predictions are calibrated future-nature probabilities, not trading commands. If
 - `anomaly_placebo_tests.csv`
 - `anomaly_baseline_comparison.csv`
 
-The controls include deterministic random-label, time-shuffled-label, symbol-shuffled-label placebos, universal simple baselines, and anomaly-specific rule/ablation baselines. Data-dependent ablations are deferred explicitly when required source features are absent; no proxy fallback is used.
+The controls include deterministic random-label, time-shuffled-label, symbol-shuffled-label placebos, universal simple baselines, and anomaly-specific rule/ablation baselines. Feature-aware baselines and ablations require `anomaly_feature_matrix.csv`; missing feature matrix is a hard input error, not a deferred proxy mode.
 
 EV and simplified pessimistic simulation are research artifacts only. Shadow live and production live remain intentionally absent.
