@@ -9,7 +9,6 @@ import pandas as pd
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.normalized import normalize_market_data
 from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, run_data_quality
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
@@ -96,6 +95,8 @@ def _read_source_frames(input_path: Path) -> tuple[dict[str, pd.DataFrame | None
 
 
 def _protocol_rows(*, data_quality: list, universe_rows: list) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+
     critical_fail = has_critical_fail(data_quality)
     base_rows = [
         ProtocolAuditRow(

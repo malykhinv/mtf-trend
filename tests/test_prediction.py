@@ -24,8 +24,10 @@ from anomaly_science.prediction import (
     build_walk_forward_predictions,
     load_anomaly_oos_predictions_csv,
     oos_prediction_rows_to_artifact,
+    validate_model_feature_catalog_membership,
 )
 from anomaly_science.state import state_rows_to_artifact
+from anomaly_science.strategy.registry import StrategyRegistryError
 
 BASE_DAY_MS = 1_704_067_200_000  # 2024-01-01 00:00:00 UTC
 ONE_MINUTE_MS = 60_000
@@ -266,15 +268,19 @@ def test_missing_future_is_excluded_from_prediction_metrics() -> None:
 
 
 def test_prediction_rejects_strategy_horizon_mismatch() -> None:
-    with pytest.raises(PredictionInputError, match="does not match strategy horizon"):
-        build_walk_forward_predictions(
-            inputs=[],
-            config=WalkForwardPredictionConfig(
-                strategy_name="broad_anomaly_v1_h30",
-                target_horizon_minutes=60,
-                active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
-            ),
+    with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
+        WalkForwardPredictionConfig(
+            strategy_name="broad_anomaly_v1_h30",
+            target_horizon_minutes=60,
+            active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
         )
+
+
+def test_prediction_model_features_must_be_declared_in_catalog() -> None:
+    validate_model_feature_catalog_membership(("minutes_since_detection", "feature_matrix.volume_zscore"))
+
+    with pytest.raises(PredictionInputError, match="not declared"):
+        validate_model_feature_catalog_membership(("undeclared_alpha",))
 
 
 def test_oos_prediction_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:

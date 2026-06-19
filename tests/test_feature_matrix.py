@@ -510,7 +510,7 @@ def _state_for_symbol(
     symbol: str,
     snapshot_time_ms: int,
     current_close: float,
-    current_return_from_start: float,
+    current_return_from_start: float = 0.01,
 ) -> AnomalyState1mRow:
     base = _state(snapshot_time_ms=snapshot_time_ms, current_close=current_close)
     return AnomalyState1mRow(

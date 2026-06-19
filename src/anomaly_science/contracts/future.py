@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .horizons import FUTURE_PATH_RETURN_HORIZONS
 from .market import MarketDataContractError
 from .time import enforce_snapshot_contract, validate_timestamp_ms
 

@@ -1,0 +1,786 @@
+diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 72846bfa..3919f485 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -90,7 +90,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | PARTIAL | BTC/ETH/systemic context features exist. Coverage and tests are still MVP-level. | Add catalog/audit coverage by context feature family. |
+-| Feature registry / feature schema | PARTIAL | Feature catalog exists. It is not yet a hard gate for every model feature. | Enforce catalog membership before prediction. |
++| Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. | Keep catalog membership tests as permanent gate. |
+ | Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. | Keep temporal/no-leakage tests as permanent gate. |
+ | Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. | Keep horizon/schema tests as permanent gate. |
+ | Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
+@@ -137,13 +137,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ 8. `methodology: add prediction artifact horizon identity` - implemented in this patch.
+ 9. `methodology: add independent forensic protocol audit` - implemented.
+ 10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
+-11. `strategy: make registry status self-auditing`.
+-12. `strategy: complete broad anomaly trigger component accounting`.
+-13. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+-14. `strategy: implement post-pump distribution variants`.
+-15. `strategy: implement post-anomaly extension variants`.
+-16. `features: add structural state and relaxed geometry features`.
+-17. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
++11. `methodology: enforce feature catalog membership before prediction` - implemented.
++12. `strategy: make registry status self-auditing`.
++13. `strategy: complete broad anomaly trigger component accounting`.
++14. `strategy: add 180m horizon support or remove 180m promises` - implemented.
++15. `strategy: implement post-pump distribution variants`.
++16. `strategy: implement post-anomaly extension variants`.
++17. `features: add structural state and relaxed geometry features`.
++18. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+ 
+ Rule:
+ 
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 015ea86d..889ad926 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,18 @@
+ # Patch log
+ 
++## methodology: enforce feature catalog membership before prediction
++
++Status: APPLIED.
++
++Intent:
++- Make `build_default_feature_catalog()` a hard gate for every numeric/bool model feature used by prediction.
++- Add the current prediction state feature set to the feature catalog.
++- Remove top-level audit imports from stage runners so feature/config modules can be imported without protocol-audit cycles.
++- Restore explicit Core horizon imports in future/label configs.
++
++Validation:
++- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_feature_catalog.py tests\test_horizon_contract.py`
++
+ ## methodology: harden point-in-time universe
+ 
+ Status: PROPOSED; patch generated after `methodology: enforce data quality mask before trigger`.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 654f13da..0d542ddd 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -7,7 +7,7 @@ Active rule:
+ - New code must not import legacy modules.
+ - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
+ - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
+-- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
++- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix with prediction-time catalog membership hard gate for all numeric/bool model features, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+ - Future paths remain raw outcomes.
+ - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
+ - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
+@@ -21,6 +21,7 @@ Active rule:
+ 
+ Current local base commit before the active run-research holdout freeze patch: `db17b76a`, verified with `git rev-parse --short HEAD`.
+ Last local validation on 2026-06-19:
++- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_feature_catalog.py tests\test_horizon_contract.py`
+ - `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
+ - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+ - `.venv\Scripts\python.exe -m pytest`
+diff --git a/src/anomaly_science/atlas/run.py b/src/anomaly_science/atlas/run.py
+index b932e032..b0bc5b95 100644
+--- a/src/anomaly_science/atlas/run.py
++++ b/src/anomaly_science/atlas/run.py
+@@ -15,7 +15,6 @@ from anomaly_science.atlas.builder import (
+     response_surface_rows_to_artifact,
+ )
+ from anomaly_science.atlas.config import AtlasConfig
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ 
+@@ -104,6 +103,8 @@ def run_mvp1_atlas(
+ 
+ 
+ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_atlas_scope",
+diff --git a/src/anomaly_science/audit/forensic.py b/src/anomaly_science/audit/forensic.py
+index d5c3e788..e93b9db1 100644
+--- a/src/anomaly_science/audit/forensic.py
++++ b/src/anomaly_science/audit/forensic.py
+@@ -332,20 +332,23 @@ def _canonical_alias_consistency_row(root: Path) -> ProtocolAuditRow:
+     failures: list[str] = []
+     checked = 0
+     for anomaly_name, strategy_name in sorted(STRATEGY_ARTIFACT_ALIASES.items()):
+-        anomaly_paths = tuple(sorted(root.rglob(anomaly_name)))
+-        strategy_paths = tuple(sorted(root.rglob(strategy_name)))
+-        if not anomaly_paths and not strategy_paths:
++        anomaly_by_parent = {path.parent: path for path in root.rglob(anomaly_name)}
++        strategy_by_parent = {path.parent: path for path in root.rglob(strategy_name)}
++        if not anomaly_by_parent and not strategy_by_parent:
+             continue
+         checked += 1
+-        if len(anomaly_paths) != len(strategy_paths):
+-            failures.append(f"{anomaly_name}/{strategy_name} count mismatch: {len(anomaly_paths)} vs {len(strategy_paths)}")
+-            continue
+-        for anomaly_path, strategy_path in zip(anomaly_paths, strategy_paths):
+-            if anomaly_path.parent != strategy_path.parent:
+-                failures.append(f"{anomaly_name}/{strategy_name} directory mismatch: {anomaly_path.parent} vs {strategy_path.parent}")
+-                continue
++        missing_strategy = sorted(set(anomaly_by_parent) - set(strategy_by_parent))
++        missing_anomaly = sorted(set(strategy_by_parent) - set(anomaly_by_parent))
++        if missing_strategy:
++            failures.append(f"{anomaly_name}/{strategy_name} missing strategy aliases in: " + ", ".join(str(path) for path in missing_strategy[:5]))
++        if missing_anomaly:
++            failures.append(f"{anomaly_name}/{strategy_name} missing anomaly aliases in: " + ", ".join(str(path) for path in missing_anomaly[:5]))
++        for parent in sorted(set(anomaly_by_parent) & set(strategy_by_parent)):
++            anomaly_path = anomaly_by_parent[parent]
++            strategy_path = strategy_by_parent[parent]
+             if anomaly_path.read_bytes() != strategy_path.read_bytes():
+                 failures.append(f"{anomaly_path} content differs from {strategy_path}")
++                continue
+     if failures:
+         return _row(
+             "forensic_canonical_alias_artifacts_match",
+diff --git a/src/anomaly_science/audit/protocol.py b/src/anomaly_science/audit/protocol.py
+index e3d40d2b..e11dd854 100644
+--- a/src/anomaly_science/audit/protocol.py
++++ b/src/anomaly_science/audit/protocol.py
+@@ -25,6 +25,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
+     "technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
+     "technical_noise_shock_excluded_from_broad_detector",
+     "warmup_window_excluded_from_trigger_generation",
++    "data_quality_mask_enforced_before_trigger_generation",
+     "required_data_streams_applied_before_trigger_generation",
+     "trigger_cascade_suppressed_before_dataset_and_simulation",
+     "technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+@@ -66,6 +67,7 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
+         "technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
+         "technical_noise_shock_excluded_from_broad_detector",
+         "warmup_window_excluded_from_trigger_generation",
++        "data_quality_mask_enforced_before_trigger_generation",
+         "required_data_streams_applied_before_trigger_generation",
+         "trigger_cascade_suppressed_before_dataset_and_simulation",
+         "base_strategy_contract_valid",
+diff --git a/src/anomaly_science/contracts/controls.py b/src/anomaly_science/contracts/controls.py
+index 24dc83fa..94673bdd 100644
+--- a/src/anomaly_science/contracts/controls.py
++++ b/src/anomaly_science/contracts/controls.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+ 
++from .horizons import is_supported_research_horizon
+ from .market import MarketDataContractError
+ 
+ CONTROL_STATUS_OK = "OK"
+diff --git a/src/anomaly_science/contracts/future.py b/src/anomaly_science/contracts/future.py
+index 3ac4edb6..56a1d750 100644
+--- a/src/anomaly_science/contracts/future.py
++++ b/src/anomaly_science/contracts/future.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import math
+ from dataclasses import dataclass
+ 
++from .horizons import FUTURE_PATH_RETURN_HORIZONS
+ from .market import MarketDataContractError
+ from .time import enforce_snapshot_contract, validate_timestamp_ms
+ 
+diff --git a/src/anomaly_science/controls/run.py b/src/anomaly_science/controls/run.py
+index d4015147..32ecd66f 100644
+--- a/src/anomaly_science/controls/run.py
++++ b/src/anomaly_science/controls/run.py
+@@ -7,7 +7,6 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.controls.builder import (
+     baseline_comparison_rows_to_artifact,
+     build_baseline_comparison_rows,
+@@ -100,6 +99,8 @@ def _protocol_rows(
+     ok_control_count: int,
+     config: ControlsConfig,
+ ) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_controls_scope",
+diff --git a/src/anomaly_science/data/audit_run.py b/src/anomaly_science/data/audit_run.py
+index 378a1d95..9de6338e 100644
+--- a/src/anomaly_science/data/audit_run.py
++++ b/src/anomaly_science/data/audit_run.py
+@@ -9,7 +9,6 @@ import pandas as pd
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.data.normalized import normalize_market_data
+ from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, run_data_quality
+ from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
+@@ -96,6 +95,8 @@ def _read_source_frames(input_path: Path) -> tuple[dict[str, pd.DataFrame | None
+ 
+ 
+ def _protocol_rows(*, data_quality: list, universe_rows: list) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     critical_fail = has_critical_fail(data_quality)
+     base_rows = [
+         ProtocolAuditRow(
+diff --git a/src/anomaly_science/decision/run.py b/src/anomaly_science/decision/run.py
+index 3d47b66f..0bb99277 100644
+--- a/src/anomaly_science/decision/run.py
++++ b/src/anomaly_science/decision/run.py
+@@ -5,7 +5,6 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ from anomaly_science.decision.builder import (
+@@ -85,6 +84,8 @@ def run_mvp1_expected_value(
+ 
+ 
+ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_expected_value_scope",
+diff --git a/src/anomaly_science/events/run.py b/src/anomaly_science/events/run.py
+index 7a1527e6..0fa3d80d 100644
+--- a/src/anomaly_science/events/run.py
++++ b/src/anomaly_science/events/run.py
+@@ -10,7 +10,6 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.data.normalized import normalize_candles_1m
+ from anomaly_science.data.quality import (
+     apply_data_quality_mask,
+@@ -168,6 +167,8 @@ def _protocol_rows(
+     required_stream_reject_count: int,
+     required_data_streams: str,
+ ) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_events_scope",
+@@ -227,6 +228,12 @@ def _protocol_rows(
+             message=f"excluded warm-up windows after data gaps before strategy.generate_triggers; warmup_window_count={warmup_window_count}",
+             artifact="anomaly_data_quality.csv",
+         ),
++        ProtocolAuditRow(
++            check_name="data_quality_mask_enforced_before_trigger_generation",
++            status=AuditStatus.PASS,
++            message=f"excluded {data_quality_mask_excluded_count} maskable bad 1m candle row(s) before strategy.generate_triggers",
++            artifact="anomaly_data_quality.csv;anomaly_events.csv",
++        ),
+         ProtocolAuditRow(
+             check_name="required_data_streams_applied_before_trigger_generation",
+             status=AuditStatus.PASS if required_stream_reject_count == 0 else AuditStatus.FAIL,
+diff --git a/src/anomaly_science/features/catalog.py b/src/anomaly_science/features/catalog.py
+index b2b96cb8..b25e0127 100644
+--- a/src/anomaly_science/features/catalog.py
++++ b/src/anomaly_science/features/catalog.py
+@@ -5,7 +5,6 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ from anomaly_science.contracts.features import (
+@@ -125,6 +124,72 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
+             audit=True,
+             description="Return from event start to current close using as-of state only.",
+         ),
++        _row(
++            name="distance_to_running_high",
++            family=FeatureFamily.PRICE_PATH,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
++            model=True,
++            audit=True,
++            description="Current close divided by as-of running high minus one; non-positive near or below high.",
++        ),
++        _row(
++            name="distance_to_running_low",
++            family=FeatureFamily.PRICE_PATH,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
++            model=True,
++            audit=True,
++            description="Current close divided by as-of running low minus one; non-negative near or above low.",
++        ),
++        _row(
++            name="distance_to_structural_low",
++            family=FeatureFamily.STRUCTURE,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
++            model=True,
++            audit=True,
++            missing=FeatureMissingPolicy.NULL_IF_SOURCE_MISSING,
++            description="Distance to the as-of structural low when a structural level is known.",
++        ),
++        _row(
++            name="distance_to_structural_high",
++            family=FeatureFamily.STRUCTURE,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
++            model=True,
++            audit=True,
++            missing=FeatureMissingPolicy.NULL_IF_SOURCE_MISSING,
++            description="Distance to the as-of structural high when a structural level is known.",
++        ),
++        _row(
++            name="missing_structural_low",
++            family=FeatureFamily.STRUCTURE,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.BOOLEAN_FLAG,
++            model=True,
++            audit=True,
++            missing=FeatureMissingPolicy.FALSE_IF_CONDITION_ABSENT,
++            dtype="bool",
++            description="True when no structural low is available as-of the snapshot.",
++        ),
++        _row(
++            name="missing_structural_high",
++            family=FeatureFamily.STRUCTURE,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.BOOLEAN_FLAG,
++            model=True,
++            audit=True,
++            missing=FeatureMissingPolicy.FALSE_IF_CONDITION_ABSENT,
++            dtype="bool",
++            description="True when no structural high is available as-of the snapshot.",
++        ),
+         _row(
+             name="range_since_start_atr",
+             family=FeatureFamily.PRICE_PATH,
+@@ -187,6 +252,50 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
+             dtype="int64",
+             description="Minutes elapsed since anomaly detection; alpha decay clock.",
+         ),
++        _row(
++            name="minutes_since_detection",
++            family=FeatureFamily.SPEED_TIME,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.TIME_RELATIVE,
++            model=True,
++            audit=True,
++            dtype="int64",
++            description="Minutes elapsed since anomaly detection in the canonical state artifact.",
++        ),
++        _row(
++            name="minutes_since_event_start",
++            family=FeatureFamily.SPEED_TIME,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.TIME_RELATIVE,
++            model=True,
++            audit=True,
++            dtype="int64",
++            description="Minutes elapsed since the anomaly event start in the canonical state artifact.",
++        ),
++        _row(
++            name="time_since_running_high_minutes",
++            family=FeatureFamily.SPEED_TIME,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.TIME_RELATIVE,
++            model=True,
++            audit=True,
++            dtype="int64",
++            description="Minutes since the as-of running high was observed.",
++        ),
++        _row(
++            name="event_alive",
++            family=FeatureFamily.SPEED_TIME,
++            source="anomaly_state_1m.csv",
++            asof=ASOF_STATE,
++            norm=FeatureNormalization.BOOLEAN_FLAG,
++            model=True,
++            audit=True,
++            dtype="bool",
++            description="True while the anomaly lifecycle is active at the snapshot.",
++        ),
+         _row(
+             name="clock_maturity",
+             family=FeatureFamily.SPEED_TIME,
+@@ -743,6 +852,8 @@ def run_mvp1_features(*, out_dir: str | Path) -> Path:
+ 
+ 
+ def _protocol_rows(*, feature_count: int, violations: list[str]) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     relative_status = AuditStatus.FAIL if violations else AuditStatus.PASS
+     relative_message = "; ".join(violations) if violations else "feature catalog contains no future-data features and no raw absolute model features"
+     base_rows = [
+diff --git a/src/anomaly_science/features/matrix.py b/src/anomaly_science/features/matrix.py
+index 781ada88..21d3bf3d 100644
+--- a/src/anomaly_science/features/matrix.py
++++ b/src/anomaly_science/features/matrix.py
+@@ -10,7 +10,6 @@ from pathlib import Path
+ from typing import Iterable, Mapping, Sequence
+ 
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ from anomaly_science.contracts.features import AnomalyFeatureMatrixRow
+@@ -1290,6 +1289,8 @@ def _correlation(left: Sequence[float], right: Sequence[float]) -> float | None:
+     return min(max(corr, -1.0), 1.0)
+ 
+ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_feature_matrix_scope",
+diff --git a/src/anomaly_science/future/config.py b/src/anomaly_science/future/config.py
+index 2a7eee11..56b6fb2f 100644
+--- a/src/anomaly_science/future/config.py
++++ b/src/anomaly_science/future/config.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+ 
++from anomaly_science.contracts.horizons import FUTURE_PATH_RETURN_HORIZONS
+ from anomaly_science.future.atr import ATR_1D_WINDOW_MINUTES
+ 
+ 
+diff --git a/src/anomaly_science/future/run.py b/src/anomaly_science/future/run.py
+index bc05e362..72e00832 100644
+--- a/src/anomaly_science/future/run.py
++++ b/src/anomaly_science/future/run.py
+@@ -7,7 +7,6 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.data.source import CsvDirectoryDataSource
+ from anomaly_science.future.builder import (
+     build_anomaly_future_paths_from_source,
+@@ -74,6 +73,8 @@ def run_mvp1_future(
+ 
+ 
+ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_future_scope",
+diff --git a/src/anomaly_science/labels/config.py b/src/anomaly_science/labels/config.py
+index ff5fef28..17a0e76b 100644
+--- a/src/anomaly_science/labels/config.py
++++ b/src/anomaly_science/labels/config.py
+@@ -2,6 +2,8 @@ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+ 
++from anomaly_science.contracts.horizons import SUPPORTED_RESEARCH_HORIZONS
++
+ 
+ @dataclass(frozen=True, slots=True)
+ class OutcomeLabelConfig:
+diff --git a/src/anomaly_science/labels/run.py b/src/anomaly_science/labels/run.py
+index a4087167..4d61cf63 100644
+--- a/src/anomaly_science/labels/run.py
++++ b/src/anomaly_science/labels/run.py
+@@ -7,7 +7,6 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.labels.builder import (
+     build_anomaly_outcome_labels_from_inputs,
+     load_outcome_label_inputs,
+@@ -68,6 +67,8 @@ def run_mvp1_labels(
+ 
+ 
+ def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_labels_scope",
+diff --git a/src/anomaly_science/prediction/__init__.py b/src/anomaly_science/prediction/__init__.py
+index c42560be..da1b1b0a 100644
+--- a/src/anomaly_science/prediction/__init__.py
++++ b/src/anomaly_science/prediction/__init__.py
+@@ -17,6 +17,7 @@ from anomaly_science.prediction.builder import (
+     model_metadata_rows_to_artifact,
+     oos_prediction_rows_to_artifact,
+     prediction_metric_rows_to_artifact,
++    validate_model_feature_catalog_membership,
+ )
+ from anomaly_science.prediction.config import WalkForwardPredictionConfig
+ from anomaly_science.prediction.run import run_mvp1_prediction
+@@ -40,4 +41,5 @@ __all__ = [
+     "oos_prediction_rows_to_artifact",
+     "prediction_metric_rows_to_artifact",
+     "run_mvp1_prediction",
++    "validate_model_feature_catalog_membership",
+ ]
+diff --git a/src/anomaly_science/prediction/builder.py b/src/anomaly_science/prediction/builder.py
+index 41de4a4d..e773b395 100644
+--- a/src/anomaly_science/prediction/builder.py
++++ b/src/anomaly_science/prediction/builder.py
+@@ -66,6 +66,28 @@ class PredictionArtifactError(ValueError):
+     """Raised when prediction artifacts violate strict schemas."""
+ 
+ 
++def validate_model_feature_catalog_membership(feature_names: Iterable[str]) -> None:
++    declared_names = _catalog_model_feature_names()
++    missing = sorted(set(feature_names) - declared_names)
++    if missing:
++        raise PredictionInputError(
++            "model feature(s) are not declared as numeric/bool model features in the feature catalog: "
++            + ", ".join(missing)
++        )
++
++
++def _catalog_model_feature_names() -> frozenset[str]:
++    names: set[str] = set()
++    for row in build_default_feature_catalog():
++        if not row.is_model_feature or row.dtype == "str":
++            continue
++        if row.source_artifact == "anomaly_state_1m.csv":
++            names.add(row.feature_name)
++        elif row.source_artifact == "anomaly_feature_matrix.csv":
++            names.add(f"feature_matrix.{row.feature_name}")
++    return frozenset(names)
++
++
+ @dataclass(frozen=True, slots=True)
+ class WalkForwardPredictionResult:
+     predictions: tuple[OosPredictionRow, ...]
+@@ -837,6 +859,7 @@ def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForw
+         )
+     if not names:
+         raise PredictionInputError("model feature set is empty after exclusions")
++    validate_model_feature_catalog_membership(names)
+     return names
+ 
+ 
+diff --git a/src/anomaly_science/prediction/run.py b/src/anomaly_science/prediction/run.py
+index 8269d93a..d8d5a82c 100644
+--- a/src/anomaly_science/prediction/run.py
++++ b/src/anomaly_science/prediction/run.py
+@@ -7,7 +7,6 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.audit import build_horizon_consistency_audit_rows, build_methodology_v2_audit_rows
+ from anomaly_science.prediction.builder import (
+     build_calibration_rows,
+     build_prediction_metric_rows,
+@@ -134,6 +133,8 @@ def _protocol_rows(
+     model_metadata: object,
+     config: WalkForwardPredictionConfig,
+ ) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_horizon_consistency_audit_rows, build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_prediction_scope",
+diff --git a/src/anomaly_science/research/run.py b/src/anomaly_science/research/run.py
+index 75838df8..2765bb1e 100644
+--- a/src/anomaly_science/research/run.py
++++ b/src/anomaly_science/research/run.py
+@@ -10,7 +10,6 @@ import pandas as pd
+ from anomaly_science.atlas import run_mvp1_atlas
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_manifest
+ from anomaly_science.artifacts.writer import write_csv_artifact_with_aliases
+-from anomaly_science.audit import build_independent_forensic_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, RunConfigRow
+ from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
+@@ -345,6 +344,8 @@ def _write_summary(
+ 
+ 
+ def _write_forensic_audit(run_dir: Path) -> tuple[Path, str, int, int, str]:
++    from anomaly_science.audit import build_independent_forensic_audit_rows
++
+     rows = build_independent_forensic_audit_rows(run_dir)
+     forensic_audit_dir = run_dir / "stages" / "forensic_audit"
+     write_csv_artifact_with_aliases(
+diff --git a/src/anomaly_science/simulation/run.py b/src/anomaly_science/simulation/run.py
+index 1e6a8498..bc0fac56 100644
+--- a/src/anomaly_science/simulation/run.py
++++ b/src/anomaly_science/simulation/run.py
+@@ -5,7 +5,6 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ from anomaly_science.data.source import CsvDirectoryDataSource
+@@ -100,6 +99,8 @@ def run_mvp1_trade_simulation(
+ 
+ 
+ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, funding_rate_present: bool) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_trade_simulation_scope",
+diff --git a/src/anomaly_science/state/run.py b/src/anomaly_science/state/run.py
+index 33d83a54..6714d283 100644
+--- a/src/anomaly_science/state/run.py
++++ b/src/anomaly_science/state/run.py
+@@ -7,7 +7,6 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.data.source import CsvDirectoryDataSource
+ from anomaly_science.state.builder import (
+     build_online_anomaly_state_1m_from_source,
+@@ -79,6 +78,8 @@ def run_mvp1_state(
+ 
+ 
+ def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_count: int) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_state_scope",
+diff --git a/src/anomaly_science/strategy/run.py b/src/anomaly_science/strategy/run.py
+index 7c4f4d25..8a60a8b3 100644
+--- a/src/anomaly_science/strategy/run.py
++++ b/src/anomaly_science/strategy/run.py
+@@ -5,7 +5,6 @@ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ from anomaly_science.strategy.metadata import format_horizons, format_required_data_streams
+@@ -116,6 +115,8 @@ def _protocol_rows(
+     reject_reason_count: int,
+     implementation_status_rows: list[dict[str, object]],
+ ) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_strategy_registry_scope",
+diff --git a/src/anomaly_science/validation/governance.py b/src/anomaly_science/validation/governance.py
+index 97603d64..4e96ceaa 100644
+--- a/src/anomaly_science/validation/governance.py
++++ b/src/anomaly_science/validation/governance.py
+@@ -6,7 +6,6 @@ from pathlib import Path
+ from typing import Literal, Sequence
+ 
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+-from anomaly_science.audit import build_methodology_v2_audit_rows
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ from anomaly_science.contracts.governance import HoldoutAccessLogRow, ResearchLedgerRow
+@@ -94,6 +93,8 @@ def run_mvp1_holdout_governance(
+ 
+ 
+ def _protocol_rows(*, ledger_row_count: int, access_row_count: int, research_mode: str) -> list[ProtocolAuditRow]:
++    from anomaly_science.audit import build_methodology_v2_audit_rows
++
+     base_rows = [
+         ProtocolAuditRow(
+             check_name="mvp1_holdout_governance_scope",
+diff --git a/tests/test_feature_matrix.py b/tests/test_feature_matrix.py
+index e1859e1d..c5c1ede6 100644
+--- a/tests/test_feature_matrix.py
++++ b/tests/test_feature_matrix.py
+@@ -510,7 +510,7 @@ def _state_for_symbol(
+     symbol: str,
+     snapshot_time_ms: int,
+     current_close: float,
+-    current_return_from_start: float,
++    current_return_from_start: float = 0.01,
+ ) -> AnomalyState1mRow:
+     base = _state(snapshot_time_ms=snapshot_time_ms, current_close=current_close)
+     return AnomalyState1mRow(
+diff --git a/tests/test_prediction.py b/tests/test_prediction.py
+index bd21cef1..dfe7102f 100644
+--- a/tests/test_prediction.py
++++ b/tests/test_prediction.py
+@@ -24,8 +24,10 @@ from anomaly_science.prediction import (
+     build_walk_forward_predictions,
+     load_anomaly_oos_predictions_csv,
+     oos_prediction_rows_to_artifact,
++    validate_model_feature_catalog_membership,
+ )
+ from anomaly_science.state import state_rows_to_artifact
++from anomaly_science.strategy.registry import StrategyRegistryError
+ 
+ BASE_DAY_MS = 1_704_067_200_000  # 2024-01-01 00:00:00 UTC
+ ONE_MINUTE_MS = 60_000
+@@ -266,17 +268,21 @@ def test_missing_future_is_excluded_from_prediction_metrics() -> None:
+ 
+ 
+ def test_prediction_rejects_strategy_horizon_mismatch() -> None:
+-    with pytest.raises(PredictionInputError, match="does not match strategy horizon"):
+-        build_walk_forward_predictions(
+-            inputs=[],
+-            config=WalkForwardPredictionConfig(
+-                strategy_name="broad_anomaly_v1_h30",
+-                target_horizon_minutes=60,
+-                active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
+-            ),
++    with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
++        WalkForwardPredictionConfig(
++            strategy_name="broad_anomaly_v1_h30",
++            target_horizon_minutes=60,
++            active_strategy_names=("broad_anomaly_v1_h30", "broad_anomaly_v1_h60"),
+         )
+ 
+ 
++def test_prediction_model_features_must_be_declared_in_catalog() -> None:
++    validate_model_feature_catalog_membership(("minutes_since_detection", "feature_matrix.volume_zscore"))
++
++    with pytest.raises(PredictionInputError, match="not declared"):
++        validate_model_feature_catalog_membership(("undeclared_alpha",))
++
++
+ def test_oos_prediction_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
+     path = tmp_path / "anomaly_oos_predictions.csv"
+     columns = list(get_artifact_schema("anomaly_oos_predictions.csv").required_columns) + ["extra"]
+diff --git a/tests/test_trade_simulation.py b/tests/test_trade_simulation.py
+index 82224b9d..9bc98f49 100644
+--- a/tests/test_trade_simulation.py
++++ b/tests/test_trade_simulation.py
+@@ -22,6 +22,7 @@ from anomaly_science.simulation import (
+     run_mvp1_trade_simulation,
+     trade_simulation_rows_to_artifact,
+ )
++from anomaly_science.strategy.registry import StrategyRegistryError
+ 
+ BASE_MS = 1_704_067_200_000
+ ONE_MINUTE_MS = 60_000
+@@ -171,14 +172,10 @@ def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant(
+ 
+ 
+ def test_trade_simulation_rejects_strategy_horizon_mismatch() -> None:
+-    with pytest.raises(TradeSimulationInputError, match="does not match strategy horizon"):
+-        build_trade_simulation_rows(
+-            candles_1m=[],
+-            decision_rows=[],
+-            config=TradeSimulationConfig(
+-                strategy_name="broad_anomaly_v1_h30",
+-                target_horizon_minutes=60,
+-            ),
++    with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
++        TradeSimulationConfig(
++            strategy_name="broad_anomaly_v1_h30",
++            target_horizon_minutes=60,
+         )
+ 
+ 

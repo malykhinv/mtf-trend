@@ -22,6 +22,7 @@ from anomaly_science.simulation import (
     run_mvp1_trade_simulation,
     trade_simulation_rows_to_artifact,
 )
+from anomaly_science.strategy.registry import StrategyRegistryError
 
 BASE_MS = 1_704_067_200_000
 ONE_MINUTE_MS = 60_000
@@ -171,14 +172,10 @@ def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant(
 
 
 def test_trade_simulation_rejects_strategy_horizon_mismatch() -> None:
-    with pytest.raises(TradeSimulationInputError, match="does not match strategy horizon"):
-        build_trade_simulation_rows(
-            candles_1m=[],
-            decision_rows=[],
-            config=TradeSimulationConfig(
-                strategy_name="broad_anomaly_v1_h30",
-                target_horizon_minutes=60,
-            ),
+    with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
+        TradeSimulationConfig(
+            strategy_name="broad_anomaly_v1_h30",
+            target_horizon_minutes=60,
         )
 
 

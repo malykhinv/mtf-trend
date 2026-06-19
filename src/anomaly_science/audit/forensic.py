@@ -332,20 +332,23 @@ def _canonical_alias_consistency_row(root: Path) -> ProtocolAuditRow:
     failures: list[str] = []
     checked = 0
     for anomaly_name, strategy_name in sorted(STRATEGY_ARTIFACT_ALIASES.items()):
-        anomaly_paths = tuple(sorted(root.rglob(anomaly_name)))
-        strategy_paths = tuple(sorted(root.rglob(strategy_name)))
-        if not anomaly_paths and not strategy_paths:
+        anomaly_by_parent = {path.parent: path for path in root.rglob(anomaly_name)}
+        strategy_by_parent = {path.parent: path for path in root.rglob(strategy_name)}
+        if not anomaly_by_parent and not strategy_by_parent:
             continue
         checked += 1
-        if len(anomaly_paths) != len(strategy_paths):
-            failures.append(f"{anomaly_name}/{strategy_name} count mismatch: {len(anomaly_paths)} vs {len(strategy_paths)}")
-            continue
-        for anomaly_path, strategy_path in zip(anomaly_paths, strategy_paths):
-            if anomaly_path.parent != strategy_path.parent:
-                failures.append(f"{anomaly_name}/{strategy_name} directory mismatch: {anomaly_path.parent} vs {strategy_path.parent}")
-                continue
+        missing_strategy = sorted(set(anomaly_by_parent) - set(strategy_by_parent))
+        missing_anomaly = sorted(set(strategy_by_parent) - set(anomaly_by_parent))
+        if missing_strategy:
+            failures.append(f"{anomaly_name}/{strategy_name} missing strategy aliases in: " + ", ".join(str(path) for path in missing_strategy[:5]))
+        if missing_anomaly:
+            failures.append(f"{anomaly_name}/{strategy_name} missing anomaly aliases in: " + ", ".join(str(path) for path in missing_anomaly[:5]))
+        for parent in sorted(set(anomaly_by_parent) & set(strategy_by_parent)):
+            anomaly_path = anomaly_by_parent[parent]
+            strategy_path = strategy_by_parent[parent]
             if anomaly_path.read_bytes() != strategy_path.read_bytes():
                 failures.append(f"{anomaly_path} content differs from {strategy_path}")
+                continue
     if failures:
         return _row(
             "forensic_canonical_alias_artifacts_match",

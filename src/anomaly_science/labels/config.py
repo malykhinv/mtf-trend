@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from anomaly_science.contracts.horizons import SUPPORTED_RESEARCH_HORIZONS
+
 
 @dataclass(frozen=True, slots=True)
 class OutcomeLabelConfig:

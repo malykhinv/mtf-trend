@@ -90,7 +90,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
 | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. | Keep universe and cross-section eligibility tests as permanent regression gates. |
 | Market context engine | PARTIAL | BTC/ETH/systemic context features exist. Coverage and tests are still MVP-level. | Add catalog/audit coverage by context feature family. |
-| Feature registry / feature schema | PARTIAL | Feature catalog exists. It is not yet a hard gate for every model feature. | Enforce catalog membership before prediction. |
+| Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. | Keep catalog membership tests as permanent gate. |
 | Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. | Keep temporal/no-leakage tests as permanent gate. |
 | Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. | Keep horizon/schema tests as permanent gate. |
 | Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
@@ -137,13 +137,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 8. `methodology: add prediction artifact horizon identity` - implemented in this patch.
 9. `methodology: add independent forensic protocol audit` - implemented.
 10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
-11. `strategy: make registry status self-auditing`.
-12. `strategy: complete broad anomaly trigger component accounting`.
-13. `strategy: add 180m horizon support or remove 180m promises` - implemented.
-14. `strategy: implement post-pump distribution variants`.
-15. `strategy: implement post-anomaly extension variants`.
-16. `features: add structural state and relaxed geometry features`.
-17. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+11. `methodology: enforce feature catalog membership before prediction` - implemented.
+12. `strategy: make registry status self-auditing`.
+13. `strategy: complete broad anomaly trigger component accounting`.
+14. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+15. `strategy: implement post-pump distribution variants`.
+16. `strategy: implement post-anomaly extension variants`.
+17. `features: add structural state and relaxed geometry features`.
+18. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 

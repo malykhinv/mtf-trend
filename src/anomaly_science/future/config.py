@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from anomaly_science.contracts.horizons import FUTURE_PATH_RETURN_HORIZONS
 from anomaly_science.future.atr import ATR_1D_WINDOW_MINUTES
 
 

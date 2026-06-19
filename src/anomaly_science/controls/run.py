@@ -7,7 +7,6 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.controls.builder import (
     baseline_comparison_rows_to_artifact,
     build_baseline_comparison_rows,
@@ -100,6 +99,8 @@ def _protocol_rows(
     ok_control_count: int,
     config: ControlsConfig,
 ) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_controls_scope",

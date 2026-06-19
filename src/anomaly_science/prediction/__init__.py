@@ -17,6 +17,7 @@ from anomaly_science.prediction.builder import (
     model_metadata_rows_to_artifact,
     oos_prediction_rows_to_artifact,
     prediction_metric_rows_to_artifact,
+    validate_model_feature_catalog_membership,
 )
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
 from anomaly_science.prediction.run import run_mvp1_prediction
@@ -40,4 +41,5 @@ __all__ = [
     "oos_prediction_rows_to_artifact",
     "prediction_metric_rows_to_artifact",
     "run_mvp1_prediction",
+    "validate_model_feature_catalog_membership",
 ]

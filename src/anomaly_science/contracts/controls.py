@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .horizons import is_supported_research_horizon
 from .market import MarketDataContractError
 
 CONTROL_STATUS_OK = "OK"

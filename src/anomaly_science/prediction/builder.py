@@ -66,6 +66,28 @@ class PredictionArtifactError(ValueError):
     """Raised when prediction artifacts violate strict schemas."""
 
 
+def validate_model_feature_catalog_membership(feature_names: Iterable[str]) -> None:
+    declared_names = _catalog_model_feature_names()
+    missing = sorted(set(feature_names) - declared_names)
+    if missing:
+        raise PredictionInputError(
+            "model feature(s) are not declared as numeric/bool model features in the feature catalog: "
+            + ", ".join(missing)
+        )
+
+
+def _catalog_model_feature_names() -> frozenset[str]:
+    names: set[str] = set()
+    for row in build_default_feature_catalog():
+        if not row.is_model_feature or row.dtype == "str":
+            continue
+        if row.source_artifact == "anomaly_state_1m.csv":
+            names.add(row.feature_name)
+        elif row.source_artifact == "anomaly_feature_matrix.csv":
+            names.add(f"feature_matrix.{row.feature_name}")
+    return frozenset(names)
+
+
 @dataclass(frozen=True, slots=True)
 class WalkForwardPredictionResult:
     predictions: tuple[OosPredictionRow, ...]
@@ -837,6 +859,7 @@ def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForw
         )
     if not names:
         raise PredictionInputError("model feature set is empty after exclusions")
+    validate_model_feature_catalog_membership(names)
     return names
 
 

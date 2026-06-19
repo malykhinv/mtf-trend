@@ -7,7 +7,6 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.source import CsvDirectoryDataSource
 from anomaly_science.future.builder import (
     build_anomaly_future_paths_from_source,
@@ -74,6 +73,8 @@ def run_mvp1_future(
 
 
 def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_future_scope",

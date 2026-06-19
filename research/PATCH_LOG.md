@@ -1,5 +1,18 @@
 # Patch log
 
+## methodology: enforce feature catalog membership before prediction
+
+Status: APPLIED.
+
+Intent:
+- Make `build_default_feature_catalog()` a hard gate for every numeric/bool model feature used by prediction.
+- Add the current prediction state feature set to the feature catalog.
+- Remove top-level audit imports from stage runners so feature/config modules can be imported without protocol-audit cycles.
+- Restore explicit Core horizon imports in future/label configs.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_feature_catalog.py tests\test_horizon_contract.py`
+
 ## methodology: harden point-in-time universe
 
 Status: PROPOSED; patch generated after `methodology: enforce data quality mask before trigger`.

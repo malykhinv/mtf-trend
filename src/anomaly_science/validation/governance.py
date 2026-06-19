@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Literal, Sequence
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.governance import HoldoutAccessLogRow, ResearchLedgerRow
@@ -94,6 +93,8 @@ def run_mvp1_holdout_governance(
 
 
 def _protocol_rows(*, ledger_row_count: int, access_row_count: int, research_mode: str) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_holdout_governance_scope",

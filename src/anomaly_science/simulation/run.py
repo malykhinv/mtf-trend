@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.data.source import CsvDirectoryDataSource
@@ -100,6 +99,8 @@ def run_mvp1_trade_simulation(
 
 
 def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, funding_rate_present: bool) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_trade_simulation_scope",

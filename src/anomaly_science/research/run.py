@@ -10,7 +10,6 @@ import pandas as pd
 from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_manifest
 from anomaly_science.artifacts.writer import write_csv_artifact_with_aliases
-from anomaly_science.audit import build_independent_forensic_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, RunConfigRow
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
@@ -345,6 +344,8 @@ def _write_summary(
 
 
 def _write_forensic_audit(run_dir: Path) -> tuple[Path, str, int, int, str]:
+    from anomaly_science.audit import build_independent_forensic_audit_rows
+
     rows = build_independent_forensic_audit_rows(run_dir)
     forensic_audit_dir = run_dir / "stages" / "forensic_audit"
     write_csv_artifact_with_aliases(

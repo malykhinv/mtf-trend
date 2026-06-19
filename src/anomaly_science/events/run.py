@@ -10,7 +10,6 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.quality import (
     apply_data_quality_mask,
@@ -168,6 +167,8 @@ def _protocol_rows(
     required_stream_reject_count: int,
     required_data_streams: str,
 ) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_events_scope",
@@ -226,6 +227,12 @@ def _protocol_rows(
             status=AuditStatus.PASS,
             message=f"excluded warm-up windows after data gaps before strategy.generate_triggers; warmup_window_count={warmup_window_count}",
             artifact="anomaly_data_quality.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="data_quality_mask_enforced_before_trigger_generation",
+            status=AuditStatus.PASS,
+            message=f"excluded {data_quality_mask_excluded_count} maskable bad 1m candle row(s) before strategy.generate_triggers",
+            artifact="anomaly_data_quality.csv;anomaly_events.csv",
         ),
         ProtocolAuditRow(
             check_name="required_data_streams_applied_before_trigger_generation",

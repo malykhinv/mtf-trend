@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.audit import build_methodology_v2_audit_rows
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.features import (
@@ -126,6 +125,72 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             description="Return from event start to current close using as-of state only.",
         ),
         _row(
+            name="distance_to_running_high",
+            family=FeatureFamily.PRICE_PATH,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
+            model=True,
+            audit=True,
+            description="Current close divided by as-of running high minus one; non-positive near or below high.",
+        ),
+        _row(
+            name="distance_to_running_low",
+            family=FeatureFamily.PRICE_PATH,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
+            model=True,
+            audit=True,
+            description="Current close divided by as-of running low minus one; non-negative near or above low.",
+        ),
+        _row(
+            name="distance_to_structural_low",
+            family=FeatureFamily.STRUCTURE,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
+            model=True,
+            audit=True,
+            missing=FeatureMissingPolicy.NULL_IF_SOURCE_MISSING,
+            description="Distance to the as-of structural low when a structural level is known.",
+        ),
+        _row(
+            name="distance_to_structural_high",
+            family=FeatureFamily.STRUCTURE,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.DIMENSIONLESS_RATIO,
+            model=True,
+            audit=True,
+            missing=FeatureMissingPolicy.NULL_IF_SOURCE_MISSING,
+            description="Distance to the as-of structural high when a structural level is known.",
+        ),
+        _row(
+            name="missing_structural_low",
+            family=FeatureFamily.STRUCTURE,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.BOOLEAN_FLAG,
+            model=True,
+            audit=True,
+            missing=FeatureMissingPolicy.FALSE_IF_CONDITION_ABSENT,
+            dtype="bool",
+            description="True when no structural low is available as-of the snapshot.",
+        ),
+        _row(
+            name="missing_structural_high",
+            family=FeatureFamily.STRUCTURE,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.BOOLEAN_FLAG,
+            model=True,
+            audit=True,
+            missing=FeatureMissingPolicy.FALSE_IF_CONDITION_ABSENT,
+            dtype="bool",
+            description="True when no structural high is available as-of the snapshot.",
+        ),
+        _row(
             name="range_since_start_atr",
             family=FeatureFamily.PRICE_PATH,
             source="anomaly_feature_matrix.csv",
@@ -186,6 +251,50 @@ def build_default_feature_catalog() -> tuple[FeatureCatalogRow, ...]:
             audit=True,
             dtype="int64",
             description="Minutes elapsed since anomaly detection; alpha decay clock.",
+        ),
+        _row(
+            name="minutes_since_detection",
+            family=FeatureFamily.SPEED_TIME,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.TIME_RELATIVE,
+            model=True,
+            audit=True,
+            dtype="int64",
+            description="Minutes elapsed since anomaly detection in the canonical state artifact.",
+        ),
+        _row(
+            name="minutes_since_event_start",
+            family=FeatureFamily.SPEED_TIME,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.TIME_RELATIVE,
+            model=True,
+            audit=True,
+            dtype="int64",
+            description="Minutes elapsed since the anomaly event start in the canonical state artifact.",
+        ),
+        _row(
+            name="time_since_running_high_minutes",
+            family=FeatureFamily.SPEED_TIME,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.TIME_RELATIVE,
+            model=True,
+            audit=True,
+            dtype="int64",
+            description="Minutes since the as-of running high was observed.",
+        ),
+        _row(
+            name="event_alive",
+            family=FeatureFamily.SPEED_TIME,
+            source="anomaly_state_1m.csv",
+            asof=ASOF_STATE,
+            norm=FeatureNormalization.BOOLEAN_FLAG,
+            model=True,
+            audit=True,
+            dtype="bool",
+            description="True while the anomaly lifecycle is active at the snapshot.",
         ),
         _row(
             name="clock_maturity",
@@ -743,6 +852,8 @@ def run_mvp1_features(*, out_dir: str | Path) -> Path:
 
 
 def _protocol_rows(*, feature_count: int, violations: list[str]) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_methodology_v2_audit_rows
+
     relative_status = AuditStatus.FAIL if violations else AuditStatus.PASS
     relative_message = "; ".join(violations) if violations else "feature catalog contains no future-data features and no raw absolute model features"
     base_rows = [

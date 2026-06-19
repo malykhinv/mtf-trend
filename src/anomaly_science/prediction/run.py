@@ -7,7 +7,6 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.audit import build_horizon_consistency_audit_rows, build_methodology_v2_audit_rows
 from anomaly_science.prediction.builder import (
     build_calibration_rows,
     build_prediction_metric_rows,
@@ -134,6 +133,8 @@ def _protocol_rows(
     model_metadata: object,
     config: WalkForwardPredictionConfig,
 ) -> list[ProtocolAuditRow]:
+    from anomaly_science.audit import build_horizon_consistency_audit_rows, build_methodology_v2_audit_rows
+
     base_rows = [
         ProtocolAuditRow(
             check_name="mvp1_prediction_scope",
