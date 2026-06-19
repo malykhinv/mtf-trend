@@ -112,7 +112,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Area | Status | Current evidence / gap | Required patch direction |
 | :--- | :--- | :--- | :--- |
 | Broad anomaly strategy variants h15/h30/h60 | IMPLEMENTED | Variants are registry-backed and executable. | Keep tests around contract validation. |
-| Broad anomaly trigger breadth | PARTIAL | Detector now persists causal `trigger_component` / `trigger_components` accounting for implemented seed-level components: one-shot spike, range expansion, quote/base volume spike, trade-count spike, and volume-only anomaly. Remaining gap: fast-burst, grind, breakout, session, and market-wide impulse are not separate executable trigger components yet. | Add missing advanced trigger-family detectors without turning trigger into a trade setup. |
+| Broad anomaly trigger breadth | IMPLEMENTED | Detector persists causal `trigger_component` / `trigger_components` accounting for one-shot spike, fast burst, grind pump, volume-only anomaly, range expansion, breakout, pump-inside-noise, session activity burst, and market-wide impulse. Unit tests cover each advanced trigger family without adding trade/PnL logic. | Keep trigger-family tests as permanent gate; new families must remain causal audit metadata, not trade setups. |
 | Trigger deduplication / anti-pyramiding | IMPLEMENTED | Same-symbol cooldown/dedup policy exists. | Keep as permanent regression test. |
 | Anomaly event lifecycle | IMPLEMENTED | Online state lifecycle now materializes causal confirmed structural high/low levels, level timestamps, distances to those levels, and keeps missing levels explicit until confirmation. | Keep no-leakage tests around structural state. |
 | Running high/low as-of semantics | IMPLEMENTED | State uses data available only up to `state_time`. | Keep no-leakage tests. |
@@ -144,12 +144,13 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 15. `methodology: audit required controls completeness` - implemented.
 16. `methodology: audit market context feature coverage` - implemented.
 17. `strategy: make registry status self-auditing` - implemented.
-18. `strategy: complete broad anomaly trigger component accounting` - implemented; broader trigger-family coverage remains tracked by the Broad anomaly trigger breadth PARTIAL row.
+18. `strategy: complete broad anomaly trigger component accounting` - implemented.
 19. `strategy: add 180m horizon support or remove 180m promises` - implemented.
 20. `strategy: implement post-pump distribution variants` - implemented.
 21. `strategy: implement post-anomaly extension variants` - implemented.
 22. `features: add structural state and relaxed geometry features` - implemented.
 23. `methodology: complete rejection funnel and docs sync` - implemented.
+24. `strategy: complete broad anomaly trigger breadth` - implemented.
 
 Rule:
 

@@ -1,5 +1,20 @@
 # Patch log
 
+## strategy: complete broad anomaly trigger breadth
+
+Status: APPLIED.
+
+Intent:
+- Add causal executable trigger-family components for `fast_burst`, `grind_pump`, `breakout`, `pump_inside_noise`, `session_activity_burst`, and `market_wide_impulse`.
+- Bump `DETECTOR_VERSION` to `broad_anomaly_detector_v2` because event selection and event IDs changed.
+- Keep components as audit metadata only: no future labels, no EV/PnL logic, no trade-direction rule.
+- Update anomaly strategy docs and methodology ledger so implemented tags match code.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_events_detector.py -q`
+- `.venv\Scripts\python.exe -m pytest tests\test_strategy_contract.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## methodology: audit market context feature coverage
 
 Status: APPLIED.

@@ -869,10 +869,16 @@ Allowed persisted trigger component tags for the current broad detector:
 ```text
 one_shot_spike
 range_expansion
+fast_burst
+grind_pump
+breakout
+pump_inside_noise
 quote_volume_spike
 base_volume_spike
 trade_count_spike
 volume_only_anomaly
+session_activity_burst
+market_wide_impulse
 ```
 
 Rule:

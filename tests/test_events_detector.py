@@ -14,22 +14,32 @@ from anomaly_science.events.run import run_mvp1_events
 BASE_TS = 1_704_067_200_000
 
 
-def _candle(index: int, *, close: float, quote_volume: float = 100.0) -> Candle1m:
+def _candle(
+    index: int,
+    *,
+    close: float,
+    quote_volume: float = 100.0,
+    symbol: str = "AAA/USDT:USDT",
+    open_price: float = 100.0,
+    high: float | None = None,
+    low: float | None = None,
+    volume: float = 1.0,
+    number_of_trades: float = 10.0,
+) -> Candle1m:
     open_time_ms = BASE_TS + index * 60_000
-    open_price = 100.0 if index == 0 else 100.0
-    high = max(open_price, close) + 0.10
-    low = min(open_price, close) - 0.10
+    candle_high = high if high is not None else max(open_price, close) + 0.10
+    candle_low = low if low is not None else min(open_price, close) - 0.10
     return Candle1m(
-        symbol="AAA/USDT:USDT",
+        symbol=symbol,
         open_time_ms=open_time_ms,
         available_time_ms=open_time_ms + 60_000,
         open=open_price,
-        high=high,
-        low=low,
+        high=candle_high,
+        low=candle_low,
         close=close,
-        volume=1.0,
+        volume=volume,
         quote_volume=quote_volume,
-        number_of_trades=10.0,
+        number_of_trades=number_of_trades,
         taker_buy_quote_volume=quote_volume * 0.5,
     )
 
@@ -75,6 +85,12 @@ def test_broad_detector_uses_current_closed_candle_and_past_baseline_only() -> N
         min_volume_zscore=99.0,
         min_trade_count_zscore=99.0,
         min_range_zscore=99.0,
+        min_fast_burst_return_pct=99.0,
+        min_grind_pump_return_pct=99.0,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=99.0,
+        min_session_activity_quote_volume_zscore=999.0,
+        min_market_wide_abs_return_pct=99.0,
     )
 
     events = detect_broad_anomaly_events(candles, config=config)
@@ -123,6 +139,12 @@ def test_broad_detector_can_detect_volume_anomaly_without_return_threshold() -> 
         min_volume_zscore=99.0,
         min_trade_count_zscore=99.0,
         min_range_zscore=99.0,
+        min_fast_burst_return_pct=99.0,
+        min_grind_pump_return_pct=99.0,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=99.0,
+        min_session_activity_quote_volume_zscore=999.0,
+        min_market_wide_abs_return_pct=99.0,
     )
 
     events = detect_broad_anomaly_events(candles, config=config)
@@ -183,6 +205,12 @@ def test_broad_detector_excludes_first_candle_after_raw_gap_from_candidates_and_
         min_volume_zscore=99.0,
         min_trade_count_zscore=99.0,
         min_range_zscore=99.0,
+        min_fast_burst_return_pct=99.0,
+        min_grind_pump_return_pct=99.0,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=99.0,
+        min_session_activity_quote_volume_zscore=999.0,
+        min_market_wide_abs_return_pct=99.0,
     )
 
     events = detect_broad_anomaly_events(candles, config=config)
@@ -191,6 +219,196 @@ def test_broad_detector_excludes_first_candle_after_raw_gap_from_candidates_and_
     assert events[0].technical_noise_shock is False
     assert events[0].excluded_by_data_quality_gate is False
     assert events[0].raw_candle_gap_minutes == 1.0
+
+
+def test_broad_detector_emits_fast_burst_component() -> None:
+    candles = [
+        *[_candle(i, close=100.0) for i in range(5)],
+        _candle(5, close=101.0),
+        _candle(6, close=102.0),
+        _candle(7, close=103.0),
+    ]
+    config = BroadAnomalyDetectorConfig(
+        baseline_bars=7,
+        min_baseline_bars=5,
+        min_abs_return_pct=99.0,
+        min_quote_volume_zscore=99.0,
+        min_volume_zscore=99.0,
+        min_trade_count_zscore=99.0,
+        min_range_zscore=99.0,
+        min_fast_burst_return_pct=0.025,
+        min_grind_pump_return_pct=99.0,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=99.0,
+        min_session_activity_quote_volume_zscore=999.0,
+        min_market_wide_abs_return_pct=99.0,
+    )
+
+    events = detect_broad_anomaly_events(candles, config=config)
+
+    assert len(events) == 1
+    assert events[0].trigger_components == ("fast_burst",)
+
+
+def test_broad_detector_emits_grind_pump_component() -> None:
+    candles = [_candle(i, close=100.0) for i in range(5)]
+    grind_prices = [(100.0, 100.6), (100.6, 101.2), (101.2, 101.8), (101.8, 102.4), (102.4, 103.0)]
+    candles.extend(
+        _candle(index, open_price=open_price, close=close)
+        for index, (open_price, close) in enumerate(grind_prices, start=5)
+    )
+    config = BroadAnomalyDetectorConfig(
+        baseline_bars=9,
+        min_baseline_bars=5,
+        min_abs_return_pct=99.0,
+        min_quote_volume_zscore=999.0,
+        min_volume_zscore=99.0,
+        min_trade_count_zscore=99.0,
+        min_range_zscore=99.0,
+        fast_burst_window_minutes=3,
+        min_fast_burst_return_pct=99.0,
+        grind_pump_window_minutes=5,
+        min_grind_pump_return_pct=0.025,
+        min_grind_pump_positive_candles=5,
+        max_grind_pump_single_candle_abs_return_pct=0.01,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=99.0,
+        min_session_activity_quote_volume_zscore=999.0,
+        min_market_wide_abs_return_pct=99.0,
+    )
+
+    events = detect_broad_anomaly_events(candles, config=config)
+
+    assert len(events) == 1
+    assert events[0].trigger_components == ("grind_pump",)
+
+
+def test_broad_detector_emits_breakout_component() -> None:
+    candles = [_candle(i, open_price=100.0, high=101.0, low=99.0, close=100.0) for i in range(5)]
+    candles.append(_candle(5, open_price=101.2, high=101.8, low=101.0, close=101.5))
+    config = BroadAnomalyDetectorConfig(
+        baseline_bars=5,
+        min_baseline_bars=5,
+        min_abs_return_pct=99.0,
+        min_quote_volume_zscore=999.0,
+        min_volume_zscore=99.0,
+        min_trade_count_zscore=99.0,
+        min_range_zscore=99.0,
+        min_fast_burst_return_pct=99.0,
+        min_grind_pump_return_pct=99.0,
+        breakout_lookback_minutes=5,
+        min_breakout_pct=0.002,
+        min_pump_inside_noise_return_pct=99.0,
+        min_session_activity_quote_volume_zscore=999.0,
+        min_market_wide_abs_return_pct=99.0,
+    )
+
+    events = detect_broad_anomaly_events(candles, config=config)
+
+    assert len(events) == 1
+    assert events[0].trigger_components == ("breakout",)
+
+
+def test_broad_detector_emits_pump_inside_noise_component() -> None:
+    candles = [
+        _candle(0, high=102.0, low=99.0, close=100.0, quote_volume=100.0),
+        _candle(1, high=102.0, low=99.0, close=100.0, quote_volume=110.0),
+        _candle(2, high=102.0, low=99.0, close=100.0, quote_volume=90.0),
+        _candle(3, high=102.0, low=99.0, close=100.0, quote_volume=105.0),
+        _candle(4, high=102.0, low=99.0, close=100.0, quote_volume=95.0),
+        _candle(5, open_price=100.0, high=101.3, low=100.0, close=101.2, quote_volume=1_000.0),
+    ]
+    config = BroadAnomalyDetectorConfig(
+        baseline_bars=5,
+        min_baseline_bars=5,
+        min_abs_return_pct=99.0,
+        min_quote_volume_zscore=4.0,
+        min_volume_zscore=99.0,
+        min_trade_count_zscore=99.0,
+        min_range_zscore=99.0,
+        min_fast_burst_return_pct=99.0,
+        min_grind_pump_return_pct=99.0,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=0.01,
+        min_session_activity_quote_volume_zscore=999.0,
+        min_market_wide_abs_return_pct=99.0,
+    )
+
+    events = detect_broad_anomaly_events(candles, config=config)
+
+    assert len(events) == 1
+    assert events[0].trigger_components == ("pump_inside_noise", "quote_volume_spike")
+
+
+def test_broad_detector_emits_session_activity_burst_component() -> None:
+    candles = [
+        _candle(0, close=100.0, quote_volume=100.0),
+        _candle(1, close=100.0, quote_volume=110.0),
+        _candle(2, close=100.0, quote_volume=90.0),
+        _candle(3, close=100.0, quote_volume=105.0),
+        _candle(4, close=100.0, quote_volume=95.0),
+        _candle(5, close=100.0, quote_volume=1_000.0),
+    ]
+    config = BroadAnomalyDetectorConfig(
+        baseline_bars=5,
+        min_baseline_bars=5,
+        min_abs_return_pct=99.0,
+        min_quote_volume_zscore=999.0,
+        min_volume_zscore=99.0,
+        min_trade_count_zscore=99.0,
+        min_range_zscore=99.0,
+        min_fast_burst_return_pct=99.0,
+        min_grind_pump_return_pct=99.0,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=99.0,
+        session_activity_start_minutes_utc=(0,),
+        session_activity_window_minutes=10,
+        min_session_activity_quote_volume_zscore=4.0,
+        min_market_wide_abs_return_pct=99.0,
+    )
+
+    events = detect_broad_anomaly_events(candles, config=config)
+
+    assert len(events) == 1
+    assert events[0].trigger_components == ("session_activity_burst",)
+
+
+def test_broad_detector_emits_market_wide_impulse_component() -> None:
+    candles: list[Candle1m] = []
+    for symbol in ("AAA/USDT:USDT", "BBB/USDT:USDT", "CCC/USDT:USDT"):
+        candles.extend(
+            [
+                _candle(0, symbol=symbol, close=100.0, quote_volume=100.0),
+                _candle(1, symbol=symbol, close=100.0, quote_volume=110.0),
+                _candle(2, symbol=symbol, close=100.0, quote_volume=90.0),
+                _candle(3, symbol=symbol, close=100.0, quote_volume=105.0),
+                _candle(4, symbol=symbol, close=100.0, quote_volume=95.0),
+                _candle(5, symbol=symbol, close=101.0, quote_volume=1_000.0),
+            ]
+        )
+    config = BroadAnomalyDetectorConfig(
+        baseline_bars=5,
+        min_baseline_bars=5,
+        min_abs_return_pct=99.0,
+        min_quote_volume_zscore=999.0,
+        min_volume_zscore=99.0,
+        min_trade_count_zscore=99.0,
+        min_range_zscore=99.0,
+        min_fast_burst_return_pct=99.0,
+        min_grind_pump_return_pct=99.0,
+        min_breakout_pct=99.0,
+        min_pump_inside_noise_return_pct=99.0,
+        min_session_activity_quote_volume_zscore=999.0,
+        market_wide_window_min_symbols=3,
+        min_market_wide_abs_return_pct=0.005,
+        min_market_wide_quote_volume_zscore=2.0,
+    )
+
+    events = detect_broad_anomaly_events(candles, config=config)
+
+    assert len(events) == 3
+    assert {event.symbol for event in events} == {"AAA/USDT:USDT", "BBB/USDT:USDT", "CCC/USDT:USDT"}
+    assert all(event.trigger_components == ("market_wide_impulse",) for event in events)
 
 
 
