@@ -347,6 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
     export_cache.add_argument("--fail-on-missing-1m-rows", action="store_true", help="Fail after writing proof artifacts if any symbol has missing 1m timestamps inside its exported first/last minute span.")
     export_cache.add_argument("--fail-on-missing-open-interest", action="store_true", help="Fail after writing proof artifacts if any exported symbol has no open_interest samples.")
     export_cache.add_argument("--include-delivery-contracts", action="store_true", help="Include fixed-date delivery contract parquet files such as BTCUSDT_250627. Disabled by default; use only for explicit delivery-contract experiments.")
+    export_cache.add_argument("--progress-every", type=int, default=25, help="Print cache export progress every N symbols. Use 0 to disable progress output.")
+    export_cache.add_argument("--parquet-use-threads", action="store_true", help="Allow the parquet reader to use multiple threads. Disabled by default to keep CPU/RAM bounded on laptop hardware.")
     export_cache.add_argument("--out", required=True, help="Directory where MVP1 CSV files will be written.")
 
 
@@ -582,6 +584,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 fail_on_missing_1m_rows=args.fail_on_missing_1m_rows,
                 fail_on_missing_open_interest=args.fail_on_missing_open_interest,
                 include_delivery_contracts=args.include_delivery_contracts,
+                progress_every=args.progress_every,
+                parquet_use_threads=args.parquet_use_threads,
             )
         )
         print(f"mvp1 csv export written: {output_dir}")

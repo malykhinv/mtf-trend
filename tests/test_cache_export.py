@@ -271,6 +271,8 @@ def test_export_cache_cli_discovers_symbols_and_accepts_optional_days() -> None:
     assert args.expected_days == 7
     assert args.fail_on_missing_1m_rows is True
     assert args.include_delivery_contracts is False
+    assert args.progress_every == 25
+    assert args.parquet_use_threads is False
 
 
 def test_export_cache_cli_accepts_delivery_contract_opt_in() -> None:
@@ -282,8 +284,13 @@ def test_export_cache_cli_accepts_delivery_contract_opt_in() -> None:
             "--out",
             "tmp/mvp1",
             "--include-delivery-contracts",
+            "--progress-every",
+            "10",
+            "--parquet-use-threads",
         ]
     )
 
     assert args.command == "export-cache-mvp1-csv"
     assert args.include_delivery_contracts is True
+    assert args.progress_every == 10
+    assert args.parquet_use_threads is True

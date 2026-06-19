@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from anomaly_science.binance_vision_cache import is_delivery_contract_symbol
 
@@ -27,12 +30,16 @@ class CacheMvp1CsvExportConfig:
     fail_on_missing_1m_rows: bool = False
     fail_on_missing_open_interest: bool = False
     include_delivery_contracts: bool = False
+    progress_every: int = 25
+    parquet_use_threads: bool = False
 
     def __post_init__(self) -> None:
         if self.days is not None and self.days <= 0:
             raise ValueError("days must be positive when provided")
         if self.expected_days is not None and self.expected_days <= 0:
             raise ValueError("expected_days must be positive when provided")
+        if self.progress_every < 0:
+            raise ValueError("progress_every must be non-negative")
 
 
 def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
@@ -40,29 +47,73 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
     symbols, excluded_delivery_symbols = _resolve_export_symbols(config)
     if not symbols:
         raise ValueError(f"cache contains no symbol parquet files: {config.cache_dir}")
-    frames = [_read_symbol_cache(config.cache_dir, symbol) for symbol in symbols]
-    candles_1m = pd.concat(frames, ignore_index=True)
-    candles_1m = _filter_days(candles_1m, days=config.days).sort_values(["symbol", "open_time_ms"])
-    if candles_1m.empty:
-        raise ValueError(f"cache export produced no rows for days={config.days!r} symbols={symbols!r}")
-    candles_5m = _build_candles_5m(candles_1m)
-    open_interest_5m = _build_open_interest_5m(candles_1m)
+
     candles_1m_path = config.out_dir / "candles_1m.csv"
     candles_5m_path = config.out_dir / "candles_5m.csv"
     open_interest_5m_path = config.out_dir / "open_interest_5m.csv"
     coverage_path = config.out_dir / "cache_export_coverage.csv"
     manifest_path = config.out_dir / "cache_export_manifest.json"
-    candles_1m.to_csv(candles_1m_path, index=False)
-    candles_5m.to_csv(candles_5m_path, index=False)
-    open_interest_5m.to_csv(open_interest_5m_path, index=False)
-    coverage = _build_cache_export_coverage(candles_1m, cache_dir=config.cache_dir)
-    validation = _build_cache_export_validation(config=config, coverage=coverage, candles_1m=candles_1m)
+    _remove_stale_export_artifacts(
+        candles_1m_path,
+        candles_5m_path,
+        open_interest_5m_path,
+        coverage_path,
+        manifest_path,
+    )
+
+    start_ms = _resolve_export_start_ms(config=config, symbols=symbols)
+    coverage_frames: list[pd.DataFrame] = []
+    exported_symbols: list[str] = []
+    total_rows = 0
+
+    for symbol_index, symbol in enumerate(symbols, start=1):
+        candles_1m = _read_symbol_cache(
+            config.cache_dir,
+            symbol,
+            parquet_use_threads=config.parquet_use_threads,
+        )
+        candles_1m = _filter_from_start_ms(candles_1m, start_ms=start_ms).sort_values(["symbol", "open_time_ms"])
+        if candles_1m.empty:
+            _print_cache_export_progress(
+                config=config,
+                symbol_index=symbol_index,
+                symbol_count=len(symbols),
+                symbol=symbol,
+                rows_written=0,
+                skipped=True,
+            )
+            continue
+
+        candles_5m = _build_candles_5m(candles_1m)
+        open_interest_5m = _build_open_interest_5m(candles_1m)
+        coverage_frames.append(_build_cache_export_coverage(candles_1m, cache_dir=config.cache_dir))
+        exported_symbols.append(symbol)
+        total_rows += int(len(candles_1m))
+        _append_csv(candles_1m_path, candles_1m)
+        _append_csv(candles_5m_path, candles_5m)
+        _append_csv(open_interest_5m_path, open_interest_5m)
+        _print_cache_export_progress(
+            config=config,
+            symbol_index=symbol_index,
+            symbol_count=len(symbols),
+            symbol=symbol,
+            rows_written=int(len(candles_1m)),
+            skipped=False,
+        )
+        del candles_1m, candles_5m, open_interest_5m
+        gc.collect()
+
+    if not exported_symbols or not coverage_frames:
+        raise ValueError(f"cache export produced no rows for days={config.days!r} symbols={symbols!r}")
+
+    coverage = pd.concat(coverage_frames, ignore_index=True)
+    validation = _build_cache_export_validation(config=config, coverage=coverage)
     coverage.to_csv(coverage_path, index=False)
     _write_cache_export_manifest(
         manifest_path,
         config=config,
-        symbols=tuple(symbols),
-        candles_1m=candles_1m,
+        symbols=tuple(exported_symbols),
+        row_count_1m=total_rows,
         coverage=coverage,
         validation=validation,
         artifact_paths=(candles_1m_path, candles_5m_path, open_interest_5m_path, coverage_path),
@@ -70,6 +121,64 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
     )
     _raise_for_validation_failures(validation)
     return config.out_dir
+
+
+def _remove_stale_export_artifacts(*paths: Path) -> None:
+    for path in paths:
+        if path.exists():
+            path.unlink()
+
+
+def _append_csv(path: Path, frame: pd.DataFrame) -> None:
+    frame.to_csv(path, mode="a", header=not path.exists(), index=False)
+
+
+def _read_parquet_schema_columns(path: Path) -> tuple[str, ...]:
+    return tuple(pq.ParquetFile(path).schema_arrow.names)
+
+
+def _resolve_export_start_ms(*, config: CacheMvp1CsvExportConfig, symbols: tuple[str, ...]) -> int | None:
+    if config.days is None:
+        return None
+    max_open_time_ms: int | None = None
+    for symbol in symbols:
+        path = config.cache_dir / f"{symbol}.parquet"
+        if not path.exists():
+            raise FileNotFoundError(f"cache parquet is missing for {symbol}: {path}")
+        schema_columns = set(_read_parquet_schema_columns(path))
+        if "timestamp" not in schema_columns:
+            raise ValueError(f"{path} is missing required cache columns: ['timestamp']")
+        timestamps = pd.read_parquet(path, columns=["timestamp"], use_threads=config.parquet_use_threads)
+        if timestamps.empty:
+            continue
+        symbol_max = int(timestamps["timestamp"].astype("int64").max())
+        max_open_time_ms = symbol_max if max_open_time_ms is None else max(max_open_time_ms, symbol_max)
+        del timestamps
+    if max_open_time_ms is None:
+        return None
+    end_day_start_ms = (max_open_time_ms // ONE_DAY_MS) * ONE_DAY_MS
+    return end_day_start_ms - (config.days - 1) * ONE_DAY_MS
+
+
+def _print_cache_export_progress(
+    *,
+    config: CacheMvp1CsvExportConfig,
+    symbol_index: int,
+    symbol_count: int,
+    symbol: str,
+    rows_written: int,
+    skipped: bool,
+) -> None:
+    if config.progress_every == 0:
+        return
+    if symbol_index != 1 and symbol_index != symbol_count and symbol_index % config.progress_every != 0:
+        return
+    status = "skipped" if skipped else f"rows={rows_written}"
+    print(
+        f"cache export {symbol_index}/{symbol_count} symbol={symbol} {status}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def discover_cache_symbols(cache_dir: Path, *, include_delivery_contracts: bool = False) -> tuple[str, ...]:
@@ -111,11 +220,10 @@ def _discover_cache_symbols_with_exclusions(
     return symbols, excluded_delivery_symbols
 
 
-def _read_symbol_cache(cache_dir: Path, symbol: str) -> pd.DataFrame:
+def _read_symbol_cache(cache_dir: Path, symbol: str, *, parquet_use_threads: bool = False) -> pd.DataFrame:
     path = cache_dir / f"{symbol}.parquet"
     if not path.exists():
         raise FileNotFoundError(f"cache parquet is missing for {symbol}: {path}")
-    frame = pd.read_parquet(path)
     required = {
         "timestamp",
         "open",
@@ -127,9 +235,14 @@ def _read_symbol_cache(cache_dir: Path, symbol: str) -> pd.DataFrame:
         "trade_count",
         "taker_buy_quote_volume",
     }
-    missing = sorted(required - set(frame.columns))
+    schema_columns = set(_read_parquet_schema_columns(path))
+    missing = sorted(required - schema_columns)
     if missing:
         raise ValueError(f"{path} is missing required cache columns: {missing}")
+    selected_columns = sorted(required)
+    if "open_interest" in schema_columns:
+        selected_columns.append("open_interest")
+    frame = pd.read_parquet(path, columns=selected_columns, use_threads=parquet_use_threads)
     result = pd.DataFrame(
         {
             "symbol": symbol,
@@ -155,6 +268,12 @@ def _filter_days(frame: pd.DataFrame, *, days: int | None) -> pd.DataFrame:
     end_ms = int(frame["open_time_ms"].max())
     end_day_start_ms = (end_ms // ONE_DAY_MS) * ONE_DAY_MS
     start_ms = end_day_start_ms - (days - 1) * ONE_DAY_MS
+    return frame[frame["open_time_ms"] >= start_ms].copy()
+
+
+def _filter_from_start_ms(frame: pd.DataFrame, *, start_ms: int | None) -> pd.DataFrame:
+    if start_ms is None or frame.empty:
+        return frame
     return frame[frame["open_time_ms"] >= start_ms].copy()
 
 
@@ -287,10 +406,12 @@ def _build_cache_export_validation(
     *,
     config: CacheMvp1CsvExportConfig,
     coverage: pd.DataFrame,
-    candles_1m: pd.DataFrame,
 ) -> dict[str, Any]:
-    timestamps = pd.to_datetime(candles_1m["open_time_ms"].astype("int64"), unit="ms", utc=True)
-    effective_calendar_days = (timestamps.max().date() - timestamps.min().date()).days + 1
+    first_ms = int(coverage["first_open_time_ms"].min())
+    last_ms = int(coverage["last_open_time_ms"].max())
+    first_date = datetime.fromtimestamp(first_ms / 1000, tz=timezone.utc).date()
+    last_date = datetime.fromtimestamp(last_ms / 1000, tz=timezone.utc).date()
+    effective_calendar_days = (last_date - first_date).days + 1
     duplicate_1m_rows_total = int(coverage["duplicate_rows_1m"].sum())
     missing_rows_1m_total = int(coverage["missing_rows_1m_by_span"].sum())
     missing_utc_days_total = int(coverage["missing_utc_days"].sum())
@@ -340,13 +461,16 @@ def _write_cache_export_manifest(
     *,
     config: CacheMvp1CsvExportConfig,
     symbols: tuple[str, ...],
-    candles_1m: pd.DataFrame,
+    row_count_1m: int,
     coverage: pd.DataFrame,
     validation: dict[str, Any],
     artifact_paths: tuple[Path, ...],
     excluded_delivery_symbols: tuple[str, ...],
 ) -> None:
-    timestamps = pd.to_datetime(candles_1m["open_time_ms"].astype("int64"), unit="ms", utc=True)
+    first_ms = int(coverage["first_open_time_ms"].min())
+    last_ms = int(coverage["last_open_time_ms"].max())
+    first_date = datetime.fromtimestamp(first_ms / 1000, tz=timezone.utc).date()
+    last_date = datetime.fromtimestamp(last_ms / 1000, tz=timezone.utc).date()
     payload = {
         "source": "binance_vision_cache",
         "boundary": "mvp1_normalized_csv",
@@ -361,10 +485,10 @@ def _write_cache_export_manifest(
         "fail_on_missing_utc_days": config.fail_on_missing_utc_days,
         "fail_on_missing_1m_rows": config.fail_on_missing_1m_rows,
         "fail_on_missing_open_interest": config.fail_on_missing_open_interest,
-        "effective_start_date": timestamps.min().date().isoformat(),
-        "effective_end_date": timestamps.max().date().isoformat(),
-        "effective_calendar_days": (timestamps.max().date() - timestamps.min().date()).days + 1,
-        "rows_1m": int(len(candles_1m)),
+        "effective_start_date": first_date.isoformat(),
+        "effective_end_date": last_date.isoformat(),
+        "effective_calendar_days": (last_date - first_date).days + 1,
+        "rows_1m": int(row_count_1m),
         "symbols_with_missing_utc_days": coverage.loc[coverage["missing_utc_days"] > 0, "symbol"].tolist(),
         "missing_utc_days_total": int(coverage["missing_utc_days"].sum()),
         "validation": validation,
