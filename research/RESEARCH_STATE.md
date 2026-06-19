@@ -7,7 +7,7 @@ Active rule:
 - New code must not import legacy modules.
 - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
 - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
-- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, horizon-consistency protocol audit rows, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+- Current implemented slice: data source boundary, data quality, point-in-time universe skeleton, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
 - Future paths remain raw outcomes.
 - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
 - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
@@ -25,6 +25,11 @@ Last local validation on 2026-06-19:
 - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
 - `.venv\Scripts\python.exe -m pytest`
 
+Current forensic audit patch generated from uploaded snapshot `project_20260619_124016.zip`:
+- `methodology: add independent forensic protocol audit`
+  - Adds `anomaly_science.audit.forensic` to re-read written artifacts independently.
+  - Checks schema columns, temporal contract, model metadata purge/H_max, OOS prediction cutoff, prediction/model horizon identity, canonical/alias artifact consistency, and stage audit FAIL rows.
+  - Patch status: PROPOSED until applied and verified locally.
 
 Current horizon audit patch generated from uploaded snapshot `project_20260619_111337.zip` plus H2 v2, H3, H4 v2, H5, and H6:
 - `methodology: audit horizon consistency`

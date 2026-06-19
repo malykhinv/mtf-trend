@@ -1,3 +1,19 @@
+# Patch log
+
+## methodology: add independent forensic protocol audit
+
+Status: PROPOSED; patch generated against uploaded snapshot `project_20260619_124016.zip`.
+
+Intent:
+- Add an artifact-driven forensic audit layer that does not trust stage-local PASS rows as proof.
+- Re-read written CSV artifacts and independently verify schema columns, temporal contract, model metadata purge/H_max, OOS prediction cutoff, prediction/model horizon identity, canonical/alias consistency, and existing stage audit FAIL rows.
+- Add tests for PASS, future leak FAIL, purge FAIL, and alias drift FAIL cases.
+
+Validation for this proposed patch:
+- `git apply --check --whitespace=error /mnt/data/out/methodology_add_independent_forensic_protocol_audit.patch`
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest -q tests/test_forensic_audit.py` was attempted in this sandbox but collection requires missing third-party dependency `polars`; run it in the project venv.
+
 
 ## methodology: clean up strategy executable horizon status
 

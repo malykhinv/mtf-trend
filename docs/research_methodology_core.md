@@ -1044,6 +1044,20 @@ final holdout not accessed before protocol freeze
 
 Если audit FAIL, результат нельзя интерпретировать.
 
+Правило independent forensic audit:
+
+```text
+Stage-local PASS rows are not sufficient proof.
+Core must provide an independent forensic audit layer that re-reads written artifacts and checks schema, temporal contract, purge/H_max, prediction/model horizon identity, canonical/alias consistency, and existing FAIL audit rows from artifact contents.
+```
+
+Правило hard gate:
+
+```text
+Before final research-ready status, run-research must fail if the independent forensic audit emits any FAIL row.
+```
+
+
 ## 23. Reproducibility
 
 Каждый run обязан сохранять:

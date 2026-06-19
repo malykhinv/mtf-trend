@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from .forensic import (
+    ForensicAuditError,
+    build_independent_forensic_audit_rows,
+)
 from .protocol import (
     METHODOLOGY_V2_REQUIRED_CHECKS,
     TemporalAuditInput,
@@ -9,6 +13,8 @@ from .protocol import (
 )
 
 __all__ = [
+    "ForensicAuditError",
+    "build_independent_forensic_audit_rows",
     "METHODOLOGY_V2_REQUIRED_CHECKS",
     "TemporalAuditInput",
     "audit_temporal_contract",
