@@ -130,6 +130,12 @@ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
             artifact="anomaly_decision_timing.csv",
         ),
         ProtocolAuditRow(
+            check_name="execution_reference_model_aligned_between_ev_and_simulation",
+            status=AuditStatus.PASS,
+            message="EV rows record the shared execution_reference_model and use a snapshot current-close proxy for the later next-open pessimistic simulation model",
+            artifact="anomaly_decision_timing.csv",
+        ),
+        ProtocolAuditRow(
             check_name="fixed_percent_stop_target_forbidden",
             status=AuditStatus.PASS,
             message="EV stop/target distances are StrategyMetadata take_profit_atr_1440/stop_loss_atr_1440 multiplied by core_atr_1440; no fixed-percent universal stop/target path exists",
@@ -171,6 +177,9 @@ def _run_config_rows(
         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="ev_version", value=config.ev_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
+        RunConfigRow(key="execution_reference_model", value=config.execution_reference_model, source="runtime"),
+        RunConfigRow(key="entry_price_basis", value=config.entry_price_basis, source="runtime"),
+        RunConfigRow(key="cost_model", value=config.cost_model, source="runtime"),
         RunConfigRow(key="fee_bps", value=str(config.fee_bps), source="runtime"),
         RunConfigRow(key="slippage_bps", value=str(config.slippage_bps), source="runtime"),
         RunConfigRow(key="min_prediction_confidence", value=str(config.min_prediction_confidence), source="runtime"),

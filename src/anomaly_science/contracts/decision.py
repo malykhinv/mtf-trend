@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
 from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
 from .market import MarketDataContractError
 from .time import enforce_snapshot_contract, validate_timestamp_ms
@@ -23,12 +24,15 @@ class ExpectedValueRow:
     feature_cutoff_time_ms: int
     future_start_time_ms: int
     target_horizon_minutes: int
+    execution_reference_model: str
+    entry_price_basis: str
     entry_reference_price: float
     core_atr_1440: float
     stop_distance: float
     target_distance: float
     fee_bps: float
     slippage_bps: float
+    cost_model: str
     cost_penalty: float
     p_follow_through_long: float
     p_adverse_long: float
@@ -70,12 +74,18 @@ class ExpectedValueRow:
         )
         if not is_supported_research_horizon(self.target_horizon_minutes):
             raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
+        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
+            raise MarketDataContractError("execution_reference_model must match the EV/simulation execution contract")
+        if self.entry_price_basis != EV_ENTRY_PRICE_BASIS:
+            raise MarketDataContractError("entry_price_basis must document the EV entry proxy")
         _require_positive_finite(self.entry_reference_price, "entry_reference_price")
         _require_positive_finite(self.core_atr_1440, "core_atr_1440")
         _require_positive_finite(self.stop_distance, "stop_distance")
         _require_positive_finite(self.target_distance, "target_distance")
         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
+        if self.cost_model != ROUND_TRIP_COST_MODEL:
+            raise MarketDataContractError("cost_model must match the EV/simulation cost contract")
         if not math.isfinite(self.cost_penalty) or self.cost_penalty < 0.0:
             raise MarketDataContractError("cost_penalty must be finite and non-negative")
         for field_name in (

@@ -50,6 +50,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "frozen_weekly_model_used_for_daily_oos",
     "sample_weight_policy_explicit_and_asof_safe",
     "expected_value_computed_before_trade_simulation",
+    "execution_reference_model_aligned_between_ev_and_simulation",
     "trade_simulation_after_calibration_and_decision_timing",
     "pessimistic_entry_price_includes_slippage_penalty",
     "anti_pyramiding_one_open_position_per_symbol_strategy",
@@ -125,10 +126,12 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     ),
     "mvp1_decision": (
         "expected_value_computed_before_trade_simulation",
+        "execution_reference_model_aligned_between_ev_and_simulation",
         "fixed_percent_stop_target_forbidden",
     ),
     "mvp1_simulation": (
         "trade_simulation_after_calibration_and_decision_timing",
+        "execution_reference_model_aligned_between_ev_and_simulation",
         "pessimistic_entry_price_includes_slippage_penalty",
     "anti_pyramiding_one_open_position_per_symbol_strategy",
         "intracandle_double_barrier_resolved_as_stop_loss_first",

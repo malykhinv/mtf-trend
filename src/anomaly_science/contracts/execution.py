@@ -1,0 +1,6 @@
+from __future__ import annotations
+
+EV_EXECUTION_REFERENCE_MODEL = "next_1m_open_after_snapshot_with_pessimistic_slippage_v1"
+EV_ENTRY_PRICE_BASIS = "snapshot_current_close_proxy_for_next_open"
+SIMULATION_ENTRY_PRICE_BASIS = "actual_next_1m_open_after_snapshot"
+ROUND_TRIP_COST_MODEL = "round_trip_fee_bps_plus_entry_slippage_bps_v1"

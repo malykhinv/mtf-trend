@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from .execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
 from .market import MarketDataContractError
 from .time import validate_timestamp_ms
@@ -22,6 +23,8 @@ class TradeSimulationRow:
     snapshot_time_ms: int
     feature_cutoff_time_ms: int
     target_horizon_minutes: int
+    execution_reference_model: str
+    entry_price_basis: str
     decision_action: str
     simulated_side: str
     entry_reference_time_ms: int
@@ -34,6 +37,7 @@ class TradeSimulationRow:
     target_price: float
     fee_bps: float
     slippage_bps: float
+    cost_model: str
     total_cost: float
     funding_cost: float
     exit_time_ms: int
@@ -60,6 +64,10 @@ class TradeSimulationRow:
             raise MarketDataContractError("exit_time_ms must be >= entry_reference_time_ms")
         if not is_supported_research_horizon(self.target_horizon_minutes):
             raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
+        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
+            raise MarketDataContractError("execution_reference_model must match the EV/simulation execution contract")
+        if self.entry_price_basis != SIMULATION_ENTRY_PRICE_BASIS:
+            raise MarketDataContractError("entry_price_basis must document the simulation entry reference")
         if self.decision_action not in SIMULATION_SIDES:
             raise MarketDataContractError("decision_action must be long or short for simulated trade rows")
         if self.simulated_side not in SIMULATION_SIDES:
@@ -77,6 +85,8 @@ class TradeSimulationRow:
             _require_positive_finite(getattr(self, field_name), field_name)
         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
+        if self.cost_model != ROUND_TRIP_COST_MODEL:
+            raise MarketDataContractError("cost_model must match the EV/simulation cost contract")
         if self.total_cost < 0.0 or not math.isfinite(self.total_cost):
             raise MarketDataContractError("total_cost must be finite and non-negative")
         if not math.isfinite(self.funding_cost):

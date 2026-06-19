@@ -98,8 +98,8 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Prediction protocol audit now verifies Core whitelist, registry strategy/horizon compatibility, target label column, active H_max, purge horizon, OOS prediction artifact identity, and model metadata horizon identity. Tests cover multi-strategy H_max, artifact horizon identity, and horizon audit pass/fail rows. | Keep as permanent regression gate. |
 | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
 | Sample weighting | IMPLEMENTED | Prediction config now requires explicit `sample_weight_policy="uniform_v1"`, CatBoost receives validated fit-split sample weights, model metadata and training diagnostics record the policy and weight sums, run config records the policy, and prediction protocol audit emits `sample_weight_policy_explicit_and_asof_safe`. Tests reject unknown policies and verify artifact/audit output. | Keep policy-version tests as permanent gate; add a new version before any non-uniform weighting. |
-| Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
-| Expected utility | PARTIAL | EV calculations exist and write canonical `strategy_decision_timing.csv` / `strategy_ev_metrics.csv`. Simulation alignment is still incomplete. | Align execution reference and store execution model fields. |
+| Decision timing | IMPLEMENTED | Decision timing writes canonical `strategy_decision_timing.csv` / `anomaly_decision_timing.csv` with explicit `execution_reference_model`, EV entry price basis, and cost model fields. The EV stage run config and protocol audit record `execution_reference_model_aligned_between_ev_and_simulation`, and tests verify artifact roundtrip/run output. | Keep execution-reference schema tests as permanent gate. |
+| Expected utility | IMPLEMENTED | EV is computed before simulation from OOS probabilities, ATR stop/target distances, fees, slippage, and the shared execution/cost model contract. Simulation validates the decision row execution/cost model before consuming it, and tests cover the EV/simulation alignment fields. | Keep EV/simulation alignment tests as permanent gate. |
 | Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
 | Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
 | Protocol audit | PARTIAL | Protocol audit exists, prediction-stage horizon consistency is audited, and `run-research` now writes an independent artifact-driven forensic audit after simulation and exits non-zero on any forensic `FAIL`. Holdout mode is enforced before downstream stages, and forensic audit checks root run-manifest completeness. Remaining gap: the forensic layer is still an initial proof set, not yet the full final research-ready audit of data-quality mask, universe, feature catalog, controls, EV/simulation alignment, and rejection funnel. | Keep expanding forensic checks as later methodology gaps become implemented. |
@@ -139,13 +139,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
 10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
 11. `methodology: enforce feature catalog membership before prediction` - implemented.
 12. `methodology: add explicit sample weight policy` - implemented.
-13. `strategy: make registry status self-auditing`.
-14. `strategy: complete broad anomaly trigger component accounting`.
-15. `strategy: add 180m horizon support or remove 180m promises` - implemented.
-16. `strategy: implement post-pump distribution variants`.
-17. `strategy: implement post-anomaly extension variants`.
-18. `features: add structural state and relaxed geometry features`.
-19. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+13. `methodology: align EV and simulation execution reference` - implemented.
+14. `strategy: make registry status self-auditing`.
+15. `strategy: complete broad anomaly trigger component accounting`.
+16. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+17. `strategy: implement post-pump distribution variants`.
+18. `strategy: implement post-anomaly extension variants`.
+19. `features: add structural state and relaxed geometry features`.
+20. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
 
 Rule:
 

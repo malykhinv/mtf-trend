@@ -283,6 +283,12 @@ def _simulate_decision(
     funding_rates: Sequence[FundingRate],
     config: TradeSimulationConfig,
 ) -> TradeSimulationRow:
+    if decision.execution_reference_model != config.execution_reference_model:
+        raise TradeSimulationInputError(
+            f"decision execution_reference_model={decision.execution_reference_model!r} does not match simulation config {config.execution_reference_model!r}"
+        )
+    if decision.cost_model != config.cost_model:
+        raise TradeSimulationInputError(f"decision cost_model={decision.cost_model!r} does not match simulation config {config.cost_model!r}")
     entry_candle = _entry_candle(decision=decision, candles=candles)
     exit_candles = [
         candle
@@ -339,6 +345,8 @@ def _simulate_decision(
         snapshot_time_ms=decision.snapshot_time_ms,
         feature_cutoff_time_ms=decision.feature_cutoff_time_ms,
         target_horizon_minutes=decision.target_horizon_minutes,
+        execution_reference_model=config.execution_reference_model,
+        entry_price_basis=config.entry_price_basis,
         decision_action=decision.best_action,
         simulated_side=side,
         entry_reference_time_ms=entry_candle.open_time_ms,
@@ -351,6 +359,7 @@ def _simulate_decision(
         target_price=target_price,
         fee_bps=decision.fee_bps,
         slippage_bps=decision.slippage_bps,
+        cost_model=config.cost_model,
         total_cost=total_cost,
         funding_cost=funding_cost,
         exit_time_ms=exit_candle.open_time_ms,
@@ -486,6 +495,8 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
         snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
         feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
         target_horizon_minutes=_required_int(row, "target_horizon_minutes"),
+        execution_reference_model=_required_str(row, "execution_reference_model"),
+        entry_price_basis=_required_str(row, "entry_price_basis"),
         decision_action=_required_str(row, "decision_action"),
         simulated_side=_required_str(row, "simulated_side"),
         entry_reference_time_ms=_required_int(row, "entry_reference_time_ms"),
@@ -498,6 +509,7 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
         target_price=_required_float(row, "target_price"),
         fee_bps=_required_float(row, "fee_bps"),
         slippage_bps=_required_float(row, "slippage_bps"),
+        cost_model=_required_str(row, "cost_model"),
         total_cost=_required_float(row, "total_cost"),
         funding_cost=_required_float(row, "funding_cost"),
         exit_time_ms=_required_int(row, "exit_time_ms"),

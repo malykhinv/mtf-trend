@@ -1,5 +1,18 @@
 # Patch log
 
+## methodology: align EV and simulation execution reference
+
+Status: APPLIED.
+
+Intent:
+- Add a shared EV/simulation execution reference contract.
+- Store `execution_reference_model`, entry price basis, and cost model in EV and trade-simulation artifacts.
+- Make simulation validate the decision-row execution/cost model before simulating.
+- Record the shared model in EV/simulation run configs and protocol audit rows.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_artifact_schemas.py tests\test_research_run.py tests\test_forensic_audit.py`
+
 ## methodology: add explicit sample weight policy
 
 Status: APPLIED.

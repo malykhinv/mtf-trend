@@ -1,0 +1,1106 @@
+diff --git a/.patches/methodology_align_ev_simulation_execution_reference.patch b/.patches/methodology_align_ev_simulation_execution_reference.patch
+new file mode 100644
+index 00000000..ddbbc86c
+--- /dev/null
++++ b/.patches/methodology_align_ev_simulation_execution_reference.patch
+@@ -0,0 +1,544 @@
++diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
++index 4f014829..382d1b4d 100644
++--- a/research/METHODOLOGY_GAP_LEDGER.md
+++++ b/research/METHODOLOGY_GAP_LEDGER.md
++@@ -98,8 +98,8 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
++ | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Prediction protocol audit now verifies Core whitelist, registry strategy/horizon compatibility, target label column, active H_max, purge horizon, OOS prediction artifact identity, and model metadata horizon identity. Tests cover multi-strategy H_max, artifact horizon identity, and horizon audit pass/fail rows. | Keep as permanent regression gate. |
++ | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
++ | Sample weighting | IMPLEMENTED | Prediction config now requires explicit `sample_weight_policy="uniform_v1"`, CatBoost receives validated fit-split sample weights, model metadata and training diagnostics record the policy and weight sums, run config records the policy, and prediction protocol audit emits `sample_weight_policy_explicit_and_asof_safe`. Tests reject unknown policies and verify artifact/audit output. | Keep policy-version tests as permanent gate; add a new version before any non-uniform weighting. |
++-| Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
++-| Expected utility | PARTIAL | EV calculations exist and write canonical `strategy_decision_timing.csv` / `strategy_ev_metrics.csv`. Simulation alignment is still incomplete. | Align execution reference and store execution model fields. |
+++| Decision timing | IMPLEMENTED | Decision timing writes canonical `strategy_decision_timing.csv` / `anomaly_decision_timing.csv` with explicit `execution_reference_model`, EV entry price basis, and cost model fields. The EV stage run config and protocol audit record `execution_reference_model_aligned_between_ev_and_simulation`, and tests verify artifact roundtrip/run output. | Keep execution-reference schema tests as permanent gate. |
+++| Expected utility | IMPLEMENTED | EV is computed before simulation from OOS probabilities, ATR stop/target distances, fees, slippage, and the shared execution/cost model contract. Simulation validates the decision row execution/cost model before consuming it, and tests cover the EV/simulation alignment fields. | Keep EV/simulation alignment tests as permanent gate. |
++ | Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
++ | Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
++ | Protocol audit | PARTIAL | Protocol audit exists, prediction-stage horizon consistency is audited, and `run-research` now writes an independent artifact-driven forensic audit after simulation and exits non-zero on any forensic `FAIL`. Holdout mode is enforced before downstream stages, and forensic audit checks root run-manifest completeness. Remaining gap: the forensic layer is still an initial proof set, not yet the full final research-ready audit of data-quality mask, universe, feature catalog, controls, EV/simulation alignment, and rejection funnel. | Keep expanding forensic checks as later methodology gaps become implemented. |
++@@ -139,13 +139,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
++ 10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
++ 11. `methodology: enforce feature catalog membership before prediction` - implemented.
++ 12. `methodology: add explicit sample weight policy` - implemented.
++-13. `strategy: make registry status self-auditing`.
++-14. `strategy: complete broad anomaly trigger component accounting`.
++-15. `strategy: add 180m horizon support or remove 180m promises` - implemented.
++-16. `strategy: implement post-pump distribution variants`.
++-17. `strategy: implement post-anomaly extension variants`.
++-18. `features: add structural state and relaxed geometry features`.
++-19. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+++13. `methodology: align EV and simulation execution reference` - implemented.
+++14. `strategy: make registry status self-auditing`.
+++15. `strategy: complete broad anomaly trigger component accounting`.
+++16. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+++17. `strategy: implement post-pump distribution variants`.
+++18. `strategy: implement post-anomaly extension variants`.
+++19. `features: add structural state and relaxed geometry features`.
+++20. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
++ 
++ Rule:
++ 
++diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
++index 24aa5e91..480dafc5 100644
++--- a/research/PATCH_LOG.md
+++++ b/research/PATCH_LOG.md
++@@ -1,5 +1,18 @@
++ # Patch log
++ 
+++## methodology: align EV and simulation execution reference
+++
+++Status: APPLIED.
+++
+++Intent:
+++- Add a shared EV/simulation execution reference contract.
+++- Store `execution_reference_model`, entry price basis, and cost model in EV and trade-simulation artifacts.
+++- Make simulation validate the decision-row execution/cost model before simulating.
+++- Record the shared model in EV/simulation run configs and protocol audit rows.
+++
+++Validation:
+++- `.venv\Scripts\python.exe -m pytest tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_artifact_schemas.py tests\test_research_run.py tests\test_forensic_audit.py`
+++
++ ## methodology: add explicit sample weight policy
++ 
++ Status: APPLIED.
++diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
++index 16691407..c94674a6 100644
++--- a/research/RESEARCH_STATE.md
+++++ b/research/RESEARCH_STATE.md
++@@ -7,7 +7,7 @@ Active rule:
++ - New code must not import legacy modules.
++ - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
++ - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
++-- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix with prediction-time catalog membership hard gate for all numeric/bool model features, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, explicit prediction sample-weight policy `uniform_v1`, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+++- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix with prediction-time catalog membership hard gate for all numeric/bool model features, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, explicit prediction sample-weight policy `uniform_v1`, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV aligned to the shared EV/simulation execution-reference contract, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
++ - Future paths remain raw outcomes.
++ - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
++ - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
++@@ -21,6 +21,7 @@ Active rule:
++ 
++ Current local base commit before the active run-research holdout freeze patch: `db17b76a`, verified with `git rev-parse --short HEAD`.
++ Last local validation on 2026-06-19:
+++- `.venv\Scripts\python.exe -m pytest tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_artifact_schemas.py tests\test_research_run.py tests\test_forensic_audit.py`
++ - `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_artifact_schemas.py`
++ - `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_feature_catalog.py tests\test_horizon_contract.py`
++ - `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
++diff --git a/src/anomaly_science/audit/protocol.py b/src/anomaly_science/audit/protocol.py
++index 5e8ab835..fa5f4529 100644
++--- a/src/anomaly_science/audit/protocol.py
+++++ b/src/anomaly_science/audit/protocol.py
++@@ -50,6 +50,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
++     "frozen_weekly_model_used_for_daily_oos",
++     "sample_weight_policy_explicit_and_asof_safe",
++     "expected_value_computed_before_trade_simulation",
+++    "execution_reference_model_aligned_between_ev_and_simulation",
++     "trade_simulation_after_calibration_and_decision_timing",
++     "pessimistic_entry_price_includes_slippage_penalty",
++     "anti_pyramiding_one_open_position_per_symbol_strategy",
++@@ -125,10 +126,12 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
++     ),
++     "mvp1_decision": (
++         "expected_value_computed_before_trade_simulation",
+++        "execution_reference_model_aligned_between_ev_and_simulation",
++         "fixed_percent_stop_target_forbidden",
++     ),
++     "mvp1_simulation": (
++         "trade_simulation_after_calibration_and_decision_timing",
+++        "execution_reference_model_aligned_between_ev_and_simulation",
++         "pessimistic_entry_price_includes_slippage_penalty",
++     "anti_pyramiding_one_open_position_per_symbol_strategy",
++         "intracandle_double_barrier_resolved_as_stop_loss_first",
++diff --git a/src/anomaly_science/contracts/artifacts.py b/src/anomaly_science/contracts/artifacts.py
++index 62ed218a..11658f70 100644
++--- a/src/anomaly_science/contracts/artifacts.py
+++++ b/src/anomaly_science/contracts/artifacts.py
++@@ -420,12 +420,15 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
++             "feature_cutoff_time_ms",
++             "future_start_time_ms",
++             "target_horizon_minutes",
+++            "execution_reference_model",
+++            "entry_price_basis",
++             "entry_reference_price",
++             "ATR_1d_asof_t",
++             "stop_distance",
++             "target_distance",
++             "fee_bps",
++             "slippage_bps",
+++            "cost_model",
++             "cost_penalty",
++             "p_follow_through_long",
++             "p_adverse_long",
++@@ -470,6 +473,8 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
++             "snapshot_time_ms",
++             "feature_cutoff_time_ms",
++             "target_horizon_minutes",
+++            "execution_reference_model",
+++            "entry_price_basis",
++             "decision_action",
++             "simulated_side",
++             "entry_reference_time_ms",
++@@ -482,6 +487,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
++             "target_price",
++             "fee_bps",
++             "slippage_bps",
+++            "cost_model",
++             "total_cost",
++             "funding_cost",
++             "exit_time_ms",
++diff --git a/src/anomaly_science/contracts/decision.py b/src/anomaly_science/contracts/decision.py
++index 57333ba5..9c67adde 100644
++--- a/src/anomaly_science/contracts/decision.py
+++++ b/src/anomaly_science/contracts/decision.py
++@@ -3,6 +3,7 @@ from __future__ import annotations
++ import math
++ from dataclasses import dataclass
++ 
+++from .execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
++ from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
++ from .market import MarketDataContractError
++ from .time import enforce_snapshot_contract, validate_timestamp_ms
++@@ -23,12 +24,15 @@ class ExpectedValueRow:
++     feature_cutoff_time_ms: int
++     future_start_time_ms: int
++     target_horizon_minutes: int
+++    execution_reference_model: str
+++    entry_price_basis: str
++     entry_reference_price: float
++     core_atr_1440: float
++     stop_distance: float
++     target_distance: float
++     fee_bps: float
++     slippage_bps: float
+++    cost_model: str
++     cost_penalty: float
++     p_follow_through_long: float
++     p_adverse_long: float
++@@ -70,12 +74,18 @@ class ExpectedValueRow:
++         )
++         if not is_supported_research_horizon(self.target_horizon_minutes):
++             raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
+++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
+++            raise MarketDataContractError("execution_reference_model must match the EV/simulation execution contract")
+++        if self.entry_price_basis != EV_ENTRY_PRICE_BASIS:
+++            raise MarketDataContractError("entry_price_basis must document the EV entry proxy")
++         _require_positive_finite(self.entry_reference_price, "entry_reference_price")
++         _require_positive_finite(self.core_atr_1440, "core_atr_1440")
++         _require_positive_finite(self.stop_distance, "stop_distance")
++         _require_positive_finite(self.target_distance, "target_distance")
++         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
++             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
+++        if self.cost_model != ROUND_TRIP_COST_MODEL:
+++            raise MarketDataContractError("cost_model must match the EV/simulation cost contract")
++         if not math.isfinite(self.cost_penalty) or self.cost_penalty < 0.0:
++             raise MarketDataContractError("cost_penalty must be finite and non-negative")
++         for field_name in (
++diff --git a/src/anomaly_science/contracts/simulation.py b/src/anomaly_science/contracts/simulation.py
++index 83a20626..6e07b68a 100644
++--- a/src/anomaly_science/contracts/simulation.py
+++++ b/src/anomaly_science/contracts/simulation.py
++@@ -3,6 +3,7 @@ from __future__ import annotations
++ import math
++ from dataclasses import dataclass
++ 
+++from .execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
++ from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
++ from .market import MarketDataContractError
++ from .time import validate_timestamp_ms
++@@ -22,6 +23,8 @@ class TradeSimulationRow:
++     snapshot_time_ms: int
++     feature_cutoff_time_ms: int
++     target_horizon_minutes: int
+++    execution_reference_model: str
+++    entry_price_basis: str
++     decision_action: str
++     simulated_side: str
++     entry_reference_time_ms: int
++@@ -34,6 +37,7 @@ class TradeSimulationRow:
++     target_price: float
++     fee_bps: float
++     slippage_bps: float
+++    cost_model: str
++     total_cost: float
++     funding_cost: float
++     exit_time_ms: int
++@@ -60,6 +64,10 @@ class TradeSimulationRow:
++             raise MarketDataContractError("exit_time_ms must be >= entry_reference_time_ms")
++         if not is_supported_research_horizon(self.target_horizon_minutes):
++             raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
+++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
+++            raise MarketDataContractError("execution_reference_model must match the EV/simulation execution contract")
+++        if self.entry_price_basis != SIMULATION_ENTRY_PRICE_BASIS:
+++            raise MarketDataContractError("entry_price_basis must document the simulation entry reference")
++         if self.decision_action not in SIMULATION_SIDES:
++             raise MarketDataContractError("decision_action must be long or short for simulated trade rows")
++         if self.simulated_side not in SIMULATION_SIDES:
++@@ -77,6 +85,8 @@ class TradeSimulationRow:
++             _require_positive_finite(getattr(self, field_name), field_name)
++         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
++             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
+++        if self.cost_model != ROUND_TRIP_COST_MODEL:
+++            raise MarketDataContractError("cost_model must match the EV/simulation cost contract")
++         if self.total_cost < 0.0 or not math.isfinite(self.total_cost):
++             raise MarketDataContractError("total_cost must be finite and non-negative")
++         if not math.isfinite(self.funding_cost):
++diff --git a/src/anomaly_science/decision/builder.py b/src/anomaly_science/decision/builder.py
++index e9e4ccc8..e34aacae 100644
++--- a/src/anomaly_science/decision/builder.py
+++++ b/src/anomaly_science/decision/builder.py
++@@ -191,12 +191,15 @@ def _build_row(
++         feature_cutoff_time_ms=prediction.feature_cutoff_time_ms,
++         future_start_time_ms=prediction.future_start_time_ms,
++         target_horizon_minutes=prediction.target_horizon_minutes,
+++        execution_reference_model=config.execution_reference_model,
+++        entry_price_basis=config.entry_price_basis,
++         entry_reference_price=entry_reference_price,
++         core_atr_1440=label.core_atr_1440,
++         stop_distance=stop_distance,
++         target_distance=target_distance,
++         fee_bps=config.fee_bps,
++         slippage_bps=config.slippage_bps,
+++        cost_model=config.cost_model,
++         cost_penalty=cost_penalty,
++         p_follow_through_long=p_follow_long,
++         p_adverse_long=p_adverse_long,
++@@ -306,12 +309,15 @@ def _expected_value_from_mapping(row: Mapping[str, object]) -> ExpectedValueRow:
++         feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
++         future_start_time_ms=_required_int(row, "future_start_time_ms"),
++         target_horizon_minutes=_required_int(row, "target_horizon_minutes"),
+++        execution_reference_model=_required_str(row, "execution_reference_model"),
+++        entry_price_basis=_required_str(row, "entry_price_basis"),
++         entry_reference_price=_required_float(row, "entry_reference_price"),
++         core_atr_1440=_required_float(row, "ATR_1d_asof_t"),
++         stop_distance=_required_float(row, "stop_distance"),
++         target_distance=_required_float(row, "target_distance"),
++         fee_bps=_required_float(row, "fee_bps"),
++         slippage_bps=_required_float(row, "slippage_bps"),
+++        cost_model=_required_str(row, "cost_model"),
++         cost_penalty=_required_float(row, "cost_penalty"),
++         p_follow_through_long=_required_float(row, "p_follow_through_long"),
++         p_adverse_long=_required_float(row, "p_adverse_long"),
++diff --git a/src/anomaly_science/decision/config.py b/src/anomaly_science/decision/config.py
++index ef38dabf..bbc8dc9e 100644
++--- a/src/anomaly_science/decision/config.py
+++++ b/src/anomaly_science/decision/config.py
++@@ -3,6 +3,7 @@ from __future__ import annotations
++ from dataclasses import dataclass
++ 
++ from anomaly_science.contracts.horizons import research_horizon_label_column
+++from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
++ from anomaly_science.strategy.registry import validate_strategy_horizon
++ 
++ 
++@@ -15,6 +16,9 @@ class ExpectedValueConfig:
++     target_horizon_minutes: int = 30
++     fee_bps: float = 4.0
++     slippage_bps: float = 2.0
+++    execution_reference_model: str = EV_EXECUTION_REFERENCE_MODEL
+++    entry_price_basis: str = EV_ENTRY_PRICE_BASIS
+++    cost_model: str = ROUND_TRIP_COST_MODEL
++     min_prediction_confidence: float = 0.40
++     min_rr: float = 1.0
++ 
++@@ -28,6 +32,12 @@ class ExpectedValueConfig:
++             raise ValueError("fee_bps must be non-negative")
++         if self.slippage_bps < 0.0:
++             raise ValueError("slippage_bps must be non-negative")
+++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
+++            raise ValueError("execution_reference_model must match EV_EXECUTION_REFERENCE_MODEL")
+++        if self.entry_price_basis != EV_ENTRY_PRICE_BASIS:
+++            raise ValueError("entry_price_basis must match EV_ENTRY_PRICE_BASIS")
+++        if self.cost_model != ROUND_TRIP_COST_MODEL:
+++            raise ValueError("cost_model must match ROUND_TRIP_COST_MODEL")
++         if self.min_prediction_confidence < 0.0 or self.min_prediction_confidence > 1.0:
++             raise ValueError("min_prediction_confidence must be within [0, 1]")
++         if self.min_rr <= 0.0:
++diff --git a/src/anomaly_science/decision/run.py b/src/anomaly_science/decision/run.py
++index 0bb99277..d091cbc5 100644
++--- a/src/anomaly_science/decision/run.py
+++++ b/src/anomaly_science/decision/run.py
++@@ -129,6 +129,12 @@ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
++             message="decision stage computes EV from OOS probabilities, ATR-normalized distances, fees, and slippage before any trade simulation exists",
++             artifact="anomaly_decision_timing.csv",
++         ),
+++        ProtocolAuditRow(
+++            check_name="execution_reference_model_aligned_between_ev_and_simulation",
+++            status=AuditStatus.PASS,
+++            message="EV rows record the shared execution_reference_model and use a snapshot current-close proxy for the later next-open pessimistic simulation model",
+++            artifact="anomaly_decision_timing.csv",
+++        ),
++         ProtocolAuditRow(
++             check_name="fixed_percent_stop_target_forbidden",
++             status=AuditStatus.PASS,
++@@ -171,6 +177,9 @@ def _run_config_rows(
++         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
++         RunConfigRow(key="ev_version", value=config.ev_version, source="runtime"),
++         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
+++        RunConfigRow(key="execution_reference_model", value=config.execution_reference_model, source="runtime"),
+++        RunConfigRow(key="entry_price_basis", value=config.entry_price_basis, source="runtime"),
+++        RunConfigRow(key="cost_model", value=config.cost_model, source="runtime"),
++         RunConfigRow(key="fee_bps", value=str(config.fee_bps), source="runtime"),
++         RunConfigRow(key="slippage_bps", value=str(config.slippage_bps), source="runtime"),
++         RunConfigRow(key="min_prediction_confidence", value=str(config.min_prediction_confidence), source="runtime"),
++diff --git a/src/anomaly_science/simulation/builder.py b/src/anomaly_science/simulation/builder.py
++index 4814bed6..77c5c4c6 100644
++--- a/src/anomaly_science/simulation/builder.py
+++++ b/src/anomaly_science/simulation/builder.py
++@@ -283,6 +283,12 @@ def _simulate_decision(
++     funding_rates: Sequence[FundingRate],
++     config: TradeSimulationConfig,
++ ) -> TradeSimulationRow:
+++    if decision.execution_reference_model != config.execution_reference_model:
+++        raise TradeSimulationInputError(
+++            f"decision execution_reference_model={decision.execution_reference_model!r} does not match simulation config {config.execution_reference_model!r}"
+++        )
+++    if decision.cost_model != config.cost_model:
+++        raise TradeSimulationInputError(f"decision cost_model={decision.cost_model!r} does not match simulation config {config.cost_model!r}")
++     entry_candle = _entry_candle(decision=decision, candles=candles)
++     exit_candles = [
++         candle
++@@ -339,6 +345,8 @@ def _simulate_decision(
++         snapshot_time_ms=decision.snapshot_time_ms,
++         feature_cutoff_time_ms=decision.feature_cutoff_time_ms,
++         target_horizon_minutes=decision.target_horizon_minutes,
+++        execution_reference_model=config.execution_reference_model,
+++        entry_price_basis=config.entry_price_basis,
++         decision_action=decision.best_action,
++         simulated_side=side,
++         entry_reference_time_ms=entry_candle.open_time_ms,
++@@ -351,6 +359,7 @@ def _simulate_decision(
++         target_price=target_price,
++         fee_bps=decision.fee_bps,
++         slippage_bps=decision.slippage_bps,
+++        cost_model=config.cost_model,
++         total_cost=total_cost,
++         funding_cost=funding_cost,
++         exit_time_ms=exit_candle.open_time_ms,
++@@ -486,6 +495,8 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
++         snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
++         feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
++         target_horizon_minutes=_required_int(row, "target_horizon_minutes"),
+++        execution_reference_model=_required_str(row, "execution_reference_model"),
+++        entry_price_basis=_required_str(row, "entry_price_basis"),
++         decision_action=_required_str(row, "decision_action"),
++         simulated_side=_required_str(row, "simulated_side"),
++         entry_reference_time_ms=_required_int(row, "entry_reference_time_ms"),
++@@ -498,6 +509,7 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
++         target_price=_required_float(row, "target_price"),
++         fee_bps=_required_float(row, "fee_bps"),
++         slippage_bps=_required_float(row, "slippage_bps"),
+++        cost_model=_required_str(row, "cost_model"),
++         total_cost=_required_float(row, "total_cost"),
++         funding_cost=_required_float(row, "funding_cost"),
++         exit_time_ms=_required_int(row, "exit_time_ms"),
++diff --git a/src/anomaly_science/simulation/config.py b/src/anomaly_science/simulation/config.py
++index edee10f8..01c0ee92 100644
++--- a/src/anomaly_science/simulation/config.py
+++++ b/src/anomaly_science/simulation/config.py
++@@ -2,6 +2,8 @@ from __future__ import annotations
++ 
++ from dataclasses import dataclass
++ 
+++from anomaly_science.contracts.execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
+++
++ 
++ @dataclass(frozen=True, slots=True)
++ class TradeSimulationConfig:
++@@ -10,6 +12,9 @@ class TradeSimulationConfig:
++     target_horizon_minutes: int = 30
++     require_prediction_confident: bool = True
++     require_rr_acceptable: bool = True
+++    execution_reference_model: str = EV_EXECUTION_REFERENCE_MODEL
+++    entry_price_basis: str = SIMULATION_ENTRY_PRICE_BASIS
+++    cost_model: str = ROUND_TRIP_COST_MODEL
++     toxic_entry_atr_1m_fraction: float = 0.2
++     random_seed: int = 1729
++ 
++@@ -20,6 +25,12 @@ class TradeSimulationConfig:
++             raise ValueError("strategy_name is required")
++         from anomaly_science.strategy.registry import validate_strategy_horizon
++         validate_strategy_horizon(self.strategy_name, self.target_horizon_minutes)
+++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
+++            raise ValueError("execution_reference_model must match EV_EXECUTION_REFERENCE_MODEL")
+++        if self.entry_price_basis != SIMULATION_ENTRY_PRICE_BASIS:
+++            raise ValueError("entry_price_basis must match SIMULATION_ENTRY_PRICE_BASIS")
+++        if self.cost_model != ROUND_TRIP_COST_MODEL:
+++            raise ValueError("cost_model must match ROUND_TRIP_COST_MODEL")
++         if self.toxic_entry_atr_1m_fraction < 0.0:
++             raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")
++         if self.random_seed < 0:
++diff --git a/src/anomaly_science/simulation/run.py b/src/anomaly_science/simulation/run.py
++index bc0fac56..f23064af 100644
++--- a/src/anomaly_science/simulation/run.py
+++++ b/src/anomaly_science/simulation/run.py
++@@ -154,6 +154,12 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
++             message="simulation consumes decision timing rows, which are produced after OOS prediction/calibration and EV",
++             artifact="anomaly_trade_simulation.csv",
++         ),
+++        ProtocolAuditRow(
+++            check_name="execution_reference_model_aligned_between_ev_and_simulation",
+++            status=AuditStatus.PASS,
+++            message="simulation validates decision execution_reference_model/cost_model and records the same execution model with actual next-open entry basis",
+++            artifact="anomaly_decision_timing.csv;anomaly_trade_simulation.csv",
+++        ),
++         ProtocolAuditRow(
++             check_name="pessimistic_entry_price_includes_slippage_penalty",
++             status=AuditStatus.PASS,
++@@ -217,6 +223,9 @@ def _run_config_rows(
++         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
++         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),
++         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
+++        RunConfigRow(key="execution_reference_model", value=config.execution_reference_model, source="runtime"),
+++        RunConfigRow(key="entry_price_basis", value=config.entry_price_basis, source="runtime"),
+++        RunConfigRow(key="cost_model", value=config.cost_model, source="runtime"),
++         RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),
++         RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
++         RunConfigRow(key="require_prediction_confident", value=str(config.require_prediction_confident), source="runtime"),
++diff --git a/tests/test_decision_expected_value.py b/tests/test_decision_expected_value.py
++index 413d0f80..99e5ad0b 100644
++--- a/tests/test_decision_expected_value.py
+++++ b/tests/test_decision_expected_value.py
++@@ -11,6 +11,7 @@ import pytest
++ from anomaly_science.artifacts import write_csv_artifact
++ from anomaly_science.contracts.artifacts import get_artifact_schema
++ from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT
+++from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
++ from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT, AnomalyOutcomeLabelRow
++ from anomaly_science.contracts.prediction import PREDICTION_TEMPORAL_CONTRACT, OosPredictionRow
++ from anomaly_science.contracts.state import AnomalyState1mRow
++@@ -130,6 +131,9 @@ def test_expected_value_uses_oos_probabilities_atr_and_costs() -> None:
++     assert row.target_distance == 4.0
++     assert row.stop_distance == 2.2
++     assert row.cost_penalty == 0.1
+++    assert row.execution_reference_model == EV_EXECUTION_REFERENCE_MODEL
+++    assert row.entry_price_basis == EV_ENTRY_PRICE_BASIS
+++    assert row.cost_model == ROUND_TRIP_COST_MODEL
++     assert round(row.EV_long, 10) == 2.88
++     assert round(row.EV_short, 10) == -1.46
++     assert row.best_action == "long"
++@@ -220,6 +224,7 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
++     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
++         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
++     assert audit_by_name["expected_value_computed_before_trade_simulation"]["status"] == "PASS"
+++    assert audit_by_name["execution_reference_model_aligned_between_ev_and_simulation"]["status"] == "PASS"
++     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
++     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
++ 
++@@ -227,3 +232,6 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
++         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
++     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
++     assert run_config["take_profit_atr_1440"] == "2.0"
+++    assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
+++    assert run_config["entry_price_basis"] == EV_ENTRY_PRICE_BASIS
+++    assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL
++diff --git a/tests/test_trade_simulation.py b/tests/test_trade_simulation.py
++index 9bc98f49..ec562c8b 100644
++--- a/tests/test_trade_simulation.py
+++++ b/tests/test_trade_simulation.py
++@@ -10,6 +10,7 @@ import pytest
++ from anomaly_science.artifacts import write_csv_artifact
++ from anomaly_science.contracts.artifacts import get_artifact_schema
++ from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT, ExpectedValueRow
+++from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
++ from anomaly_science.contracts.market import Candle1m, FundingRate
++ from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
++ from anomaly_science.decision import expected_value_rows_to_artifact
++@@ -57,12 +58,15 @@ def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
++         feature_cutoff_time_ms=BASE_MS,
++         future_start_time_ms=BASE_MS + ONE_MINUTE_MS,
++         target_horizon_minutes=30,
+++        execution_reference_model=EV_EXECUTION_REFERENCE_MODEL,
+++        entry_price_basis=EV_ENTRY_PRICE_BASIS,
++         entry_reference_price=100.0,
++         core_atr_1440=2.0,
++         stop_distance=2.0,
++         target_distance=3.0,
++         fee_bps=4.0,
++         slippage_bps=2.0,
+++        cost_model=ROUND_TRIP_COST_MODEL,
++         cost_penalty=0.1,
++         p_follow_through_long=0.8,
++         p_adverse_long=0.1,
++@@ -96,6 +100,9 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
++     row = rows[0]
++ 
++     assert row.entry_reference_time_ms == BASE_MS + ONE_MINUTE_MS
+++    assert row.execution_reference_model == EV_EXECUTION_REFERENCE_MODEL
+++    assert row.entry_price_basis == SIMULATION_ENTRY_PRICE_BASIS
+++    assert row.cost_model == ROUND_TRIP_COST_MODEL
++     assert row.entry_price > row.entry_reference_open
++     assert row.exit_reason == "stop_loss"
++     assert row.barrier_resolution == "stop_loss_first"
++@@ -272,6 +279,7 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
++     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
++         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
++     assert audit_by_name["trade_simulation_after_calibration_and_decision_timing"]["status"] == "PASS"
+++    assert audit_by_name["execution_reference_model_aligned_between_ev_and_simulation"]["status"] == "PASS"
++     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
++     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
++     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
++@@ -289,6 +297,9 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
++         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
++     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
++     assert run_config["stop_loss_atr_1440"] == "1.1"
+++    assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
+++    assert run_config["entry_price_basis"] == SIMULATION_ENTRY_PRICE_BASIS
+++    assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL
++ 
++ 
++ def test_run_mvp1_trade_simulation_debits_present_funding_rate_stream(tmp_path: Path) -> None:
+diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 4f014829..382d1b4d 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -98,8 +98,8 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Prediction protocol audit now verifies Core whitelist, registry strategy/horizon compatibility, target label column, active H_max, purge horizon, OOS prediction artifact identity, and model metadata horizon identity. Tests cover multi-strategy H_max, artifact horizon identity, and horizon audit pass/fail rows. | Keep as permanent regression gate. |
+ | Calibration artifacts | PARTIAL | Raw/calibrated probabilities and metrics exist. Regime/symbol/session calibration breakdowns need expansion. | Add calibration breakdown ledger and audit gates. |
+ | Sample weighting | IMPLEMENTED | Prediction config now requires explicit `sample_weight_policy="uniform_v1"`, CatBoost receives validated fit-split sample weights, model metadata and training diagnostics record the policy and weight sums, run config records the policy, and prediction protocol audit emits `sample_weight_policy_explicit_and_asof_safe`. Tests reject unknown policies and verify artifact/audit output. | Keep policy-version tests as permanent gate; add a new version before any non-uniform weighting. |
+-| Decision timing | PARTIAL | Decision timing / EV artifact exists. EV reference model must be aligned with simulation. | Align execution reference and store execution model fields. |
+-| Expected utility | PARTIAL | EV calculations exist and write canonical `strategy_decision_timing.csv` / `strategy_ev_metrics.csv`. Simulation alignment is still incomplete. | Align execution reference and store execution model fields. |
++| Decision timing | IMPLEMENTED | Decision timing writes canonical `strategy_decision_timing.csv` / `anomaly_decision_timing.csv` with explicit `execution_reference_model`, EV entry price basis, and cost model fields. The EV stage run config and protocol audit record `execution_reference_model_aligned_between_ev_and_simulation`, and tests verify artifact roundtrip/run output. | Keep execution-reference schema tests as permanent gate. |
++| Expected utility | IMPLEMENTED | EV is computed before simulation from OOS probabilities, ATR stop/target distances, fees, slippage, and the shared execution/cost model contract. Simulation validates the decision row execution/cost model before consuming it, and tests cover the EV/simulation alignment fields. | Keep EV/simulation alignment tests as permanent gate. |
+ | Pessimistic trade simulation | PARTIAL | Slippage, fees, next open, stop-first collision, no same-symbol parallel positions, and canonical `strategy_trade_simulation.csv` artifacts exist. Stronger independent audit is still needed. | Strengthen audit simulation assumptions. |
+ | Controls / placebo | PARTIAL | Placebo and baseline controls exist. Full anomaly-specific ablation set needs verification/completion. | Complete listed anomaly controls and feature ablations. |
+ | Protocol audit | PARTIAL | Protocol audit exists, prediction-stage horizon consistency is audited, and `run-research` now writes an independent artifact-driven forensic audit after simulation and exits non-zero on any forensic `FAIL`. Holdout mode is enforced before downstream stages, and forensic audit checks root run-manifest completeness. Remaining gap: the forensic layer is still an initial proof set, not yet the full final research-ready audit of data-quality mask, universe, feature catalog, controls, EV/simulation alignment, and rejection funnel. | Keep expanding forensic checks as later methodology gaps become implemented. |
+@@ -139,13 +139,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ 10. `methodology: hard-gate run-research on forensic audit` - implemented in this patch.
+ 11. `methodology: enforce feature catalog membership before prediction` - implemented.
+ 12. `methodology: add explicit sample weight policy` - implemented.
+-13. `strategy: make registry status self-auditing`.
+-14. `strategy: complete broad anomaly trigger component accounting`.
+-15. `strategy: add 180m horizon support or remove 180m promises` - implemented.
+-16. `strategy: implement post-pump distribution variants`.
+-17. `strategy: implement post-anomaly extension variants`.
+-18. `features: add structural state and relaxed geometry features`.
+-19. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
++13. `methodology: align EV and simulation execution reference` - implemented.
++14. `strategy: make registry status self-auditing`.
++15. `strategy: complete broad anomaly trigger component accounting`.
++16. `strategy: add 180m horizon support or remove 180m promises` - implemented.
++17. `strategy: implement post-pump distribution variants`.
++18. `strategy: implement post-anomaly extension variants`.
++19. `features: add structural state and relaxed geometry features`.
++20. `methodology: complete controls, rejection funnel, run manifest, and docs sync`.
+ 
+ Rule:
+ 
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 24aa5e91..480dafc5 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,18 @@
+ # Patch log
+ 
++## methodology: align EV and simulation execution reference
++
++Status: APPLIED.
++
++Intent:
++- Add a shared EV/simulation execution reference contract.
++- Store `execution_reference_model`, entry price basis, and cost model in EV and trade-simulation artifacts.
++- Make simulation validate the decision-row execution/cost model before simulating.
++- Record the shared model in EV/simulation run configs and protocol audit rows.
++
++Validation:
++- `.venv\Scripts\python.exe -m pytest tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_artifact_schemas.py tests\test_research_run.py tests\test_forensic_audit.py`
++
+ ## methodology: add explicit sample weight policy
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 16691407..c94674a6 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -7,7 +7,7 @@ Active rule:
+ - New code must not import legacy modules.
+ - Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
+ - First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
+-- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix with prediction-time catalog membership hard gate for all numeric/bool model features, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, explicit prediction sample-weight policy `uniform_v1`, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
++- Current implemented slice: data source boundary, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, broad anomaly events via BaseStrategy `generate_triggers`, online 1m anomaly state, raw future paths through 180m, feature catalog/matrix with prediction-time catalog membership hard gate for all numeric/bool model features, descriptive strategy nature atlas, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, explicit prediction sample-weight policy `uniform_v1`, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts, placebo/control tests, decision timing with EV aligned to the shared EV/simulation execution-reference contract, simplified pessimistic trade simulation, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
+ - Future paths remain raw outcomes.
+ - Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
+ - Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
+@@ -21,6 +21,7 @@ Active rule:
+ 
+ Current local base commit before the active run-research holdout freeze patch: `db17b76a`, verified with `git rev-parse --short HEAD`.
+ Last local validation on 2026-06-19:
++- `.venv\Scripts\python.exe -m pytest tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_artifact_schemas.py tests\test_research_run.py tests\test_forensic_audit.py`
+ - `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_artifact_schemas.py`
+ - `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_feature_catalog.py tests\test_horizon_contract.py`
+ - `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
+diff --git a/src/anomaly_science/audit/protocol.py b/src/anomaly_science/audit/protocol.py
+index 5e8ab835..fa5f4529 100644
+--- a/src/anomaly_science/audit/protocol.py
++++ b/src/anomaly_science/audit/protocol.py
+@@ -50,6 +50,7 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
+     "frozen_weekly_model_used_for_daily_oos",
+     "sample_weight_policy_explicit_and_asof_safe",
+     "expected_value_computed_before_trade_simulation",
++    "execution_reference_model_aligned_between_ev_and_simulation",
+     "trade_simulation_after_calibration_and_decision_timing",
+     "pessimistic_entry_price_includes_slippage_penalty",
+     "anti_pyramiding_one_open_position_per_symbol_strategy",
+@@ -125,10 +126,12 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
+     ),
+     "mvp1_decision": (
+         "expected_value_computed_before_trade_simulation",
++        "execution_reference_model_aligned_between_ev_and_simulation",
+         "fixed_percent_stop_target_forbidden",
+     ),
+     "mvp1_simulation": (
+         "trade_simulation_after_calibration_and_decision_timing",
++        "execution_reference_model_aligned_between_ev_and_simulation",
+         "pessimistic_entry_price_includes_slippage_penalty",
+     "anti_pyramiding_one_open_position_per_symbol_strategy",
+         "intracandle_double_barrier_resolved_as_stop_loss_first",
+diff --git a/src/anomaly_science/contracts/artifacts.py b/src/anomaly_science/contracts/artifacts.py
+index 62ed218a..11658f70 100644
+--- a/src/anomaly_science/contracts/artifacts.py
++++ b/src/anomaly_science/contracts/artifacts.py
+@@ -420,12 +420,15 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
+             "feature_cutoff_time_ms",
+             "future_start_time_ms",
+             "target_horizon_minutes",
++            "execution_reference_model",
++            "entry_price_basis",
+             "entry_reference_price",
+             "ATR_1d_asof_t",
+             "stop_distance",
+             "target_distance",
+             "fee_bps",
+             "slippage_bps",
++            "cost_model",
+             "cost_penalty",
+             "p_follow_through_long",
+             "p_adverse_long",
+@@ -470,6 +473,8 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
+             "snapshot_time_ms",
+             "feature_cutoff_time_ms",
+             "target_horizon_minutes",
++            "execution_reference_model",
++            "entry_price_basis",
+             "decision_action",
+             "simulated_side",
+             "entry_reference_time_ms",
+@@ -482,6 +487,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
+             "target_price",
+             "fee_bps",
+             "slippage_bps",
++            "cost_model",
+             "total_cost",
+             "funding_cost",
+             "exit_time_ms",
+diff --git a/src/anomaly_science/contracts/decision.py b/src/anomaly_science/contracts/decision.py
+index 57333ba5..9c67adde 100644
+--- a/src/anomaly_science/contracts/decision.py
++++ b/src/anomaly_science/contracts/decision.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import math
+ from dataclasses import dataclass
+ 
++from .execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
+ from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
+ from .market import MarketDataContractError
+ from .time import enforce_snapshot_contract, validate_timestamp_ms
+@@ -23,12 +24,15 @@ class ExpectedValueRow:
+     feature_cutoff_time_ms: int
+     future_start_time_ms: int
+     target_horizon_minutes: int
++    execution_reference_model: str
++    entry_price_basis: str
+     entry_reference_price: float
+     core_atr_1440: float
+     stop_distance: float
+     target_distance: float
+     fee_bps: float
+     slippage_bps: float
++    cost_model: str
+     cost_penalty: float
+     p_follow_through_long: float
+     p_adverse_long: float
+@@ -70,12 +74,18 @@ class ExpectedValueRow:
+         )
+         if not is_supported_research_horizon(self.target_horizon_minutes):
+             raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
++            raise MarketDataContractError("execution_reference_model must match the EV/simulation execution contract")
++        if self.entry_price_basis != EV_ENTRY_PRICE_BASIS:
++            raise MarketDataContractError("entry_price_basis must document the EV entry proxy")
+         _require_positive_finite(self.entry_reference_price, "entry_reference_price")
+         _require_positive_finite(self.core_atr_1440, "core_atr_1440")
+         _require_positive_finite(self.stop_distance, "stop_distance")
+         _require_positive_finite(self.target_distance, "target_distance")
+         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
+             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
++        if self.cost_model != ROUND_TRIP_COST_MODEL:
++            raise MarketDataContractError("cost_model must match the EV/simulation cost contract")
+         if not math.isfinite(self.cost_penalty) or self.cost_penalty < 0.0:
+             raise MarketDataContractError("cost_penalty must be finite and non-negative")
+         for field_name in (
+diff --git a/src/anomaly_science/contracts/execution.py b/src/anomaly_science/contracts/execution.py
+new file mode 100644
+index 00000000..c378fcee
+--- /dev/null
++++ b/src/anomaly_science/contracts/execution.py
+@@ -0,0 +1,6 @@
++from __future__ import annotations
++
++EV_EXECUTION_REFERENCE_MODEL = "next_1m_open_after_snapshot_with_pessimistic_slippage_v1"
++EV_ENTRY_PRICE_BASIS = "snapshot_current_close_proxy_for_next_open"
++SIMULATION_ENTRY_PRICE_BASIS = "actual_next_1m_open_after_snapshot"
++ROUND_TRIP_COST_MODEL = "round_trip_fee_bps_plus_entry_slippage_bps_v1"
+diff --git a/src/anomaly_science/contracts/simulation.py b/src/anomaly_science/contracts/simulation.py
+index 83a20626..6e07b68a 100644
+--- a/src/anomaly_science/contracts/simulation.py
++++ b/src/anomaly_science/contracts/simulation.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import math
+ from dataclasses import dataclass
+ 
++from .execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
+ from .horizons import is_supported_research_horizon, supported_research_horizon_error_message
+ from .market import MarketDataContractError
+ from .time import validate_timestamp_ms
+@@ -22,6 +23,8 @@ class TradeSimulationRow:
+     snapshot_time_ms: int
+     feature_cutoff_time_ms: int
+     target_horizon_minutes: int
++    execution_reference_model: str
++    entry_price_basis: str
+     decision_action: str
+     simulated_side: str
+     entry_reference_time_ms: int
+@@ -34,6 +37,7 @@ class TradeSimulationRow:
+     target_price: float
+     fee_bps: float
+     slippage_bps: float
++    cost_model: str
+     total_cost: float
+     funding_cost: float
+     exit_time_ms: int
+@@ -60,6 +64,10 @@ class TradeSimulationRow:
+             raise MarketDataContractError("exit_time_ms must be >= entry_reference_time_ms")
+         if not is_supported_research_horizon(self.target_horizon_minutes):
+             raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
++            raise MarketDataContractError("execution_reference_model must match the EV/simulation execution contract")
++        if self.entry_price_basis != SIMULATION_ENTRY_PRICE_BASIS:
++            raise MarketDataContractError("entry_price_basis must document the simulation entry reference")
+         if self.decision_action not in SIMULATION_SIDES:
+             raise MarketDataContractError("decision_action must be long or short for simulated trade rows")
+         if self.simulated_side not in SIMULATION_SIDES:
+@@ -77,6 +85,8 @@ class TradeSimulationRow:
+             _require_positive_finite(getattr(self, field_name), field_name)
+         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
+             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
++        if self.cost_model != ROUND_TRIP_COST_MODEL:
++            raise MarketDataContractError("cost_model must match the EV/simulation cost contract")
+         if self.total_cost < 0.0 or not math.isfinite(self.total_cost):
+             raise MarketDataContractError("total_cost must be finite and non-negative")
+         if not math.isfinite(self.funding_cost):
+diff --git a/src/anomaly_science/decision/builder.py b/src/anomaly_science/decision/builder.py
+index e9e4ccc8..e34aacae 100644
+--- a/src/anomaly_science/decision/builder.py
++++ b/src/anomaly_science/decision/builder.py
+@@ -191,12 +191,15 @@ def _build_row(
+         feature_cutoff_time_ms=prediction.feature_cutoff_time_ms,
+         future_start_time_ms=prediction.future_start_time_ms,
+         target_horizon_minutes=prediction.target_horizon_minutes,
++        execution_reference_model=config.execution_reference_model,
++        entry_price_basis=config.entry_price_basis,
+         entry_reference_price=entry_reference_price,
+         core_atr_1440=label.core_atr_1440,
+         stop_distance=stop_distance,
+         target_distance=target_distance,
+         fee_bps=config.fee_bps,
+         slippage_bps=config.slippage_bps,
++        cost_model=config.cost_model,
+         cost_penalty=cost_penalty,
+         p_follow_through_long=p_follow_long,
+         p_adverse_long=p_adverse_long,
+@@ -306,12 +309,15 @@ def _expected_value_from_mapping(row: Mapping[str, object]) -> ExpectedValueRow:
+         feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+         future_start_time_ms=_required_int(row, "future_start_time_ms"),
+         target_horizon_minutes=_required_int(row, "target_horizon_minutes"),
++        execution_reference_model=_required_str(row, "execution_reference_model"),
++        entry_price_basis=_required_str(row, "entry_price_basis"),
+         entry_reference_price=_required_float(row, "entry_reference_price"),
+         core_atr_1440=_required_float(row, "ATR_1d_asof_t"),
+         stop_distance=_required_float(row, "stop_distance"),
+         target_distance=_required_float(row, "target_distance"),
+         fee_bps=_required_float(row, "fee_bps"),
+         slippage_bps=_required_float(row, "slippage_bps"),
++        cost_model=_required_str(row, "cost_model"),
+         cost_penalty=_required_float(row, "cost_penalty"),
+         p_follow_through_long=_required_float(row, "p_follow_through_long"),
+         p_adverse_long=_required_float(row, "p_adverse_long"),
+diff --git a/src/anomaly_science/decision/config.py b/src/anomaly_science/decision/config.py
+index ef38dabf..bbc8dc9e 100644
+--- a/src/anomaly_science/decision/config.py
++++ b/src/anomaly_science/decision/config.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ from dataclasses import dataclass
+ 
+ from anomaly_science.contracts.horizons import research_horizon_label_column
++from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
+ from anomaly_science.strategy.registry import validate_strategy_horizon
+ 
+ 
+@@ -15,6 +16,9 @@ class ExpectedValueConfig:
+     target_horizon_minutes: int = 30
+     fee_bps: float = 4.0
+     slippage_bps: float = 2.0
++    execution_reference_model: str = EV_EXECUTION_REFERENCE_MODEL
++    entry_price_basis: str = EV_ENTRY_PRICE_BASIS
++    cost_model: str = ROUND_TRIP_COST_MODEL
+     min_prediction_confidence: float = 0.40
+     min_rr: float = 1.0
+ 
+@@ -28,6 +32,12 @@ class ExpectedValueConfig:
+             raise ValueError("fee_bps must be non-negative")
+         if self.slippage_bps < 0.0:
+             raise ValueError("slippage_bps must be non-negative")
++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
++            raise ValueError("execution_reference_model must match EV_EXECUTION_REFERENCE_MODEL")
++        if self.entry_price_basis != EV_ENTRY_PRICE_BASIS:
++            raise ValueError("entry_price_basis must match EV_ENTRY_PRICE_BASIS")
++        if self.cost_model != ROUND_TRIP_COST_MODEL:
++            raise ValueError("cost_model must match ROUND_TRIP_COST_MODEL")
+         if self.min_prediction_confidence < 0.0 or self.min_prediction_confidence > 1.0:
+             raise ValueError("min_prediction_confidence must be within [0, 1]")
+         if self.min_rr <= 0.0:
+diff --git a/src/anomaly_science/decision/run.py b/src/anomaly_science/decision/run.py
+index 0bb99277..d091cbc5 100644
+--- a/src/anomaly_science/decision/run.py
++++ b/src/anomaly_science/decision/run.py
+@@ -129,6 +129,12 @@ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
+             message="decision stage computes EV from OOS probabilities, ATR-normalized distances, fees, and slippage before any trade simulation exists",
+             artifact="anomaly_decision_timing.csv",
+         ),
++        ProtocolAuditRow(
++            check_name="execution_reference_model_aligned_between_ev_and_simulation",
++            status=AuditStatus.PASS,
++            message="EV rows record the shared execution_reference_model and use a snapshot current-close proxy for the later next-open pessimistic simulation model",
++            artifact="anomaly_decision_timing.csv",
++        ),
+         ProtocolAuditRow(
+             check_name="fixed_percent_stop_target_forbidden",
+             status=AuditStatus.PASS,
+@@ -171,6 +177,9 @@ def _run_config_rows(
+         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
+         RunConfigRow(key="ev_version", value=config.ev_version, source="runtime"),
+         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
++        RunConfigRow(key="execution_reference_model", value=config.execution_reference_model, source="runtime"),
++        RunConfigRow(key="entry_price_basis", value=config.entry_price_basis, source="runtime"),
++        RunConfigRow(key="cost_model", value=config.cost_model, source="runtime"),
+         RunConfigRow(key="fee_bps", value=str(config.fee_bps), source="runtime"),
+         RunConfigRow(key="slippage_bps", value=str(config.slippage_bps), source="runtime"),
+         RunConfigRow(key="min_prediction_confidence", value=str(config.min_prediction_confidence), source="runtime"),
+diff --git a/src/anomaly_science/simulation/builder.py b/src/anomaly_science/simulation/builder.py
+index 4814bed6..77c5c4c6 100644
+--- a/src/anomaly_science/simulation/builder.py
++++ b/src/anomaly_science/simulation/builder.py
+@@ -283,6 +283,12 @@ def _simulate_decision(
+     funding_rates: Sequence[FundingRate],
+     config: TradeSimulationConfig,
+ ) -> TradeSimulationRow:
++    if decision.execution_reference_model != config.execution_reference_model:
++        raise TradeSimulationInputError(
++            f"decision execution_reference_model={decision.execution_reference_model!r} does not match simulation config {config.execution_reference_model!r}"
++        )
++    if decision.cost_model != config.cost_model:
++        raise TradeSimulationInputError(f"decision cost_model={decision.cost_model!r} does not match simulation config {config.cost_model!r}")
+     entry_candle = _entry_candle(decision=decision, candles=candles)
+     exit_candles = [
+         candle
+@@ -339,6 +345,8 @@ def _simulate_decision(
+         snapshot_time_ms=decision.snapshot_time_ms,
+         feature_cutoff_time_ms=decision.feature_cutoff_time_ms,
+         target_horizon_minutes=decision.target_horizon_minutes,
++        execution_reference_model=config.execution_reference_model,
++        entry_price_basis=config.entry_price_basis,
+         decision_action=decision.best_action,
+         simulated_side=side,
+         entry_reference_time_ms=entry_candle.open_time_ms,
+@@ -351,6 +359,7 @@ def _simulate_decision(
+         target_price=target_price,
+         fee_bps=decision.fee_bps,
+         slippage_bps=decision.slippage_bps,
++        cost_model=config.cost_model,
+         total_cost=total_cost,
+         funding_cost=funding_cost,
+         exit_time_ms=exit_candle.open_time_ms,
+@@ -486,6 +495,8 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
+         snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+         feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+         target_horizon_minutes=_required_int(row, "target_horizon_minutes"),
++        execution_reference_model=_required_str(row, "execution_reference_model"),
++        entry_price_basis=_required_str(row, "entry_price_basis"),
+         decision_action=_required_str(row, "decision_action"),
+         simulated_side=_required_str(row, "simulated_side"),
+         entry_reference_time_ms=_required_int(row, "entry_reference_time_ms"),
+@@ -498,6 +509,7 @@ def _simulation_from_mapping(row: Mapping[str, object]) -> TradeSimulationRow:
+         target_price=_required_float(row, "target_price"),
+         fee_bps=_required_float(row, "fee_bps"),
+         slippage_bps=_required_float(row, "slippage_bps"),
++        cost_model=_required_str(row, "cost_model"),
+         total_cost=_required_float(row, "total_cost"),
+         funding_cost=_required_float(row, "funding_cost"),
+         exit_time_ms=_required_int(row, "exit_time_ms"),
+diff --git a/src/anomaly_science/simulation/config.py b/src/anomaly_science/simulation/config.py
+index edee10f8..01c0ee92 100644
+--- a/src/anomaly_science/simulation/config.py
++++ b/src/anomaly_science/simulation/config.py
+@@ -2,6 +2,8 @@ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+ 
++from anomaly_science.contracts.execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
++
+ 
+ @dataclass(frozen=True, slots=True)
+ class TradeSimulationConfig:
+@@ -10,6 +12,9 @@ class TradeSimulationConfig:
+     target_horizon_minutes: int = 30
+     require_prediction_confident: bool = True
+     require_rr_acceptable: bool = True
++    execution_reference_model: str = EV_EXECUTION_REFERENCE_MODEL
++    entry_price_basis: str = SIMULATION_ENTRY_PRICE_BASIS
++    cost_model: str = ROUND_TRIP_COST_MODEL
+     toxic_entry_atr_1m_fraction: float = 0.2
+     random_seed: int = 1729
+ 
+@@ -20,6 +25,12 @@ class TradeSimulationConfig:
+             raise ValueError("strategy_name is required")
+         from anomaly_science.strategy.registry import validate_strategy_horizon
+         validate_strategy_horizon(self.strategy_name, self.target_horizon_minutes)
++        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
++            raise ValueError("execution_reference_model must match EV_EXECUTION_REFERENCE_MODEL")
++        if self.entry_price_basis != SIMULATION_ENTRY_PRICE_BASIS:
++            raise ValueError("entry_price_basis must match SIMULATION_ENTRY_PRICE_BASIS")
++        if self.cost_model != ROUND_TRIP_COST_MODEL:
++            raise ValueError("cost_model must match ROUND_TRIP_COST_MODEL")
+         if self.toxic_entry_atr_1m_fraction < 0.0:
+             raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")
+         if self.random_seed < 0:
+diff --git a/src/anomaly_science/simulation/run.py b/src/anomaly_science/simulation/run.py
+index bc0fac56..f23064af 100644
+--- a/src/anomaly_science/simulation/run.py
++++ b/src/anomaly_science/simulation/run.py
+@@ -154,6 +154,12 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
+             message="simulation consumes decision timing rows, which are produced after OOS prediction/calibration and EV",
+             artifact="anomaly_trade_simulation.csv",
+         ),
++        ProtocolAuditRow(
++            check_name="execution_reference_model_aligned_between_ev_and_simulation",
++            status=AuditStatus.PASS,
++            message="simulation validates decision execution_reference_model/cost_model and records the same execution model with actual next-open entry basis",
++            artifact="anomaly_decision_timing.csv;anomaly_trade_simulation.csv",
++        ),
+         ProtocolAuditRow(
+             check_name="pessimistic_entry_price_includes_slippage_penalty",
+             status=AuditStatus.PASS,
+@@ -217,6 +223,9 @@ def _run_config_rows(
+         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
+         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),
+         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
++        RunConfigRow(key="execution_reference_model", value=config.execution_reference_model, source="runtime"),
++        RunConfigRow(key="entry_price_basis", value=config.entry_price_basis, source="runtime"),
++        RunConfigRow(key="cost_model", value=config.cost_model, source="runtime"),
+         RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),
+         RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
+         RunConfigRow(key="require_prediction_confident", value=str(config.require_prediction_confident), source="runtime"),
+diff --git a/tests/test_decision_expected_value.py b/tests/test_decision_expected_value.py
+index 413d0f80..99e5ad0b 100644
+--- a/tests/test_decision_expected_value.py
++++ b/tests/test_decision_expected_value.py
+@@ -11,6 +11,7 @@ import pytest
+ from anomaly_science.artifacts import write_csv_artifact
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT
++from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
+ from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT, AnomalyOutcomeLabelRow
+ from anomaly_science.contracts.prediction import PREDICTION_TEMPORAL_CONTRACT, OosPredictionRow
+ from anomaly_science.contracts.state import AnomalyState1mRow
+@@ -130,6 +131,9 @@ def test_expected_value_uses_oos_probabilities_atr_and_costs() -> None:
+     assert row.target_distance == 4.0
+     assert row.stop_distance == 2.2
+     assert row.cost_penalty == 0.1
++    assert row.execution_reference_model == EV_EXECUTION_REFERENCE_MODEL
++    assert row.entry_price_basis == EV_ENTRY_PRICE_BASIS
++    assert row.cost_model == ROUND_TRIP_COST_MODEL
+     assert round(row.EV_long, 10) == 2.88
+     assert round(row.EV_short, 10) == -1.46
+     assert row.best_action == "long"
+@@ -220,6 +224,7 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
+     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
+     assert audit_by_name["expected_value_computed_before_trade_simulation"]["status"] == "PASS"
++    assert audit_by_name["execution_reference_model_aligned_between_ev_and_simulation"]["status"] == "PASS"
+     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
+     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
+ 
+@@ -227,3 +232,6 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
+         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
+     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+     assert run_config["take_profit_atr_1440"] == "2.0"
++    assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
++    assert run_config["entry_price_basis"] == EV_ENTRY_PRICE_BASIS
++    assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL
+diff --git a/tests/test_trade_simulation.py b/tests/test_trade_simulation.py
+index 9bc98f49..ec562c8b 100644
+--- a/tests/test_trade_simulation.py
++++ b/tests/test_trade_simulation.py
+@@ -10,6 +10,7 @@ import pytest
+ from anomaly_science.artifacts import write_csv_artifact
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT, ExpectedValueRow
++from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
+ from anomaly_science.contracts.market import Candle1m, FundingRate
+ from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
+ from anomaly_science.decision import expected_value_rows_to_artifact
+@@ -57,12 +58,15 @@ def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
+         feature_cutoff_time_ms=BASE_MS,
+         future_start_time_ms=BASE_MS + ONE_MINUTE_MS,
+         target_horizon_minutes=30,
++        execution_reference_model=EV_EXECUTION_REFERENCE_MODEL,
++        entry_price_basis=EV_ENTRY_PRICE_BASIS,
+         entry_reference_price=100.0,
+         core_atr_1440=2.0,
+         stop_distance=2.0,
+         target_distance=3.0,
+         fee_bps=4.0,
+         slippage_bps=2.0,
++        cost_model=ROUND_TRIP_COST_MODEL,
+         cost_penalty=0.1,
+         p_follow_through_long=0.8,
+         p_adverse_long=0.1,
+@@ -96,6 +100,9 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
+     row = rows[0]
+ 
+     assert row.entry_reference_time_ms == BASE_MS + ONE_MINUTE_MS
++    assert row.execution_reference_model == EV_EXECUTION_REFERENCE_MODEL
++    assert row.entry_price_basis == SIMULATION_ENTRY_PRICE_BASIS
++    assert row.cost_model == ROUND_TRIP_COST_MODEL
+     assert row.entry_price > row.entry_reference_open
+     assert row.exit_reason == "stop_loss"
+     assert row.barrier_resolution == "stop_loss_first"
+@@ -272,6 +279,7 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
+     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
+     assert audit_by_name["trade_simulation_after_calibration_and_decision_timing"]["status"] == "PASS"
++    assert audit_by_name["execution_reference_model_aligned_between_ev_and_simulation"]["status"] == "PASS"
+     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
+     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
+     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
+@@ -289,6 +297,9 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
+         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
+     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+     assert run_config["stop_loss_atr_1440"] == "1.1"
++    assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
++    assert run_config["entry_price_basis"] == SIMULATION_ENTRY_PRICE_BASIS
++    assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL
+ 
+ 
+ def test_run_mvp1_trade_simulation_debits_present_funding_rate_stream(tmp_path: Path) -> None:

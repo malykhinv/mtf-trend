@@ -10,6 +10,7 @@ import pytest
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT, ExpectedValueRow
+from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 from anomaly_science.contracts.market import Candle1m, FundingRate
 from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
 from anomaly_science.decision import expected_value_rows_to_artifact
@@ -57,12 +58,15 @@ def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
         feature_cutoff_time_ms=BASE_MS,
         future_start_time_ms=BASE_MS + ONE_MINUTE_MS,
         target_horizon_minutes=30,
+        execution_reference_model=EV_EXECUTION_REFERENCE_MODEL,
+        entry_price_basis=EV_ENTRY_PRICE_BASIS,
         entry_reference_price=100.0,
         core_atr_1440=2.0,
         stop_distance=2.0,
         target_distance=3.0,
         fee_bps=4.0,
         slippage_bps=2.0,
+        cost_model=ROUND_TRIP_COST_MODEL,
         cost_penalty=0.1,
         p_follow_through_long=0.8,
         p_adverse_long=0.1,
@@ -96,6 +100,9 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
     row = rows[0]
 
     assert row.entry_reference_time_ms == BASE_MS + ONE_MINUTE_MS
+    assert row.execution_reference_model == EV_EXECUTION_REFERENCE_MODEL
+    assert row.entry_price_basis == SIMULATION_ENTRY_PRICE_BASIS
+    assert row.cost_model == ROUND_TRIP_COST_MODEL
     assert row.entry_price > row.entry_reference_open
     assert row.exit_reason == "stop_loss"
     assert row.barrier_resolution == "stop_loss_first"
@@ -272,6 +279,7 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["trade_simulation_after_calibration_and_decision_timing"]["status"] == "PASS"
+    assert audit_by_name["execution_reference_model_aligned_between_ev_and_simulation"]["status"] == "PASS"
     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
@@ -289,6 +297,9 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
     assert run_config["stop_loss_atr_1440"] == "1.1"
+    assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
+    assert run_config["entry_price_basis"] == SIMULATION_ENTRY_PRICE_BASIS
+    assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL
 
 
 def test_run_mvp1_trade_simulation_debits_present_funding_rate_stream(tmp_path: Path) -> None:

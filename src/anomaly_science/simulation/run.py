@@ -155,6 +155,12 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
             artifact="anomaly_trade_simulation.csv",
         ),
         ProtocolAuditRow(
+            check_name="execution_reference_model_aligned_between_ev_and_simulation",
+            status=AuditStatus.PASS,
+            message="simulation validates decision execution_reference_model/cost_model and records the same execution model with actual next-open entry basis",
+            artifact="anomaly_decision_timing.csv;anomaly_trade_simulation.csv",
+        ),
+        ProtocolAuditRow(
             check_name="pessimistic_entry_price_includes_slippage_penalty",
             status=AuditStatus.PASS,
             message="entry prices include side-aware pessimistic slippage plus toxic-entry 1m range penalty; exit prices include pessimistic slippage",
@@ -217,6 +223,9 @@ def _run_config_rows(
         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="simulation_version", value=config.simulation_version, source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
+        RunConfigRow(key="execution_reference_model", value=config.execution_reference_model, source="runtime"),
+        RunConfigRow(key="entry_price_basis", value=config.entry_price_basis, source="runtime"),
+        RunConfigRow(key="cost_model", value=config.cost_model, source="runtime"),
         RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),
         RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
         RunConfigRow(key="require_prediction_confident", value=str(config.require_prediction_confident), source="runtime"),
