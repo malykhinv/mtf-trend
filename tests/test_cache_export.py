@@ -178,6 +178,77 @@ def test_export_cache_validation_rejects_short_global_span(tmp_path):
     assert manifest["validation"]["effective_calendar_days"] == 1
 
 
+def test_export_cache_discovery_excludes_delivery_contracts_by_default(tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "mvp1"
+    cache_dir.mkdir()
+    pd.DataFrame(
+        {
+            "timestamp": [1704067200000, 1704067260000],
+            "open": [1, 2],
+            "high": [2, 3],
+            "low": [0.5, 1.5],
+            "close": [1.5, 2.5],
+            "volume": [10, 11],
+            "quote_volume": [100, 110],
+            "trade_count": [1, 2],
+            "taker_buy_quote_volume": [50, 55],
+            "open_interest": [1000, 1001],
+        }
+    ).to_parquet(cache_dir / "BTCUSDT.parquet")
+    pd.DataFrame(
+        {
+            "timestamp": [1704067200000],
+            "open": [1],
+            "high": [2],
+            "low": [0.5],
+            "close": [1.5],
+            "volume": [10],
+            "taker_buy_quote_volume": [50],
+        }
+    ).to_parquet(cache_dir / "BTCUSDT_250627.parquet")
+
+    assert discover_cache_symbols(cache_dir) == ("BTCUSDT",)
+    assert discover_cache_symbols(cache_dir, include_delivery_contracts=True) == ("BTCUSDT", "BTCUSDT_250627")
+
+    export_cache_to_mvp1_csv(CacheMvp1CsvExportConfig(cache_dir=cache_dir, out_dir=out_dir))
+
+    candles_1m = pd.read_csv(out_dir / "candles_1m.csv")
+    manifest = json.loads((out_dir / "cache_export_manifest.json").read_text(encoding="utf-8"))
+    assert candles_1m["symbol"].unique().tolist() == ["BTCUSDT"]
+    assert manifest["exported_symbols"] == ["BTCUSDT"]
+    assert manifest["excluded_delivery_contract_symbols"] == ["BTCUSDT_250627"]
+    assert manifest["include_delivery_contracts"] is False
+
+
+def test_export_cache_rejects_explicit_delivery_contract_without_opt_in(tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "mvp1"
+    cache_dir.mkdir()
+    pd.DataFrame(
+        {
+            "timestamp": [1704067200000],
+            "open": [1],
+            "high": [2],
+            "low": [0.5],
+            "close": [1.5],
+            "volume": [10],
+            "quote_volume": [100],
+            "trade_count": [1],
+            "taker_buy_quote_volume": [50],
+        }
+    ).to_parquet(cache_dir / "BTCUSDT_250627.parquet")
+
+    with pytest.raises(ValueError, match="explicit delivery contract symbols are excluded by default"):
+        export_cache_to_mvp1_csv(
+            CacheMvp1CsvExportConfig(
+                cache_dir=cache_dir,
+                out_dir=out_dir,
+                symbols=("BTCUSDT_250627",),
+            )
+        )
+
+
 def test_export_cache_cli_discovers_symbols_and_accepts_optional_days() -> None:
     args = build_parser().parse_args(
         [
@@ -199,3 +270,20 @@ def test_export_cache_cli_discovers_symbols_and_accepts_optional_days() -> None:
     assert args.days == 7
     assert args.expected_days == 7
     assert args.fail_on_missing_1m_rows is True
+    assert args.include_delivery_contracts is False
+
+
+def test_export_cache_cli_accepts_delivery_contract_opt_in() -> None:
+    args = build_parser().parse_args(
+        [
+            "export-cache-mvp1-csv",
+            "--cache-dir",
+            ".cache",
+            "--out",
+            "tmp/mvp1",
+            "--include-delivery-contracts",
+        ]
+    )
+
+    assert args.command == "export-cache-mvp1-csv"
+    assert args.include_delivery_contracts is True

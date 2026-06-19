@@ -1,5 +1,19 @@
 # Patch log
 
+## methodology: exclude delivery contracts from cache export discovery
+
+Status: PROPOSED.
+
+Intent:
+- Keep the MVP1 perpetual export aligned with the Binance Vision cache builder universe by excluding fixed-date delivery-contract parquet files such as `BTCUSDT_250627` during automatic symbol discovery.
+- Preserve explicitness: requested delivery symbols fail with a clear error unless `--include-delivery-contracts` is passed for a dedicated delivery-contract experiment.
+- Record excluded delivery-contract files in `cache_export_manifest.json` instead of silently ignoring them.
+- Add regression coverage for discovery, explicit-symbol rejection, manifest reporting, and the CLI opt-in flag.
+
+Validation:
+- `python -m pytest tests/test_cache_export.py tests/test_binance_vision_cache_delivery_symbols.py -q`
+- `python -m compileall -q src/anomaly_science/cache_export.py src/anomaly_science/cli.py tests/test_cache_export.py`
+
 ## methodology: harden cache export proof gates
 
 Status: PROPOSED.

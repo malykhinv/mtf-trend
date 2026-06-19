@@ -9,6 +9,8 @@ from typing import Any
 
 import pandas as pd
 
+from anomaly_science.binance_vision_cache import is_delivery_contract_symbol
+
 ONE_MINUTE_MS = 60_000
 ONE_DAY_MS = 86_400_000
 FULL_UTC_DAY_1M_ROWS = 1_440
@@ -24,6 +26,7 @@ class CacheMvp1CsvExportConfig:
     fail_on_missing_utc_days: bool = False
     fail_on_missing_1m_rows: bool = False
     fail_on_missing_open_interest: bool = False
+    include_delivery_contracts: bool = False
 
     def __post_init__(self) -> None:
         if self.days is not None and self.days <= 0:
@@ -34,7 +37,7 @@ class CacheMvp1CsvExportConfig:
 
 def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
     config.out_dir.mkdir(parents=True, exist_ok=True)
-    symbols = config.symbols or discover_cache_symbols(config.cache_dir)
+    symbols, excluded_delivery_symbols = _resolve_export_symbols(config)
     if not symbols:
         raise ValueError(f"cache contains no symbol parquet files: {config.cache_dir}")
     frames = [_read_symbol_cache(config.cache_dir, symbol) for symbol in symbols]
@@ -63,15 +66,49 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
         coverage=coverage,
         validation=validation,
         artifact_paths=(candles_1m_path, candles_5m_path, open_interest_5m_path, coverage_path),
+        excluded_delivery_symbols=excluded_delivery_symbols,
     )
     _raise_for_validation_failures(validation)
     return config.out_dir
 
 
-def discover_cache_symbols(cache_dir: Path) -> tuple[str, ...]:
+def discover_cache_symbols(cache_dir: Path, *, include_delivery_contracts: bool = False) -> tuple[str, ...]:
+    symbols, _excluded_delivery_symbols = _discover_cache_symbols_with_exclusions(
+        cache_dir,
+        include_delivery_contracts=include_delivery_contracts,
+    )
+    return symbols
+
+
+def _resolve_export_symbols(config: CacheMvp1CsvExportConfig) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if config.symbols:
+        delivery_symbols = tuple(symbol for symbol in config.symbols if is_delivery_contract_symbol(symbol))
+        if delivery_symbols and not config.include_delivery_contracts:
+            raise ValueError(
+                "explicit delivery contract symbols are excluded by default: "
+                + ",".join(delivery_symbols)
+                + "; pass --include-delivery-contracts only for an explicit delivery-contract experiment"
+            )
+        return config.symbols, ()
+    return _discover_cache_symbols_with_exclusions(
+        config.cache_dir,
+        include_delivery_contracts=config.include_delivery_contracts,
+    )
+
+
+def _discover_cache_symbols_with_exclusions(
+    cache_dir: Path,
+    *,
+    include_delivery_contracts: bool = False,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if not cache_dir.exists():
         raise FileNotFoundError(f"cache directory is missing: {cache_dir}")
-    return tuple(sorted(path.stem.upper() for path in cache_dir.glob("*.parquet") if path.is_file()))
+    all_symbols = tuple(sorted(path.stem.upper() for path in cache_dir.glob("*.parquet") if path.is_file()))
+    if include_delivery_contracts:
+        return all_symbols, ()
+    symbols = tuple(symbol for symbol in all_symbols if not is_delivery_contract_symbol(symbol))
+    excluded_delivery_symbols = tuple(symbol for symbol in all_symbols if is_delivery_contract_symbol(symbol))
+    return symbols, excluded_delivery_symbols
 
 
 def _read_symbol_cache(cache_dir: Path, symbol: str) -> pd.DataFrame:
@@ -307,6 +344,7 @@ def _write_cache_export_manifest(
     coverage: pd.DataFrame,
     validation: dict[str, Any],
     artifact_paths: tuple[Path, ...],
+    excluded_delivery_symbols: tuple[str, ...],
 ) -> None:
     timestamps = pd.to_datetime(candles_1m["open_time_ms"].astype("int64"), unit="ms", utc=True)
     payload = {
@@ -316,6 +354,8 @@ def _write_cache_export_manifest(
         "out_dir": str(config.out_dir),
         "requested_symbols": list(config.symbols),
         "exported_symbols": list(symbols),
+        "excluded_delivery_contract_symbols": list(excluded_delivery_symbols),
+        "include_delivery_contracts": config.include_delivery_contracts,
         "requested_days": config.days,
         "expected_days": config.expected_days,
         "fail_on_missing_utc_days": config.fail_on_missing_utc_days,
