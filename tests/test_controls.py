@@ -222,7 +222,7 @@ def test_baseline_comparison_defers_volume_without_proxy_fields() -> None:
     assert by_name["price_path_only"].oos_prediction_rows > 0
 
 
-def test_run_mvp1_controls_cli_writes_control_artifacts(tmp_path: Path) -> None:
+def test_run_mvp1_controls_cli_requires_feature_matrix(tmp_path: Path) -> None:
     states, labels = _control_rows()
     state_path = tmp_path / "anomaly_state_1m.csv"
     labels_path = tmp_path / "anomaly_outcome_labels.csv"
@@ -249,31 +249,8 @@ def test_run_mvp1_controls_cli_writes_control_artifacts(tmp_path: Path) -> None:
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "mvp1 placebo/control artifacts written" in result.stdout
-    assert (out_dir / "anomaly_placebo_tests.csv").is_file()
-    assert (out_dir / "anomaly_baseline_comparison.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
-    assert (out_dir / "artifact_manifest.json").is_file()
-
-    with (out_dir / "anomaly_protocol_audit.csv").open(newline="", encoding="utf-8-sig") as handle:
-        audit_by_name = {row["check_name"]: row for row in csv.DictReader(handle)}
-    assert audit_by_name["non_empty_oos_control_gate"]["status"] == "PASS"
-    assert audit_by_name["technical_noise_shock_excluded_from_ml_train_validation_calibration_test"]["status"] == "PASS"
-    assert audit_by_name["fixed_percent_labels_forbidden"]["status"] == "PASS"
-    assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
-    assert audit_by_name["feature_matrix_control_baselines"]["status"] == "PASS"
-
-    with (out_dir / "anomaly_run_config.csv").open(newline="", encoding="utf-8-sig") as handle:
-        run_config = {row["key"]: row["value"] for row in csv.DictReader(handle)}
-    assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
-    assert run_config["required_data_streams"] == "liquidations=false;open_interest=false"
-
-    with (out_dir / "anomaly_baseline_comparison.csv").open(newline="", encoding="utf-8-sig") as handle:
-        baseline_rows = list(csv.DictReader(handle))
-    assert any(row["baseline_name"] == "volume_only" and row["status"] == CONTROL_STATUS_DEFERRED for row in baseline_rows)
-    assert any(row["baseline_name"] == "always_follow_anomaly" and row["status"] == CONTROL_STATUS_OK for row in baseline_rows)
+    assert result.returncode != 0
+    assert "--features" in result.stderr
 
 
 def test_run_mvp1_controls_cli_uses_feature_matrix_for_ablation_baselines(tmp_path: Path) -> None:
@@ -308,6 +285,26 @@ def test_run_mvp1_controls_cli_uses_feature_matrix_for_ablation_baselines(tmp_pa
     )
 
     assert result.returncode == 0, result.stderr
+    assert "mvp1 placebo/control artifacts written" in result.stdout
+    assert (out_dir / "anomaly_placebo_tests.csv").is_file()
+    assert (out_dir / "anomaly_baseline_comparison.csv").is_file()
+    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
+    assert (out_dir / "anomaly_run_config.csv").is_file()
+    assert (out_dir / "artifact_manifest.json").is_file()
+
+    with (out_dir / "anomaly_protocol_audit.csv").open(newline="", encoding="utf-8-sig") as handle:
+        audit_by_name = {row["check_name"]: row for row in csv.DictReader(handle)}
+    assert audit_by_name["non_empty_oos_control_gate"]["status"] == "PASS"
+    assert audit_by_name["technical_noise_shock_excluded_from_ml_train_validation_calibration_test"]["status"] == "PASS"
+    assert audit_by_name["fixed_percent_labels_forbidden"]["status"] == "PASS"
+    assert audit_by_name["purge_rule_snapshot_time_plus_Hmax_before_test_start"]["status"] == "PASS"
+    assert audit_by_name["feature_matrix_control_baselines"]["status"] == "PASS"
+
+    with (out_dir / "anomaly_run_config.csv").open(newline="", encoding="utf-8-sig") as handle:
+        run_config = {row["key"]: row["value"] for row in csv.DictReader(handle)}
+    assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+    assert run_config["required_data_streams"] == "liquidations=false;open_interest=false"
+
     with (out_dir / "anomaly_baseline_comparison.csv").open(newline="", encoding="utf-8-sig") as handle:
         by_name = {row["baseline_name"]: row for row in csv.DictReader(handle)}
 

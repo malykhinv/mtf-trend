@@ -104,8 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
     atlas.add_argument("--future", required=True, help="Path to anomaly_future_paths.csv from run-mvp1-future.")
     atlas.add_argument(
         "--features",
-        default="",
-        help="Optional path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for relative atlas slices.",
+        required=True,
+        help="Path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for relative atlas slices.",
     )
     atlas.add_argument("--out", required=True, help="Directory where atlas artifacts will be written.")
 
@@ -119,14 +119,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     prediction = subparsers.add_parser(
         "run-mvp1-prediction",
-        help="Run MVP1 weekly CatBoost+Isotonic calibrated prediction from state, optional features, and labels.",
+        help="Run MVP1 weekly CatBoost+Isotonic calibrated prediction from state, features, and labels.",
     )
     prediction.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
     prediction.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
     prediction.add_argument(
         "--features",
-        default="",
-        help="Optional path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for rich as-of model features.",
+        required=True,
+        help="Path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for rich as-of model features.",
     )
     prediction.add_argument("--out", required=True, help="Directory where prediction artifacts will be written.")
     prediction.add_argument(
@@ -145,8 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
     controls.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
     controls.add_argument(
         "--features",
-        default="",
-        help="Optional path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for feature-aware baselines and ablations.",
+        required=True,
+        help="Path to anomaly_feature_matrix.csv from run-mvp1-feature-matrix for feature-aware baselines and ablations.",
     )
     controls.add_argument("--out", required=True, help="Directory where control artifacts will be written.")
     controls.add_argument(
@@ -337,7 +337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_mvp1_atlas(
             state_path=Path(args.state),
             future_path=Path(args.future),
-            feature_matrix_path=None if not args.features else Path(args.features),
+            feature_matrix_path=Path(args.features),
             out_dir=Path(args.out),
         )
         print(f"mvp1 anomaly atlas artifacts written: {output_dir}")
@@ -356,7 +356,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_mvp1_prediction(
             state_path=Path(args.state),
             labels_path=Path(args.labels),
-            feature_matrix_path=None if not args.features else Path(args.features),
+            feature_matrix_path=Path(args.features),
             out_dir=Path(args.out),
             config=config,
         )
@@ -371,7 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_mvp1_controls(
             state_path=Path(args.state),
             labels_path=Path(args.labels),
-            feature_matrix_path=None if not args.features else Path(args.features),
+            feature_matrix_path=Path(args.features),
             out_dir=Path(args.out),
             config=config,
         )

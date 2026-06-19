@@ -198,7 +198,7 @@ def test_atlas_preserves_temporal_contract_in_outputs() -> None:
     assert artifacts.market_shock_group_rows[0].market_shock_candidate is False
 
 
-def test_run_mvp1_atlas_cli_writes_atlas_artifacts(tmp_path: Path) -> None:
+def test_run_mvp1_atlas_cli_requires_feature_matrix(tmp_path: Path) -> None:
     state_path = tmp_path / "anomaly_state_1m.csv"
     future_path = tmp_path / "anomaly_future_paths.csv"
     out_dir = tmp_path / "atlas"
@@ -222,22 +222,8 @@ def test_run_mvp1_atlas_cli_writes_atlas_artifacts(tmp_path: Path) -> None:
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "mvp1 anomaly atlas artifacts written" in result.stdout
-    assert (out_dir / "anomaly_nature_atlas.csv").is_file()
-    assert (out_dir / "anomaly_context_splits.csv").is_file()
-    assert (out_dir / "anomaly_response_surfaces.csv").is_file()
-    assert (out_dir / "anomaly_market_shock_groups.csv").is_file()
-    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
-    assert (out_dir / "anomaly_run_config.csv").is_file()
-    assert (out_dir / "artifact_manifest.json").is_file()
-
-    with (out_dir / "anomaly_nature_atlas.csv").open(encoding="utf-8-sig", newline="") as file_obj:
-        rows = list(csv.DictReader(file_obj))
-    assert rows
-    assert rows[0]["atlas_version"] == "mvp1_atlas_v2"
-    assert rows[0]["outcome_coordinate"] == "ATR_normalized_30m"
-    assert rows[0]["atlas_outcome_bin"] == "range_chop_atr_30m"
+    assert result.returncode != 0
+    assert "--features" in result.stderr
 
 
 def test_atlas_uses_feature_matrix_relative_contexts_and_market_shock_ids(tmp_path: Path) -> None:
@@ -286,6 +272,22 @@ def test_run_mvp1_atlas_cli_accepts_feature_matrix(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    assert "mvp1 anomaly atlas artifacts written" in result.stdout
+    assert (out_dir / "anomaly_nature_atlas.csv").is_file()
+    assert (out_dir / "anomaly_context_splits.csv").is_file()
+    assert (out_dir / "anomaly_response_surfaces.csv").is_file()
+    assert (out_dir / "anomaly_market_shock_groups.csv").is_file()
+    assert (out_dir / "anomaly_protocol_audit.csv").is_file()
+    assert (out_dir / "anomaly_run_config.csv").is_file()
+    assert (out_dir / "artifact_manifest.json").is_file()
+
+    with (out_dir / "anomaly_nature_atlas.csv").open(encoding="utf-8-sig", newline="") as file_obj:
+        atlas_rows = list(csv.DictReader(file_obj))
+    assert atlas_rows
+    assert atlas_rows[0]["atlas_version"] == "mvp1_atlas_v2"
+    assert atlas_rows[0]["outcome_coordinate"] == "ATR_normalized_30m"
+    assert atlas_rows[0]["atlas_outcome_bin"] == "upside_continuation_atr_30m"
+
     with (out_dir / "anomaly_market_shock_groups.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert rows[0]["market_shock_id"] == "idiosyncratic:AAA/USDT:USDT"
