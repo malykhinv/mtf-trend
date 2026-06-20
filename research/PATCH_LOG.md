@@ -1,5 +1,19 @@
 # Patch log
 
+## docs: canonicalize low-level CLI artifact help
+
+Status: APPLIED.
+
+Intent:
+- Fix low-level CLI help that still named `anomaly_*` inputs as primary artifacts after canonical `strategy_*` contracts became the documented boundary.
+- Keep `anomaly_*` compatibility aliases intact, but stop advertising them as the preferred CLI path.
+- Replace stale `RESEARCH_STATE` Git-head `UNKNOWN` text with the checked local head before this patch.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_cli_contract.py tests\test_atlas.py -q`
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\cli.py tests\test_cli_contract.py`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## methodology: validate full 380d cache export proof
 
 Status: APPLIED.

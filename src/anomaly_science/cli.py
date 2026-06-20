@@ -133,18 +133,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     state = subparsers.add_parser(
         "run-mvp1-state",
-        help="Build MVP1 online 1m anomaly state from normalized candles and anomaly_events.csv.",
+        help="Build MVP1 online 1m strategy state from normalized candles and strategy_events.csv.",
     )
     state.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
-    state.add_argument("--events", required=True, help="Path to anomaly_events.csv from run-mvp1-events.")
+    state.add_argument("--events", required=True, help="Path to strategy_events.csv from run-mvp1-events.")
     state.add_argument("--out", required=True, help="Directory where state artifacts will be written.")
 
     future = subparsers.add_parser(
         "run-mvp1-future",
-        help="Build MVP1 raw future paths from normalized candles and anomaly_state_1m.csv.",
+        help="Build MVP1 raw future paths from normalized candles and strategy_state_1m.csv.",
     )
     future.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
-    future.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
+    future.add_argument("--state", required=True, help="Path to strategy_state_1m.csv from run-mvp1-state.")
     future.add_argument("--out", required=True, help="Directory where future path artifacts will be written.")
 
     features = subparsers.add_parser(
@@ -161,10 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     feature_matrix = subparsers.add_parser(
         "run-mvp1-feature-matrix",
-        help="Build MVP1 as-of price/time/alpha-decay feature matrix from normalized candles and anomaly_state_1m.csv.",
+        help="Build MVP1 as-of price/time/alpha-decay feature matrix from normalized candles and strategy_state_1m.csv.",
     )
     feature_matrix.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
-    feature_matrix.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
+    feature_matrix.add_argument("--state", required=True, help="Path to strategy_state_1m.csv from run-mvp1-state.")
     feature_matrix.add_argument("--out", required=True, help="Directory where feature matrix artifacts will be written.")
     feature_matrix.add_argument(
         "--expected-event-lifetime-minutes",
@@ -175,10 +175,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     atlas = subparsers.add_parser(
         "run-mvp1-atlas",
-        help="Build MVP1 descriptive anomaly nature atlas from anomaly_state_1m.csv and anomaly_future_paths.csv.",
+        help="Build MVP1 descriptive strategy nature atlas from strategy_state_1m.csv and strategy_future_paths.csv.",
     )
-    atlas.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
-    atlas.add_argument("--future", required=True, help="Path to anomaly_future_paths.csv from run-mvp1-future.")
+    atlas.add_argument("--state", required=True, help="Path to strategy_state_1m.csv from run-mvp1-state.")
+    atlas.add_argument("--future", required=True, help="Path to strategy_future_paths.csv from run-mvp1-future.")
     atlas.add_argument(
         "--features",
         required=True,
@@ -190,16 +190,16 @@ def build_parser() -> argparse.ArgumentParser:
         "run-mvp1-labels",
         help="Build MVP1 descriptive future-nature scenario labels from state and raw future path artifacts.",
     )
-    labels.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
-    labels.add_argument("--future", required=True, help="Path to anomaly_future_paths.csv from run-mvp1-future.")
+    labels.add_argument("--state", required=True, help="Path to strategy_state_1m.csv from run-mvp1-state.")
+    labels.add_argument("--future", required=True, help="Path to strategy_future_paths.csv from run-mvp1-future.")
     labels.add_argument("--out", required=True, help="Directory where outcome label artifacts will be written.")
 
     prediction = subparsers.add_parser(
         "run-mvp1-prediction",
         help="Run MVP1 weekly CatBoost+Isotonic calibrated prediction from state, features, and labels.",
     )
-    prediction.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
-    prediction.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
+    prediction.add_argument("--state", required=True, help="Path to strategy_state_1m.csv from run-mvp1-state.")
+    prediction.add_argument("--labels", required=True, help="Path to strategy_outcome_labels.csv from run-mvp1-labels.")
     prediction.add_argument(
         "--features",
         required=True,
@@ -212,8 +212,8 @@ def build_parser() -> argparse.ArgumentParser:
         "run-mvp1-controls",
         help="Run MVP1 placebo/control checks for walk-forward prediction artifacts.",
     )
-    controls.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
-    controls.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
+    controls.add_argument("--state", required=True, help="Path to strategy_state_1m.csv from run-mvp1-state.")
+    controls.add_argument("--labels", required=True, help="Path to strategy_outcome_labels.csv from run-mvp1-labels.")
     controls.add_argument(
         "--features",
         required=True,
@@ -226,9 +226,9 @@ def build_parser() -> argparse.ArgumentParser:
         "run-mvp1-expected-value",
         help="Run MVP1 pre-simulation expected-value analysis from OOS predictions.",
     )
-    expected_value.add_argument("--state", required=True, help="Path to anomaly_state_1m.csv from run-mvp1-state.")
-    expected_value.add_argument("--labels", required=True, help="Path to anomaly_outcome_labels.csv from run-mvp1-labels.")
-    expected_value.add_argument("--predictions", required=True, help="Path to anomaly_oos_predictions.csv from run-mvp1-prediction.")
+    expected_value.add_argument("--state", required=True, help="Path to strategy_state_1m.csv from run-mvp1-state.")
+    expected_value.add_argument("--labels", required=True, help="Path to strategy_outcome_labels.csv from run-mvp1-labels.")
+    expected_value.add_argument("--predictions", required=True, help="Path to strategy_oos_predictions.csv from run-mvp1-prediction.")
     expected_value.add_argument("--out", required=True, help="Directory where expected-value artifacts will be written.")
     _add_strategy_horizon_arguments(expected_value, verb="evaluate")
     expected_value.add_argument("--fee-bps", type=float, default=4.0, help="Per-side fee basis points. Default: 4.0.")
@@ -241,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run MVP1 simplified pessimistic trade simulation from decision timing rows.",
     )
     simulation.add_argument("--input", required=True, help="Directory containing normalized MVP1 CSV inputs.")
-    simulation.add_argument("--decision-timing", required=True, help="Path to anomaly_decision_timing.csv from run-mvp1-expected-value.")
+    simulation.add_argument("--decision-timing", required=True, help="Path to strategy_decision_timing.csv from run-mvp1-expected-value.")
     simulation.add_argument("--out", required=True, help="Directory where trade simulation artifacts will be written.")
     _add_strategy_horizon_arguments(simulation, verb="simulate")
     simulation.add_argument(
@@ -450,7 +450,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             feature_matrix_path=Path(args.features),
             out_dir=Path(args.out),
         )
-        print(f"mvp1 anomaly atlas artifacts written: {output_dir}")
+        print(f"mvp1 strategy atlas artifacts written: {output_dir}")
         return 0
 
     if args.command == "run-mvp1-labels":
