@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import csv
+import os
+import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.artifacts.writer import ArtifactWriteError
+from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.data.normalized import normalize_candles_1m
-from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
+from anomaly_science.contracts.future import FuturePathRow
 from anomaly_science.future.builder import (
-    build_strategy_future_paths,
-    future_rows_to_artifact,
-    load_strategy_state_1m_csv,
+    future_row_to_artifact,
+    iter_strategy_future_paths_from_csv,
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
 
@@ -31,17 +34,18 @@ def run_mvp1_future(
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or FuturePathBuilderConfig()
 
-    source = CsvDirectoryDataSource(input_path)
-    state_rows = load_strategy_state_1m_csv(state_artifact_path)
-    candle_frame = source.read_frame("candles_1m", required=True)
-    if candle_frame is None:
-        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
-    future_rows = build_strategy_future_paths(
-        candles_1m=normalize_candles_1m(candle_frame),
-        state_rows=state_rows,
-        config=cfg,
+    written: list[Path] = []
+    future_written, future_row_count = _write_future_rows_with_aliases(
+        output_path / "strategy_future_paths.csv",
+        iter_strategy_future_paths_from_csv(
+            input_dir=input_path,
+            state_path=state_artifact_path,
+            config=cfg,
+        ),
+        get_artifact_schema("strategy_future_paths.csv"),
     )
-    protocol_rows = _protocol_rows(state_row_count=len(state_rows), future_row_count=len(future_rows))
+    written.extend(future_written)
+    protocol_rows = _protocol_rows(state_row_count=future_row_count, future_row_count=future_row_count)
     run_config_rows = _run_config_rows(
         input_path=input_path,
         state_path=state_artifact_path,
@@ -49,14 +53,6 @@ def run_mvp1_future(
         config=cfg,
     )
 
-    written: list[Path] = []
-    written.extend(
-        write_csv_artifact_with_aliases(
-            output_path / "strategy_future_paths.csv",
-            future_rows_to_artifact(future_rows),
-            get_artifact_schema("strategy_future_paths.csv"),
-        )
-    )
     written.extend(
         write_csv_artifact_with_aliases(
             output_path / "strategy_protocol_audit.csv",
@@ -74,6 +70,50 @@ def run_mvp1_future(
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)
     write_manifest(output_path / "artifact_manifest.json", manifest)
     return output_path
+
+
+def _write_future_rows_with_aliases(
+    path: Path,
+    rows: Iterable[FuturePathRow],
+    schema: ArtifactSchema,
+) -> tuple[list[Path], int]:
+    if path.name != schema.name:
+        raise ArtifactWriteError(f"path name {path.name!r} does not match schema name {schema.name!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row_count = _write_future_rows(path=path, rows=rows, schema=schema)
+    written = [path]
+    for alias_name in get_strategy_artifact_companion_names(schema.name):
+        alias_path = path.with_name(alias_name)
+        alias_schema = get_artifact_schema(alias_name)
+        if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
+            raise ArtifactWriteError(f"{schema.name} streaming alias {alias_name} must have identical columns")
+        shutil.copyfile(path, alias_path)
+        written.append(alias_path)
+    return written, row_count
+
+
+def _write_future_rows(*, path: Path, rows: Iterable[FuturePathRow], schema: ArtifactSchema) -> int:
+    fieldnames = list(schema.required_columns)
+    expected_columns = set(fieldnames)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    row_count = 0
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
+        writer.writeheader()
+        for row in rows:
+            payload = future_row_to_artifact(row)
+            if set(payload) != expected_columns:
+                missing = [name for name in fieldnames if name not in payload]
+                extra = sorted(set(payload) - expected_columns)
+                raise ArtifactWriteError(
+                    f"strategy_future_paths.csv row {row_count} schema mismatch: missing={missing} extra={extra}"
+                )
+            writer.writerow({name: payload[name] for name in fieldnames})
+            row_count += 1
+            if row_count % 100_000 == 0:
+                file_obj.flush()
+    os.replace(tmp_path, path)
+    return row_count
 
 
 def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[ProtocolAuditRow]:

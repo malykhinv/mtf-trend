@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
@@ -17,7 +18,7 @@ from anomaly_science.contracts.future import (
 from anomaly_science.contracts.market import Candle1m, MarketDataContractError, ONE_MINUTE_MS
 from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.data.normalized import normalize_candles_1m
-from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
+from anomaly_science.data.source import CANDLE_REQUIRED_COLUMNS, CsvDataSourceError, MarketDataSource
 from anomaly_science.future.atr import AtrAsOfResult, AtrComputationError
 from anomaly_science.future.config import FuturePathBuilderConfig
 
@@ -76,40 +77,63 @@ def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ..
 
     rows: list[StrategyState1mRow] = []
     for row_index, row in enumerate(frame.itertuples(index=False)):
-        try:
-            rows.append(
-                StrategyState1mRow(
-                    event_id=_tuple_required_str(row, "event_id"),
-                    symbol=_tuple_required_str(row, "symbol"),
-                    state_time_ms=_tuple_required_int(row, "state_time_ms"),
-                    snapshot_time_ms=_tuple_required_int(row, "snapshot_time_ms"),
-                    feature_cutoff_time_ms=_tuple_required_int(row, "feature_cutoff_time_ms"),
-                    minutes_since_event_start=_tuple_required_int(row, "minutes_since_event_start"),
-                    minutes_since_detection=_tuple_required_int(row, "minutes_since_detection"),
-                    event_alive=_tuple_required_bool(row, "event_alive"),
-                    running_high_asof_t=_tuple_required_float(row, "running_high_asof_t"),
-                    running_high_time_asof_t_ms=_tuple_required_int(row, "running_high_time_asof_t_ms"),
-                    running_low_asof_t=_tuple_required_float(row, "running_low_asof_t"),
-                    running_low_time_asof_t_ms=_tuple_required_int(row, "running_low_time_asof_t_ms"),
-                    time_since_running_high_minutes=_tuple_required_int(row, "time_since_running_high_minutes"),
-                    current_close=_tuple_required_float(row, "current_close"),
-                    current_return_from_start=_tuple_required_float(row, "current_return_from_start"),
-                    distance_to_running_high=_tuple_required_float(row, "distance_to_running_high"),
-                    distance_to_running_low=_tuple_required_float(row, "distance_to_running_low"),
-                    distance_to_structural_low=_tuple_optional_float(row, "distance_to_structural_low"),
-                    distance_to_structural_high=_tuple_optional_float(row, "distance_to_structural_high"),
-                    structural_low_asof_t=_tuple_optional_float(row, "structural_low_asof_t"),
-                    structural_low_time_asof_t_ms=_tuple_optional_int(row, "structural_low_time_asof_t_ms"),
-                    structural_high_asof_t=_tuple_optional_float(row, "structural_high_asof_t"),
-                    structural_high_time_asof_t_ms=_tuple_optional_int(row, "structural_high_time_asof_t_ms"),
-                )
-            )
-        except (TypeError, ValueError) as exc:
-            raise AnomalyStateArtifactError(f"invalid anomaly_state_1m.csv row {row_index}: {exc}") from exc
+        rows.append(_state_row_from_object(row=row, row_index=row_index, artifact_name=state_path.name))
     return tuple(rows)
 
 
 load_anomaly_state_1m_csv = load_strategy_state_1m_csv
+
+
+def iter_strategy_state_1m_csv(path: str | Path) -> Iterable[StrategyState1mRow]:
+    """Stream state rows through the same strict artifact boundary as the tuple loader."""
+    state_path = Path(path)
+    if not state_path.exists():
+        raise AnomalyStateArtifactError(f"state artifact is missing: {state_path}")
+
+    schema = get_artifact_schema("strategy_state_1m.csv")
+    expected_columns = list(schema.required_columns)
+    with state_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_columns:
+            raise AnomalyStateArtifactError(
+                f"state artifact columns must match {expected_columns}, got {actual_columns}"
+            )
+        for row_index, row in enumerate(reader):
+            yield _state_row_from_mapping(row=row, row_index=row_index, artifact_name=state_path.name)
+
+
+iter_anomaly_state_1m_csv = iter_strategy_state_1m_csv
+
+
+def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
+    """Stream normalized 1m candles from the explicit CSV boundary."""
+    candles_path = Path(path)
+    if not candles_path.exists():
+        raise CsvDataSourceError(f"required dataset 'candles_1m.csv' is missing: {candles_path}")
+    with candles_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = tuple(reader.fieldnames or ())
+        missing = [name for name in CANDLE_REQUIRED_COLUMNS if name not in actual_columns]
+        if missing:
+            raise CsvDataSourceError(f"dataset 'candles_1m.csv' is missing required columns: {missing}")
+        for row_index, row in enumerate(reader):
+            try:
+                yield Candle1m(
+                    symbol=_required_str(row, "symbol"),
+                    open_time_ms=_required_int(row, "open_time_ms"),
+                    available_time_ms=_required_int(row, "available_time_ms"),
+                    open=_required_float(row, "open"),
+                    high=_required_float(row, "high"),
+                    low=_required_float(row, "low"),
+                    close=_required_float(row, "close"),
+                    volume=_required_float(row, "volume"),
+                    quote_volume=_required_float(row, "quote_volume"),
+                    number_of_trades=_optional_float(row, "number_of_trades"),
+                    taker_buy_quote_volume=_optional_float(row, "taker_buy_quote_volume"),
+                )
+            except (TypeError, ValueError) as exc:
+                raise CsvDataSourceError(f"invalid candles_1m.csv row {row_index}: {exc}") from exc
 
 
 def load_strategy_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]:
@@ -217,6 +241,23 @@ def build_strategy_future_paths(
     state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
     config: FuturePathBuilderConfig | None = None,
 ) -> tuple[FuturePathRow, ...]:
+    return tuple(
+        iter_strategy_future_paths(
+            candles_1m=candles_1m,
+            state_rows=state_rows,
+            config=config,
+            sort_state_rows=True,
+        )
+    )
+
+
+def iter_strategy_future_paths(
+    *,
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
+    config: FuturePathBuilderConfig | None = None,
+    sort_state_rows: bool = False,
+) -> Iterable[FuturePathRow]:
     """Build raw future paths strictly after each online state snapshot.
 
     Feature-side state fields are never recomputed here. The only state values
@@ -235,23 +276,25 @@ def build_strategy_future_paths(
         for symbol, symbol_candles in candles_by_symbol.items()
     }
 
-    rows: list[FuturePathRow] = []
-    for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
+    ordered_state_rows = (
+        sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id))
+        if sort_state_rows
+        else state_rows
+    )
+    for state in ordered_state_rows:
         symbol_candles = indexed_candles_by_symbol.get(state.symbol, _empty_symbol_future_candle_index())
-        rows.append(
-            _build_state_future_path(
-                state=state,
-                candle_index=symbol_candles,
-                max_horizon=max_horizon,
-                atr_window_minutes=cfg.atr_window_minutes,
-                double_barrier_k_continuation=cfg.double_barrier_k_continuation,
-                double_barrier_k_fade=cfg.double_barrier_k_fade,
-            )
+        yield _build_state_future_path(
+            state=state,
+            candle_index=symbol_candles,
+            max_horizon=max_horizon,
+            atr_window_minutes=cfg.atr_window_minutes,
+            double_barrier_k_continuation=cfg.double_barrier_k_continuation,
+            double_barrier_k_fade=cfg.double_barrier_k_fade,
         )
-    return tuple(rows)
 
 
 build_anomaly_future_paths = build_strategy_future_paths
+iter_anomaly_future_paths = iter_strategy_future_paths
 
 
 def build_strategy_future_paths_from_source(
@@ -275,12 +318,52 @@ def build_strategy_future_paths_from_source(
 build_anomaly_future_paths_from_source = build_strategy_future_paths_from_source
 
 
+def iter_strategy_future_paths_from_source(
+    *,
+    source: MarketDataSource,
+    state_path: str | Path,
+    config: FuturePathBuilderConfig | None = None,
+) -> Iterable[FuturePathRow]:
+    """Stream future path rows from normalized candles and a strict state artifact."""
+    frame = source.read_frame("candles_1m", required=True)
+    if frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    return iter_strategy_future_paths(
+        candles_1m=normalize_candles_1m(frame),
+        state_rows=iter_strategy_state_1m_csv(state_path),
+        config=config,
+        sort_state_rows=False,
+    )
+
+
+iter_anomaly_future_paths_from_source = iter_strategy_future_paths_from_source
+
+
+def iter_strategy_future_paths_from_csv(
+    *,
+    input_dir: str | Path,
+    state_path: str | Path,
+    config: FuturePathBuilderConfig | None = None,
+) -> Iterable[FuturePathRow]:
+    input_path = Path(input_dir)
+    return iter_strategy_future_paths(
+        candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
+        state_rows=iter_strategy_state_1m_csv(state_path),
+        config=config,
+        sort_state_rows=False,
+    )
+
+
+iter_anomaly_future_paths_from_csv = iter_strategy_future_paths_from_csv
+
+
 def future_rows_to_artifact(rows: Sequence[FuturePathRow]) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
-    for row in rows:
-        payload = _with_core_atr_csv_alias(asdict(row))
-        result.append({key: _csv_value(value) for key, value in payload.items()})
-    return result
+    return [future_row_to_artifact(row) for row in rows]
+
+
+def future_row_to_artifact(row: FuturePathRow) -> dict[str, object]:
+    payload = _with_core_atr_csv_alias(asdict(row))
+    return {key: _csv_value(value) for key, value in payload.items()}
 
 
 def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
@@ -625,8 +708,10 @@ def _compute_atr_when_history_available(
     last_close = candle_index.candles[last_source_index].close
     if last_close <= 0:
         raise AtrComputationError("latest as-of close must be positive")
-    if not math.isfinite(atr) or atr <= 0:
+    if not math.isfinite(atr):
         raise AtrComputationError("computed ATR must be positive and finite")
+    if atr <= 0:
+        return None
     return AtrAsOfResult(
         symbol=state.symbol,
         snapshot_time_ms=state.snapshot_time_ms,
@@ -672,6 +757,73 @@ def _true_range(*, candle: Candle1m, previous_close: float) -> float:
         abs(candle.high - previous_close),
         abs(candle.low - previous_close),
     )
+
+
+def _state_row_from_object(*, row: object, row_index: int, artifact_name: str) -> StrategyState1mRow:
+    try:
+        return StrategyState1mRow(
+            event_id=_tuple_required_str(row, "event_id"),
+            symbol=_tuple_required_str(row, "symbol"),
+            state_time_ms=_tuple_required_int(row, "state_time_ms"),
+            snapshot_time_ms=_tuple_required_int(row, "snapshot_time_ms"),
+            feature_cutoff_time_ms=_tuple_required_int(row, "feature_cutoff_time_ms"),
+            minutes_since_event_start=_tuple_required_int(row, "minutes_since_event_start"),
+            minutes_since_detection=_tuple_required_int(row, "minutes_since_detection"),
+            event_alive=_tuple_required_bool(row, "event_alive"),
+            running_high_asof_t=_tuple_required_float(row, "running_high_asof_t"),
+            running_high_time_asof_t_ms=_tuple_required_int(row, "running_high_time_asof_t_ms"),
+            running_low_asof_t=_tuple_required_float(row, "running_low_asof_t"),
+            running_low_time_asof_t_ms=_tuple_required_int(row, "running_low_time_asof_t_ms"),
+            time_since_running_high_minutes=_tuple_required_int(row, "time_since_running_high_minutes"),
+            current_close=_tuple_required_float(row, "current_close"),
+            current_return_from_start=_tuple_required_float(row, "current_return_from_start"),
+            distance_to_running_high=_tuple_required_float(row, "distance_to_running_high"),
+            distance_to_running_low=_tuple_required_float(row, "distance_to_running_low"),
+            distance_to_structural_low=_tuple_optional_float(row, "distance_to_structural_low"),
+            distance_to_structural_high=_tuple_optional_float(row, "distance_to_structural_high"),
+            structural_low_asof_t=_tuple_optional_float(row, "structural_low_asof_t"),
+            structural_low_time_asof_t_ms=_tuple_optional_int(row, "structural_low_time_asof_t_ms"),
+            structural_high_asof_t=_tuple_optional_float(row, "structural_high_asof_t"),
+            structural_high_time_asof_t_ms=_tuple_optional_int(row, "structural_high_time_asof_t_ms"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise AnomalyStateArtifactError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
+
+
+def _state_row_from_mapping(
+    *,
+    row: Mapping[str, object],
+    row_index: int,
+    artifact_name: str,
+) -> StrategyState1mRow:
+    try:
+        return StrategyState1mRow(
+            event_id=_required_str(row, "event_id"),
+            symbol=_required_str(row, "symbol"),
+            state_time_ms=_required_int(row, "state_time_ms"),
+            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+            minutes_since_event_start=_required_int(row, "minutes_since_event_start"),
+            minutes_since_detection=_required_int(row, "minutes_since_detection"),
+            event_alive=_required_bool(row, "event_alive"),
+            running_high_asof_t=_required_float(row, "running_high_asof_t"),
+            running_high_time_asof_t_ms=_required_int(row, "running_high_time_asof_t_ms"),
+            running_low_asof_t=_required_float(row, "running_low_asof_t"),
+            running_low_time_asof_t_ms=_required_int(row, "running_low_time_asof_t_ms"),
+            time_since_running_high_minutes=_required_int(row, "time_since_running_high_minutes"),
+            current_close=_required_float(row, "current_close"),
+            current_return_from_start=_required_float(row, "current_return_from_start"),
+            distance_to_running_high=_required_float(row, "distance_to_running_high"),
+            distance_to_running_low=_required_float(row, "distance_to_running_low"),
+            distance_to_structural_low=_optional_float(row, "distance_to_structural_low"),
+            distance_to_structural_high=_optional_float(row, "distance_to_structural_high"),
+            structural_low_asof_t=_optional_float(row, "structural_low_asof_t"),
+            structural_low_time_asof_t_ms=_optional_int(row, "structural_low_time_asof_t_ms"),
+            structural_high_asof_t=_optional_float(row, "structural_high_asof_t"),
+            structural_high_time_asof_t_ms=_optional_int(row, "structural_high_time_asof_t_ms"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise AnomalyStateArtifactError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
 
 
 def _required_str(row: Mapping[str, object], name: str) -> str:

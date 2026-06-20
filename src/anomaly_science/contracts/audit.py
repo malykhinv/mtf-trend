@@ -26,7 +26,7 @@ class DataQualityRow:
     excluded_from_detector: bool | None = None
     excluded_from_ml_dataset: bool | None = None
     reason: str = ""
-    artifact: str = "anomaly_data_quality.csv"
+    artifact: str = "strategy_data_quality.csv"
 
     def __post_init__(self) -> None:
         if not self.check_name:
@@ -42,7 +42,7 @@ class ProtocolAuditRow:
     check_name: str
     status: AuditStatus
     message: str
-    artifact: str = "anomaly_protocol_audit.csv"
+    artifact: str = "strategy_protocol_audit.csv"
 
     def __post_init__(self) -> None:
         if not self.check_name:

@@ -96,6 +96,15 @@ def build_online_strategy_state_1m(
     events: Sequence[StrategyEvent] | Iterable[StrategyEvent],
     config: OnlineStateBuilderConfig | None = None,
 ) -> tuple[StrategyState1mRow, ...]:
+    return tuple(iter_online_strategy_state_1m(candles_1m=candles_1m, events=events, config=config))
+
+
+def iter_online_strategy_state_1m(
+    *,
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    events: Sequence[StrategyEvent] | Iterable[StrategyEvent],
+    config: OnlineStateBuilderConfig | None = None,
+) -> Iterable[StrategyState1mRow]:
     """Build one online state row per available closed 1m candle per event.
 
     A state row at time t uses only candles whose available_time_ms <= t.
@@ -115,15 +124,13 @@ def build_online_strategy_state_1m(
             available_times=tuple(candle.available_time_ms for candle in ordered),
         )
 
-    rows: list[StrategyState1mRow] = []
     for event in sorted(events, key=lambda item: (item.symbol, item.event_detection_time_ms, item.event_id)):
         if event.technical_noise_shock or event.excluded_by_data_quality_gate:
             continue
         symbol_candles = indexed_candles_by_symbol.get(event.symbol)
         if symbol_candles is None:
             continue
-        rows.extend(_build_event_rows(event=event, candles=symbol_candles, config=cfg))
-    return tuple(rows)
+        yield from _build_event_rows(event=event, candles=symbol_candles, config=cfg)
 
 
 build_online_anomaly_state_1m = build_online_strategy_state_1m
@@ -150,6 +157,27 @@ def build_online_strategy_state_1m_from_source(
 build_online_anomaly_state_1m_from_source = build_online_strategy_state_1m_from_source
 
 
+def iter_online_strategy_state_1m_from_source(
+    *,
+    source: MarketDataSource,
+    events_path: str | Path,
+    config: OnlineStateBuilderConfig | None = None,
+) -> Iterable[StrategyState1mRow]:
+    """Stream online state rows from the normalized source and events artifact."""
+    frame = source.read_frame("candles_1m", required=True)
+    if frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    events = load_strategy_events_csv(events_path)
+    return iter_online_strategy_state_1m(
+        candles_1m=normalize_candles_1m(frame),
+        events=events,
+        config=config,
+    )
+
+
+iter_online_anomaly_state_1m_from_source = iter_online_strategy_state_1m_from_source
+
+
 def state_rows_to_artifact(rows: Sequence[StrategyState1mRow]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for row in rows:
@@ -169,21 +197,39 @@ def _build_event_rows(
     max_available_time_ms = event.event_detection_time_ms + config.max_state_minutes_after_detection * ONE_MINUTE_MS
     end_index = bisect_right(candles.available_times, max_available_time_ms)
     start_index = max(event_start_index, detection_index)
-    candidate_indexes = range(start_index, end_index)
     event_rows: list[StrategyState1mRow] = []
-    for current_index in candidate_indexes:
+    first_candle: Candle1m | None = None
+    running_high: Candle1m | None = None
+    running_low: Candle1m | None = None
+    structural_low: Candle1m | None = None
+    structural_high: Candle1m | None = None
+    for current_index in range(event_start_index, end_index):
         current = candles.candles[current_index]
         if current.open_time_ms < event.event_start_time_ms:
             continue
-        state_time_ms = current.available_time_ms
-        asof_candles = candles.candles[event_start_index : current_index + 1]
-        if not asof_candles:
+        if first_candle is None or current.open_time_ms < first_candle.open_time_ms:
+            first_candle = current
+        if running_high is None or (current.high, -current.open_time_ms) > (running_high.high, -running_high.open_time_ms):
+            running_high = current
+        if running_low is None or (current.low, current.open_time_ms) < (running_low.low, running_low.open_time_ms):
+            running_low = current
+        structural_low = _latest_confirmed_structural_low_at(
+            candles=candles.candles,
+            event_start_index=event_start_index,
+            current_index=current_index,
+            previous=structural_low,
+        )
+        structural_high = _latest_confirmed_structural_high_at(
+            candles=candles.candles,
+            event_start_index=event_start_index,
+            current_index=current_index,
+            previous=structural_high,
+        )
+        if current_index < start_index:
             continue
-        first_candle = min(asof_candles, key=lambda item: item.open_time_ms)
-        running_high = max(asof_candles, key=lambda item: (item.high, -item.open_time_ms))
-        running_low = min(asof_candles, key=lambda item: (item.low, item.open_time_ms))
-        structural_low = _latest_confirmed_structural_low(asof_candles)
-        structural_high = _latest_confirmed_structural_high(asof_candles)
+        state_time_ms = current.available_time_ms
+        if first_candle is None or running_high is None or running_low is None:
+            continue
         row = StrategyState1mRow(
             event_id=event.event_id,
             symbol=event.symbol,
@@ -213,6 +259,74 @@ def _build_event_rows(
             raise MarketDataContractError("state_time_ms must be >= event_detection_time_ms")
         event_rows.append(row)
     return event_rows
+
+
+def _latest_confirmed_structural_low_at(
+    *,
+    candles: Sequence[Candle1m],
+    event_start_index: int,
+    current_index: int,
+    previous: Candle1m | None,
+) -> Candle1m | None:
+    candidate = _confirmed_pivot_at(
+        candles=candles,
+        event_start_index=event_start_index,
+        current_index=current_index,
+        side="low",
+    )
+    return _latest_pivot(previous=previous, candidate=candidate)
+
+
+def _latest_confirmed_structural_high_at(
+    *,
+    candles: Sequence[Candle1m],
+    event_start_index: int,
+    current_index: int,
+    previous: Candle1m | None,
+) -> Candle1m | None:
+    candidate = _confirmed_pivot_at(
+        candles=candles,
+        event_start_index=event_start_index,
+        current_index=current_index,
+        side="high",
+    )
+    return _latest_pivot(previous=previous, candidate=candidate)
+
+
+def _confirmed_pivot_at(
+    *,
+    candles: Sequence[Candle1m],
+    event_start_index: int,
+    current_index: int,
+    side: str,
+) -> Candle1m | None:
+    candidate_index = current_index - STRUCTURAL_PIVOT_RIGHT_CANDLES
+    if candidate_index < event_start_index + STRUCTURAL_PIVOT_LEFT_CANDLES:
+        return None
+    if candidate_index + STRUCTURAL_PIVOT_RIGHT_CANDLES > current_index:
+        return None
+    candidate = candles[candidate_index]
+    left = candles[candidate_index - STRUCTURAL_PIVOT_LEFT_CANDLES : candidate_index]
+    right = candles[candidate_index + 1 : candidate_index + 1 + STRUCTURAL_PIVOT_RIGHT_CANDLES]
+    if len(left) < STRUCTURAL_PIVOT_LEFT_CANDLES or len(right) < STRUCTURAL_PIVOT_RIGHT_CANDLES:
+        return None
+    if side == "low":
+        if candidate.low <= min(candle.low for candle in left) and candidate.low < min(candle.low for candle in right):
+            return candidate
+        return None
+    if side == "high":
+        if candidate.high >= max(candle.high for candle in left) and candidate.high > max(candle.high for candle in right):
+            return candidate
+        return None
+    raise MarketDataContractError(f"unsupported structural pivot side: {side}")
+
+
+def _latest_pivot(*, previous: Candle1m | None, candidate: Candle1m | None) -> Candle1m | None:
+    if candidate is None:
+        return previous
+    if previous is None:
+        return candidate
+    return max((previous, candidate), key=lambda item: (item.open_time_ms, item.available_time_ms))
 
 
 def _latest_confirmed_structural_low(asof_candles: Sequence[Candle1m]) -> Candle1m | None:

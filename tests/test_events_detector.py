@@ -523,6 +523,7 @@ def test_run_mvp1_events_cli_writes_event_artifacts(tmp_path: Path) -> None:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["base_strategy_contract_valid"]["status"] == "PASS"
     assert audit_by_name["required_data_streams_applied_before_trigger_generation"]["status"] == "PASS"
+    assert not [row for row in audit_by_name.values() if row["artifact"].startswith("anomaly_")]
 
     with (output_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}

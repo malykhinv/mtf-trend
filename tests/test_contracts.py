@@ -387,6 +387,22 @@ def test_temporal_audit_reports_failures_without_throwing() -> None:
     assert [row.status for row in result] == [AuditStatus.PASS, AuditStatus.FAIL]
 
 
+def test_audit_row_defaults_use_canonical_strategy_artifacts() -> None:
+    from anomaly_science.contracts.audit import DataQualityRow, ProtocolAuditRow
+
+    quality = DataQualityRow(
+        check_name="quality",
+        status=AuditStatus.PASS,
+        severity="info",
+        affected_rows=0,
+        message="ok",
+    )
+    protocol = ProtocolAuditRow(check_name="protocol", status=AuditStatus.PASS, message="ok")
+
+    assert quality.artifact == "strategy_data_quality.csv"
+    assert protocol.artifact == "strategy_protocol_audit.csv"
+
+
 def test_methodology_v2_audit_rows_emit_not_implemented_for_missing_checks() -> None:
     from anomaly_science.audit import METHODOLOGY_V2_REQUIRED_CHECKS, build_methodology_v2_audit_rows
     from anomaly_science.contracts.audit import ProtocolAuditRow

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import csv
+import os
+import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable, Mapping
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.data.source import CsvDirectoryDataSource
 from anomaly_science.state.builder import (
-    build_online_strategy_state_1m_from_source,
+    iter_online_strategy_state_1m_from_source,
     load_strategy_events_csv,
-    state_rows_to_artifact,
 )
 from anomaly_science.state.config import OnlineStateBuilderConfig
 
@@ -32,15 +36,21 @@ def run_mvp1_state(
 
     source = CsvDirectoryDataSource(input_path)
     events = load_strategy_events_csv(events_artifact_path)
-    state_rows = build_online_strategy_state_1m_from_source(
-        source=source,
-        events_path=events_artifact_path,
-        config=cfg,
+    written: list[Path] = []
+    state_written, state_row_count = _write_state_rows_with_aliases(
+        output_path / "strategy_state_1m.csv",
+        iter_online_strategy_state_1m_from_source(
+            source=source,
+            events_path=events_artifact_path,
+            config=cfg,
+        ),
+        get_artifact_schema("strategy_state_1m.csv"),
     )
+    written.extend(state_written)
     excluded_event_count = sum(1 for event in events if event.technical_noise_shock or event.excluded_by_data_quality_gate)
     protocol_rows = _protocol_rows(
         event_count=len(events),
-        state_row_count=len(state_rows),
+        state_row_count=state_row_count,
         excluded_event_count=excluded_event_count,
     )
     run_config_rows = _run_config_rows(
@@ -50,14 +60,6 @@ def run_mvp1_state(
         config=cfg,
     )
 
-    written: list[Path] = []
-    written.extend(
-        write_csv_artifact_with_aliases(
-            output_path / "strategy_state_1m.csv",
-            state_rows_to_artifact(state_rows),
-            get_artifact_schema("strategy_state_1m.csv"),
-        )
-    )
     written.extend(
         write_csv_artifact_with_aliases(
             output_path / "strategy_protocol_audit.csv",
@@ -75,6 +77,51 @@ def run_mvp1_state(
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)
     write_manifest(output_path / "artifact_manifest.json", manifest)
     return output_path
+
+
+def _write_state_rows_with_aliases(
+    path: Path,
+    rows: Iterable[StrategyState1mRow],
+    schema: ArtifactSchema,
+) -> tuple[list[Path], int]:
+    if path.name != schema.name:
+        raise ValueError(f"path name {path.name!r} does not match schema name {schema.name!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row_count = _write_state_rows(path=path, rows=rows, schema=schema)
+    written = [path]
+    for alias_name in get_strategy_artifact_companion_names(schema.name):
+        alias_path = path.with_name(alias_name)
+        alias_schema = get_artifact_schema(alias_name)
+        if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
+            raise ValueError(f"{schema.name} streaming alias {alias_name} must have identical columns")
+        shutil.copyfile(path, alias_path)
+        written.append(alias_path)
+    return written, row_count
+
+
+def _write_state_rows(*, path: Path, rows: Iterable[StrategyState1mRow], schema: ArtifactSchema) -> int:
+    fieldnames = list(schema.required_columns)
+    expected_columns = set(fieldnames)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    row_count = 0
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
+        writer.writeheader()
+        for row in rows:
+            payload = _state_row_to_artifact(row)
+            if set(payload) != expected_columns:
+                missing = [name for name in fieldnames if name not in payload]
+                extra = sorted(set(payload) - expected_columns)
+                raise ValueError(f"strategy_state_1m.csv row {row_count} schema mismatch: missing={missing} extra={extra}")
+            writer.writerow({name: payload[name] for name in fieldnames})
+            row_count += 1
+    os.replace(tmp_path, path)
+    return row_count
+
+
+def _state_row_to_artifact(row: StrategyState1mRow) -> Mapping[str, object]:
+    payload = asdict(row)
+    return {key: "" if value is None else value for key, value in payload.items()}
 
 
 def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_count: int) -> list[ProtocolAuditRow]:

@@ -125,7 +125,7 @@ def _protocol_rows(*, data_quality: list, universe_rows: list) -> list[ProtocolA
             check_name="technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
             status=AuditStatus.PASS,
             message="candles_1m data-quality audit marks first candles after raw timestamp gaps > 3 minutes as technical_noise_shock rows",
-            artifact="anomaly_data_quality.csv",
+            artifact="strategy_data_quality.csv",
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(

@@ -373,6 +373,9 @@ def test_run_mvp1_data_audit_writes_core_artifacts(tmp_path: Path) -> None:
     quality_rows = _read_csv_rows(out_dir / "strategy_data_quality.csv")
     assert not [row for row in quality_rows if row["status"] == "FAIL" and row["severity"] == "critical"]
 
+    audit_rows = _read_csv_rows(out_dir / "strategy_protocol_audit.csv")
+    assert not [row for row in audit_rows if row["artifact"].startswith("anomaly_")]
+
     universe_rows = _read_csv_rows(out_dir / "symbol_universe_by_day.csv")
     bbb = [row for row in universe_rows if row["symbol"] == "BBB/USDT:USDT"][0]
     assert bbb["tradable_on_day"] == "False"

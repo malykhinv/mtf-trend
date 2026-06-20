@@ -1,5 +1,20 @@
 # Patch log
 
+## perf: stream state and future artifacts for compact proofs
+
+Status: APPLIED.
+
+Intent:
+- Keep compact all-symbol research executable without materializing multi-million-row state/future artifacts as Python lists before writing.
+- Stream `strategy_state_1m.csv` and `strategy_future_paths.csv` through strict canonical schemas, then copy identical `anomaly_*` aliases for compatibility.
+- Treat zero ATR from flat as-of history as explicit missing ATR fields instead of crashing or falling back to a proxy value.
+- Finish canonical audit payload cleanup so default protocol/data-quality rows name `strategy_*` primary artifacts.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_state_builder.py tests\test_contracts.py tests\test_data_audit.py tests\test_events_detector.py -q`
+- `.venv\Scripts\python.exe main.py run-mvp1-future --input .output\results\research_runs\20260620T134600533596Z_broad_anomaly_v1_h30\input --state tmp\state_9d_streaming_perf_h30\strategy_state_1m.csv --out tmp\future_9d_streaming_state_h30_final` completed in about `58m`.
+- The 9d future proof wrote `7,308,031` `strategy_future_paths.csv` rows and `strategy_protocol_audit.csv` had `11` PASS / `0` FAIL rows.
+
 ## methodology: keep WFA proof rows in short IS runs
 
 Status: APPLIED.

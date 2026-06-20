@@ -259,6 +259,32 @@ def test_future_builder_emits_missing_atr_fields_without_fallback_when_history_i
     assert row.future_min_atr_5m is None
 
 
+def test_future_builder_emits_missing_atr_fields_when_history_atr_is_zero() -> None:
+    candles = [
+        _candle(0, open_price=102.0, high=102.0, low=102.0, close=102.0),
+        _candle(1, open_price=102.0, high=102.0, low=102.0, close=102.0),
+        _candle(2, open_price=102.0, high=102.0, low=102.0, close=102.0),
+        _candle(3, open_price=102.0, high=103.0, low=101.0, close=102.5),
+    ]
+
+    row = build_anomaly_future_paths(
+        candles_1m=candles,
+        state_rows=[_state_row()],
+        config=FuturePathBuilderConfig(atr_window_minutes=1),
+    )[0]
+
+    assert row.core_atr_1440 is None
+    assert row.ATR_1d_pct_asof_t is None
+    assert row.double_barrier_k_continuation is None
+    assert row.double_barrier_k_fade is None
+    assert row.future_return_atr_5m is None
+    assert row.future_max_atr_5m is None
+    assert row.future_min_atr_5m is None
+    assert row.intracandle_double_barrier_hit_5m is None
+    assert row.barrier_resolution_5m is None
+    assert row.future_max_5m == pytest.approx((103.0 / 102.0) - 1.0)
+
+
 def test_future_path_artifact_roundtrip_accepts_atr_normalized_schema(tmp_path: Path) -> None:
     candles = [
         _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),

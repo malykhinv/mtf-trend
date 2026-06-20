@@ -193,20 +193,20 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="strategy_events_written",
             status=AuditStatus.FAIL if event_error else AuditStatus.PASS,
-            message=event_error or f"anomaly_events.csv written with {event_count} accepted strategy event rows from {raw_event_count} raw trigger rows",
-            artifact="anomaly_events.csv",
+            message=event_error or f"strategy_events.csv written with {event_count} accepted strategy event rows from {raw_event_count} raw trigger rows",
+            artifact="strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="detector_not_trade_setup",
             status=AuditStatus.PASS,
             message="strategy trigger generation uses only point-in-time market_frame_asof rows; no entry/exit/trade rules",
-            artifact="anomaly_events.csv",
+            artifact="strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="base_strategy_contract_valid",
             status=AuditStatus.PASS,
             message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible trigger-frame generate_triggers",
-            artifact="anomaly_events.csv",
+            artifact="strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -219,25 +219,25 @@ def _protocol_rows(
             check_name="technical_noise_shock_flag_computed_from_raw_timestamp_gaps",
             status=AuditStatus.PASS,
             message="candles_1m data-quality audit marks first candles after raw timestamp gaps > 3 minutes as technical_noise_shock rows",
-            artifact="anomaly_data_quality.csv",
+            artifact="strategy_data_quality.csv",
         ),
         ProtocolAuditRow(
             check_name="technical_noise_shock_excluded_from_broad_detector",
             status=AuditStatus.PASS,
             message=f"excluded {technical_noise_shock_count} first candles after raw timestamp gaps > 3 minutes from broad detector candidates and baselines",
-            artifact="anomaly_events.csv",
+            artifact="strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="warmup_window_excluded_from_trigger_generation",
             status=AuditStatus.PASS,
             message=f"excluded warm-up windows after data gaps before strategy.generate_triggers; warmup_window_count={warmup_window_count}",
-            artifact="anomaly_data_quality.csv",
+            artifact="strategy_data_quality.csv",
         ),
         ProtocolAuditRow(
             check_name="data_quality_mask_enforced_before_trigger_generation",
             status=AuditStatus.PASS,
             message=f"excluded {data_quality_mask_excluded_count} maskable bad 1m candle row(s) before strategy.generate_triggers",
-            artifact="anomaly_data_quality.csv;anomaly_events.csv",
+            artifact="strategy_data_quality.csv;strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="required_data_streams_applied_before_trigger_generation",
@@ -247,19 +247,19 @@ def _protocol_rows(
                 if required_stream_reject_count == 0
                 else f"strategy.required_data_streams applied before strategy.generate_triggers; required_stream_reject_count={required_stream_reject_count}"
             ),
-            artifact="symbol_universe_by_day.csv;anomaly_events.csv",
+            artifact="symbol_universe_by_day.csv;strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="trigger_cascade_suppressed_before_dataset_and_simulation",
             status=AuditStatus.PASS,
-            message=f"suppressed {cascade_suppressed_count} repeated same-symbol triggers inside the strategy horizon before writing anomaly_events.csv",
-            artifact="anomaly_events.csv",
+            message=f"suppressed {cascade_suppressed_count} repeated same-symbol triggers inside the strategy horizon before writing strategy_events.csv",
+            artifact="strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="base_strategy_contract_valid",
             status=AuditStatus.PASS,
             message=f"{strategy_name} is declared through StrategyMetadata and called through BaseStrategy-compatible trigger-frame generate_triggers",
-            artifact="anomaly_events.csv",
+            artifact="strategy_events.csv",
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(
