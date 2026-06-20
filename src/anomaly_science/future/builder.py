@@ -117,6 +117,8 @@ def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
         missing = [name for name in CANDLE_REQUIRED_COLUMNS if name not in actual_columns]
         if missing:
             raise CsvDataSourceError(f"dataset 'candles_1m.csv' is missing required columns: {missing}")
+        has_number_of_trades = "number_of_trades" in actual_columns
+        has_taker_buy_quote_volume = "taker_buy_quote_volume" in actual_columns
         for row_index, row in enumerate(reader):
             try:
                 yield Candle1m(
@@ -129,8 +131,10 @@ def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
                     close=_required_float(row, "close"),
                     volume=_required_float(row, "volume"),
                     quote_volume=_required_float(row, "quote_volume"),
-                    number_of_trades=_optional_float(row, "number_of_trades"),
-                    taker_buy_quote_volume=_optional_float(row, "taker_buy_quote_volume"),
+                    number_of_trades=_optional_float(row, "number_of_trades") if has_number_of_trades else None,
+                    taker_buy_quote_volume=(
+                        _optional_float(row, "taker_buy_quote_volume") if has_taker_buy_quote_volume else None
+                    ),
                 )
             except (TypeError, ValueError) as exc:
                 raise CsvDataSourceError(f"invalid candles_1m.csv row {row_index}: {exc}") from exc

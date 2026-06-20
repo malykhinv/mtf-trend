@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import math
+import os
+import shutil
 import statistics
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict
@@ -10,7 +12,8 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.artifacts.writer import ArtifactWriteError
+from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.features import StrategyFeatureMatrixRow
 from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
@@ -21,7 +24,7 @@ from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSour
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION, build_default_feature_catalog, feature_rows_to_artifact
 from anomaly_science.features.config import FeatureMatrixConfig
 from anomaly_science.future.atr import AtrComputationError, compute_atr_1d_asof
-from anomaly_science.future.builder import load_strategy_state_1m_csv
+from anomaly_science.future.builder import iter_candles_1m_csv, iter_strategy_state_1m_csv, load_strategy_state_1m_csv
 
 EPS = 1e-12
 
@@ -127,6 +130,29 @@ def build_price_time_feature_matrix(
     symbol_universe_by_day: Sequence[SymbolDayUniverseRow] | Iterable[SymbolDayUniverseRow] | None = None,
     config: FeatureMatrixConfig | None = None,
 ) -> tuple[StrategyFeatureMatrixRow, ...]:
+    return tuple(
+        iter_price_time_feature_matrix(
+            candles_1m=candles_1m,
+            state_rows=state_rows,
+            open_interest_5m=open_interest_5m,
+            liquidations=liquidations,
+            symbol_universe_by_day=symbol_universe_by_day,
+            config=config,
+            sort_state_rows=True,
+        )
+    )
+
+
+def iter_price_time_feature_matrix(
+    *,
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
+    open_interest_5m: Sequence[OpenInterest5m] | Iterable[OpenInterest5m] | None = None,
+    liquidations: Sequence[LiquidationEvent] | Iterable[LiquidationEvent] | None = None,
+    symbol_universe_by_day: Sequence[SymbolDayUniverseRow] | Iterable[SymbolDayUniverseRow] | None = None,
+    config: FeatureMatrixConfig | None = None,
+    sort_state_rows: bool = False,
+) -> Iterable[StrategyFeatureMatrixRow]:
     """Build as-of feature rows from state rows.
 
     This builder deliberately does not read `anomaly_future_paths.csv`. ATR and
@@ -166,8 +192,12 @@ def build_price_time_feature_matrix(
         states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
     cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
 
-    rows: list[StrategyFeatureMatrixRow] = []
-    for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
+    ordered_state_rows = (
+        sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id))
+        if sort_state_rows
+        else state_rows
+    )
+    for state in ordered_state_rows:
         symbol_candles = candles_by_symbol.get(state.symbol, [])
         if state.snapshot_time_ms not in cross_section_by_snapshot:
             snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
@@ -181,24 +211,21 @@ def build_price_time_feature_matrix(
                 min_cross_section_symbols=cfg.min_cross_section_symbols,
             )
         cross_section_by_symbol, missing_cross_section = cross_section_by_snapshot[state.snapshot_time_ms]
-        rows.append(
-            _build_state_feature_row(
-                state=state,
-                candles=symbol_candles,
-                open_interest_rows=None if oi_by_symbol is None else oi_by_symbol.get(state.symbol, []),
-                liquidation_rows=None
-                if liquidations_by_symbol is None
-                else liquidations_by_symbol.get(state.symbol, []),
-                candles_by_symbol=candles_by_symbol,
-                open_interest_by_symbol=oi_by_symbol,
-                liquidations_by_symbol=liquidations_by_symbol,
-                universe_by_day=universe_by_day,
-                states_at_snapshot=states_by_snapshot.get(state.snapshot_time_ms, []),
-                cross_section_features=cross_section_by_symbol.get(state.symbol, missing_cross_section),
-                config=cfg,
-            )
+        yield _build_state_feature_row(
+            state=state,
+            candles=symbol_candles,
+            open_interest_rows=None if oi_by_symbol is None else oi_by_symbol.get(state.symbol, []),
+            liquidation_rows=None
+            if liquidations_by_symbol is None
+            else liquidations_by_symbol.get(state.symbol, []),
+            candles_by_symbol=candles_by_symbol,
+            open_interest_by_symbol=oi_by_symbol,
+            liquidations_by_symbol=liquidations_by_symbol,
+            universe_by_day=universe_by_day,
+            states_at_snapshot=states_by_snapshot.get(state.snapshot_time_ms, []),
+            cross_section_features=cross_section_by_symbol.get(state.symbol, missing_cross_section),
+            config=cfg,
         )
-    return tuple(rows)
 
 
 def build_price_time_feature_matrix_from_source(
@@ -225,11 +252,12 @@ def build_price_time_feature_matrix_from_source(
 
 
 def feature_matrix_rows_to_artifact(rows: Sequence[StrategyFeatureMatrixRow]) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
-    for row in rows:
-        payload = _with_core_atr_csv_alias(asdict(row))
-        result.append({key: _csv_value(value) for key, value in payload.items()})
-    return result
+    return [feature_matrix_row_to_artifact(row) for row in rows]
+
+
+def feature_matrix_row_to_artifact(row: StrategyFeatureMatrixRow) -> dict[str, object]:
+    payload = _with_core_atr_csv_alias(asdict(row))
+    return {key: _csv_value(value) for key, value in payload.items()}
 
 
 def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
@@ -368,22 +396,27 @@ def run_mvp1_feature_matrix(
     cfg = config or FeatureMatrixConfig()
 
     source = CsvDirectoryDataSource(input_path)
-    state_rows = load_strategy_state_1m_csv(state_artifact_path)
-    frame = source.read_frame("candles_1m", required=True)
-    if frame is None:
-        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    state_rows = tuple(iter_strategy_state_1m_csv(state_artifact_path))
     oi_frame = source.read_frame("open_interest_5m", required=False)
     liquidation_frame = source.read_frame("liquidations", required=False)
     universe_frame = source.read_frame("symbol_universe_by_day", required=False)
-    matrix_rows = build_price_time_feature_matrix(
-        candles_1m=normalize_candles_1m(frame),
-        open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
-        liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
-        symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
-        state_rows=state_rows,
-        config=cfg,
+
+    written: list[Path] = []
+    feature_written, feature_row_count = _write_feature_matrix_rows_with_aliases(
+        output_path / "strategy_feature_matrix.csv",
+        iter_price_time_feature_matrix(
+            candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
+            open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
+            liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
+            symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
+            state_rows=state_rows,
+            config=cfg,
+            sort_state_rows=False,
+        ),
+        get_artifact_schema("strategy_feature_matrix.csv"),
     )
-    protocol_rows = _protocol_rows(state_row_count=len(state_rows), feature_row_count=len(matrix_rows))
+    written.extend(feature_written)
+    protocol_rows = _protocol_rows(state_row_count=len(state_rows), feature_row_count=feature_row_count)
     run_config_rows = _run_config_rows(
         input_path=input_path,
         state_path=state_artifact_path,
@@ -391,14 +424,6 @@ def run_mvp1_feature_matrix(
         config=cfg,
     )
 
-    written: list[Path] = []
-    written.extend(
-        write_csv_artifact_with_aliases(
-            output_path / "strategy_feature_matrix.csv",
-            feature_matrix_rows_to_artifact(matrix_rows),
-            get_artifact_schema("strategy_feature_matrix.csv"),
-        )
-    )
     written.extend(
         write_csv_artifact_with_aliases(
             output_path / "strategy_feature_catalog.csv",
@@ -423,6 +448,55 @@ def run_mvp1_feature_matrix(
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)
     write_manifest(output_path / "artifact_manifest.json", manifest)
     return output_path
+
+
+def _write_feature_matrix_rows_with_aliases(
+    path: Path,
+    rows: Iterable[StrategyFeatureMatrixRow],
+    schema: ArtifactSchema,
+) -> tuple[list[Path], int]:
+    if path.name != schema.name:
+        raise ArtifactWriteError(f"path name {path.name!r} does not match schema name {schema.name!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row_count = _write_feature_matrix_rows(path=path, rows=rows, schema=schema)
+    written = [path]
+    for alias_name in get_strategy_artifact_companion_names(schema.name):
+        alias_path = path.with_name(alias_name)
+        alias_schema = get_artifact_schema(alias_name)
+        if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
+            raise ArtifactWriteError(f"{schema.name} streaming alias {alias_name} must have identical columns")
+        shutil.copyfile(path, alias_path)
+        written.append(alias_path)
+    return written, row_count
+
+
+def _write_feature_matrix_rows(
+    *,
+    path: Path,
+    rows: Iterable[StrategyFeatureMatrixRow],
+    schema: ArtifactSchema,
+) -> int:
+    fieldnames = list(schema.required_columns)
+    expected_columns = set(fieldnames)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    row_count = 0
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
+        writer.writeheader()
+        for row in rows:
+            payload = feature_matrix_row_to_artifact(row)
+            if set(payload) != expected_columns:
+                missing = [name for name in fieldnames if name not in payload]
+                extra = sorted(set(payload) - expected_columns)
+                raise ArtifactWriteError(
+                    f"strategy_feature_matrix.csv row {row_count} schema mismatch: missing={missing} extra={extra}"
+                )
+            writer.writerow({name: payload[name] for name in fieldnames})
+            row_count += 1
+            if row_count % 100_000 == 0:
+                file_obj.flush()
+    os.replace(tmp_path, path)
+    return row_count
 
 
 def _build_state_feature_row(

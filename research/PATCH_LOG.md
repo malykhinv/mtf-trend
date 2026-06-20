@@ -1,5 +1,19 @@
 # Patch log
 
+## perf: stream feature matrix artifact writes
+
+Status: APPLIED.
+
+Intent:
+- Remove the extra multi-million-row `strategy_feature_matrix.csv` list materialization before artifact writing.
+- Keep feature computation inside Core artifact infrastructure; strategy definitions, training methodology, EV, and simulation black-box contracts are unchanged.
+- Reuse the strict direct CSV candle/state iterators for the feature-matrix CLI boundary.
+- Preserve canonical `strategy_feature_matrix.csv` as primary and copy identical `anomaly_feature_matrix.csv` only as compatibility alias.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py tests\test_future_paths.py -q`
+- 9d probe wrote `1,486,861` feature rows before manual stop, proving streaming output works; full 9d feature-matrix runtime is still a bottleneck and remains the next optimization target.
+
 ## perf: stream state and future artifacts for compact proofs
 
 Status: APPLIED.
