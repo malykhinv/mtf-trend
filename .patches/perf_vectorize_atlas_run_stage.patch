@@ -1,0 +1,1162 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index bdc8bf23..49969b79 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -87,7 +87,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Strategy registry truthfulness for specified-only variants | IMPLEMENTED | Registry exposes executable anomaly variants explicitly, writes `strategy_implementation_status.csv` as a generated truth table, and registry-level `validate_strategy_horizon()` rejects unknown, arbitrary, and mismatched strategy/horizon pairs. The current anomaly strategy spec has no remaining specified-only executable gaps. | Keep status artifact and registry tests as permanent gates. |
+ | Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, validates them against the Core whitelist, registry-level `validate_strategy_horizon()` enforces executable strategy/horizon compatibility before prediction, controls, EV, and simulation configs are accepted, and low-level CLI commands now use the same Core whitelist plus registry validation before file IO. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Keep horizon compatibility tests as permanent regression gate. |
+ | Data source boundary / normalized market data | IMPLEMENTED | Binance Vision cache, normalized CSV boundary, run-level data snapshot hashing, and export-level `cache_export_coverage.csv` / `cache_export_manifest.json` proof artifacts exist. Full local 380d export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, 0 unclassified 1m gaps. The only missing 1m rows are 3,570 explicitly classified settlement-transition rows across AIAUSDT/CVXUSDT/LITUSDT/PUMPUSDT/SLPUSDT with `{symbol}SETTLED` sibling evidence. Fixed-date delivery contracts are excluded from perpetual exports by default and recorded in the manifest. `run-research` uses the full available cache period when `--days` is omitted. | Keep `validate-cache-export-proof --expected-days 380 --allow-settlement-transition-gaps` as the permanent full-cache proof gate. |
+-| Compact all-symbol `run-research` executability | PARTIAL | `run-research <strategy> --days N` now creates output automatically, uses the full cache period when `--days` is omitted, auto-scales default IS holdout for short windows, and progresses through all-symbol data audit, events, state, future, feature matrix, and labels. Current 2d all-symbol measurements: feature matrix `710.30s`, labels `221.16s`, atlas `1582.80s`. The full compact all-symbol command has not yet completed because atlas aggregation remains too slow. | Convert atlas aggregation from per-group row-list materialization to streaming accumulators, then rerun `python main.py run-research broad_anomaly_v1_h30 --days 2` to completion. |
++| Compact all-symbol `run-research` executability | IMPLEMENTED | `run-research <strategy> --days N` creates output automatically, uses the full cache period when `--days` is omitted, auto-scales default IS holdout for short windows, and completed the all-symbol 2d command `python main.py run-research broad_anomaly_v1_h30 --days 2`. Atlas now builds through the strict CSV boundary with vectorized grouping; the same run reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the short smoke window lacking non-empty OOS/simulation proof rows. | Keep compact-run smoke plus full tests as regression gates; improve short-window OOS proof depth separately if needed. |
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 2c7d97b9..fdd132e5 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,20 @@
+ # Patch log
+ 
++## perf: vectorize atlas aggregation for compact run-research
++
++Status: APPLIED.
++
++Intent:
++- Make `run-mvp1-atlas` consume strict canonical CSV artifacts directly instead of materializing every joined row as Python dataclasses before grouping.
++- Preserve the atlas temporal contract and descriptive-only methodology: state/features remain as-of, future columns remain response summaries only.
++- Keep `run-research <strategy> --days N` simple: strategy and optional days at the CLI, output and stage wiring under the hood.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\atlas\builder.py src\anomaly_science\atlas\run.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_atlas.py -q`
++- `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --days 2` completed at `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30` with forensic `FAIL=0`, `WARN=8`
++- Atlas in the full all-symbol 2d run completed in about `8m47s`; previous standalone 2d atlas measurement was `1582.80s`.
++
+ ## perf: make compact run-research stages executable through labels
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 67345b92..43386e4c 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -18,11 +18,11 @@ Active rule:
+ - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
+ - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
+ - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+-- Compact `run-research <strategy> --days N` behavior is now closer to the documented target: output remains automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days and keep one non-holdout research day, state windows use active strategy `H_max`, and all-symbol 2d execution now progresses through data audit, events, state, future, feature matrix, atlas, and labels when stages are run directly. Atlas aggregation is still the main remaining performance conflict for a full compact all-symbol run: measured `run-mvp1-atlas` on 2d all-symbol artifacts is `1582.80s`, so `research/METHODOLOGY_GAP_LEDGER.md` now marks compact all-symbol run-research executability as `PARTIAL`.
++- Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days and keep one non-holdout research day, state windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the short smoke window lacking non-empty OOS/simulation proof rows, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+ 
+-Current Git head before the active compact-run performance patch: `de79ea4c`.
++Current Git head before the active atlas vectorization patch: `a5445958`.
+ - Verified with `git rev-parse --short HEAD` in the local repository.
+ - Do not treat old patch-queue notes in previous chats as current state unless they match the checked-out Git head.
+ 
+@@ -46,6 +46,7 @@ Last known local validation before this compact-run performance patch:
+ - `.venv\Scripts\python.exe main.py run-mvp1-feature-matrix --input <2d all-symbol input> --state <2d all-symbol strategy_state_1m.csv> --out tmp\feature_matrix_2d_perf4` completed in `710.30s`
+ - `.venv\Scripts\python.exe main.py run-mvp1-labels --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --out tmp\labels_2d_perf` completed in `221.16s`
+ - `.venv\Scripts\python.exe main.py run-mvp1-atlas --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --features <2d all-symbol strategy_feature_matrix.csv> --out tmp\atlas_2d_perf` completed in `1582.80s`
++- `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --days 2` completed at `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30` with forensic `FAIL=0`, `WARN=8`
+ 
+ Current documentation sync status:
+ - README and COMMANDS must list broad anomaly, post-anomaly extension, and post-pump distribution as executable offline research variants.
+diff --git a/src/anomaly_science/atlas/builder.py b/src/anomaly_science/atlas/builder.py
+index cda35dc1..c436025f 100644
+--- a/src/anomaly_science/atlas/builder.py
++++ b/src/anomaly_science/atlas/builder.py
+@@ -1,13 +1,16 @@
+ from __future__ import annotations
+ 
+ import math
+-from collections import Counter, defaultdict
+-from dataclasses import asdict, dataclass
++from collections import Counter
++from dataclasses import asdict, dataclass, field
+ from pathlib import Path
+ from statistics import median
+ from typing import Iterable, Sequence
+ 
++import pandas as pd
++
+ from anomaly_science.atlas.config import AtlasConfig
++from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.atlas import (
+     AtlasContextSplitRow,
+     AtlasMarketShockGroupRow,
+@@ -53,6 +56,650 @@ class AtlasArtifacts:
+     market_shock_group_rows: tuple[AtlasMarketShockGroupRow, ...]
+ 
+ 
++def build_atlas_artifacts_from_csv_paths(
++    *,
++    state_path: str | Path,
++    future_path: str | Path,
++    feature_matrix_path: str | Path,
++    config: AtlasConfig | None = None,
++) -> AtlasArtifacts:
++    """Build atlas artifacts from strict CSV boundaries using vectorized grouping."""
++    cfg = config or AtlasConfig()
++    state_frame = _read_atlas_state_frame(Path(state_path))
++    future_frame = _read_atlas_future_frame(Path(future_path), horizons=cfg.outcome_horizon_minutes_list)
++    feature_frame = _read_atlas_feature_frame(Path(feature_matrix_path))
++    joined = state_frame.merge(
++        future_frame,
++        on=["event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms"],
++        how="inner",
++        validate="one_to_one",
++    ).merge(
++        feature_frame,
++        on=["event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms"],
++        how="inner",
++        validate="one_to_one",
++    )
++    if len(joined) != len(state_frame) or len(joined) != len(future_frame) or len(joined) != len(feature_frame):
++        raise AtlasInputError("state/future/feature atlas join must be one-to-one on event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms")
++    _enforce_atlas_frame_temporal_contract(joined)
++    _add_atlas_context_columns(joined)
++    return _build_atlas_artifacts_from_frame(joined=joined, config=cfg)
++
++
++def _read_atlas_state_frame(path: Path) -> pd.DataFrame:
++    usecols = [
++        "event_id",
++        "symbol",
++        "snapshot_time_ms",
++        "feature_cutoff_time_ms",
++        "minutes_since_detection",
++        "event_alive",
++        "current_return_from_start",
++    ]
++    return _read_strict_artifact_frame(path=path, usecols=usecols)
++
++
++def _read_atlas_future_frame(path: Path, *, horizons: Sequence[int]) -> pd.DataFrame:
++    horizon_columns: list[str] = []
++    for horizon in horizons:
++        suffix = f"{horizon}m"
++        horizon_columns.extend(
++            [
++                f"future_return_{suffix}",
++                f"future_max_{suffix}",
++                f"future_min_{suffix}",
++                f"future_return_atr_{suffix}",
++                f"future_max_atr_{suffix}",
++                f"future_min_atr_{suffix}",
++                f"barrier_resolution_{suffix}",
++            ]
++        )
++    usecols = [
++        "event_id",
++        "symbol",
++        "snapshot_time_ms",
++        "feature_cutoff_time_ms",
++        "future_start_time_ms",
++        "reclaimed_running_high_30m",
++        "reclaimed_running_high_60m",
++        *horizon_columns,
++    ]
++    return _read_strict_artifact_frame(path=path, usecols=usecols)
++
++
++def _read_atlas_feature_frame(path: Path) -> pd.DataFrame:
++    usecols = [
++        "event_id",
++        "symbol",
++        "snapshot_time_ms",
++        "feature_cutoff_time_ms",
++        "minutes_since_trigger",
++        "range_since_start_atr",
++        "distance_to_running_high_atr",
++        "price_speed_atr",
++        "alpha_decay_bucket",
++        "quote_volume_market_percentile",
++        "oi_growth_market_percentile",
++        "liq_intensity_market_percentile",
++        "liquidation_imbalance",
++        "return_from_event_market_percentile",
++        "cvd_price_divergence_5m",
++        "price_up_cvd_down_flag",
++        "price_down_cvd_up_flag",
++        "cvd_failed_to_confirm_high_flag",
++        "corr_with_btc_30m",
++        "symbol_return_minus_btc_return_15m",
++        "idiosyncratic_momentum_score",
++        "simultaneous_anomalies_count_1m",
++        "simultaneous_anomalies_share_1m",
++        "systemic_cluster_regime",
++        "market_shock_id",
++        "initial_pump_height_core_atr_1440",
++        "consolidation_width_ratio",
++        "current_close_minus_shelf_low_core_atr_1440",
++        "current_low_minus_shelf_low_core_atr_1440",
++        "minutes_since_reclaim",
++        "volume_on_sweep_percentile",
++        "liq_intensity_during_sweep",
++    ]
++    return _read_strict_artifact_frame(path=path, usecols=usecols)
++
++
++def _read_strict_artifact_frame(*, path: Path, usecols: Sequence[str]) -> pd.DataFrame:
++    schema = get_artifact_schema(path.name)
++    actual_columns = list(pd.read_csv(path, nrows=0).columns)
++    expected_columns = list(schema.required_columns)
++    if actual_columns != expected_columns:
++        raise AtlasInputError(f"{path.name} columns must match {expected_columns}, got {actual_columns}")
++    return pd.read_csv(path, usecols=list(usecols), low_memory=False)
++
++
++def _enforce_atlas_frame_temporal_contract(frame: pd.DataFrame) -> None:
++    if not (frame["feature_cutoff_time_ms"] <= frame["snapshot_time_ms"]).all():
++        raise AtlasInputError("atlas joined frame violates feature_cutoff_time_ms <= snapshot_time_ms")
++    if not (frame["future_start_time_ms"] > frame["snapshot_time_ms"]).all():
++        raise AtlasInputError("atlas joined frame violates snapshot_time_ms < future_start_time_ms")
++
++
++def _add_atlas_context_columns(frame: pd.DataFrame) -> None:
++    frame["ctx_price_shape_atr"] = frame["range_since_start_atr"].map(_price_shape_atr_value_bin)
++    frame["ctx_high_position_atr"] = frame["distance_to_running_high_atr"].map(_high_position_atr_value_bin)
++    frame["ctx_detection_maturity"] = frame["minutes_since_detection"].map(_detection_maturity_value_bin)
++    frame["ctx_state_liveness"] = frame["event_alive"].map(lambda value: "alive" if _bool_value(value) else "not_alive")
++    frame["ctx_alpha_decay_bucket"] = frame["alpha_decay_bucket"].fillna("")
++    frame["ctx_speed_regime"] = frame["price_speed_atr"].map(_speed_regime_value_bin)
++    frame["ctx_session"] = frame["snapshot_time_ms"].map(_utc_session_bin)
++    frame["ctx_volume_regime_relative"] = frame["quote_volume_market_percentile"].map(
++        lambda value: _percentile_value_bin(value, missing="missing_volume_rank")
++    )
++    frame["ctx_oi_regime_relative"] = frame["oi_growth_market_percentile"].map(
++        lambda value: _centered_percentile_value_bin(value, missing="missing_oi_rank")
++    )
++    frame["ctx_liquidation_regime_relative"] = frame.apply(_liquidation_regime_frame_bin, axis=1)
++    frame["ctx_cvd_divergence_regime"] = frame.apply(_cvd_divergence_frame_bin, axis=1)
++    frame["ctx_cross_sectional_rank_regime"] = frame["return_from_event_market_percentile"].map(
++        lambda value: _percentile_value_bin(value, missing="missing_return_rank")
++    )
++    frame["ctx_btc_relative_regime"] = frame.apply(_btc_relative_frame_bin, axis=1)
++    frame["ctx_systemic_cluster_regime"] = frame["systemic_cluster_regime"].fillna("")
++    frame["ctx_initial_pump_height_atr"] = frame["initial_pump_height_core_atr_1440"].map(_initial_pump_height_value_bin)
++    frame["ctx_consolidation_width_ratio"] = frame["consolidation_width_ratio"].map(_consolidation_width_ratio_value_bin)
++    frame["ctx_shelf_position_atr"] = frame["current_close_minus_shelf_low_core_atr_1440"].map(_shelf_position_value_bin)
++    frame["ctx_shelf_break_risk"] = frame["current_low_minus_shelf_low_core_atr_1440"].map(_shelf_break_risk_value_bin)
++    frame["ctx_shelf_reclaim_state"] = frame["minutes_since_reclaim"].map(_shelf_reclaim_state_value_bin)
++    frame["ctx_sweep_flow_regime"] = frame.apply(_sweep_flow_frame_bin, axis=1)
++    frame["ctx_market_context"] = frame.apply(_market_context_frame_bin, axis=1)
++    frame["ctx_feature_matrix"] = "feature_matrix_joined"
++
++
++def _build_atlas_artifacts_from_frame(*, joined: pd.DataFrame, config: AtlasConfig) -> AtlasArtifacts:
++    context_columns = _atlas_context_columns()
++    nature_rows: list[AtlasNatureRow] = []
++    context_rows: list[AtlasContextSplitRow] = []
++    response_rows: list[AtlasResponseSurfaceRow] = []
++    market_rows: list[AtlasMarketShockGroupRow] = []
++
++    for horizon in config.outcome_horizon_minutes_list:
++        horizon_frame = joined.copy(deep=False)
++        _add_horizon_columns(horizon_frame, horizon=horizon, config=config)
++        for context_name, column_name in context_columns:
++            nature_rows.extend(_nature_rows_from_grouped_frame(horizon_frame, context_name, column_name, horizon, config))
++            context_rows.extend(_context_rows_from_grouped_frame(horizon_frame, context_name, column_name, horizon, config))
++        response_rows.extend(_response_rows_from_grouped_frame(horizon_frame, horizon, config))
++        market_rows.extend(_market_rows_from_grouped_frame(horizon_frame, horizon, config))
++
++    return AtlasArtifacts(
++        nature_atlas_rows=tuple(nature_rows),
++        context_split_rows=tuple(context_rows),
++        response_surface_rows=tuple(response_rows),
++        market_shock_group_rows=tuple(market_rows),
++    )
++
++
++def _atlas_context_columns() -> tuple[tuple[str, str], ...]:
++    return (
++        ("price_shape_atr", "ctx_price_shape_atr"),
++        ("high_position_atr", "ctx_high_position_atr"),
++        ("detection_maturity", "ctx_detection_maturity"),
++        ("state_liveness", "ctx_state_liveness"),
++        ("alpha_decay_bucket", "ctx_alpha_decay_bucket"),
++        ("speed_regime", "ctx_speed_regime"),
++        ("session", "ctx_session"),
++        ("market_context", "ctx_market_context"),
++        ("volume_regime_relative", "ctx_volume_regime_relative"),
++        ("oi_regime_relative", "ctx_oi_regime_relative"),
++        ("liquidation_regime_relative", "ctx_liquidation_regime_relative"),
++        ("cvd_divergence_regime", "ctx_cvd_divergence_regime"),
++        ("cross_sectional_rank_regime", "ctx_cross_sectional_rank_regime"),
++        ("btc_relative_regime", "ctx_btc_relative_regime"),
++        ("systemic_cluster_regime", "ctx_systemic_cluster_regime"),
++        ("initial_pump_height_atr", "ctx_initial_pump_height_atr"),
++        ("consolidation_width_ratio", "ctx_consolidation_width_ratio"),
++        ("shelf_position_atr", "ctx_shelf_position_atr"),
++        ("shelf_break_risk", "ctx_shelf_break_risk"),
++        ("shelf_reclaim_state", "ctx_shelf_reclaim_state"),
++        ("sweep_flow_regime", "ctx_sweep_flow_regime"),
++        ("feature_matrix", "ctx_feature_matrix"),
++    )
++
++
++def _add_horizon_columns(frame: pd.DataFrame, *, horizon: int, config: AtlasConfig) -> None:
++    suffix = f"{horizon}m"
++    frame["_horizon"] = horizon
++    frame["_outcome_bin"] = _outcome_bin_series(frame, horizon=horizon, config=config)
++    frame["_future_return_atr"] = frame[f"future_return_atr_{suffix}"]
++    frame["_future_max_atr"] = frame[f"future_max_atr_{suffix}"]
++    frame["_future_min_atr"] = frame[f"future_min_atr_{suffix}"]
++    frame["_future_return"] = frame[f"future_return_{suffix}"]
++    frame["_future_max"] = frame[f"future_max_{suffix}"]
++    frame["_future_min"] = frame[f"future_min_{suffix}"]
++    frame["_reclaimed_running_high"] = frame["reclaimed_running_high_30m"] if horizon <= 30 else frame["reclaimed_running_high_60m"]
++    frame["_stop_first"] = frame[f"barrier_resolution_{suffix}"] == BARRIER_RESOLUTION_STOP_LOSS_FIRST
++
++
++def _outcome_bin_series(frame: pd.DataFrame, *, horizon: int, config: AtlasConfig) -> pd.Series:
++    suffix = f"{horizon}m"
++    result = pd.Series(f"mixed_drift_atr_{suffix}", index=frame.index, dtype="object")
++    future_return = frame[f"future_return_atr_{suffix}"]
++    future_max = frame[f"future_max_atr_{suffix}"]
++    future_min = frame[f"future_min_atr_{suffix}"]
++    missing = future_return.isna() | future_max.isna() | future_min.isna()
++    stop_first = frame[f"barrier_resolution_{suffix}"] == BARRIER_RESOLUTION_STOP_LOSS_FIRST
++    upside = future_max >= config.outcome_continuation_threshold_atr
++    downside = future_min <= -config.outcome_fade_threshold_atr
++    range_chop = (
++        future_return.abs().le(config.outcome_chop_threshold_atr)
++        & future_max.lt(config.outcome_continuation_threshold_atr)
++        & future_min.gt(-config.outcome_fade_threshold_atr)
++    )
++    result.loc[missing] = f"missing_atr_future_{suffix}"
++    result.loc[stop_first & ~missing] = f"stop_first_double_barrier_{suffix}"
++    result.loc[upside & downside & ~missing & ~stop_first] = f"two_sided_atr_{suffix}"
++    result.loc[upside & ~downside & ~missing & ~stop_first] = f"upside_continuation_atr_{suffix}"
++    result.loc[downside & ~upside & ~missing & ~stop_first] = f"downside_extension_atr_{suffix}"
++    result.loc[range_chop & ~missing & ~stop_first & ~upside & ~downside] = f"range_chop_atr_{suffix}"
++    return result
++
++
++def _nature_rows_from_grouped_frame(
++    frame: pd.DataFrame,
++    context_name: str,
++    context_column: str,
++    horizon: int,
++    config: AtlasConfig,
++) -> list[AtlasNatureRow]:
++    grouped = frame.groupby([context_column, "_outcome_bin"], dropna=False, sort=True)
++    rows: list[AtlasNatureRow] = []
++    for (context_value, outcome_bin), group in grouped:
++        rows.append(
++            AtlasNatureRow(
++                atlas_version=config.atlas_version,
++                split_family=context_name,
++                split_value=str(context_value),
++                outcome_horizon_minutes=horizon,
++                atlas_outcome_bin=str(outcome_bin),
++                outcome_coordinate=_outcome_coordinate(horizon),
++                row_count=int(len(group)),
++                unique_event_count=int(group["event_id"].nunique()),
++                unique_symbol_count=int(group["symbol"].nunique()),
++                mean_future_return_atr=_series_mean(group["_future_return_atr"]),
++                median_future_return_atr=_series_median(group["_future_return_atr"]),
++                mean_future_max_atr=_series_mean(group["_future_max_atr"]),
++                mean_future_min_atr=_series_mean(group["_future_min_atr"]),
++                mean_future_return=_series_mean(group["_future_return"]),
++                median_future_return=_series_median(group["_future_return"]),
++                mean_future_max=_series_mean(group["_future_max"]),
++                mean_future_min=_series_mean(group["_future_min"]),
++                reclaim_rate=_series_bool_rate(group["_reclaimed_running_high"]),
++                double_barrier_stop_first_rate=_series_bool_rate(group["_stop_first"]),
++                feature_min_snapshot_time_ms=int(group["snapshot_time_ms"].min()),
++                feature_max_snapshot_time_ms=int(group["snapshot_time_ms"].max()),
++                temporal_contract=TEMPORAL_CONTRACT_TEXT,
++            )
++        )
++    return rows
++
++
++def _context_rows_from_grouped_frame(
++    frame: pd.DataFrame,
++    context_name: str,
++    context_column: str,
++    horizon: int,
++    config: AtlasConfig,
++) -> list[AtlasContextSplitRow]:
++    grouped = frame.groupby(context_column, dropna=False, sort=True)
++    rows: list[AtlasContextSplitRow] = []
++    expected_bins = {
++        "upside_continuation_share": _outcome_bin_name("upside_continuation", horizon),
++        "downside_extension_share": _outcome_bin_name("downside_extension", horizon),
++        "two_sided_share": _outcome_bin_name("two_sided", horizon),
++        "range_chop_share": _outcome_bin_name("range_chop", horizon),
++        "mixed_drift_share": _outcome_bin_name("mixed_drift", horizon),
++        "missing_atr_future_share": _outcome_bin_name("missing_atr_future", horizon),
++        "stop_first_barrier_share": _outcome_bin_name("stop_first_double_barrier", horizon),
++    }
++    for context_value, group in grouped:
++        counts = group["_outcome_bin"].value_counts()
++        row_count = int(len(group))
++        shares = {name: float(counts.get(outcome_bin, 0) / row_count) for name, outcome_bin in expected_bins.items()}
++        rows.append(
++            AtlasContextSplitRow(
++                atlas_version=config.atlas_version,
++                context_name=context_name,
++                context_value=str(context_value),
++                outcome_horizon_minutes=horizon,
++                outcome_coordinate=_outcome_coordinate(horizon),
++                row_count=row_count,
++                unique_event_count=int(group["event_id"].nunique()),
++                unique_symbol_count=int(group["symbol"].nunique()),
++                mean_minutes_since_trigger=_series_mean(group["minutes_since_trigger"]),
++                mean_current_return_from_start=_series_mean(group["current_return_from_start"]),
++                mean_distance_to_running_high_atr=_series_mean(group["distance_to_running_high_atr"]),
++                **shares,
++            )
++        )
++    return rows
++
++
++def _response_rows_from_grouped_frame(frame: pd.DataFrame, horizon: int, config: AtlasConfig) -> list[AtlasResponseSurfaceRow]:
++    surfaces = (
++        ("price_shape_atr_x_alpha_decay", "price_shape_atr", "ctx_price_shape_atr", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
++        ("liquidation_x_cvd_divergence", "liquidation_regime_relative", "ctx_liquidation_regime_relative", "cvd_divergence_regime", "ctx_cvd_divergence_regime"),
++        ("cross_section_x_systemic_cluster", "cross_sectional_rank_regime", "ctx_cross_sectional_rank_regime", "systemic_cluster_regime", "ctx_systemic_cluster_regime"),
++        ("btc_relative_x_volume_rank", "btc_relative_regime", "ctx_btc_relative_regime", "volume_regime_relative", "ctx_volume_regime_relative"),
++        ("session_x_market_context", "session", "ctx_session", "market_context", "ctx_market_context"),
++        ("speed_x_alpha_decay", "speed_regime", "ctx_speed_regime", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
++        ("initial_pump_x_consolidation", "initial_pump_height_atr", "ctx_initial_pump_height_atr", "consolidation_width_ratio", "ctx_consolidation_width_ratio"),
++        ("shelf_position_x_alpha_decay", "shelf_position_atr", "ctx_shelf_position_atr", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
++        ("shelf_break_x_systemic_cluster", "shelf_break_risk", "ctx_shelf_break_risk", "systemic_cluster_regime", "ctx_systemic_cluster_regime"),
++        ("sweep_flow_x_liquidation", "sweep_flow_regime", "ctx_sweep_flow_regime", "liquidation_regime_relative", "ctx_liquidation_regime_relative"),
++    )
++    rows: list[AtlasResponseSurfaceRow] = []
++    for surface_name, x_axis, x_column, y_axis, y_column in surfaces:
++        grouped = frame.groupby([x_column, y_column], dropna=False, sort=True)
++        for (x_bin, y_bin), group in grouped:
++            rows.append(
++                AtlasResponseSurfaceRow(
++                    atlas_version=config.atlas_version,
++                    surface_name=surface_name,
++                    x_axis=x_axis,
++                    x_bin=str(x_bin),
++                    y_axis=y_axis,
++                    y_bin=str(y_bin),
++                    outcome_horizon_minutes=horizon,
++                    outcome_coordinate=_outcome_coordinate(horizon),
++                    row_count=int(len(group)),
++                    unique_event_count=int(group["event_id"].nunique()),
++                    mean_future_return_atr=_series_mean(group["_future_return_atr"]),
++                    mean_future_max_atr=_series_mean(group["_future_max_atr"]),
++                    mean_future_min_atr=_series_mean(group["_future_min_atr"]),
++                    reclaim_rate=_series_bool_rate(group["_reclaimed_running_high"]),
++                    double_barrier_stop_first_rate=_series_bool_rate(group["_stop_first"]),
++                    dominant_outcome_bin=str(group["_outcome_bin"].value_counts().idxmax()),
++                )
++            )
++    return rows
++
++
++def _market_rows_from_grouped_frame(frame: pd.DataFrame, horizon: int, config: AtlasConfig) -> list[AtlasMarketShockGroupRow]:
++    grouped = frame.groupby(["market_shock_id", "systemic_cluster_regime", "snapshot_time_ms"], dropna=False, sort=True)
++    rows: list[AtlasMarketShockGroupRow] = []
++    for (market_shock_id, systemic_cluster_regime, snapshot_time_ms), group in grouped:
++        symbols = sorted(str(symbol) for symbol in group["symbol"].dropna().unique())
++        rows.append(
++            AtlasMarketShockGroupRow(
++                atlas_version=config.atlas_version,
++                market_shock_group_id=f"{market_shock_id}:{int(snapshot_time_ms)}:{horizon}m",
++                market_shock_id=str(market_shock_id),
++                systemic_cluster_regime=str(systemic_cluster_regime),
++                snapshot_time_ms=int(snapshot_time_ms),
++                outcome_horizon_minutes=horizon,
++                outcome_coordinate=_outcome_coordinate(horizon),
++                row_count=int(len(group)),
++                unique_event_count=int(group["event_id"].nunique()),
++                unique_symbol_count=len(symbols),
++                simultaneous_anomalies_count_1m=int(group["simultaneous_anomalies_count_1m"].max()),
++                simultaneous_anomalies_share_1m=_series_mean(group["simultaneous_anomalies_share_1m"]),
++                symbols="|".join(symbols),
++                market_shock_candidate=str(systemic_cluster_regime) == "systemic_beta_shock"
++                or len(symbols) >= config.min_symbols_for_market_shock_candidate,
++                mean_current_return_from_start=_series_mean(group["current_return_from_start"]),
++                mean_future_return_atr=_series_mean(group["_future_return_atr"]),
++                dominant_outcome_bin=str(group["_outcome_bin"].value_counts().idxmax()),
++                temporal_contract=TEMPORAL_CONTRACT_TEXT,
++            )
++        )
++    return rows
++
++
++def _series_mean(series: pd.Series) -> float | None:
++    clean = pd.to_numeric(series, errors="coerce").dropna()
++    if clean.empty:
++        return None
++    return float(clean.mean())
++
++
++def _series_median(series: pd.Series) -> float | None:
++    clean = pd.to_numeric(series, errors="coerce").dropna()
++    if clean.empty:
++        return None
++    return float(clean.median())
++
++
++def _series_bool_rate(series: pd.Series) -> float | None:
++    observed = series.dropna()
++    if observed.empty:
++        return None
++    return float(observed.map(_bool_value).mean())
++
++
++def _bool_value(value: object) -> bool:
++    if isinstance(value, bool):
++        return value
++    if pd.isna(value):
++        return False
++    if isinstance(value, (int, float)):
++        return bool(value)
++    return str(value).strip().lower() in {"true", "1"}
++
++
++def _price_shape_atr_value_bin(value: object) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return "missing_range_since_start_atr"
++    if number >= 3.0:
++        return "strong_range_expansion_atr"
++    if number >= 1.5:
++        return "moderate_range_expansion_atr"
++    return "muted_range_expansion_atr"
++
++
++def _high_position_atr_value_bin(value: object) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return "missing_distance_to_running_high_atr"
++    if number <= 0.25:
++        return "at_or_near_running_high_atr"
++    if number <= 0.75:
++        return "shallow_pullback_from_high_atr"
++    if number <= 1.5:
++        return "deep_pullback_from_high_atr"
++    return "far_below_running_high_atr"
++
++
++def _detection_maturity_value_bin(value: object) -> str:
++    number = int(value)
++    if number <= 2:
++        return "early_after_detection"
++    if number <= 10:
++        return "developing_after_detection"
++    return "late_after_detection"
++
++
++def _speed_regime_value_bin(value: object) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return "missing_speed_regime"
++    if number >= 1.0:
++        return "fast_atr_move"
++    if number >= 0.4:
++        return "moderate_atr_move"
++    return "slow_atr_move"
++
++
++def _percentile_value_bin(value: object, *, missing: str) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return missing
++    if number >= 0.9:
++        return "top_decile"
++    if number >= 0.75:
++        return "upper_quartile"
++    if number >= 0.25:
++        return "middle_half"
++    return "lower_quartile"
++
++
++def _centered_percentile_value_bin(value: object, *, missing: str) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return missing
++    if number >= 0.75:
++        return "high_positive_rank"
++    if number <= 0.25:
++        return "high_negative_rank"
++    return "middle_rank"
++
++
++def _liquidation_regime_frame_bin(row: pd.Series) -> str:
++    pct_bin = _percentile_value_bin(row["liq_intensity_market_percentile"], missing="missing_liq_rank")
++    imbalance = _optional_number(row["liquidation_imbalance"])
++    if imbalance is None:
++        return pct_bin
++    if imbalance >= 0.5:
++        return f"{pct_bin}_short_liq_dominant"
++    if imbalance <= -0.5:
++        return f"{pct_bin}_long_liq_dominant"
++    return f"{pct_bin}_balanced_liq"
++
++
++def _cvd_divergence_frame_bin(row: pd.Series) -> str:
++    if _bool_value(row["price_up_cvd_down_flag"]):
++        return "price_up_cvd_down"
++    if _bool_value(row["price_down_cvd_up_flag"]):
++        return "price_down_cvd_up"
++    if _bool_value(row["cvd_failed_to_confirm_high_flag"]):
++        return "cvd_failed_to_confirm_high"
++    value = _optional_number(row["cvd_price_divergence_5m"])
++    if value is None:
++        return "missing_cvd_divergence"
++    if value >= 1.0:
++        return "positive_price_minus_cvd_divergence"
++    if value <= -1.0:
++        return "negative_price_minus_cvd_divergence"
++    return "cvd_confirmed_or_neutral"
++
++
++def _btc_relative_frame_bin(row: pd.Series) -> str:
++    score = _optional_number(row["idiosyncratic_momentum_score"])
++    if score is not None and score >= 1.0:
++        return "strong_idiosyncratic_momentum"
++    diff = _optional_number(row["symbol_return_minus_btc_return_15m"])
++    if diff is None:
++        return "missing_btc_relative"
++    if diff > 0:
++        return "outperforming_btc"
++    if diff < 0:
++        return "underperforming_btc"
++    return "btc_neutral"
++
++
++def _market_context_frame_bin(row: pd.Series) -> str:
++    if row["systemic_cluster_regime"] == "systemic_beta_shock":
++        return "systemic_beta_shock"
++    btc_regime = row["ctx_btc_relative_regime"]
++    if btc_regime == "strong_idiosyncratic_momentum":
++        return "idiosyncratic_momentum"
++    if btc_regime == "missing_btc_relative":
++        return "missing_market_context"
++    return str(btc_regime)
++
++
++def _initial_pump_height_value_bin(value: object) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return "missing_initial_pump_height_atr"
++    if number >= 5.0:
++        return "extreme_initial_pump_atr"
++    if number >= 3.0:
++        return "large_initial_pump_atr"
++    if number >= 1.5:
++        return "moderate_initial_pump_atr"
++    return "muted_initial_pump_atr"
++
++
++def _consolidation_width_ratio_value_bin(value: object) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return "missing_consolidation_width_ratio"
++    if number <= 0.2:
++        return "tight_consolidation"
++    if number <= 0.5:
++        return "moderate_consolidation"
++    if number <= 1.0:
++        return "wide_consolidation"
++    return "loose_or_noisy_consolidation"
++
++
++def _shelf_position_value_bin(value: object) -> str:
++    return _signed_value_atr_bin(
++        value,
++        missing="missing_shelf_position_atr",
++        negative_prefix="below_shelf_low",
++        positive_prefix="above_shelf_low",
++    )
++
++
++def _shelf_break_risk_value_bin(value: object) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return "missing_shelf_break_risk"
++    if number < -0.25:
++        return "confirmed_shelf_break_asof"
++    if number < 0.0:
++        return "shallow_shelf_sweep_asof"
++    if number <= 0.25:
++        return "testing_shelf_low_asof"
++    return "clear_above_shelf_low_asof"
++
++
++def _shelf_reclaim_state_value_bin(value: object) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return "no_reclaim_observed_asof"
++    if number <= 2:
++        return "fresh_reclaim_asof"
++    if number <= 10:
++        return "recent_reclaim_asof"
++    return "stale_reclaim_asof"
++
++
++def _sweep_flow_frame_bin(row: pd.Series) -> str:
++    pct_bin = _percentile_value_bin(row["volume_on_sweep_percentile"], missing="missing_sweep_volume_rank")
++    liq = _optional_number(row["liq_intensity_during_sweep"])
++    if liq is None:
++        return pct_bin
++    if liq >= 1.0:
++        return f"{pct_bin}_high_liq_sweep"
++    if liq > 0.0:
++        return f"{pct_bin}_some_liq_sweep"
++    return f"{pct_bin}_no_liq_sweep"
++
++
++def _signed_value_atr_bin(value: object, *, missing: str, negative_prefix: str, positive_prefix: str) -> str:
++    number = _optional_number(value)
++    if number is None:
++        return missing
++    if number < -0.5:
++        return f"{negative_prefix}_deep"
++    if number < 0.0:
++        return f"{negative_prefix}_shallow"
++    if number <= 0.25:
++        return f"{positive_prefix}_near"
++    if number <= 1.0:
++        return f"{positive_prefix}_moderate"
++    return f"{positive_prefix}_far"
++
++
++def _optional_number(value: object) -> float | None:
++    if pd.isna(value):
++        return None
++    number = float(value)
++    if not math.isfinite(number):
++        return None
++    return number
++
++
+ def load_atlas_inputs(
+     *,
+     state_path: str | Path,
+@@ -245,14 +892,15 @@ def market_shock_group_rows_to_artifact(rows: Sequence[AtlasMarketShockGroupRow]
+ 
+ 
+ def _build_nature_atlas(*, rows: Sequence[AtlasInputRow], config: AtlasConfig) -> tuple[AtlasNatureRow, ...]:
+-    groups: dict[tuple[str, str, int, str], list[AtlasInputRow]] = defaultdict(list)
++    groups: dict[tuple[str, str, int, str], _NatureAccumulator] = {}
+     for row in rows:
+         for horizon, outcome_bin in row.atlas_outcome_bins:
+             for split_family, split_value in row.contexts:
+-                groups[(split_family, split_value, horizon, outcome_bin)].append(row)
++                key = (split_family, split_value, horizon, outcome_bin)
++                groups.setdefault(key, _NatureAccumulator()).add(row=row, horizon=horizon)
+ 
+     result: list[AtlasNatureRow] = []
+-    for (split_family, split_value, horizon, outcome_bin), group_rows in sorted(groups.items()):
++    for (split_family, split_value, horizon, outcome_bin), stats in sorted(groups.items()):
+         result.append(
+             AtlasNatureRow(
+                 atlas_version=config.atlas_version,
+@@ -261,21 +909,21 @@ def _build_nature_atlas(*, rows: Sequence[AtlasInputRow], config: AtlasConfig) -
+                 outcome_horizon_minutes=horizon,
+                 atlas_outcome_bin=outcome_bin,
+                 outcome_coordinate=_outcome_coordinate(horizon),
+-                row_count=len(group_rows),
+-                unique_event_count=_unique_count(row.state.event_id for row in group_rows),
+-                unique_symbol_count=_unique_count(row.state.symbol for row in group_rows),
+-                mean_future_return_atr=_mean(_future_return_atr(row, horizon) for row in group_rows),
+-                median_future_return_atr=_median(_future_return_atr(row, horizon) for row in group_rows),
+-                mean_future_max_atr=_mean(_future_max_atr(row, horizon) for row in group_rows),
+-                mean_future_min_atr=_mean(_future_min_atr(row, horizon) for row in group_rows),
+-                mean_future_return=_mean(_future_return(row, horizon) for row in group_rows),
+-                median_future_return=_median(_future_return(row, horizon) for row in group_rows),
+-                mean_future_max=_mean(_future_max(row, horizon) for row in group_rows),
+-                mean_future_min=_mean(_future_min(row, horizon) for row in group_rows),
+-                reclaim_rate=_bool_rate(_reclaimed_running_high(row, horizon) for row in group_rows),
+-                double_barrier_stop_first_rate=_bool_rate(_stop_first(row, horizon) for row in group_rows),
+-                feature_min_snapshot_time_ms=min(row.state.snapshot_time_ms for row in group_rows),
+-                feature_max_snapshot_time_ms=max(row.state.snapshot_time_ms for row in group_rows),
++                row_count=stats.row_count,
++                unique_event_count=len(stats.event_ids),
++                unique_symbol_count=len(stats.symbols),
++                mean_future_return_atr=stats.future_return_atr.mean(),
++                median_future_return_atr=stats.future_return_atr.median(),
++                mean_future_max_atr=stats.future_max_atr.mean(),
++                mean_future_min_atr=stats.future_min_atr.mean(),
++                mean_future_return=stats.future_return.mean(),
++                median_future_return=stats.future_return.median(),
++                mean_future_max=stats.future_max.mean(),
++                mean_future_min=stats.future_min.mean(),
++                reclaim_rate=stats.reclaimed_running_high.rate(),
++                double_barrier_stop_first_rate=stats.stop_first.rate(),
++                feature_min_snapshot_time_ms=stats.min_snapshot_time_ms,
++                feature_max_snapshot_time_ms=stats.max_snapshot_time_ms,
+                 temporal_contract=TEMPORAL_CONTRACT_TEXT,
+             )
+         )
+@@ -283,14 +931,15 @@ def _build_nature_atlas(*, rows: Sequence[AtlasInputRow], config: AtlasConfig) -
+ 
+ 
+ def _build_context_splits(*, rows: Sequence[AtlasInputRow], config: AtlasConfig) -> tuple[AtlasContextSplitRow, ...]:
+-    groups: dict[tuple[str, str, int], list[AtlasInputRow]] = defaultdict(list)
++    groups: dict[tuple[str, str, int], _ContextAccumulator] = {}
+     for row in rows:
+-        for horizon, _outcome_bin in row.atlas_outcome_bins:
++        for horizon, outcome_bin in row.atlas_outcome_bins:
+             for context_name, context_value in row.contexts:
+-                groups[(context_name, context_value, horizon)].append(row)
++                key = (context_name, context_value, horizon)
++                groups.setdefault(key, _ContextAccumulator()).add(row=row, outcome_bin=outcome_bin)
+ 
+     result: list[AtlasContextSplitRow] = []
+-    for (context_name, context_value, horizon), group_rows in sorted(groups.items()):
++    for (context_name, context_value, horizon), stats in sorted(groups.items()):
+         result.append(
+             AtlasContextSplitRow(
+                 atlas_version=config.atlas_version,
+@@ -298,19 +947,19 @@ def _build_context_splits(*, rows: Sequence[AtlasInputRow], config: AtlasConfig)
+                 context_value=context_value,
+                 outcome_horizon_minutes=horizon,
+                 outcome_coordinate=_outcome_coordinate(horizon),
+-                row_count=len(group_rows),
+-                unique_event_count=_unique_count(row.state.event_id for row in group_rows),
+-                unique_symbol_count=_unique_count(row.state.symbol for row in group_rows),
+-                mean_minutes_since_trigger=_mean(_minutes_since_trigger(row) for row in group_rows),
+-                mean_current_return_from_start=_mean(row.state.current_return_from_start for row in group_rows),
+-                mean_distance_to_running_high_atr=_mean(_distance_to_running_high_atr(row) for row in group_rows),
+-                upside_continuation_share=_outcome_share(group_rows, horizon, "upside_continuation"),
+-                downside_extension_share=_outcome_share(group_rows, horizon, "downside_extension"),
+-                two_sided_share=_outcome_share(group_rows, horizon, "two_sided"),
+-                range_chop_share=_outcome_share(group_rows, horizon, "range_chop"),
+-                mixed_drift_share=_outcome_share(group_rows, horizon, "mixed_drift"),
+-                missing_atr_future_share=_outcome_share(group_rows, horizon, "missing_atr_future"),
+-                stop_first_barrier_share=_outcome_share(group_rows, horizon, "stop_first_double_barrier"),
++                row_count=stats.row_count,
++                unique_event_count=len(stats.event_ids),
++                unique_symbol_count=len(stats.symbols),
++                mean_minutes_since_trigger=stats.minutes_since_trigger.mean(),
++                mean_current_return_from_start=stats.current_return_from_start.mean(),
++                mean_distance_to_running_high_atr=stats.distance_to_running_high_atr.mean(),
++                upside_continuation_share=stats.outcome_share(_outcome_bin_name("upside_continuation", horizon)),
++                downside_extension_share=stats.outcome_share(_outcome_bin_name("downside_extension", horizon)),
++                two_sided_share=stats.outcome_share(_outcome_bin_name("two_sided", horizon)),
++                range_chop_share=stats.outcome_share(_outcome_bin_name("range_chop", horizon)),
++                mixed_drift_share=stats.outcome_share(_outcome_bin_name("mixed_drift", horizon)),
++                missing_atr_future_share=stats.outcome_share(_outcome_bin_name("missing_atr_future", horizon)),
++                stop_first_barrier_share=stats.outcome_share(_outcome_bin_name("stop_first_double_barrier", horizon)),
+             )
+         )
+     return tuple(result)
+@@ -330,46 +979,63 @@ def _build_response_surfaces(*, rows: Sequence[AtlasInputRow], config: AtlasConf
+         ("sweep_flow_x_liquidation", "sweep_flow_regime", "liquidation_regime_relative"),
+     )
+     result: list[AtlasResponseSurfaceRow] = []
++    surface_pairs = tuple((surface_name, x_axis, y_axis) for surface_name, x_axis, y_axis in surfaces)
++    groups: dict[tuple[str, str, str, str, str, int], _ResponseSurfaceAccumulator] = {}
++    surface_axes = {surface_name: (x_axis, y_axis) for surface_name, x_axis, y_axis in surface_pairs}
++    for row in rows:
++        contexts = dict(row.contexts)
++        for surface_name, x_axis, y_axis in surface_pairs:
++            if x_axis not in contexts or y_axis not in contexts:
++                continue
++            for horizon, outcome_bin in row.atlas_outcome_bins:
++                key = (surface_name, x_axis, contexts[x_axis], y_axis, contexts[y_axis], horizon)
++                groups.setdefault(key, _ResponseSurfaceAccumulator()).add(
++                    row=row,
++                    horizon=horizon,
++                    outcome_bin=outcome_bin,
++                )
+     for surface_name, x_axis, y_axis in surfaces:
+-        groups: dict[tuple[str, str, int], list[AtlasInputRow]] = defaultdict(list)
+-        for row in rows:
+-            contexts = dict(row.contexts)
+-            if x_axis in contexts and y_axis in contexts:
+-                for horizon, _outcome_bin in row.atlas_outcome_bins:
+-                    groups[(contexts[x_axis], contexts[y_axis], horizon)].append(row)
+-        for (x_bin, y_bin, horizon), group_rows in sorted(groups.items()):
++        for (group_surface_name, group_x_axis, x_bin, group_y_axis, y_bin, horizon), stats in sorted(groups.items()):
++            if group_surface_name != surface_name:
++                continue
++            expected_x_axis, expected_y_axis = surface_axes[group_surface_name]
+             result.append(
+                 AtlasResponseSurfaceRow(
+                     atlas_version=config.atlas_version,
+-                    surface_name=surface_name,
+-                    x_axis=x_axis,
++                    surface_name=group_surface_name,
++                    x_axis=expected_x_axis,
+                     x_bin=x_bin,
+-                    y_axis=y_axis,
++                    y_axis=expected_y_axis,
+                     y_bin=y_bin,
+                     outcome_horizon_minutes=horizon,
+                     outcome_coordinate=_outcome_coordinate(horizon),
+-                    row_count=len(group_rows),
+-                    unique_event_count=_unique_count(row.state.event_id for row in group_rows),
+-                    mean_future_return_atr=_mean(_future_return_atr(row, horizon) for row in group_rows),
+-                    mean_future_max_atr=_mean(_future_max_atr(row, horizon) for row in group_rows),
+-                    mean_future_min_atr=_mean(_future_min_atr(row, horizon) for row in group_rows),
+-                    reclaim_rate=_bool_rate(_reclaimed_running_high(row, horizon) for row in group_rows),
+-                    double_barrier_stop_first_rate=_bool_rate(_stop_first(row, horizon) for row in group_rows),
+-                    dominant_outcome_bin=_dominant_outcome_bin(group_rows, horizon),
++                    row_count=stats.row_count,
++                    unique_event_count=len(stats.event_ids),
++                    mean_future_return_atr=stats.future_return_atr.mean(),
++                    mean_future_max_atr=stats.future_max_atr.mean(),
++                    mean_future_min_atr=stats.future_min_atr.mean(),
++                    reclaim_rate=stats.reclaimed_running_high.rate(),
++                    double_barrier_stop_first_rate=stats.stop_first.rate(),
++                    dominant_outcome_bin=stats.dominant_outcome_bin(),
+                 )
+             )
+     return tuple(result)
+ 
+ 
+ def _build_market_shock_groups(*, rows: Sequence[AtlasInputRow], config: AtlasConfig) -> tuple[AtlasMarketShockGroupRow, ...]:
+-    groups: dict[tuple[str, str, int, int], list[AtlasInputRow]] = defaultdict(list)
++    groups: dict[tuple[str, str, int, int], _MarketShockAccumulator] = {}
+     for row in rows:
+-        for horizon, _outcome_bin in row.atlas_outcome_bins:
+-            groups[(_market_shock_id(row), _systemic_cluster_regime(row), row.state.snapshot_time_ms, horizon)].append(row)
++        for horizon, outcome_bin in row.atlas_outcome_bins:
++            key = (_market_shock_id(row), _systemic_cluster_regime(row), row.state.snapshot_time_ms, horizon)
++            groups.setdefault(key, _MarketShockAccumulator()).add(
++                row=row,
++                horizon=horizon,
++                outcome_bin=outcome_bin,
++            )
+ 
+     result: list[AtlasMarketShockGroupRow] = []
+-    for (market_shock_id, systemic_cluster_regime, snapshot_time_ms, horizon), group_rows in sorted(groups.items()):
+-        symbols = sorted({row.state.symbol for row in group_rows})
++    for (market_shock_id, systemic_cluster_regime, snapshot_time_ms, horizon), stats in sorted(groups.items()):
++        symbols = sorted(stats.symbols)
+         result.append(
+             AtlasMarketShockGroupRow(
+                 atlas_version=config.atlas_version,
+@@ -379,23 +1045,184 @@ def _build_market_shock_groups(*, rows: Sequence[AtlasInputRow], config: AtlasCo
+                 snapshot_time_ms=snapshot_time_ms,
+                 outcome_horizon_minutes=horizon,
+                 outcome_coordinate=_outcome_coordinate(horizon),
+-                row_count=len(group_rows),
+-                unique_event_count=_unique_count(row.state.event_id for row in group_rows),
++                row_count=stats.row_count,
++                unique_event_count=len(stats.event_ids),
+                 unique_symbol_count=len(symbols),
+-                simultaneous_anomalies_count_1m=max(_simultaneous_count(row) for row in group_rows),
+-                simultaneous_anomalies_share_1m=_mean(_simultaneous_share(row) for row in group_rows),
++                simultaneous_anomalies_count_1m=stats.max_simultaneous_count,
++                simultaneous_anomalies_share_1m=stats.simultaneous_share.mean(),
+                 symbols="|".join(symbols),
+                 market_shock_candidate=systemic_cluster_regime == "systemic_beta_shock"
+                 or len(symbols) >= config.min_symbols_for_market_shock_candidate,
+-                mean_current_return_from_start=_mean(row.state.current_return_from_start for row in group_rows),
+-                mean_future_return_atr=_mean(_future_return_atr(row, horizon) for row in group_rows),
+-                dominant_outcome_bin=_dominant_outcome_bin(group_rows, horizon),
++                mean_current_return_from_start=stats.current_return_from_start.mean(),
++                mean_future_return_atr=stats.future_return_atr.mean(),
++                dominant_outcome_bin=stats.dominant_outcome_bin(),
+                 temporal_contract=TEMPORAL_CONTRACT_TEXT,
+             )
+         )
+     return tuple(result)
+ 
+ 
++@dataclass(slots=True)
++class _MeanAccumulator:
++    total: float = 0.0
++    count: int = 0
++    values: list[float] | None = None
++
++    def add(self, value: float | int | None) -> None:
++        if value is None:
++            return
++        item = float(value)
++        if not math.isfinite(item):
++            return
++        self.total += item
++        self.count += 1
++        if self.values is not None:
++            self.values.append(item)
++
++    def mean(self) -> float | None:
++        if self.count == 0:
++            return None
++        return self.total / self.count
++
++    def median(self) -> float | None:
++        if not self.values:
++            return None
++        return float(median(self.values))
++
++
++@dataclass(slots=True)
++class _BoolRateAccumulator:
++    true_count: int = 0
++    observed_count: int = 0
++
++    def add(self, value: bool | None) -> None:
++        if value is None:
++            return
++        self.observed_count += 1
++        if value:
++            self.true_count += 1
++
++    def rate(self) -> float | None:
++        if self.observed_count == 0:
++            return None
++        return self.true_count / self.observed_count
++
++
++@dataclass(slots=True)
++class _NatureAccumulator:
++    row_count: int = 0
++    event_ids: set[str] = field(default_factory=set)
++    symbols: set[str] = field(default_factory=set)
++    future_return_atr: _MeanAccumulator = field(default_factory=lambda: _MeanAccumulator(values=[]))
++    future_max_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    future_min_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    future_return: _MeanAccumulator = field(default_factory=lambda: _MeanAccumulator(values=[]))
++    future_max: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    future_min: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    reclaimed_running_high: _BoolRateAccumulator = field(default_factory=_BoolRateAccumulator)
++    stop_first: _BoolRateAccumulator = field(default_factory=_BoolRateAccumulator)
++    min_snapshot_time_ms: int = 0
++    max_snapshot_time_ms: int = 0
++
++    def add(self, *, row: AtlasInputRow, horizon: int) -> None:
++        self.row_count += 1
++        self.event_ids.add(row.state.event_id)
++        self.symbols.add(row.state.symbol)
++        if self.row_count == 1:
++            self.min_snapshot_time_ms = row.state.snapshot_time_ms
++            self.max_snapshot_time_ms = row.state.snapshot_time_ms
++        else:
++            self.min_snapshot_time_ms = min(self.min_snapshot_time_ms, row.state.snapshot_time_ms)
++            self.max_snapshot_time_ms = max(self.max_snapshot_time_ms, row.state.snapshot_time_ms)
++        self.future_return_atr.add(_future_return_atr(row, horizon))
++        self.future_max_atr.add(_future_max_atr(row, horizon))
++        self.future_min_atr.add(_future_min_atr(row, horizon))
++        self.future_return.add(_future_return(row, horizon))
++        self.future_max.add(_future_max(row, horizon))
++        self.future_min.add(_future_min(row, horizon))
++        self.reclaimed_running_high.add(_reclaimed_running_high(row, horizon))
++        self.stop_first.add(_stop_first(row, horizon))
++
++
++@dataclass(slots=True)
++class _ContextAccumulator:
++    row_count: int = 0
++    event_ids: set[str] = field(default_factory=set)
++    symbols: set[str] = field(default_factory=set)
++    minutes_since_trigger: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    current_return_from_start: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    distance_to_running_high_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    outcome_counts: Counter[str] = field(default_factory=Counter)
++
++    def add(self, *, row: AtlasInputRow, outcome_bin: str) -> None:
++        self.row_count += 1
++        self.event_ids.add(row.state.event_id)
++        self.symbols.add(row.state.symbol)
++        self.minutes_since_trigger.add(_minutes_since_trigger(row))
++        self.current_return_from_start.add(row.state.current_return_from_start)
++        self.distance_to_running_high_atr.add(_distance_to_running_high_atr(row))
++        self.outcome_counts[outcome_bin] += 1
++
++    def outcome_share(self, outcome_bin: str) -> float:
++        if self.row_count == 0:
++            return 0.0
++        return self.outcome_counts[outcome_bin] / self.row_count
++
++
++@dataclass(slots=True)
++class _ResponseSurfaceAccumulator:
++    row_count: int = 0
++    event_ids: set[str] = field(default_factory=set)
++    future_return_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    future_max_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    future_min_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    reclaimed_running_high: _BoolRateAccumulator = field(default_factory=_BoolRateAccumulator)
++    stop_first: _BoolRateAccumulator = field(default_factory=_BoolRateAccumulator)
++    outcome_counts: Counter[str] = field(default_factory=Counter)
++
++    def add(self, *, row: AtlasInputRow, horizon: int, outcome_bin: str) -> None:
++        self.row_count += 1
++        self.event_ids.add(row.state.event_id)
++        self.future_return_atr.add(_future_return_atr(row, horizon))
++        self.future_max_atr.add(_future_max_atr(row, horizon))
++        self.future_min_atr.add(_future_min_atr(row, horizon))
++        self.reclaimed_running_high.add(_reclaimed_running_high(row, horizon))
++        self.stop_first.add(_stop_first(row, horizon))
++        self.outcome_counts[outcome_bin] += 1
++
++    def dominant_outcome_bin(self) -> str:
++        if not self.outcome_counts:
++            return "none"
++        return self.outcome_counts.most_common(1)[0][0]
++
++
++@dataclass(slots=True)
++class _MarketShockAccumulator:
++    row_count: int = 0
++    event_ids: set[str] = field(default_factory=set)
++    symbols: set[str] = field(default_factory=set)
++    max_simultaneous_count: int = 0
++    simultaneous_share: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    current_return_from_start: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    future_return_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
++    outcome_counts: Counter[str] = field(default_factory=Counter)
++
++    def add(self, *, row: AtlasInputRow, horizon: int, outcome_bin: str) -> None:
++        self.row_count += 1
++        self.event_ids.add(row.state.event_id)
++        self.symbols.add(row.state.symbol)
++        self.max_simultaneous_count = max(self.max_simultaneous_count, _simultaneous_count(row))
++        self.simultaneous_share.add(_simultaneous_share(row))
++        self.current_return_from_start.add(row.state.current_return_from_start)
++        self.future_return_atr.add(_future_return_atr(row, horizon))
++        self.outcome_counts[outcome_bin] += 1
++
++    def dominant_outcome_bin(self) -> str:
++        if not self.outcome_counts:
++            return "none"
++        return self.outcome_counts.most_common(1)[0][0]
++
++
+ def _price_shape_atr_bin(state: StrategyState1mRow, feature: StrategyFeatureMatrixRow) -> str:
+     value = feature.range_since_start_atr
+     if value is None:
+diff --git a/src/anomaly_science/atlas/run.py b/src/anomaly_science/atlas/run.py
+index 0c2d42ef..18b737ae 100644
+--- a/src/anomaly_science/atlas/run.py
++++ b/src/anomaly_science/atlas/run.py
+@@ -4,11 +4,10 @@ from dataclasses import asdict
+ from datetime import datetime, timezone
+ from pathlib import Path
+ 
+-from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
++from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.atlas.builder import (
+-    build_atlas_artifacts_from_inputs,
++    build_atlas_artifacts_from_csv_paths,
+     context_split_rows_to_artifact,
+-    load_atlas_inputs,
+     market_shock_group_rows_to_artifact,
+     nature_rows_to_artifact,
+     response_surface_rows_to_artifact,
+@@ -34,15 +33,14 @@ def run_mvp1_atlas(
+     output_path.mkdir(parents=True, exist_ok=True)
+     cfg = config or AtlasConfig()
+ 
+-    inputs = load_atlas_inputs(
++    artifacts = build_atlas_artifacts_from_csv_paths(
+         state_path=state_artifact_path,
+         future_path=future_artifact_path,
+         feature_matrix_path=feature_artifact_path,
+         config=cfg,
+     )
+-    artifacts = build_atlas_artifacts_from_inputs(inputs=inputs, config=cfg)
+     protocol_rows = _protocol_rows(
+-        input_row_count=len(inputs),
++        input_row_count=sum(row.row_count for row in artifacts.market_shock_group_rows if row.outcome_horizon_minutes == cfg.outcome_horizon_minutes_list[0]),
+         market_shock_group_count=len(artifacts.market_shock_group_rows),
+     )
+     run_config_rows = _run_config_rows(

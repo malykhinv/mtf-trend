@@ -4,11 +4,10 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.atlas.builder import (
-    build_atlas_artifacts_from_inputs,
+    build_atlas_artifacts_from_csv_paths,
     context_split_rows_to_artifact,
-    load_atlas_inputs,
     market_shock_group_rows_to_artifact,
     nature_rows_to_artifact,
     response_surface_rows_to_artifact,
@@ -34,15 +33,14 @@ def run_mvp1_atlas(
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or AtlasConfig()
 
-    inputs = load_atlas_inputs(
+    artifacts = build_atlas_artifacts_from_csv_paths(
         state_path=state_artifact_path,
         future_path=future_artifact_path,
         feature_matrix_path=feature_artifact_path,
         config=cfg,
     )
-    artifacts = build_atlas_artifacts_from_inputs(inputs=inputs, config=cfg)
     protocol_rows = _protocol_rows(
-        input_row_count=len(inputs),
+        input_row_count=sum(row.row_count for row in artifacts.market_shock_group_rows if row.outcome_horizon_minutes == cfg.outcome_horizon_minutes_list[0]),
         market_shock_group_count=len(artifacts.market_shock_group_rows),
     )
     run_config_rows = _run_config_rows(

@@ -1,5 +1,20 @@
 # Patch log
 
+## perf: vectorize atlas aggregation for compact run-research
+
+Status: APPLIED.
+
+Intent:
+- Make `run-mvp1-atlas` consume strict canonical CSV artifacts directly instead of materializing every joined row as Python dataclasses before grouping.
+- Preserve the atlas temporal contract and descriptive-only methodology: state/features remain as-of, future columns remain response summaries only.
+- Keep `run-research <strategy> --days N` simple: strategy and optional days at the CLI, output and stage wiring under the hood.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\atlas\builder.py src\anomaly_science\atlas\run.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_atlas.py -q`
+- `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --days 2` completed at `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30` with forensic `FAIL=0`, `WARN=8`
+- Atlas in the full all-symbol 2d run completed in about `8m47s`; previous standalone 2d atlas measurement was `1582.80s`.
+
 ## perf: make compact run-research stages executable through labels
 
 Status: APPLIED.
