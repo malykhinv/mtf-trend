@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -136,6 +138,23 @@ def test_strategy_artifact_aliases_keep_source_columns() -> None:
 
         assert alias.required_columns == source.required_columns
         assert alias.stage == source.stage
+
+
+def test_stage_protocol_audits_name_canonical_strategy_artifacts() -> None:
+    from anomaly_science.atlas import run as atlas_run
+    from anomaly_science.controls import run as controls_run
+    from anomaly_science.features import matrix as feature_matrix
+    from anomaly_science.future import run as future_run
+    from anomaly_science.labels import run as labels_run
+    from anomaly_science.prediction import run as prediction_run
+
+    protocol_sources = [
+        inspect.getsource(module._protocol_rows)
+        for module in (atlas_run, controls_run, feature_matrix, future_run, labels_run, prediction_run)
+    ]
+
+    for source in protocol_sources:
+        assert not re.search(r"anomaly_[a-z_]+\.csv", source)
 
 
 def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:

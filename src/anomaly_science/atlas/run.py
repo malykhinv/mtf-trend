@@ -111,56 +111,56 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> li
         ProtocolAuditRow(
             check_name="state_artifact_schema_boundary",
             status=AuditStatus.PASS,
-            message=f"anomaly_state_1m.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
-            artifact="anomaly_state_1m.csv",
+            message=f"strategy_state_1m.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
+            artifact="strategy_state_1m.csv",
         ),
         ProtocolAuditRow(
             check_name="future_artifact_schema_boundary",
             status=AuditStatus.PASS,
-            message=f"anomaly_future_paths.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
-            artifact="anomaly_future_paths.csv",
+            message=f"strategy_future_paths.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
+            artifact="strategy_future_paths.csv",
         ),
         ProtocolAuditRow(
             check_name="feature_matrix_schema_boundary",
             status=AuditStatus.PASS,
-            message="anomaly_feature_matrix.csv accepted through strict schema boundary and used for relative atlas contexts",
-            artifact="anomaly_feature_matrix.csv",
+            message="strategy_feature_matrix.csv accepted through strict schema boundary and used for relative atlas contexts",
+            artifact="strategy_feature_matrix.csv",
         ),
         ProtocolAuditRow(
             check_name="atlas_temporal_contract",
             status=AuditStatus.PASS,
             message="atlas join preserves feature_cutoff_time_ms <= snapshot_time_ms < future_start_time_ms for every joined row",
-            artifact="anomaly_nature_atlas.csv",
+            artifact="strategy_nature_atlas.csv",
         ),
         ProtocolAuditRow(
             check_name="atlas_grouping_uses_asof_features_only",
             status=AuditStatus.PASS,
-            message="context/surface grouping bins are derived only from anomaly_state_1m.csv and anomaly_feature_matrix.csv as-of fields; future fields are used only for descriptive response summaries",
-            artifact="anomaly_context_splits.csv",
+            message="context/surface grouping bins are derived only from strategy_state_1m.csv and strategy_feature_matrix.csv as-of fields; future fields are used only for descriptive response summaries",
+            artifact="strategy_context_splits.csv",
         ),
         ProtocolAuditRow(
             check_name="atlas_outcome_bins_atr_normalized",
             status=AuditStatus.PASS,
             message="coarse multi-horizon outcome bins are built from ATR-normalized future paths and are atlas-only descriptive bins",
-            artifact="anomaly_nature_atlas.csv",
+            artifact="strategy_nature_atlas.csv",
         ),
         ProtocolAuditRow(
             check_name="atlas_multi_horizon_complete",
             status=AuditStatus.PASS,
             message="atlas writes descriptive slices for every configured research horizon without using them as decision logic",
-            artifact="anomaly_nature_atlas.csv",
+            artifact="strategy_nature_atlas.csv",
         ),
         ProtocolAuditRow(
             check_name="atlas_relaxed_geometry_slices",
             status=AuditStatus.PASS,
-            message="atlas includes relaxed shelf/sweep/consolidation geometry bins derived from anomaly_feature_matrix.csv as-of fields",
-            artifact="anomaly_response_surfaces.csv",
+            message="atlas includes relaxed shelf/sweep/consolidation geometry bins derived from strategy_feature_matrix.csv as-of fields",
+            artifact="strategy_response_surfaces.csv",
         ),
         ProtocolAuditRow(
             check_name="market_shock_groups_from_point_in_time_feature_context",
             status=AuditStatus.PASS,
-            message=f"anomaly_market_shock_groups.csv groups by point-in-time market_shock_id/systemic_cluster_regime; {market_shock_group_count} groups written",
-            artifact="anomaly_market_shock_groups.csv",
+            message=f"strategy_market_shock_groups.csv groups by point-in-time market_shock_id/systemic_cluster_regime; {market_shock_group_count} groups written",
+            artifact="strategy_market_shock_groups.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -172,8 +172,8 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> li
         ProtocolAuditRow(
             check_name="market_shock_id_assigned",
             status=AuditStatus.PASS,
-            message=f"atlas joined anomaly_feature_matrix.csv market_shock_id/systemic_cluster_regime and wrote {market_shock_group_count} market-shock groups",
-            artifact="anomaly_market_shock_groups.csv",
+            message=f"atlas joined strategy_feature_matrix.csv market_shock_id/systemic_cluster_regime and wrote {market_shock_group_count} market-shock groups",
+            artifact="strategy_market_shock_groups.csv",
         )
     ]
     return base_rows + build_methodology_v2_audit_rows(

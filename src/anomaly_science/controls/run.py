@@ -110,38 +110,38 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="state_artifact_schema_boundary",
             status=AuditStatus.PASS,
-            message=f"anomaly_state_1m.csv accepted through strict schema boundary for {input_row_count} control input rows",
-            artifact="anomaly_state_1m.csv",
+            message=f"strategy_state_1m.csv accepted through strict schema boundary for {input_row_count} control input rows",
+            artifact="strategy_state_1m.csv",
         ),
         ProtocolAuditRow(
             check_name="label_artifact_schema_boundary",
             status=AuditStatus.PASS,
-            message=f"anomaly_outcome_labels.csv accepted through strict schema boundary for {input_row_count} control input rows",
-            artifact="anomaly_outcome_labels.csv",
+            message=f"strategy_outcome_labels.csv accepted through strict schema boundary for {input_row_count} control input rows",
+            artifact="strategy_outcome_labels.csv",
         ),
         ProtocolAuditRow(
             check_name="walk_forward_boundary_reused",
             status=AuditStatus.PASS,
             message=f"control evaluations reuse daily prequential purge rule with horizon {config.purge_horizon_minutes}m",
-            artifact="anomaly_placebo_tests.csv",
+            artifact="strategy_placebo_tests.csv",
         ),
         ProtocolAuditRow(
             check_name="placebo_labels_are_controls_only",
             status=AuditStatus.PASS,
             message="shuffled labels are generated only inside controls and are not written as scientific outcome labels",
-            artifact="anomaly_placebo_tests.csv",
+            artifact="strategy_placebo_tests.csv",
         ),
         ProtocolAuditRow(
             check_name="feature_matrix_control_baselines",
             status=AuditStatus.PASS,
-            message="feature-aware volume/BTC and anomaly ablation baselines use anomaly_feature_matrix.csv through a strict join",
-            artifact="anomaly_baseline_comparison.csv",
+            message="feature-aware volume/BTC and anomaly ablation baselines use strategy_feature_matrix.csv through a strict join",
+            artifact="strategy_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
             check_name="control_rows_written",
             status=AuditStatus.PASS if ok_control_count > 0 else AuditStatus.WARN,
             message=f"wrote {placebo_count} placebo rows and {baseline_count} baseline comparison rows",
-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
             check_name="non_empty_oos_control_gate",
@@ -151,7 +151,7 @@ def _protocol_rows(
                 if ok_control_count > 0
                 else "no control/baseline row produced OOS evaluations; fixture smoke is valid, but scientific interpretation requires non-empty controls"
             ),
-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -164,19 +164,19 @@ def _protocol_rows(
             check_name="technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
             status=AuditStatus.PASS,
             message="controls reuse strict state/label prediction inputs; technical-noise events are excluded before state rows are materialized",
-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
             check_name="fixed_percent_labels_forbidden",
             status=AuditStatus.PASS,
-            message="controls reuse strict ATR-normalized anomaly_outcome_labels.csv inputs; shuffled controls never create fixed-percent labels",
-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+            message="controls reuse strict ATR-normalized strategy_outcome_labels.csv inputs; shuffled controls never create fixed-percent labels",
+            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
         ),
         ProtocolAuditRow(
             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
             status=AuditStatus.PASS,
             message=f"controls reuse daily prequential purge horizon {config.purge_horizon_minutes}m before each test day",
-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
+            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(

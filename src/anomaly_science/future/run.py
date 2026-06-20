@@ -88,32 +88,32 @@ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[Proto
         ProtocolAuditRow(
             check_name="state_artifact_schema_boundary",
             status=AuditStatus.PASS,
-            message=f"anomaly_state_1m.csv accepted through strict schema boundary with {state_row_count} state rows",
-            artifact="anomaly_state_1m.csv",
+            message=f"strategy_state_1m.csv accepted through strict schema boundary with {state_row_count} state rows",
+            artifact="strategy_state_1m.csv",
         ),
         ProtocolAuditRow(
             check_name="future_temporal_contract",
             status=AuditStatus.PASS,
             message="each future path row has feature_cutoff_time_ms <= snapshot_time_ms and future_start_time_ms > snapshot_time_ms",
-            artifact="anomaly_future_paths.csv",
+            artifact="strategy_future_paths.csv",
         ),
         ProtocolAuditRow(
             check_name="future_windows_after_snapshot_only",
             status=AuditStatus.PASS,
             message="future returns, max/min, and new-high timings use candles with available_time_ms strictly greater than snapshot_time_ms",
-            artifact="anomaly_future_paths.csv",
+            artifact="strategy_future_paths.csv",
         ),
         ProtocolAuditRow(
             check_name="structural_break_no_proxy",
             status=AuditStatus.PASS,
             message="structural break fields are explicit null until structural features exist; running_low_asof_t is not reused as a proxy",
-            artifact="anomaly_future_paths.csv",
+            artifact="strategy_future_paths.csv",
         ),
         ProtocolAuditRow(
             check_name="future_rows_written",
             status=AuditStatus.PASS,
-            message=f"anomaly_future_paths.csv written with {future_row_count} rows",
-            artifact="anomaly_future_paths.csv",
+            message=f"strategy_future_paths.csv written with {future_row_count} rows",
+            artifact="strategy_future_paths.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -126,19 +126,19 @@ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[Proto
             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
             status=AuditStatus.PASS,
             message="future path builder computes core_atr_1440 from the last 1440 true ranges using closed 1m candles available <= snapshot_time_ms; CSV alias is ATR_1d_asof_t",
-            artifact="anomaly_future_paths.csv",
+            artifact="strategy_future_paths.csv",
         ),
         ProtocolAuditRow(
             check_name="fixed_percent_labels_forbidden",
             status=AuditStatus.PASS,
             message="future paths materialize ATR-normalized returns/max/min and ATR-unit double-barrier thresholds; no fixed-percent label basis is emitted",
-            artifact="anomaly_future_paths.csv",
+            artifact="strategy_future_paths.csv",
         ),
         ProtocolAuditRow(
             check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
             status=AuditStatus.PASS,
             message="future path builder marks same-1m target/stop barrier collisions as intracandle_double_barrier_hit with barrier_resolution=stop_loss_first",
-            artifact="anomaly_future_paths.csv",
+            artifact="strategy_future_paths.csv",
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(

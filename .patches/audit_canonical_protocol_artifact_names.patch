@@ -1,0 +1,605 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 49969b79..5c3c75e6 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -123,7 +123,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Relaxed geometry features | IMPLEMENTED | Feature matrix now materializes the required continuous shelf/sweep/consolidation geometry fields from data available <= state_time; raw shelf prices are audit-only and ATR/relative coordinates are cataloged as model features. | Keep point-in-time equivalence tests and anti-binary catalog checks. |
+ | Required anomaly controls | IMPLEMENTED | Anomaly-specific controls include always-follow, always-fade, fade-after-extension, follow-early-squeeze, no-CVD/no-OI/no-liquidation ablations, and idiosyncratic/systemic subsets. Forensic audit verifies the complete required set in `strategy_baseline_comparison.csv`. | Keep required-control forensic tests as permanent gate. |
+ | Reject reasons | IMPLEMENTED | `strategy_rejection_funnel.csv` / `anomaly_rejection_funnel.csv` now records artifact-driven lineage across data quality, universe, events, state, future paths, labels, prediction, decision, and simulation. Excluded rows require explicit `reason_code`; forensic audit fails if the funnel is missing, empty, has invalid statuses, or omits a required stage. | Keep funnel completeness and explicit reason-code tests as permanent gates. |
+-| Strategy-specific artifact aliases | IMPLEMENTED | Strategy-owned stages write canonical `strategy_*` artifacts first and keep `anomaly_*` only as compatibility aliases, with schema/writer tests. | Keep canonical-first writer tests as permanent gate. |
++| Strategy-specific artifact aliases | IMPLEMENTED | Strategy-owned stages write canonical `strategy_*` artifacts first, protocol audit rows name canonical `strategy_*` artifacts as the primary boundary, and `anomaly_*` remains only as compatibility aliases, with schema/writer/audit-wording tests. | Keep canonical-first writer and protocol-audit wording tests as permanent gates. |
+ | Strategy/Core separation | IMPLEMENTED | Artifact boundaries are strategy-neutral. Core contracts now expose strategy-neutral `StrategyEvent`, `StrategyState1mRow`, `StrategyFeatureMatrixRow`, and `StrategyOutcomeLabelRow` names, with old `Anomaly*` names retained only as compatibility aliases. Core loaders/builders now expose and use `strategy_*` entrypoints while `anomaly_*` functions remain compatibility wrappers for documented alias artifacts. | Keep compatibility alias tests and avoid adding strategy-specific branches inside Core. |
+ 
+ ## Patch queue implied by this ledger
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index fdd132e5..b506fefd 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,17 @@
+ # Patch log
+ 
++## audit: name canonical artifacts in protocol rows
++
++Status: APPLIED.
++
++Intent:
++- Align stage protocol audits with the documented canonical artifact boundary: `strategy_*` is primary, `anomaly_*` is only a compatibility alias.
++- Keep alias writers/loaders intact while removing stale alias names from schema-boundary and output audit messages.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\atlas\run.py src\anomaly_science\labels\run.py src\anomaly_science\prediction\run.py src\anomaly_science\controls\run.py tests\test_artifact_schemas.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py tests\test_atlas.py tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_prediction.py tests\test_controls.py -q`
++
+ ## perf: vectorize atlas aggregation for compact run-research
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 43386e4c..8937c23f 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -19,6 +19,7 @@ Active rule:
+ - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
+ - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+ - Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days and keep one non-holdout research day, state windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the short smoke window lacking non-empty OOS/simulation proof rows, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
++- Stage protocol audits now name canonical `strategy_*` artifacts as the primary schema/input/output boundary. `anomaly_*` files remain compatibility aliases, not the documented primary artifact names.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+ 
+diff --git a/src/anomaly_science/atlas/run.py b/src/anomaly_science/atlas/run.py
+index 18b737ae..ad805187 100644
+--- a/src/anomaly_science/atlas/run.py
++++ b/src/anomaly_science/atlas/run.py
+@@ -111,56 +111,56 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> li
+         ProtocolAuditRow(
+             check_name="state_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_state_1m.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
+-            artifact="anomaly_state_1m.csv",
++            message=f"strategy_state_1m.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="future_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_future_paths.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
+-            artifact="anomaly_future_paths.csv",
++            message=f"strategy_future_paths.csv accepted through strict schema boundary for {input_row_count} joined atlas rows",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="feature_matrix_schema_boundary",
+             status=AuditStatus.PASS,
+-            message="anomaly_feature_matrix.csv accepted through strict schema boundary and used for relative atlas contexts",
+-            artifact="anomaly_feature_matrix.csv",
++            message="strategy_feature_matrix.csv accepted through strict schema boundary and used for relative atlas contexts",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="atlas_temporal_contract",
+             status=AuditStatus.PASS,
+             message="atlas join preserves feature_cutoff_time_ms <= snapshot_time_ms < future_start_time_ms for every joined row",
+-            artifact="anomaly_nature_atlas.csv",
++            artifact="strategy_nature_atlas.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="atlas_grouping_uses_asof_features_only",
+             status=AuditStatus.PASS,
+-            message="context/surface grouping bins are derived only from anomaly_state_1m.csv and anomaly_feature_matrix.csv as-of fields; future fields are used only for descriptive response summaries",
+-            artifact="anomaly_context_splits.csv",
++            message="context/surface grouping bins are derived only from strategy_state_1m.csv and strategy_feature_matrix.csv as-of fields; future fields are used only for descriptive response summaries",
++            artifact="strategy_context_splits.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="atlas_outcome_bins_atr_normalized",
+             status=AuditStatus.PASS,
+             message="coarse multi-horizon outcome bins are built from ATR-normalized future paths and are atlas-only descriptive bins",
+-            artifact="anomaly_nature_atlas.csv",
++            artifact="strategy_nature_atlas.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="atlas_multi_horizon_complete",
+             status=AuditStatus.PASS,
+             message="atlas writes descriptive slices for every configured research horizon without using them as decision logic",
+-            artifact="anomaly_nature_atlas.csv",
++            artifact="strategy_nature_atlas.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="atlas_relaxed_geometry_slices",
+             status=AuditStatus.PASS,
+-            message="atlas includes relaxed shelf/sweep/consolidation geometry bins derived from anomaly_feature_matrix.csv as-of fields",
+-            artifact="anomaly_response_surfaces.csv",
++            message="atlas includes relaxed shelf/sweep/consolidation geometry bins derived from strategy_feature_matrix.csv as-of fields",
++            artifact="strategy_response_surfaces.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="market_shock_groups_from_point_in_time_feature_context",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_market_shock_groups.csv groups by point-in-time market_shock_id/systemic_cluster_regime; {market_shock_group_count} groups written",
+-            artifact="anomaly_market_shock_groups.csv",
++            message=f"strategy_market_shock_groups.csv groups by point-in-time market_shock_id/systemic_cluster_regime; {market_shock_group_count} groups written",
++            artifact="strategy_market_shock_groups.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -172,8 +172,8 @@ def _protocol_rows(*, input_row_count: int, market_shock_group_count: int) -> li
+         ProtocolAuditRow(
+             check_name="market_shock_id_assigned",
+             status=AuditStatus.PASS,
+-            message=f"atlas joined anomaly_feature_matrix.csv market_shock_id/systemic_cluster_regime and wrote {market_shock_group_count} market-shock groups",
+-            artifact="anomaly_market_shock_groups.csv",
++            message=f"atlas joined strategy_feature_matrix.csv market_shock_id/systemic_cluster_regime and wrote {market_shock_group_count} market-shock groups",
++            artifact="strategy_market_shock_groups.csv",
+         )
+     ]
+     return base_rows + build_methodology_v2_audit_rows(
+diff --git a/src/anomaly_science/controls/run.py b/src/anomaly_science/controls/run.py
+index 32ecd66f..a9d0ec1d 100644
+--- a/src/anomaly_science/controls/run.py
++++ b/src/anomaly_science/controls/run.py
+@@ -110,38 +110,38 @@ def _protocol_rows(
+         ProtocolAuditRow(
+             check_name="state_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_state_1m.csv accepted through strict schema boundary for {input_row_count} control input rows",
+-            artifact="anomaly_state_1m.csv",
++            message=f"strategy_state_1m.csv accepted through strict schema boundary for {input_row_count} control input rows",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="label_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_outcome_labels.csv accepted through strict schema boundary for {input_row_count} control input rows",
+-            artifact="anomaly_outcome_labels.csv",
++            message=f"strategy_outcome_labels.csv accepted through strict schema boundary for {input_row_count} control input rows",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="walk_forward_boundary_reused",
+             status=AuditStatus.PASS,
+             message=f"control evaluations reuse daily prequential purge rule with horizon {config.purge_horizon_minutes}m",
+-            artifact="anomaly_placebo_tests.csv",
++            artifact="strategy_placebo_tests.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="placebo_labels_are_controls_only",
+             status=AuditStatus.PASS,
+             message="shuffled labels are generated only inside controls and are not written as scientific outcome labels",
+-            artifact="anomaly_placebo_tests.csv",
++            artifact="strategy_placebo_tests.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="feature_matrix_control_baselines",
+             status=AuditStatus.PASS,
+-            message="feature-aware volume/BTC and anomaly ablation baselines use anomaly_feature_matrix.csv through a strict join",
+-            artifact="anomaly_baseline_comparison.csv",
++            message="feature-aware volume/BTC and anomaly ablation baselines use strategy_feature_matrix.csv through a strict join",
++            artifact="strategy_baseline_comparison.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="control_rows_written",
+             status=AuditStatus.PASS if ok_control_count > 0 else AuditStatus.WARN,
+             message=f"wrote {placebo_count} placebo rows and {baseline_count} baseline comparison rows",
+-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
++            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="non_empty_oos_control_gate",
+@@ -151,7 +151,7 @@ def _protocol_rows(
+                 if ok_control_count > 0
+                 else "no control/baseline row produced OOS evaluations; fixture smoke is valid, but scientific interpretation requires non-empty controls"
+             ),
+-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
++            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -164,19 +164,19 @@ def _protocol_rows(
+             check_name="technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+             status=AuditStatus.PASS,
+             message="controls reuse strict state/label prediction inputs; technical-noise events are excluded before state rows are materialized",
+-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
++            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="fixed_percent_labels_forbidden",
+             status=AuditStatus.PASS,
+-            message="controls reuse strict ATR-normalized anomaly_outcome_labels.csv inputs; shuffled controls never create fixed-percent labels",
+-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
++            message="controls reuse strict ATR-normalized strategy_outcome_labels.csv inputs; shuffled controls never create fixed-percent labels",
++            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
+             status=AuditStatus.PASS,
+             message=f"controls reuse daily prequential purge horizon {config.purge_horizon_minutes}m before each test day",
+-            artifact="anomaly_placebo_tests.csv;anomaly_baseline_comparison.csv",
++            artifact="strategy_placebo_tests.csv;strategy_baseline_comparison.csv",
+         ),
+     ]
+     return base_rows + build_methodology_v2_audit_rows(
+diff --git a/src/anomaly_science/features/matrix.py b/src/anomaly_science/features/matrix.py
+index a0e0aeeb..5f252e5e 100644
+--- a/src/anomaly_science/features/matrix.py
++++ b/src/anomaly_science/features/matrix.py
+@@ -1678,37 +1678,37 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
+             check_name="mvp1_feature_matrix_scope",
+             status=AuditStatus.PASS,
+             message="price/time/alpha-decay plus volume/OI/liquidation/CVD, point-in-time cross-sectional, BTC-relative, and systemic cluster feature matrix only; no ML/decision/trade simulation",
+-            artifact="anomaly_feature_matrix.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="state_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_state_1m.csv accepted through strict schema boundary with {state_row_count} state rows",
+-            artifact="anomaly_state_1m.csv",
++            message=f"strategy_state_1m.csv accepted through strict schema boundary with {state_row_count} state rows",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="feature_matrix_rows_written",
+             status=AuditStatus.PASS if feature_row_count == state_row_count else AuditStatus.FAIL,
+-            message=f"anomaly_feature_matrix.csv written with {feature_row_count} rows for {state_row_count} state rows",
+-            artifact="anomaly_feature_matrix.csv",
++            message=f"strategy_feature_matrix.csv written with {feature_row_count} rows for {state_row_count} state rows",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="feature_matrix_no_future_artifact_dependency",
+             status=AuditStatus.PASS,
+-            message="feature matrix recomputes ATR and all rolling features from normalized as-of market data and does not read anomaly_future_paths.csv",
+-            artifact="anomaly_feature_matrix.csv",
++            message="feature matrix recomputes ATR and all rolling features from normalized as-of market data and does not read strategy_future_paths.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="feature_matrix_flow_oi_liquidation_cvd_asof",
+             status=AuditStatus.PASS,
+             message="OI uses closed 5m rows available <= snapshot; liquidation and CVD use events/candles available <= snapshot only",
+-            artifact="anomaly_feature_matrix.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="feature_matrix_cross_section_point_in_time",
+             status=AuditStatus.PASS,
+             message="cross-sectional percentiles use only point-in-time universe symbols with current candles available <= snapshot_time_ms",
+-            artifact="anomaly_feature_matrix.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -1721,31 +1721,31 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
+             check_name="relative_over_absolute_feature_contract_enforced",
+             status=AuditStatus.PASS,
+             message="materialized feature matrix contains ATR-normalized, self-history-relative, dimensionless, categorical, boolean, or audit-only fields; no raw absolute model features",
+-            artifact="anomaly_feature_matrix.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="custom_features_causality_gate_enforced",
+             status=AuditStatus.PASS,
+             message="feature matrix builders use state/future joins by point-in-time keys and do not call non-causal strategy custom feature operations",
+-            artifact="anomaly_feature_matrix.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
+             status=AuditStatus.PASS,
+             message="feature matrix computes core_atr_1440 from closed 1m candles available <= snapshot_time_ms and leaves ATR features null when history is insufficient; CSV alias is ATR_1d_asof_t",
+-            artifact="anomaly_feature_matrix.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="market_shock_id_assigned",
+             status=AuditStatus.PASS,
+             message="feature matrix assigns a point-in-time market_shock_id for every row; clustered rows share the snapshot-level market shock id",
+-            artifact="anomaly_feature_matrix.csv",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="simultaneous_anomalies_count_1m_point_in_time",
+             status=AuditStatus.PASS,
+-            message="simultaneous anomaly counts are computed from anomaly_state_1m rows at the same snapshot_time_ms and normalized by the point-in-time cross-section when available",
+-            artifact="anomaly_feature_matrix.csv",
++            message="simultaneous anomaly counts are computed from strategy_state_1m rows at the same snapshot_time_ms and normalized by the point-in-time cross-section when available",
++            artifact="strategy_feature_matrix.csv",
+         ),
+     ]
+     return base_rows + build_methodology_v2_audit_rows(
+diff --git a/src/anomaly_science/future/run.py b/src/anomaly_science/future/run.py
+index 0e2839b2..190c09ba 100644
+--- a/src/anomaly_science/future/run.py
++++ b/src/anomaly_science/future/run.py
+@@ -88,32 +88,32 @@ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[Proto
+         ProtocolAuditRow(
+             check_name="state_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_state_1m.csv accepted through strict schema boundary with {state_row_count} state rows",
+-            artifact="anomaly_state_1m.csv",
++            message=f"strategy_state_1m.csv accepted through strict schema boundary with {state_row_count} state rows",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="future_temporal_contract",
+             status=AuditStatus.PASS,
+             message="each future path row has feature_cutoff_time_ms <= snapshot_time_ms and future_start_time_ms > snapshot_time_ms",
+-            artifact="anomaly_future_paths.csv",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="future_windows_after_snapshot_only",
+             status=AuditStatus.PASS,
+             message="future returns, max/min, and new-high timings use candles with available_time_ms strictly greater than snapshot_time_ms",
+-            artifact="anomaly_future_paths.csv",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="structural_break_no_proxy",
+             status=AuditStatus.PASS,
+             message="structural break fields are explicit null until structural features exist; running_low_asof_t is not reused as a proxy",
+-            artifact="anomaly_future_paths.csv",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="future_rows_written",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_future_paths.csv written with {future_row_count} rows",
+-            artifact="anomaly_future_paths.csv",
++            message=f"strategy_future_paths.csv written with {future_row_count} rows",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -126,19 +126,19 @@ def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[Proto
+             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
+             status=AuditStatus.PASS,
+             message="future path builder computes core_atr_1440 from the last 1440 true ranges using closed 1m candles available <= snapshot_time_ms; CSV alias is ATR_1d_asof_t",
+-            artifact="anomaly_future_paths.csv",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="fixed_percent_labels_forbidden",
+             status=AuditStatus.PASS,
+             message="future paths materialize ATR-normalized returns/max/min and ATR-unit double-barrier thresholds; no fixed-percent label basis is emitted",
+-            artifact="anomaly_future_paths.csv",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
+             status=AuditStatus.PASS,
+             message="future path builder marks same-1m target/stop barrier collisions as intracandle_double_barrier_hit with barrier_resolution=stop_loss_first",
+-            artifact="anomaly_future_paths.csv",
++            artifact="strategy_future_paths.csv",
+         ),
+     ]
+     return base_rows + build_methodology_v2_audit_rows(
+diff --git a/src/anomaly_science/labels/run.py b/src/anomaly_science/labels/run.py
+index 02ecf59d..17c8d0ed 100644
+--- a/src/anomaly_science/labels/run.py
++++ b/src/anomaly_science/labels/run.py
+@@ -78,38 +78,38 @@ def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[Protoc
+         ProtocolAuditRow(
+             check_name="state_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_state_1m.csv accepted through strict schema boundary for {input_row_count} label input rows",
+-            artifact="anomaly_state_1m.csv",
++            message=f"strategy_state_1m.csv accepted through strict schema boundary for {input_row_count} label input rows",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="future_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_future_paths.csv accepted through strict schema boundary for {input_row_count} label input rows",
+-            artifact="anomaly_future_paths.csv",
++            message=f"strategy_future_paths.csv accepted through strict schema boundary for {input_row_count} label input rows",
++            artifact="strategy_future_paths.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="outcome_label_temporal_contract",
+             status=AuditStatus.PASS,
+             message="label join preserves feature_cutoff_time_ms <= snapshot_time_ms < future_start_time_ms for every row",
+-            artifact="anomaly_outcome_labels.csv",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="labels_use_future_paths_only",
+             status=AuditStatus.PASS,
+             message="scenario values are derived only from ATR-normalized future path fields; state rows are used only for strict join and temporal audit",
+-            artifact="anomaly_outcome_labels.csv",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="missing_future_is_data_condition",
+             status=AuditStatus.PASS,
+             message="missing_future is explicit and not collapsed into unclear, static_or_chop, or a tradeable class",
+-            artifact="anomaly_outcome_labels.csv",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="label_rows_written",
+             status=AuditStatus.PASS,
+-            message=f"wrote {label_row_count} anomaly_outcome_labels.csv rows",
+-            artifact="anomaly_outcome_labels.csv",
++            message=f"wrote {label_row_count} strategy_outcome_labels.csv rows",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -122,19 +122,19 @@ def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[Protoc
+             check_name="ATR_1d_asof_t_computed_from_closed_past_candles",
+             status=AuditStatus.PASS,
+             message="labels consume internal core_atr_1440 from future paths, which is computed strictly as-of snapshot_time_ms; CSV alias is ATR_1d_asof_t",
+-            artifact="anomaly_outcome_labels.csv",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="fixed_percent_labels_forbidden",
+             status=AuditStatus.PASS,
+             message="OutcomeLabelConfig exposes only ATR-unit thresholds k_continuation, k_fade, and k_chop; fixed-percent label thresholds are not part of the label schema",
+-            artifact="anomaly_outcome_labels.csv",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
+             status=AuditStatus.PASS,
+             message="label builder maps stop_loss_first double-barrier rows to unclear and never credits a profit-label for same-candle target/stop collisions",
+-            artifact="anomaly_outcome_labels.csv",
++            artifact="strategy_outcome_labels.csv",
+         ),
+     ]
+     return base_rows + build_methodology_v2_audit_rows(
+diff --git a/src/anomaly_science/prediction/run.py b/src/anomaly_science/prediction/run.py
+index b901559b..05f58536 100644
+--- a/src/anomaly_science/prediction/run.py
++++ b/src/anomaly_science/prediction/run.py
+@@ -154,50 +154,50 @@ def _protocol_rows(
+         ProtocolAuditRow(
+             check_name="state_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_state_1m.csv accepted through strict schema boundary for {input_row_count} prediction input rows",
+-            artifact="anomaly_state_1m.csv",
++            message=f"strategy_state_1m.csv accepted through strict schema boundary for {input_row_count} prediction input rows",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="label_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_outcome_labels.csv accepted through strict schema boundary for {input_row_count} prediction input rows",
+-            artifact="anomaly_outcome_labels.csv",
++            message=f"strategy_outcome_labels.csv accepted through strict schema boundary for {input_row_count} prediction input rows",
++            artifact="strategy_outcome_labels.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="feature_matrix_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_feature_matrix.csv accepted through strict schema boundary for {input_row_count} prediction input rows",
+-            artifact="anomaly_feature_matrix.csv",
++            message=f"strategy_feature_matrix.csv accepted through strict schema boundary for {input_row_count} prediction input rows",
++            artifact="strategy_feature_matrix.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="weekly_walk_forward_prediction",
+             status=AuditStatus.PASS,
+             message="each evaluated ISO week is predicted with one model frozen before the week; no intra-week refit",
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="purge_rule_enforced",
+             status=AuditStatus.PASS,
+             message=f"train rows must satisfy train_snapshot_time_ms + {config.purge_horizon_minutes}m <= weekly_model_freeze_time_ms",
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="asof_model_features",
+             status=AuditStatus.PASS,
+-            message="CatBoost features are derived from anomaly_state_1m.csv plus anomaly_feature_matrix.csv as-of fields; labels are used only as targets",
+-            artifact="anomaly_oos_predictions.csv",
++            message="CatBoost features are derived from strategy_state_1m.csv plus strategy_feature_matrix.csv as-of fields; labels are used only as targets",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="missing_future_excluded_from_prediction",
+             status=AuditStatus.PASS,
+             message="missing_future remains a data condition and is excluded from probability fitting/evaluation",
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="prediction_rows_written",
+             status=AuditStatus.PASS if prediction_row_count > 0 else AuditStatus.WARN,
+-            message=f"wrote {prediction_row_count} anomaly_oos_predictions.csv rows",
+-            artifact="anomaly_oos_predictions.csv",
++            message=f"wrote {prediction_row_count} strategy_oos_predictions.csv rows",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="non_empty_oos_prediction_gate",
+@@ -207,7 +207,7 @@ def _protocol_rows(
+                 if prediction_row_count > 0
+                 else "no OOS prediction rows were produced; fixture smoke is valid, but scientific interpretation requires non-empty OOS predictions"
+             ),
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -220,19 +220,19 @@ def _protocol_rows(
+             check_name="technical_noise_shock_excluded_from_ml_train_validation_calibration_test",
+             status=AuditStatus.PASS,
+             message="prediction train/test/calibration inputs are strict state/label joins; technical-noise events are excluded before state rows are materialized",
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="fixed_percent_labels_forbidden",
+             status=AuditStatus.PASS,
+-            message="prediction targets come from strict anomaly_outcome_labels.csv ATR-normalized scenario labels; no fixed-percent label columns are accepted",
+-            artifact="anomaly_oos_predictions.csv",
++            message="prediction targets come from strict strategy_outcome_labels.csv ATR-normalized scenario labels; no fixed-percent label columns are accepted",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="purge_rule_snapshot_time_plus_Hmax_before_test_start",
+             status=AuditStatus.PASS,
+             message=f"weekly CatBoost enforces train_snapshot_time_ms + {config.purge_horizon_minutes}m <= weekly_model_freeze_time_ms",
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         *build_horizon_consistency_audit_rows(
+             stage="mvp1_prediction",
+@@ -249,13 +249,13 @@ def _protocol_rows(
+             check_name="weekly_walk_forward_heavy_models_enforced",
+             status=AuditStatus.PASS,
+             message="prediction stage trains at most one CatBoost model plus Isotonic calibrators per ISO week; no daily retraining path exists",
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="frozen_weekly_model_used_for_daily_oos",
+             status=AuditStatus.PASS,
+             message="all OOS days inside an ISO week share the same weekly_freeze model identifier and train_cutoff_time_ms",
+-            artifact="anomaly_oos_predictions.csv",
++            artifact="strategy_oos_predictions.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="calibration_breakdowns_written",
+diff --git a/tests/test_artifact_schemas.py b/tests/test_artifact_schemas.py
+index 4c96fde8..2ed7c039 100644
+--- a/tests/test_artifact_schemas.py
++++ b/tests/test_artifact_schemas.py
+@@ -1,7 +1,9 @@
+ from __future__ import annotations
+ 
++import inspect
+ import json
+ from pathlib import Path
++import re
+ 
+ import pytest
+ 
+@@ -138,6 +140,23 @@ def test_strategy_artifact_aliases_keep_source_columns() -> None:
+         assert alias.stage == source.stage
+ 
+ 
++def test_stage_protocol_audits_name_canonical_strategy_artifacts() -> None:
++    from anomaly_science.atlas import run as atlas_run
++    from anomaly_science.controls import run as controls_run
++    from anomaly_science.features import matrix as feature_matrix
++    from anomaly_science.future import run as future_run
++    from anomaly_science.labels import run as labels_run
++    from anomaly_science.prediction import run as prediction_run
++
++    protocol_sources = [
++        inspect.getsource(module._protocol_rows)
++        for module in (atlas_run, controls_run, feature_matrix, future_run, labels_run, prediction_run)
++    ]
++
++    for source in protocol_sources:
++        assert not re.search(r"anomaly_[a-z_]+\.csv", source)
++
++
+ def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
+     schema = get_artifact_schema("strategy_events.csv")
+     rows = [
