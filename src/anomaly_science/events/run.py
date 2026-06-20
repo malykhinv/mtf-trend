@@ -10,7 +10,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.data.normalized import normalize_candles_1m
+from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.data.quality import (
     apply_data_quality_mask,
     build_candles_1m_data_quality_mask,
@@ -23,7 +23,7 @@ from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSour
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
 from anomaly_science.events.deduplication import suppress_event_cascade
 from anomaly_science.events.detector import events_to_artifact
-from anomaly_science.strategy.base import validate_trigger_frame
+from anomaly_science.strategy.base import internal_datetime_to_utc_ms, validate_trigger_frame
 from anomaly_science.strategy.metadata import format_required_data_streams, strategy_metadata_run_config_rows
 from anomaly_science.strategy.registry import get_broad_anomaly_strategy, get_strategy
 
@@ -72,19 +72,14 @@ def run_mvp1_events(
     )
     blocking_quality_fail = has_detector_blocking_quality_fail(data_quality)
     if required_stream_reject_count:
-        event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
+            event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
     if frames.get("candles_1m") is not None and not blocking_quality_fail and not required_stream_reject_count:
         try:
             gated_candles_1m = apply_data_quality_mask(frames["candles_1m"], data_quality_mask)
-            market_frame = pl.DataFrame(gated_candles_1m.to_dict(orient="list"))
+            market_frame = pl.from_pandas(gated_candles_1m)
             trigger_frame = strategy.generate_triggers(market_frame)
             validate_trigger_frame(trigger_frame)
-            raw_events = (
-                ()
-                if gated_candles_1m.empty
-                else strategy.generate_events(normalize_candles_1m(gated_candles_1m))  # type: ignore[attr-defined]
-            )
-            _enforce_trigger_frame_matches_events(trigger_frame=trigger_frame, events=raw_events)
+            raw_events = _events_from_trigger_frame(trigger_frame)
             cascade_result = suppress_event_cascade(raw_events, horizon_minutes=strategy.metadata.horizon_minutes)
             events = cascade_result.accepted_events
             raw_event_count = len(raw_events)
@@ -305,6 +300,52 @@ def _required_stream_reject_count(*, universe_rows: list, required_streams: obje
             if getattr(row, "tradable_on_day", False) and getattr(row, column_name, False) is False
         )
     return reject_count
+
+
+def _events_from_trigger_frame(trigger_frame: pl.DataFrame) -> tuple[StrategyEvent, ...]:
+    if trigger_frame.height == 0:
+        return ()
+    events: list[StrategyEvent] = []
+    for row in trigger_frame.to_dicts():
+        trigger_components = tuple(
+            item
+            for item in str(row.get("trigger_components") or row.get("trigger_component") or "").split(";")
+            if item
+        )
+        events.append(
+            StrategyEvent(
+                event_id=str(row["event_id"]),
+                symbol=str(row["symbol"]),
+                event_start_time_ms=internal_datetime_to_utc_ms(row["event_start_time"]),
+                event_detection_time_ms=internal_datetime_to_utc_ms(row.get("event_detection_time") or row["state_time"]),
+                seed_time_ms=internal_datetime_to_utc_ms(row.get("seed_time") or row["event_start_time"]),
+                seed_open=float(row["seed_open"]),
+                seed_high=float(row["seed_high"]),
+                seed_low=float(row["seed_low"]),
+                seed_close=float(row["seed_close"]),
+                initial_move_pct=float(row["initial_move_pct"]),
+                initial_volume_zscore=_optional_trigger_float(row.get("initial_volume_zscore")),
+                initial_quote_volume_zscore=_optional_trigger_float(row.get("initial_quote_volume_zscore")),
+                initial_trade_count_zscore=_optional_trigger_float(row.get("initial_trade_count_zscore")),
+                trigger_component=str(row.get("trigger_component") or ""),
+                trigger_components=trigger_components,
+                technical_noise_shock=bool(row.get("technical_noise_shock", False)),
+                raw_candle_gap_minutes=_optional_trigger_float(row.get("raw_candle_gap_minutes")),
+                excluded_by_data_quality_gate=bool(row.get("excluded_by_data_quality_gate", False)),
+                daily_return_asof_t=_optional_trigger_float(row.get("daily_return_asof_t")),
+                trade_count_market_percentile_asof_t=_optional_trigger_float(row.get("trade_count_market_percentile_asof_t")),
+                detector_version=str(row.get("detector_version") or ""),
+            )
+        )
+    return tuple(events)
+
+
+def _optional_trigger_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if pd.isna(value):
+        return None
+    return float(value)
 
 
 def _enforce_trigger_frame_matches_events(*, trigger_frame: pl.DataFrame, events: tuple) -> None:

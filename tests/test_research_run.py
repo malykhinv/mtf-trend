@@ -6,22 +6,29 @@ import pandas as pd
 
 from anomaly_science.cli import build_parser
 from anomaly_science.research import ResearchRunConfig, run_research_pipeline
+from anomaly_science.research.run import _effective_holdout_days, _state_config_for_strategy
 
 
-def _write_cache(path: Path) -> None:
+def _write_cache(path: Path, *, day_count: int = 1) -> None:
     path.mkdir()
+    base_timestamp = 1704067200000
+    timestamps = [
+        base_timestamp + day_offset * 86_400_000 + minute_offset * 60_000
+        for day_offset in range(day_count)
+        for minute_offset in range(4)
+    ]
     pd.DataFrame(
         {
-            "timestamp": [1704067200000, 1704067260000, 1704067320000, 1704067380000],
-            "open": [100.0, 100.5, 101.0, 101.5],
-            "high": [101.0, 101.5, 102.0, 102.5],
-            "low": [99.5, 100.0, 100.5, 101.0],
-            "close": [100.5, 101.0, 101.5, 102.0],
-            "volume": [10.0, 11.0, 12.0, 13.0],
-            "quote_volume": [1005.0, 1111.0, 1218.0, 1326.0],
-            "trade_count": [20, 22, 24, 26],
-            "taker_buy_quote_volume": [550.0, 600.0, 650.0, 700.0],
-            "open_interest": [1000.0, 1001.0, 1002.0, 1003.0],
+            "timestamp": timestamps,
+            "open": [100.0 + index * 0.5 for index in range(len(timestamps))],
+            "high": [101.0 + index * 0.5 for index in range(len(timestamps))],
+            "low": [99.5 + index * 0.5 for index in range(len(timestamps))],
+            "close": [100.5 + index * 0.5 for index in range(len(timestamps))],
+            "volume": [10.0 + index for index in range(len(timestamps))],
+            "quote_volume": [1005.0 + index * 100.0 for index in range(len(timestamps))],
+            "trade_count": [20 + index for index in range(len(timestamps))],
+            "taker_buy_quote_volume": [550.0 + index * 50.0 for index in range(len(timestamps))],
+            "open_interest": [1000.0 + index for index in range(len(timestamps))],
         }
     ).to_parquet(path / "AAAUSDT.parquet")
 
@@ -91,6 +98,38 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert coverage.loc[0, "first_date"] == "2024-01-01"
 
 
+def test_run_research_is_mode_auto_scales_holdout_for_short_windows(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    _write_cache(cache_dir, day_count=2)
+
+    run_dir = run_research_pipeline(
+        ResearchRunConfig(
+            strategy_name="broad_anomaly_v1_h30",
+            cache_dir=cache_dir,
+            days=2,
+            output_root=tmp_path / "runs",
+        )
+    )
+
+    summary = pd.read_csv(run_dir / "research_run_summary.csv")
+    summary_by_key = dict(zip(summary["key"], summary["value"], strict=True))
+    assert summary_by_key["research_mode"] == "is"
+    assert summary_by_key["requested_holdout_days"] == "60"
+    assert summary_by_key["effective_holdout_days"] == "1"
+    assert summary_by_key["research_start_date"] == "2024-01-01"
+    assert summary_by_key["research_end_date"] == "2024-01-01"
+
+    ledger = pd.read_csv(run_dir / "stages" / "holdout_governance" / "research_ledger.csv")
+    assert ledger.loc[0, "final_holdout_start_date"] == "2024-01-02"
+    assert pd.read_csv(run_dir / "stages" / "holdout_governance" / "holdout_access_log.csv").empty
+
+    run_config = pd.read_csv(run_dir / "strategy_run_config.csv")
+    run_config_by_key = dict(zip(run_config["key"], run_config["value"].astype(str), strict=True))
+    assert run_config_by_key["holdout_days"] == "1"
+    assert run_config_by_key["requested_holdout_days"] == "60"
+    assert run_config_by_key["effective_holdout_days"] == "1"
+
+
 def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
     args = build_parser().parse_args(["run-research", "broad_anomaly_v1_h30", "--days", "30"])
 
@@ -99,6 +138,26 @@ def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
     assert args.days == 30
     assert args.research_mode == "is"
     assert args.holdout_days == 60
+
+
+def test_effective_holdout_days_keeps_non_holdout_rows_for_short_is_windows() -> None:
+    assert _effective_holdout_days(
+        full_start_date=pd.Timestamp("2024-01-01").date(),
+        full_end_date=pd.Timestamp("2024-01-02").date(),
+        requested_holdout_days=60,
+        research_mode="is",
+    ) == 1
+    assert _effective_holdout_days(
+        full_start_date=pd.Timestamp("2024-01-01").date(),
+        full_end_date=pd.Timestamp("2024-03-31").date(),
+        requested_holdout_days=60,
+        research_mode="is",
+    ) == 60
+
+
+def test_run_research_state_window_uses_active_strategy_hmax() -> None:
+    assert _state_config_for_strategy(strategy_name="broad_anomaly_v1_h30").max_state_minutes_after_detection == 30
+    assert _state_config_for_strategy(strategy_name="post_anomaly_extension_v1_h180").max_state_minutes_after_detection == 180
 
 
 def test_run_research_config_requires_freeze_id_for_frozen_holdout(tmp_path: Path) -> None:

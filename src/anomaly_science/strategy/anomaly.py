@@ -11,7 +11,7 @@ from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
-from anomaly_science.events.detector import detect_broad_anomaly_events
+from anomaly_science.events.detector import detect_broad_anomaly_events, detect_broad_anomaly_events_from_frame
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION
 from anomaly_science.labels.config import OutcomeLabelConfig
 from anomaly_science.strategy.base import (
@@ -205,9 +205,7 @@ class BroadAnomalyStrategy(BaseStrategy):
     def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         if market_frame_asof.height == 0:
             return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
-        pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
-        candles = normalize_candles_1m(pandas_frame)
-        events = self.generate_events(candles)
+        events = detect_broad_anomaly_events_from_frame(market_frame_asof.to_pandas(), config=self.config)
         trigger_frame = events_to_trigger_frame(events)
         validate_trigger_frame(trigger_frame)
         return trigger_frame

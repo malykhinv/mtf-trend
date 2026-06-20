@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from statistics import fmean, pstdev
 from typing import Iterable, Sequence
 
+import pandas as pd
+
 from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
 from anomaly_science.events.config import BroadAnomalyDetectorConfig
@@ -85,6 +87,203 @@ def detect_broad_anomaly_events(
             )
             events.append(event)
             last_event_start_ms = candle.open_time_ms
+    return tuple(events)
+
+
+def detect_broad_anomaly_events_from_frame(
+    frame: pd.DataFrame,
+    *,
+    config: BroadAnomalyDetectorConfig | None = None,
+) -> tuple[StrategyEvent, ...]:
+    """Detect broad anomaly events from a normalized candle frame using vectorized rolling metrics."""
+    cfg = config or BroadAnomalyDetectorConfig()
+    if frame.empty:
+        return ()
+    required = {
+        "symbol",
+        "open_time_ms",
+        "available_time_ms",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+    }
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"broad anomaly frame is missing required columns: {missing}")
+
+    work = frame.copy()
+    work["symbol"] = work["symbol"].astype(str)
+    numeric_columns = [
+        "open_time_ms",
+        "available_time_ms",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+    ]
+    if "number_of_trades" in work.columns:
+        numeric_columns.append("number_of_trades")
+    for column in numeric_columns:
+        work[column] = pd.to_numeric(work[column], errors="coerce")
+    if work[numeric_columns].isna().any(axis=1).any():
+        raise ValueError("broad anomaly frame contains non-numeric required values")
+    if "number_of_trades" not in work.columns:
+        work["number_of_trades"] = math.nan
+
+    work = work.sort_values(["symbol", "open_time_ms"], kind="mergesort").reset_index(drop=True)
+    grouped = work.groupby("symbol", sort=False)
+    work["raw_candle_gap_minutes"] = (work["open_time_ms"] - grouped["open_time_ms"].shift(1)) / ONE_MINUTE_MS
+    work["technical_noise_shock"] = work["raw_candle_gap_minutes"] > 3.0
+    work["move_pct"] = (work["close"] / work["open"]) - 1.0
+    work["range_pct"] = (work["high"] / work["low"]) - 1.0
+
+    baseline_count = grouped["open_time_ms"].transform(
+        lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).count().shift(1)
+    )
+    for column, metric_name in (
+        ("volume", "volume_zscore"),
+        ("quote_volume", "quote_volume_zscore"),
+        ("number_of_trades", "trade_count_zscore"),
+        ("range_pct", "range_zscore"),
+    ):
+        mean = grouped[column].transform(
+            lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).mean().shift(1)
+        )
+        std = grouped[column].transform(
+            lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).std(ddof=0).shift(1)
+        )
+        work[metric_name] = (work[column] - mean) / std.where(std > 0.0)
+
+    if cfg.fast_burst_window_minutes <= 1:
+        work["fast_burst_return_pct"] = work["move_pct"]
+    else:
+        fast_open = grouped["open"].shift(cfg.fast_burst_window_minutes - 1)
+        work["fast_burst_return_pct"] = (work["close"] / fast_open) - 1.0
+
+    grind_window = cfg.grind_pump_window_minutes
+    grind_open = grouped["open"].shift(grind_window - 1)
+    work["grind_pump_return_pct"] = (work["close"] / grind_open) - 1.0
+    positive = (work["close"] > work["open"]).astype(int)
+    abs_move = work["move_pct"].abs()
+    work["grind_pump_positive_candles"] = positive.groupby(work["symbol"], sort=False).transform(
+        lambda item: item.rolling(grind_window, min_periods=grind_window).sum()
+    )
+    work["grind_pump_max_abs_move_pct"] = abs_move.groupby(work["symbol"], sort=False).transform(
+        lambda item: item.rolling(grind_window, min_periods=grind_window).max()
+    )
+
+    prior_high = grouped["high"].transform(
+        lambda item: item.rolling(cfg.breakout_lookback_minutes, min_periods=1).max().shift(1)
+    )
+    work["breakout_pct"] = (work["close"] / prior_high) - 1.0
+    baseline_high = grouped["high"].transform(
+        lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).max().shift(1)
+    )
+    baseline_low = grouped["low"].transform(
+        lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).min().shift(1)
+    )
+    work["inside_baseline_range"] = (work["high"] <= baseline_high) & (work["low"] >= baseline_low)
+    work["minutes_since_session_start"] = _session_minutes_series(
+        work["open_time_ms"],
+        cfg.session_activity_start_minutes_utc,
+        cfg.session_activity_window_minutes,
+    )
+
+    market_wide_seed = (
+        work["move_pct"].abs().ge(cfg.min_market_wide_abs_return_pct)
+        & work["quote_volume_zscore"].ge(cfg.min_market_wide_quote_volume_zscore)
+    )
+    market_wide_counts = work.loc[market_wide_seed].groupby("open_time_ms", sort=False)["symbol"].count()
+    market_wide_times = set(market_wide_counts[market_wide_counts >= cfg.market_wide_window_min_symbols].index.astype(int))
+    work["market_wide_impulse"] = work["open_time_ms"].astype("int64").isin(market_wide_times)
+
+    candidate_mask = (
+        baseline_count.ge(cfg.min_baseline_bars)
+        & ~work["technical_noise_shock"].fillna(False)
+        & (
+            work["move_pct"].abs().ge(cfg.min_abs_return_pct)
+            | work["range_zscore"].ge(cfg.min_range_zscore)
+            | work["fast_burst_return_pct"].ge(cfg.min_fast_burst_return_pct)
+            | (
+                work["grind_pump_return_pct"].ge(cfg.min_grind_pump_return_pct)
+                & work["grind_pump_positive_candles"].ge(cfg.min_grind_pump_positive_candles)
+                & work["grind_pump_max_abs_move_pct"].le(cfg.max_grind_pump_single_candle_abs_return_pct)
+            )
+            | work["breakout_pct"].ge(cfg.min_breakout_pct)
+            | (
+                work["move_pct"].ge(cfg.min_pump_inside_noise_return_pct)
+                & work["inside_baseline_range"]
+                & work["quote_volume_zscore"].ge(cfg.min_quote_volume_zscore)
+            )
+            | work["quote_volume_zscore"].ge(cfg.min_quote_volume_zscore)
+            | work["volume_zscore"].ge(cfg.min_volume_zscore)
+            | work["trade_count_zscore"].ge(cfg.min_trade_count_zscore)
+            | (
+                work["minutes_since_session_start"].notna()
+                & work["quote_volume_zscore"].ge(cfg.min_session_activity_quote_volume_zscore)
+            )
+            | work["market_wide_impulse"]
+        )
+    )
+
+    events: list[StrategyEvent] = []
+    last_event_start_by_symbol: dict[str, int] = {}
+    for row in work.loc[candidate_mask].itertuples(index=False):
+        open_time_ms = int(row.open_time_ms)
+        symbol = str(row.symbol)
+        if _in_cooldown(open_time_ms, last_event_start_by_symbol.get(symbol), cfg.cooldown_minutes):
+            continue
+        metrics = {
+            "move_pct": row.move_pct,
+            "range_pct": row.range_pct,
+            "volume_zscore": row.volume_zscore,
+            "quote_volume_zscore": row.quote_volume_zscore,
+            "trade_count_zscore": row.trade_count_zscore,
+            "range_zscore": row.range_zscore,
+            "fast_burst_return_pct": row.fast_burst_return_pct,
+            "grind_pump_return_pct": row.grind_pump_return_pct,
+            "grind_pump_positive_candles": row.grind_pump_positive_candles,
+            "grind_pump_max_abs_move_pct": row.grind_pump_max_abs_move_pct,
+            "breakout_pct": row.breakout_pct,
+            "inside_baseline_range": bool(row.inside_baseline_range),
+            "minutes_since_session_start": row.minutes_since_session_start,
+        }
+        trigger_components = _broad_activity_components(
+            metrics,
+            cfg,
+            market_wide_impulse=bool(row.market_wide_impulse),
+        )
+        if not trigger_components:
+            continue
+        events.append(
+            StrategyEvent(
+                event_id=_event_id(cfg.detector_version, symbol, open_time_ms),
+                symbol=symbol,
+                event_start_time_ms=open_time_ms,
+                event_detection_time_ms=int(row.available_time_ms),
+                seed_time_ms=open_time_ms,
+                seed_open=float(row.open),
+                seed_high=float(row.high),
+                seed_low=float(row.low),
+                seed_close=float(row.close),
+                initial_move_pct=float(row.move_pct),
+                initial_volume_zscore=_metric_float(row.volume_zscore),
+                initial_quote_volume_zscore=_metric_float(row.quote_volume_zscore),
+                initial_trade_count_zscore=_metric_float(row.trade_count_zscore),
+                trigger_component=trigger_components[0],
+                trigger_components=trigger_components,
+                technical_noise_shock=False,
+                raw_candle_gap_minutes=_metric_float(row.raw_candle_gap_minutes),
+                excluded_by_data_quality_gate=False,
+                detector_version=cfg.detector_version,
+            )
+        )
+        last_event_start_by_symbol[symbol] = open_time_ms
     return tuple(events)
 
 
@@ -276,13 +475,19 @@ def _at_least(value: _MetricValue, threshold: float) -> bool:
 def _metric_float(value: _MetricValue) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
-    return float(value)
+    result = float(value)
+    if not math.isfinite(result):
+        return None
+    return result
 
 
 def _metric_int(value: _MetricValue) -> int:
     if isinstance(value, bool) or value is None:
         return 0
-    return int(value)
+    numeric = float(value)
+    if not math.isfinite(numeric):
+        return 0
+    return int(numeric)
 
 
 def _window_candles(candle: Candle1m, baseline: Sequence[Candle1m], window_minutes: int) -> tuple[Candle1m, ...]:
@@ -332,6 +537,17 @@ def _minutes_since_session_start(open_time_ms: int, start_minutes_utc: Sequence[
     if nearest is None or nearest >= window_minutes:
         return None
     return nearest
+
+
+def _session_minutes_series(open_time_ms: pd.Series, start_minutes_utc: Sequence[int], window_minutes: int) -> pd.Series:
+    minute_of_day = (open_time_ms.astype("int64") // ONE_MINUTE_MS) % 1_440
+    if not start_minutes_utc:
+        return pd.Series(math.nan, index=open_time_ms.index)
+    nearest = pd.Series(1_440, index=open_time_ms.index, dtype="int64")
+    for start_minute in start_minutes_utc:
+        distance = (minute_of_day - start_minute) % 1_440
+        nearest = nearest.where(nearest <= distance, distance)
+    return nearest.where(nearest < window_minutes, math.nan)
 
 
 def _market_wide_impulse_times(

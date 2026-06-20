@@ -70,8 +70,8 @@ def build_outcome_label_inputs(
         )
 
     rows: list[OutcomeLabelInputRow] = []
-    for key in sorted(state_keys):
-        state = state_by_key[key]
+    for state in states:
+        key = _join_key(state)
         future = future_by_key[key]
         _enforce_label_temporal_contract(state=state, future=future)
         rows.append(OutcomeLabelInputRow(state=state, future=future))

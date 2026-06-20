@@ -8,6 +8,7 @@ from .normalized import (
     normalize_liquidations,
     normalize_market_data,
     normalize_open_interest_5m,
+    validate_market_data_boundary,
 )
 from .quality import (
     DataQualityMask,
@@ -44,4 +45,5 @@ __all__ = [
     "rows_to_artifact",
     "run_data_quality",
     "run_mvp1_data_audit",
+    "validate_market_data_boundary",
 ]

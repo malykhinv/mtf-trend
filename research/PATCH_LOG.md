@@ -1,5 +1,22 @@
 # Patch log
 
+## perf: make compact run-research stages executable through labels
+
+Status: APPLIED.
+
+Intent:
+- Keep `run-research <strategy> --days N` compact: output is automatic, and short default IS windows auto-scale holdout so at least one non-holdout day remains.
+- Remove all-symbol hot-path stalls in data audit, events, state, future, feature matrix, and labels without changing trigger thresholds, labels, EV, or methodology.
+- Reuse active strategy `H_max` for the state window and avoid state rows beyond the selected strategy horizon.
+- Preserve canonical `strategy_*` artifacts and copy identical `anomaly_*` aliases after strict canonical schema validation instead of serializing huge CSVs twice.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_atlas.py tests\test_artifact_schemas.py -q`
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\builder.py src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\labels\builder.py src\anomaly_science\atlas\builder.py src\anomaly_science\artifacts\writer.py`
+- `run-mvp1-feature-matrix` on the 2d all-symbol run input/state: `710.30s` after removing duplicate state load and hot history copies.
+- `run-mvp1-labels` on the 2d all-symbol state/future artifacts: `221.16s`.
+- `run-mvp1-atlas` on the 2d all-symbol state/future/feature artifacts: `1582.80s`; atlas still needs streaming aggregation before claiming the full compact all-symbol `run-research --days 2` proof.
+
 ## perf: vectorize point-in-time universe audit
 
 Status: APPLIED.

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict
+from bisect import bisect_right
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -17,7 +18,7 @@ from anomaly_science.contracts.market import Candle1m, MarketDataContractError, 
 from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
-from anomaly_science.future.atr import AtrAsOfResult, compute_atr_1d_asof
+from anomaly_science.future.atr import AtrAsOfResult, AtrComputationError
 from anomaly_science.future.config import FuturePathBuilderConfig
 
 
@@ -31,6 +32,26 @@ class AnomalyFutureArtifactError(ValueError):
 
 StrategyStateArtifactError = AnomalyStateArtifactError
 StrategyFutureArtifactError = AnomalyFutureArtifactError
+
+
+@dataclass(frozen=True, slots=True)
+class _SymbolFutureCandleIndex:
+    candles: tuple[Candle1m, ...]
+    available_times: tuple[int, ...]
+    true_range_prefix_sums: tuple[float, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _FutureMetrics:
+    future_return: dict[int, float | None]
+    future_max: dict[int, float | None]
+    future_min: dict[int, float | None]
+    future_return_atr: dict[int, float | None]
+    future_max_atr: dict[int, float | None]
+    future_min_atr: dict[int, float | None]
+    barrier_hit: dict[int, bool | None]
+    reclaimed_running_high: dict[int, bool | None]
+    time_to_new_high_minutes: int | None
 
 
 def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ...]:
@@ -54,33 +75,33 @@ def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ..
         )
 
     rows: list[StrategyState1mRow] = []
-    for row_index, row in frame.iterrows():
+    for row_index, row in enumerate(frame.itertuples(index=False)):
         try:
             rows.append(
                 StrategyState1mRow(
-                    event_id=_required_str(row, "event_id"),
-                    symbol=_required_str(row, "symbol"),
-                    state_time_ms=_required_int(row, "state_time_ms"),
-                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
-                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
-                    minutes_since_event_start=_required_int(row, "minutes_since_event_start"),
-                    minutes_since_detection=_required_int(row, "minutes_since_detection"),
-                    event_alive=_required_bool(row, "event_alive"),
-                    running_high_asof_t=_required_float(row, "running_high_asof_t"),
-                    running_high_time_asof_t_ms=_required_int(row, "running_high_time_asof_t_ms"),
-                    running_low_asof_t=_required_float(row, "running_low_asof_t"),
-                    running_low_time_asof_t_ms=_required_int(row, "running_low_time_asof_t_ms"),
-                    time_since_running_high_minutes=_required_int(row, "time_since_running_high_minutes"),
-                    current_close=_required_float(row, "current_close"),
-                    current_return_from_start=_required_float(row, "current_return_from_start"),
-                    distance_to_running_high=_required_float(row, "distance_to_running_high"),
-                    distance_to_running_low=_required_float(row, "distance_to_running_low"),
-                    distance_to_structural_low=_optional_float(row, "distance_to_structural_low"),
-                    distance_to_structural_high=_optional_float(row, "distance_to_structural_high"),
-                    structural_low_asof_t=_optional_float(row, "structural_low_asof_t"),
-                    structural_low_time_asof_t_ms=_optional_int(row, "structural_low_time_asof_t_ms"),
-                    structural_high_asof_t=_optional_float(row, "structural_high_asof_t"),
-                    structural_high_time_asof_t_ms=_optional_int(row, "structural_high_time_asof_t_ms"),
+                    event_id=_tuple_required_str(row, "event_id"),
+                    symbol=_tuple_required_str(row, "symbol"),
+                    state_time_ms=_tuple_required_int(row, "state_time_ms"),
+                    snapshot_time_ms=_tuple_required_int(row, "snapshot_time_ms"),
+                    feature_cutoff_time_ms=_tuple_required_int(row, "feature_cutoff_time_ms"),
+                    minutes_since_event_start=_tuple_required_int(row, "minutes_since_event_start"),
+                    minutes_since_detection=_tuple_required_int(row, "minutes_since_detection"),
+                    event_alive=_tuple_required_bool(row, "event_alive"),
+                    running_high_asof_t=_tuple_required_float(row, "running_high_asof_t"),
+                    running_high_time_asof_t_ms=_tuple_required_int(row, "running_high_time_asof_t_ms"),
+                    running_low_asof_t=_tuple_required_float(row, "running_low_asof_t"),
+                    running_low_time_asof_t_ms=_tuple_required_int(row, "running_low_time_asof_t_ms"),
+                    time_since_running_high_minutes=_tuple_required_int(row, "time_since_running_high_minutes"),
+                    current_close=_tuple_required_float(row, "current_close"),
+                    current_return_from_start=_tuple_required_float(row, "current_return_from_start"),
+                    distance_to_running_high=_tuple_required_float(row, "distance_to_running_high"),
+                    distance_to_running_low=_tuple_required_float(row, "distance_to_running_low"),
+                    distance_to_structural_low=_tuple_optional_float(row, "distance_to_structural_low"),
+                    distance_to_structural_high=_tuple_optional_float(row, "distance_to_structural_high"),
+                    structural_low_asof_t=_tuple_optional_float(row, "structural_low_asof_t"),
+                    structural_low_time_asof_t_ms=_tuple_optional_int(row, "structural_low_time_asof_t_ms"),
+                    structural_high_asof_t=_tuple_optional_float(row, "structural_high_asof_t"),
+                    structural_high_time_asof_t_ms=_tuple_optional_int(row, "structural_high_time_asof_t_ms"),
                 )
             )
         except (TypeError, ValueError) as exc:
@@ -107,7 +128,8 @@ def load_strategy_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...
         )
 
     rows: list[FuturePathRow] = []
-    for row_index, row in frame.iterrows():
+    for row_index, row_tuple in enumerate(frame.itertuples(index=False)):
+        row = row_tuple._asdict()
         try:
             rows.append(
                 FuturePathRow(
@@ -208,16 +230,18 @@ def build_strategy_future_paths(
     candles_by_symbol: dict[str, list[Candle1m]] = {}
     for candle in candles_1m:
         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
-    for symbol in candles_by_symbol:
-        candles_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    indexed_candles_by_symbol = {
+        symbol: _build_symbol_future_candle_index(symbol_candles)
+        for symbol, symbol_candles in candles_by_symbol.items()
+    }
 
     rows: list[FuturePathRow] = []
     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
-        symbol_candles = candles_by_symbol.get(state.symbol, [])
+        symbol_candles = indexed_candles_by_symbol.get(state.symbol, _empty_symbol_future_candle_index())
         rows.append(
             _build_state_future_path(
                 state=state,
-                candles=symbol_candles,
+                candle_index=symbol_candles,
                 max_horizon=max_horizon,
                 atr_window_minutes=cfg.atr_window_minutes,
                 double_barrier_k_continuation=cfg.double_barrier_k_continuation,
@@ -266,7 +290,7 @@ def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
 def _build_state_future_path(
     *,
     state: StrategyState1mRow,
-    candles: Sequence[Candle1m],
+    candle_index: _SymbolFutureCandleIndex,
     max_horizon: int,
     atr_window_minutes: int,
     double_barrier_k_continuation: float,
@@ -279,61 +303,19 @@ def _build_state_future_path(
 
     future_start_time_ms = state.snapshot_time_ms + ONE_MINUTE_MS
     max_future_time_ms = state.snapshot_time_ms + max_horizon * ONE_MINUTE_MS
-    future_candles = [
-        candle
-        for candle in candles
-        if candle.available_time_ms > state.snapshot_time_ms and candle.available_time_ms <= max_future_time_ms
-    ]
+    future_start_index = bisect_right(candle_index.available_times, state.snapshot_time_ms)
+    future_end_index = bisect_right(candle_index.available_times, max_future_time_ms)
+    future_candles = candle_index.candles[future_start_index:future_end_index]
     atr_result = _compute_atr_when_history_available(
         state=state,
-        candles=candles,
+        candle_index=candle_index,
         atr_window_minutes=atr_window_minutes,
     )
     atr_value = atr_result.core_atr_1440 if atr_result is not None else None
-    barrier_5m = _intracandle_double_barrier(
+    metrics = _future_metrics(
         state=state,
         candles=future_candles,
-        horizon_minutes=5,
-        atr_value=atr_value,
-        k_continuation=double_barrier_k_continuation,
-        k_fade=double_barrier_k_fade,
-    )
-    barrier_15m = _intracandle_double_barrier(
-        state=state,
-        candles=future_candles,
-        horizon_minutes=15,
-        atr_value=atr_value,
-        k_continuation=double_barrier_k_continuation,
-        k_fade=double_barrier_k_fade,
-    )
-    barrier_30m = _intracandle_double_barrier(
-        state=state,
-        candles=future_candles,
-        horizon_minutes=30,
-        atr_value=atr_value,
-        k_continuation=double_barrier_k_continuation,
-        k_fade=double_barrier_k_fade,
-    )
-    barrier_60m = _intracandle_double_barrier(
-        state=state,
-        candles=future_candles,
-        horizon_minutes=60,
-        atr_value=atr_value,
-        k_continuation=double_barrier_k_continuation,
-        k_fade=double_barrier_k_fade,
-    )
-    barrier_120m = _intracandle_double_barrier(
-        state=state,
-        candles=future_candles,
-        horizon_minutes=120,
-        atr_value=atr_value,
-        k_continuation=double_barrier_k_continuation,
-        k_fade=double_barrier_k_fade,
-    )
-    barrier_180m = _intracandle_double_barrier(
-        state=state,
-        candles=future_candles,
-        horizon_minutes=180,
+        horizons=(5, 15, 30, 60, 120, 180),
         atr_value=atr_value,
         k_continuation=double_barrier_k_continuation,
         k_fade=double_barrier_k_fade,
@@ -350,60 +332,154 @@ def _build_state_future_path(
         ATR_1d_pct_asof_t=atr_result.atr_1d_pct_asof_t if atr_result is not None else None,
         double_barrier_k_continuation=double_barrier_k_continuation if atr_value is not None else None,
         double_barrier_k_fade=double_barrier_k_fade if atr_value is not None else None,
-        future_return_5m=_future_return(state=state, candles=future_candles, horizon_minutes=5),
-        future_return_15m=_future_return(state=state, candles=future_candles, horizon_minutes=15),
-        future_return_30m=_future_return(state=state, candles=future_candles, horizon_minutes=30),
-        future_return_60m=_future_return(state=state, candles=future_candles, horizon_minutes=60),
-        future_return_120m=_future_return(state=state, candles=future_candles, horizon_minutes=120),
-        future_return_180m=_future_return(state=state, candles=future_candles, horizon_minutes=180),
-        future_max_5m=_future_max(state=state, candles=future_candles, horizon_minutes=5),
-        future_max_15m=_future_max(state=state, candles=future_candles, horizon_minutes=15),
-        future_max_30m=_future_max(state=state, candles=future_candles, horizon_minutes=30),
-        future_max_60m=_future_max(state=state, candles=future_candles, horizon_minutes=60),
-        future_max_120m=_future_max(state=state, candles=future_candles, horizon_minutes=120),
-        future_max_180m=_future_max(state=state, candles=future_candles, horizon_minutes=180),
-        future_min_5m=_future_min(state=state, candles=future_candles, horizon_minutes=5),
-        future_min_15m=_future_min(state=state, candles=future_candles, horizon_minutes=15),
-        future_min_30m=_future_min(state=state, candles=future_candles, horizon_minutes=30),
-        future_min_60m=_future_min(state=state, candles=future_candles, horizon_minutes=60),
-        future_min_120m=_future_min(state=state, candles=future_candles, horizon_minutes=120),
-        future_min_180m=_future_min(state=state, candles=future_candles, horizon_minutes=180),
-        future_return_atr_5m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
-        future_return_atr_15m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
-        future_return_atr_30m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
-        future_return_atr_60m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
-        future_return_atr_120m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
-        future_return_atr_180m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=180, atr_value=atr_value),
-        future_max_atr_5m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
-        future_max_atr_15m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
-        future_max_atr_30m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
-        future_max_atr_60m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
-        future_max_atr_120m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
-        future_max_atr_180m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=180, atr_value=atr_value),
-        future_min_atr_5m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
-        future_min_atr_15m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
-        future_min_atr_30m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
-        future_min_atr_60m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
-        future_min_atr_120m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
-        future_min_atr_180m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=180, atr_value=atr_value),
-        intracandle_double_barrier_hit_5m=barrier_5m,
-        intracandle_double_barrier_hit_15m=barrier_15m,
-        intracandle_double_barrier_hit_30m=barrier_30m,
-        intracandle_double_barrier_hit_60m=barrier_60m,
-        intracandle_double_barrier_hit_120m=barrier_120m,
-        intracandle_double_barrier_hit_180m=barrier_180m,
-        barrier_resolution_5m=_barrier_resolution(barrier_5m),
-        barrier_resolution_15m=_barrier_resolution(barrier_15m),
-        barrier_resolution_30m=_barrier_resolution(barrier_30m),
-        barrier_resolution_60m=_barrier_resolution(barrier_60m),
-        barrier_resolution_120m=_barrier_resolution(barrier_120m),
-        barrier_resolution_180m=_barrier_resolution(barrier_180m),
-        reclaimed_running_high_30m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=30),
-        reclaimed_running_high_60m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=60),
+        future_return_5m=metrics.future_return[5],
+        future_return_15m=metrics.future_return[15],
+        future_return_30m=metrics.future_return[30],
+        future_return_60m=metrics.future_return[60],
+        future_return_120m=metrics.future_return[120],
+        future_return_180m=metrics.future_return[180],
+        future_max_5m=metrics.future_max[5],
+        future_max_15m=metrics.future_max[15],
+        future_max_30m=metrics.future_max[30],
+        future_max_60m=metrics.future_max[60],
+        future_max_120m=metrics.future_max[120],
+        future_max_180m=metrics.future_max[180],
+        future_min_5m=metrics.future_min[5],
+        future_min_15m=metrics.future_min[15],
+        future_min_30m=metrics.future_min[30],
+        future_min_60m=metrics.future_min[60],
+        future_min_120m=metrics.future_min[120],
+        future_min_180m=metrics.future_min[180],
+        future_return_atr_5m=metrics.future_return_atr[5],
+        future_return_atr_15m=metrics.future_return_atr[15],
+        future_return_atr_30m=metrics.future_return_atr[30],
+        future_return_atr_60m=metrics.future_return_atr[60],
+        future_return_atr_120m=metrics.future_return_atr[120],
+        future_return_atr_180m=metrics.future_return_atr[180],
+        future_max_atr_5m=metrics.future_max_atr[5],
+        future_max_atr_15m=metrics.future_max_atr[15],
+        future_max_atr_30m=metrics.future_max_atr[30],
+        future_max_atr_60m=metrics.future_max_atr[60],
+        future_max_atr_120m=metrics.future_max_atr[120],
+        future_max_atr_180m=metrics.future_max_atr[180],
+        future_min_atr_5m=metrics.future_min_atr[5],
+        future_min_atr_15m=metrics.future_min_atr[15],
+        future_min_atr_30m=metrics.future_min_atr[30],
+        future_min_atr_60m=metrics.future_min_atr[60],
+        future_min_atr_120m=metrics.future_min_atr[120],
+        future_min_atr_180m=metrics.future_min_atr[180],
+        intracandle_double_barrier_hit_5m=metrics.barrier_hit[5],
+        intracandle_double_barrier_hit_15m=metrics.barrier_hit[15],
+        intracandle_double_barrier_hit_30m=metrics.barrier_hit[30],
+        intracandle_double_barrier_hit_60m=metrics.barrier_hit[60],
+        intracandle_double_barrier_hit_120m=metrics.barrier_hit[120],
+        intracandle_double_barrier_hit_180m=metrics.barrier_hit[180],
+        barrier_resolution_5m=_barrier_resolution(metrics.barrier_hit[5]),
+        barrier_resolution_15m=_barrier_resolution(metrics.barrier_hit[15]),
+        barrier_resolution_30m=_barrier_resolution(metrics.barrier_hit[30]),
+        barrier_resolution_60m=_barrier_resolution(metrics.barrier_hit[60]),
+        barrier_resolution_120m=_barrier_resolution(metrics.barrier_hit[120]),
+        barrier_resolution_180m=_barrier_resolution(metrics.barrier_hit[180]),
+        reclaimed_running_high_30m=metrics.reclaimed_running_high[30],
+        reclaimed_running_high_60m=metrics.reclaimed_running_high[60],
         broke_structural_low_30m=None,
         broke_structural_low_60m=None,
-        time_to_new_high_minutes=_time_to_new_high_minutes(state=state, candles=future_candles),
+        time_to_new_high_minutes=metrics.time_to_new_high_minutes,
         time_to_structural_break_minutes=None,
+    )
+
+
+def _build_symbol_future_candle_index(candles: Sequence[Candle1m]) -> _SymbolFutureCandleIndex:
+    ordered = tuple(sorted(candles, key=lambda item: (item.available_time_ms, item.open_time_ms)))
+    prefix: list[float] = []
+    running_sum = 0.0
+    for index, candle in enumerate(ordered):
+        if index == 0:
+            prefix.append(0.0)
+            continue
+        running_sum += _true_range(candle=candle, previous_close=ordered[index - 1].close)
+        prefix.append(running_sum)
+    return _SymbolFutureCandleIndex(
+        candles=ordered,
+        available_times=tuple(candle.available_time_ms for candle in ordered),
+        true_range_prefix_sums=tuple(prefix),
+    )
+
+
+def _empty_symbol_future_candle_index() -> _SymbolFutureCandleIndex:
+    return _SymbolFutureCandleIndex(candles=(), available_times=(), true_range_prefix_sums=())
+
+
+def _future_metrics(
+    *,
+    state: StrategyState1mRow,
+    candles: Sequence[Candle1m],
+    horizons: Sequence[int],
+    atr_value: float | None,
+    k_continuation: float,
+    k_fade: float,
+) -> _FutureMetrics:
+    sorted_horizons = tuple(sorted(horizons))
+    future_return: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
+    future_max: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
+    future_min: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
+    future_return_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
+    future_max_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
+    future_min_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
+    barrier_hit: dict[int, bool | None] = {horizon: None for horizon in sorted_horizons}
+    reclaimed_running_high: dict[int, bool | None] = {horizon: None for horizon in sorted_horizons}
+
+    cursor = 0
+    running_high: float | None = None
+    running_low: float | None = None
+    running_barrier_hit = False
+    running_reclaimed_high = False
+    time_to_new_high_minutes: int | None = None
+    upper_barrier = state.current_close + k_continuation * atr_value if atr_value is not None else None
+    lower_barrier = state.current_close - k_fade * atr_value if atr_value is not None else None
+
+    for horizon in sorted_horizons:
+        horizon_end_ms = state.snapshot_time_ms + horizon * ONE_MINUTE_MS
+        had_window = False
+        while cursor < len(candles) and candles[cursor].available_time_ms <= horizon_end_ms:
+            candle = candles[cursor]
+            had_window = True
+            running_high = candle.high if running_high is None else max(running_high, candle.high)
+            running_low = candle.low if running_low is None else min(running_low, candle.low)
+            if candle.available_time_ms == horizon_end_ms and future_return[horizon] is None:
+                future_return[horizon] = (candle.close / state.current_close) - 1.0
+                if atr_value is not None:
+                    future_return_atr[horizon] = (candle.close - state.current_close) / atr_value
+            if atr_value is not None and upper_barrier is not None and lower_barrier is not None:
+                running_barrier_hit = running_barrier_hit or (
+                    candle.high >= upper_barrier and candle.low <= lower_barrier
+                )
+            running_reclaimed_high = running_reclaimed_high or candle.high > state.running_high_asof_t
+            if time_to_new_high_minutes is None and candle.high > state.running_high_asof_t:
+                time_to_new_high_minutes = _minutes_between(state.snapshot_time_ms, candle.available_time_ms)
+            cursor += 1
+
+        if running_high is not None and running_low is not None:
+            future_max[horizon] = (running_high / state.current_close) - 1.0
+            future_min[horizon] = (running_low / state.current_close) - 1.0
+            if atr_value is not None:
+                future_max_atr[horizon] = (running_high - state.current_close) / atr_value
+                future_min_atr[horizon] = (running_low - state.current_close) / atr_value
+                barrier_hit[horizon] = running_barrier_hit
+            reclaimed_running_high[horizon] = running_reclaimed_high
+        elif had_window and atr_value is not None:
+            barrier_hit[horizon] = running_barrier_hit
+
+    return _FutureMetrics(
+        future_return=future_return,
+        future_max=future_max,
+        future_min=future_min,
+        future_return_atr=future_return_atr,
+        future_max_atr=future_max_atr,
+        future_min_atr=future_min_atr,
+        barrier_hit=barrier_hit,
+        reclaimed_running_high=reclaimed_running_high,
+        time_to_new_high_minutes=time_to_new_high_minutes,
     )
 
 
@@ -535,21 +611,31 @@ def _barrier_resolution(hit: bool | None) -> str | None:
 def _compute_atr_when_history_available(
     *,
     state: StrategyState1mRow,
-    candles: Sequence[Candle1m],
+    candle_index: _SymbolFutureCandleIndex,
     atr_window_minutes: int,
 ) -> AtrAsOfResult | None:
-    asof_candle_count = sum(
-        1
-        for candle in candles
-        if candle.symbol == state.symbol and candle.available_time_ms <= state.snapshot_time_ms
-    )
-    if asof_candle_count < atr_window_minutes + 1:
+    history_count = bisect_right(candle_index.available_times, state.snapshot_time_ms)
+    if history_count < atr_window_minutes + 1:
         return None
-    return compute_atr_1d_asof(
-        candles_1m=candles,
+    source_start_index = history_count - atr_window_minutes
+    last_source_index = history_count - 1
+    prefix_before_window = candle_index.true_range_prefix_sums[source_start_index - 1]
+    prefix_at_window_end = candle_index.true_range_prefix_sums[last_source_index]
+    atr = (prefix_at_window_end - prefix_before_window) / atr_window_minutes
+    last_close = candle_index.candles[last_source_index].close
+    if last_close <= 0:
+        raise AtrComputationError("latest as-of close must be positive")
+    if not math.isfinite(atr) or atr <= 0:
+        raise AtrComputationError("computed ATR must be positive and finite")
+    return AtrAsOfResult(
         symbol=state.symbol,
         snapshot_time_ms=state.snapshot_time_ms,
         atr_window_minutes=atr_window_minutes,
+        core_atr_1440=atr,
+        atr_1d_pct_asof_t=atr / last_close,
+        source_candle_count=atr_window_minutes,
+        first_candle_available_time_ms=candle_index.candles[source_start_index].available_time_ms,
+        last_candle_available_time_ms=candle_index.candles[last_source_index].available_time_ms,
     )
 
 
@@ -576,6 +662,16 @@ def _minutes_between(start_ms: int, end_ms: int) -> int:
     if end_ms <= start_ms:
         raise MarketDataContractError("future timestamp must be > snapshot timestamp")
     return (end_ms - start_ms) // ONE_MINUTE_MS
+
+
+def _true_range(*, candle: Candle1m, previous_close: float) -> float:
+    if previous_close <= 0:
+        raise AtrComputationError("previous close must be positive")
+    return max(
+        candle.high - candle.low,
+        abs(candle.high - previous_close),
+        abs(candle.low - previous_close),
+    )
 
 
 def _required_str(row: Mapping[str, object], name: str) -> str:
@@ -671,6 +767,70 @@ def _is_missing(value: object) -> bool:
         return bool(pd.isna(value))
     except TypeError:
         return False
+
+
+def _tuple_value(row: object, name: str) -> object:
+    return getattr(row, name)
+
+
+def _tuple_required_str(row: object, name: str) -> str:
+    value = _tuple_value(row, name)
+    if pd.isna(value):
+        raise ValueError(f"{name} is required")
+    result = str(value)
+    if not result:
+        raise ValueError(f"{name} is required")
+    return result
+
+
+def _tuple_required_int(row: object, name: str) -> int:
+    value = _tuple_value(row, name)
+    if pd.isna(value):
+        raise ValueError(f"{name} is required")
+    return int(value)
+
+
+def _tuple_required_float(row: object, name: str) -> float:
+    value = _tuple_value(row, name)
+    if pd.isna(value):
+        raise ValueError(f"{name} is required")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _tuple_optional_float(row: object, name: str) -> float | None:
+    value = _tuple_value(row, name)
+    if _is_missing(value):
+        return None
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite when provided")
+    return result
+
+
+def _tuple_optional_int(row: object, name: str) -> int | None:
+    value = _tuple_value(row, name)
+    if _is_missing(value):
+        return None
+    return int(value)
+
+
+def _tuple_required_bool(row: object, name: str) -> bool:
+    value = _tuple_value(row, name)
+    if isinstance(value, bool):
+        return value
+    if _is_missing(value):
+        raise ValueError(f"{name} is required")
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1"}:
+        return True
+    if text in {"false", "0"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _csv_value(value: object) -> object:

@@ -7,9 +7,10 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.data.source import CsvDirectoryDataSource
+from anomaly_science.data.normalized import normalize_candles_1m
+from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.future.builder import (
-    build_strategy_future_paths_from_source,
+    build_strategy_future_paths,
     future_rows_to_artifact,
     load_strategy_state_1m_csv,
 )
@@ -32,9 +33,12 @@ def run_mvp1_future(
 
     source = CsvDirectoryDataSource(input_path)
     state_rows = load_strategy_state_1m_csv(state_artifact_path)
-    future_rows = build_strategy_future_paths_from_source(
-        source=source,
-        state_path=state_artifact_path,
+    candle_frame = source.read_frame("candles_1m", required=True)
+    if candle_frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    future_rows = build_strategy_future_paths(
+        candles_1m=normalize_candles_1m(candle_frame),
+        state_rows=state_rows,
         config=cfg,
     )
     protocol_rows = _protocol_rows(state_row_count=len(state_rows), future_row_count=len(future_rows))

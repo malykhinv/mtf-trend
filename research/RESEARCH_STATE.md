@@ -18,14 +18,15 @@ Active rule:
 - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
 - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
 - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+- Compact `run-research <strategy> --days N` behavior is now closer to the documented target: output remains automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days and keep one non-holdout research day, state windows use active strategy `H_max`, and all-symbol 2d execution now progresses through data audit, events, state, future, feature matrix, atlas, and labels when stages are run directly. Atlas aggregation is still the main remaining performance conflict for a full compact all-symbol run: measured `run-mvp1-atlas` on 2d all-symbol artifacts is `1582.80s`, so `research/METHODOLOGY_GAP_LEDGER.md` now marks compact all-symbol run-research executability as `PARTIAL`.
 - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
 - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
 
-Current Git head before the active universe-performance patch: `0a0f11ca`.
+Current Git head before the active compact-run performance patch: `de79ea4c`.
 - Verified with `git rev-parse --short HEAD` in the local repository.
 - Do not treat old patch-queue notes in previous chats as current state unless they match the checked-out Git head.
 
-Last known local validation before this universe-performance patch:
+Last known local validation before this compact-run performance patch:
 - `.venv\Scripts\python.exe -m pytest tests\test_data_audit.py -q`
 - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
 - `.venv\Scripts\python.exe main.py run-mvp1-data-audit --input .output\results\research_runs\20260620T032748623164Z_broad_anomaly_v1_h30\input --out tmp\data_audit_2d_perf` completed in 577.49s
@@ -40,6 +41,11 @@ Last known local validation before this universe-performance patch:
 - `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
 - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
 - `.venv\Scripts\python.exe -m pytest`
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_atlas.py tests\test_artifact_schemas.py -q`
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\builder.py src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\labels\builder.py src\anomaly_science\atlas\builder.py src\anomaly_science\artifacts\writer.py`
+- `.venv\Scripts\python.exe main.py run-mvp1-feature-matrix --input <2d all-symbol input> --state <2d all-symbol strategy_state_1m.csv> --out tmp\feature_matrix_2d_perf4` completed in `710.30s`
+- `.venv\Scripts\python.exe main.py run-mvp1-labels --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --out tmp\labels_2d_perf` completed in `221.16s`
+- `.venv\Scripts\python.exe main.py run-mvp1-atlas --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --features <2d all-symbol strategy_feature_matrix.csv> --out tmp\atlas_2d_perf` completed in `1582.80s`
 
 Current documentation sync status:
 - README and COMMANDS must list broad anomaly, post-anomaly extension, and post-pump distribution as executable offline research variants.

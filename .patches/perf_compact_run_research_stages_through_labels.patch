@@ -1,0 +1,2234 @@
+﻿diff --git a/COMMANDS.md b/COMMANDS.md
+index 65a53580..0c1b76ca 100644
+--- a/COMMANDS.md
++++ b/COMMANDS.md
+@@ -67,7 +67,7 @@ python main.py run-mvp1-labels --state tmp/mvp1_state/strategy_state_1m.csv --fu
+ 
+ Low-level target-horizon commands use the same horizon contract as `run-research`: `--horizon-minutes` must be one of `15/30/60/120/180`, and the selected `--strategy-name` must be an executable registry variant that semantically allows that horizon. Omitting `--strategy-name` resolves to `broad_anomaly_v1_h{horizon}` for compatibility; use explicit post-anomaly/post-pump strategy names for executable `120/180` research.
+ 
+-`run-research` defaults to `--research-mode is`, which excludes the final holdout from downstream research stages before data audit/events/state/features/prediction. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records an explicit approved holdout access row. `run-research` writes `stages/forensic_audit/strategy_protocol_audit.csv` after simulation and exits non-zero if the independent forensic audit has any `FAIL` row. `research_run_summary.csv` records holdout mode plus forensic audit status/counts.
++`run-research` defaults to `--research-mode is`, which excludes the final holdout from downstream research stages before data audit/events/state/features/prediction. For short exported windows where the requested holdout would cover the whole period, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to keep one non-holdout research day. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records an explicit approved holdout access row. `run-research` writes `stages/forensic_audit/strategy_protocol_audit.csv` after simulation and exits non-zero if the independent forensic audit has any `FAIL` row. `research_run_summary.csv` records holdout mode plus forensic audit status/counts.
+ 
+ MVP1 weekly CatBoost+Isotonic calibrated prediction:
+ 
+diff --git a/README.md b/README.md
+index c395529b..b5bd69d9 100644
+--- a/README.md
++++ b/README.md
+@@ -28,7 +28,7 @@ python main.py run-research broad_anomaly_v1_h30 --days 380
+ python main.py run-research broad_anomaly_v1_h30 --research-mode frozen_holdout --protocol-freeze-id protocol_freeze_v1
+ ```
+ 
+-`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, applies the holdout lock, runs the full research pipeline through simulation, then writes root reproducibility manifests and an independent forensic protocol audit; the run fails if that audit emits any `FAIL` row. Root outputs include `strategy_run_config.csv`, `anomaly_run_config.csv`, `artifact_manifest.json`, and `research_run_summary.csv`. Input-boundary outputs include `cache_export_coverage.csv` and `cache_export_manifest.json`, so the actual exported symbols, excluded delivery-contract symbols, period, missing UTC days, row count, lifecycle gaps, and file hashes are inspectable for every run. Default `--research-mode is` excludes the final holdout from downstream research stages. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records explicit approved holdout access. If `--days` is omitted, it uses the full available cache period. The current full-cache proof is recorded in `research/validation/cache_export_380d_validation.json` and validates 2025-06-03..2026-06-17, 796 perpetual symbols, 344,895,197 1m rows, no missing UTC days, no duplicate 1m rows, and no unclassified 1m gaps; 3,570 missing 1m rows are explicitly classified as settlement-transition gaps with `{symbol}SETTLED` evidence.
++`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, applies the holdout lock, runs the full research pipeline through simulation, then writes root reproducibility manifests and an independent forensic protocol audit; the run fails if that audit emits any `FAIL` row. Root outputs include `strategy_run_config.csv`, `anomaly_run_config.csv`, `artifact_manifest.json`, and `research_run_summary.csv`. Input-boundary outputs include `cache_export_coverage.csv` and `cache_export_manifest.json`, so the actual exported symbols, excluded delivery-contract symbols, period, missing UTC days, row count, lifecycle gaps, and file hashes are inspectable for every run. Default `--research-mode is` excludes the final holdout from downstream research stages; for short exported windows where the requested holdout would cover the whole period, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to keep one non-holdout research day. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records explicit approved holdout access. If `--days` is omitted, it uses the full available cache period. The current full-cache proof is recorded in `research/validation/cache_export_380d_validation.json` and validates 2025-06-03..2026-06-17, 796 perpetual symbols, 344,895,197 1m rows, no missing UTC days, no duplicate 1m rows, and no unclassified 1m gaps; 3,570 missing 1m rows are explicitly classified as settlement-transition gaps with `{symbol}SETTLED` evidence.
+ 
+ Low-level MVP1 stage commands remain available for debugging:
+ 
+diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 4a43bfbf..bdc8bf23 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -87,6 +87,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Strategy registry truthfulness for specified-only variants | IMPLEMENTED | Registry exposes executable anomaly variants explicitly, writes `strategy_implementation_status.csv` as a generated truth table, and registry-level `validate_strategy_horizon()` rejects unknown, arbitrary, and mismatched strategy/horizon pairs. The current anomaly strategy spec has no remaining specified-only executable gaps. | Keep status artifact and registry tests as permanent gates. |
+ | Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, validates them against the Core whitelist, registry-level `validate_strategy_horizon()` enforces executable strategy/horizon compatibility before prediction, controls, EV, and simulation configs are accepted, and low-level CLI commands now use the same Core whitelist plus registry validation before file IO. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Keep horizon compatibility tests as permanent regression gate. |
+ | Data source boundary / normalized market data | IMPLEMENTED | Binance Vision cache, normalized CSV boundary, run-level data snapshot hashing, and export-level `cache_export_coverage.csv` / `cache_export_manifest.json` proof artifacts exist. Full local 380d export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, 0 unclassified 1m gaps. The only missing 1m rows are 3,570 explicitly classified settlement-transition rows across AIAUSDT/CVXUSDT/LITUSDT/PUMPUSDT/SLPUSDT with `{symbol}SETTLED` sibling evidence. Fixed-date delivery contracts are excluded from perpetual exports by default and recorded in the manifest. `run-research` uses the full available cache period when `--days` is omitted. | Keep `validate-cache-export-proof --expected-days 380 --allow-settlement-transition-gaps` as the permanent full-cache proof gate. |
++| Compact all-symbol `run-research` executability | PARTIAL | `run-research <strategy> --days N` now creates output automatically, uses the full cache period when `--days` is omitted, auto-scales default IS holdout for short windows, and progresses through all-symbol data audit, events, state, future, feature matrix, and labels. Current 2d all-symbol measurements: feature matrix `710.30s`, labels `221.16s`, atlas `1582.80s`. The full compact all-symbol command has not yet completed because atlas aggregation remains too slow. | Convert atlas aggregation from per-group row-list materialization to streaming accumulators, then rerun `python main.py run-research broad_anomaly_v1_h30 --days 2` to completion. |
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index b0a47f62..2c7d97b9 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,22 @@
+ # Patch log
+ 
++## perf: make compact run-research stages executable through labels
++
++Status: APPLIED.
++
++Intent:
++- Keep `run-research <strategy> --days N` compact: output is automatic, and short default IS windows auto-scale holdout so at least one non-holdout day remains.
++- Remove all-symbol hot-path stalls in data audit, events, state, future, feature matrix, and labels without changing trigger thresholds, labels, EV, or methodology.
++- Reuse active strategy `H_max` for the state window and avoid state rows beyond the selected strategy horizon.
++- Preserve canonical `strategy_*` artifacts and copy identical `anomaly_*` aliases after strict canonical schema validation instead of serializing huge CSVs twice.
++
++Validation:
++- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_atlas.py tests\test_artifact_schemas.py -q`
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\builder.py src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\labels\builder.py src\anomaly_science\atlas\builder.py src\anomaly_science\artifacts\writer.py`
++- `run-mvp1-feature-matrix` on the 2d all-symbol run input/state: `710.30s` after removing duplicate state load and hot history copies.
++- `run-mvp1-labels` on the 2d all-symbol state/future artifacts: `221.16s`.
++- `run-mvp1-atlas` on the 2d all-symbol state/future/feature artifacts: `1582.80s`; atlas still needs streaming aggregation before claiming the full compact all-symbol `run-research --days 2` proof.
++
+ ## perf: vectorize point-in-time universe audit
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index e68653e5..67345b92 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -18,14 +18,15 @@ Active rule:
+ - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
+ - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
+ - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
++- Compact `run-research <strategy> --days N` behavior is now closer to the documented target: output remains automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days and keep one non-holdout research day, state windows use active strategy `H_max`, and all-symbol 2d execution now progresses through data audit, events, state, future, feature matrix, atlas, and labels when stages are run directly. Atlas aggregation is still the main remaining performance conflict for a full compact all-symbol run: measured `run-mvp1-atlas` on 2d all-symbol artifacts is `1582.80s`, so `research/METHODOLOGY_GAP_LEDGER.md` now marks compact all-symbol run-research executability as `PARTIAL`.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+ 
+-Current Git head before the active universe-performance patch: `0a0f11ca`.
++Current Git head before the active compact-run performance patch: `de79ea4c`.
+ - Verified with `git rev-parse --short HEAD` in the local repository.
+ - Do not treat old patch-queue notes in previous chats as current state unless they match the checked-out Git head.
+ 
+-Last known local validation before this universe-performance patch:
++Last known local validation before this compact-run performance patch:
+ - `.venv\Scripts\python.exe -m pytest tests\test_data_audit.py -q`
+ - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+ - `.venv\Scripts\python.exe main.py run-mvp1-data-audit --input .output\results\research_runs\20260620T032748623164Z_broad_anomaly_v1_h30\input --out tmp\data_audit_2d_perf` completed in 577.49s
+@@ -40,6 +41,11 @@ Last known local validation before this universe-performance patch:
+ - `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
+ - `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+ - `.venv\Scripts\python.exe -m pytest`
++- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_atlas.py tests\test_artifact_schemas.py -q`
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\builder.py src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\labels\builder.py src\anomaly_science\atlas\builder.py src\anomaly_science\artifacts\writer.py`
++- `.venv\Scripts\python.exe main.py run-mvp1-feature-matrix --input <2d all-symbol input> --state <2d all-symbol strategy_state_1m.csv> --out tmp\feature_matrix_2d_perf4` completed in `710.30s`
++- `.venv\Scripts\python.exe main.py run-mvp1-labels --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --out tmp\labels_2d_perf` completed in `221.16s`
++- `.venv\Scripts\python.exe main.py run-mvp1-atlas --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --features <2d all-symbol strategy_feature_matrix.csv> --out tmp\atlas_2d_perf` completed in `1582.80s`
+ 
+ Current documentation sync status:
+ - README and COMMANDS must list broad anomaly, post-anomaly extension, and post-pump distribution as executable offline research variants.
+diff --git a/src/anomaly_science/artifacts/writer.py b/src/anomaly_science/artifacts/writer.py
+index 1956d071..88afa3ba 100644
+--- a/src/anomaly_science/artifacts/writer.py
++++ b/src/anomaly_science/artifacts/writer.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ import csv
+ import os
++import shutil
+ from dataclasses import asdict, is_dataclass
+ from pathlib import Path
+ from typing import Any, Mapping
+@@ -59,5 +60,11 @@ def write_csv_artifact_with_aliases(
+ ) -> list[Path]:
+     written = [write_csv_artifact(path, rows, schema)]
+     for alias_name in get_strategy_artifact_companion_names(schema.name):
+-        written.append(write_csv_artifact(path.with_name(alias_name), rows, get_artifact_schema(alias_name)))
++        alias_path = path.with_name(alias_name)
++        alias_schema = get_artifact_schema(alias_name)
++        if tuple(alias_schema.required_columns) == tuple(schema.required_columns):
++            shutil.copyfile(path, alias_path)
++            written.append(alias_path)
++        else:
++            written.append(write_csv_artifact(alias_path, rows, alias_schema))
+     return written
+diff --git a/src/anomaly_science/atlas/builder.py b/src/anomaly_science/atlas/builder.py
+index 51c47ab9..cda35dc1 100644
+--- a/src/anomaly_science/atlas/builder.py
++++ b/src/anomaly_science/atlas/builder.py
+@@ -103,8 +103,8 @@ def build_atlas_inputs(
+         )
+ 
+     rows: list[AtlasInputRow] = []
+-    for key in sorted(state_keys):
+-        state = state_by_key[key]
++    for state in states:
++        key = _join_key(state)
+         future = future_by_key[key]
+         feature = feature_by_key[key]
+         if not isinstance(state, StrategyState1mRow) or not isinstance(future, FuturePathRow):
+@@ -619,13 +619,17 @@ def _unique_by_join_key(
+ ) -> dict[tuple[str, str, int, int], object]:
+     result: dict[tuple[str, str, int, int], object] = {}
+     for row in rows:
+-        key = (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
++        key = _join_key(row)
+         if key in result:
+             raise AtlasInputError(f"{artifact_name} duplicate atlas join key: {key}")
+         result[key] = row
+     return result
+ 
+ 
++def _join_key(row: StrategyState1mRow | FuturePathRow | StrategyFeatureMatrixRow) -> tuple[str, str, int, int]:
++    return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
++
++
+ def _enforce_atlas_temporal_contract(
+     *,
+     state: StrategyState1mRow,
+diff --git a/src/anomaly_science/data/__init__.py b/src/anomaly_science/data/__init__.py
+index 8ff02a1b..f410fe5f 100644
+--- a/src/anomaly_science/data/__init__.py
++++ b/src/anomaly_science/data/__init__.py
+@@ -8,6 +8,7 @@ from .normalized import (
+     normalize_liquidations,
+     normalize_market_data,
+     normalize_open_interest_5m,
++    validate_market_data_boundary,
+ )
+ from .quality import (
+     DataQualityMask,
+@@ -44,4 +45,5 @@ __all__ = [
+     "rows_to_artifact",
+     "run_data_quality",
+     "run_mvp1_data_audit",
++    "validate_market_data_boundary",
+ ]
+diff --git a/src/anomaly_science/data/audit_run.py b/src/anomaly_science/data/audit_run.py
+index 9de6338e..186f5a15 100644
+--- a/src/anomaly_science/data/audit_run.py
++++ b/src/anomaly_science/data/audit_run.py
+@@ -9,7 +9,7 @@ import pandas as pd
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.data.normalized import normalize_market_data
++from anomaly_science.data.normalized import validate_market_data_boundary
+ from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, run_data_quality
+ from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
+ from anomaly_science.universe import build_symbol_universe_by_day, universe_rows_to_artifact
+@@ -83,7 +83,7 @@ def _read_source_frames(input_path: Path) -> tuple[dict[str, pd.DataFrame | None
+ 
+     if frames.get("candles_1m") is not None and frames.get("candles_5m") is not None:
+         try:
+-            normalize_market_data(
++            validate_market_data_boundary(
+                 candles_1m=frames["candles_1m"],
+                 candles_5m=frames["candles_5m"],
+                 open_interest_5m=frames.get("open_interest_5m"),
+diff --git a/src/anomaly_science/data/normalized.py b/src/anomaly_science/data/normalized.py
+index 128414ca..603ad064 100644
+--- a/src/anomaly_science/data/normalized.py
++++ b/src/anomaly_science/data/normalized.py
+@@ -6,6 +6,7 @@ from typing import TypeVar
+ import pandas as pd
+ 
+ from anomaly_science.contracts.market import Candle1m, Candle5m, FundingRate, LiquidationEvent, OpenInterest5m, SymbolDayUniverseRow
++from anomaly_science.contracts.market import FIVE_MINUTES_MS, ONE_MINUTE_MS
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+@@ -41,41 +42,62 @@ def _records(frame: pd.DataFrame) -> list[pd.Series]:
+     return [row for _, row in frame.iterrows()]
+ 
+ 
++def _tuple_optional_float(row: object, name: str, *, present: bool) -> float | None:
++    if not present:
++        return None
++    value = getattr(row, name)
++    if pd.isna(value):
++        return None
++    return float(value)
++
++
+ def normalize_candles_1m(frame: pd.DataFrame) -> tuple[Candle1m, ...]:
++    has_number_of_trades = "number_of_trades" in frame.columns
++    has_taker_buy_quote_volume = "taker_buy_quote_volume" in frame.columns
+     return tuple(
+         Candle1m(
+-            symbol=str(row["symbol"]),
+-            open_time_ms=int(row["open_time_ms"]),
+-            available_time_ms=int(row["available_time_ms"]),
+-            open=float(row["open"]),
+-            high=float(row["high"]),
+-            low=float(row["low"]),
+-            close=float(row["close"]),
+-            volume=float(row["volume"]),
+-            quote_volume=float(row["quote_volume"]),
+-            number_of_trades=_optional_float(row, "number_of_trades"),
+-            taker_buy_quote_volume=_optional_float(row, "taker_buy_quote_volume"),
++            symbol=str(row.symbol),
++            open_time_ms=int(row.open_time_ms),
++            available_time_ms=int(row.available_time_ms),
++            open=float(row.open),
++            high=float(row.high),
++            low=float(row.low),
++            close=float(row.close),
++            volume=float(row.volume),
++            quote_volume=float(row.quote_volume),
++            number_of_trades=_tuple_optional_float(row, "number_of_trades", present=has_number_of_trades),
++            taker_buy_quote_volume=_tuple_optional_float(
++                row,
++                "taker_buy_quote_volume",
++                present=has_taker_buy_quote_volume,
++            ),
+         )
+-        for row in _records(frame)
++        for row in frame.itertuples(index=False)
+     )
+ 
+ 
+ def normalize_candles_5m(frame: pd.DataFrame) -> tuple[Candle5m, ...]:
++    has_number_of_trades = "number_of_trades" in frame.columns
++    has_taker_buy_quote_volume = "taker_buy_quote_volume" in frame.columns
+     return tuple(
+         Candle5m(
+-            symbol=str(row["symbol"]),
+-            open_time_ms=int(row["open_time_ms"]),
+-            available_time_ms=int(row["available_time_ms"]),
+-            open=float(row["open"]),
+-            high=float(row["high"]),
+-            low=float(row["low"]),
+-            close=float(row["close"]),
+-            volume=float(row["volume"]),
+-            quote_volume=float(row["quote_volume"]),
+-            number_of_trades=_optional_float(row, "number_of_trades"),
+-            taker_buy_quote_volume=_optional_float(row, "taker_buy_quote_volume"),
++            symbol=str(row.symbol),
++            open_time_ms=int(row.open_time_ms),
++            available_time_ms=int(row.available_time_ms),
++            open=float(row.open),
++            high=float(row.high),
++            low=float(row.low),
++            close=float(row.close),
++            volume=float(row.volume),
++            quote_volume=float(row.quote_volume),
++            number_of_trades=_tuple_optional_float(row, "number_of_trades", present=has_number_of_trades),
++            taker_buy_quote_volume=_tuple_optional_float(
++                row,
++                "taker_buy_quote_volume",
++                present=has_taker_buy_quote_volume,
++            ),
+         )
+-        for row in _records(frame)
++        for row in frame.itertuples(index=False)
+     )
+ 
+ 
+@@ -84,13 +106,13 @@ def normalize_open_interest_5m(frame: pd.DataFrame | None) -> tuple[OpenInterest
+         return ()
+     return tuple(
+         OpenInterest5m(
+-            symbol=str(row["symbol"]),
+-            timestamp_ms=int(row["timestamp_ms"]),
+-            available_time_ms=int(row["available_time_ms"]),
+-            open_interest=float(row["open_interest"]),
+-            source=str(row["source"]),
++            symbol=str(row.symbol),
++            timestamp_ms=int(row.timestamp_ms),
++            available_time_ms=int(row.available_time_ms),
++            open_interest=float(row.open_interest),
++            source=str(row.source),
+         )
+-        for row in _records(frame)
++        for row in frame.itertuples(index=False)
+     )
+ 
+ 
+@@ -99,16 +121,16 @@ def normalize_liquidations(frame: pd.DataFrame | None) -> tuple[LiquidationEvent
+         return ()
+     return tuple(
+         LiquidationEvent(
+-            symbol=str(row["symbol"]),
+-            event_time_ms=int(row["event_time_ms"]),
+-            available_time_ms=int(row["available_time_ms"]),
+-            side=str(row["side"]),
+-            price=float(row["price"]),
+-            quantity=float(row["quantity"]),
+-            quote_quantity=float(row["quote_quantity"]),
+-            source=str(row["source"]),
++            symbol=str(row.symbol),
++            event_time_ms=int(row.event_time_ms),
++            available_time_ms=int(row.available_time_ms),
++            side=str(row.side),
++            price=float(row.price),
++            quantity=float(row.quantity),
++            quote_quantity=float(row.quote_quantity),
++            source=str(row.source),
+         )
+-        for row in _records(frame)
++        for row in frame.itertuples(index=False)
+     )
+ 
+ 
+@@ -117,11 +139,11 @@ def normalize_funding_rates(frame: pd.DataFrame | None) -> tuple[FundingRate, ..
+         return ()
+     return tuple(
+         FundingRate(
+-            symbol=str(row["symbol"]),
+-            timestamp_ms=int(row["timestamp_ms"]),
+-            funding_rate=float(row["funding_rate"]),
++            symbol=str(row.symbol),
++            timestamp_ms=int(row.timestamp_ms),
++            funding_rate=float(row.funding_rate),
+         )
+-        for row in _records(frame)
++        for row in frame.itertuples(index=False)
+     )
+ 
+ 
+@@ -182,3 +204,124 @@ def normalize_market_data(
+         open_interest_5m=normalize_open_interest_5m(open_interest_5m),
+         liquidations=normalize_liquidations(liquidations),
+     )
++
++
++def validate_market_data_boundary(
++    *,
++    candles_1m: pd.DataFrame,
++    candles_5m: pd.DataFrame,
++    open_interest_5m: pd.DataFrame | None,
++    liquidations: pd.DataFrame | None,
++) -> None:
++    """Validate normalized market-data contracts without materializing row objects."""
++    _validate_candle_frame(candles_1m, dataset_name="candles_1m", timeframe_ms=ONE_MINUTE_MS)
++    _validate_candle_frame(candles_5m, dataset_name="candles_5m", timeframe_ms=FIVE_MINUTES_MS)
++    if open_interest_5m is not None:
++        _validate_open_interest_frame(open_interest_5m)
++    if liquidations is not None:
++        _validate_liquidation_frame(liquidations)
++
++
++def _validate_candle_frame(frame: pd.DataFrame, *, dataset_name: str, timeframe_ms: int) -> None:
++    _require_non_empty_symbol(frame, dataset_name=dataset_name)
++    numeric = _numeric_columns(
++        frame,
++        dataset_name=dataset_name,
++        columns=(
++            "open_time_ms",
++            "available_time_ms",
++            "open",
++            "high",
++            "low",
++            "close",
++            "volume",
++            "quote_volume",
++        ),
++    )
++    if bool((numeric["available_time_ms"] < numeric["open_time_ms"] + timeframe_ms).any()):
++        raise ValueError(f"{dataset_name}.available_time_ms must be at or after candle close")
++    if bool((numeric[["open", "high", "low", "close"]] <= 0).any(axis=1).any()):
++        raise ValueError(f"{dataset_name} OHLC values must be positive")
++    if bool(
++        (
++            (numeric["high"] < numeric[["open", "close"]].max(axis=1))
++            | (numeric["low"] > numeric[["open", "close"]].min(axis=1))
++            | (numeric["low"] > numeric["high"])
++        ).any()
++    ):
++        raise ValueError(f"{dataset_name} OHLC ordering is invalid")
++    if bool((numeric[["volume", "quote_volume"]] < 0).any(axis=1).any()):
++        raise ValueError(f"{dataset_name} volume fields must be non-negative")
++
++    optional_numeric = _existing_numeric_columns(frame, dataset_name=dataset_name, columns=("number_of_trades", "taker_buy_quote_volume"))
++    for column in optional_numeric.columns:
++        if bool((optional_numeric[column] < 0).any()):
++            raise ValueError(f"{dataset_name}.{column} must be non-negative")
++    if "taker_buy_quote_volume" in optional_numeric.columns:
++        if bool((optional_numeric["taker_buy_quote_volume"] > numeric["quote_volume"]).any()):
++            raise ValueError(f"{dataset_name}.taker_buy_quote_volume must be <= quote_volume")
++
++
++def _validate_open_interest_frame(frame: pd.DataFrame) -> None:
++    dataset_name = "open_interest_5m"
++    _require_non_empty_symbol(frame, dataset_name=dataset_name)
++    _require_non_empty_text(frame, dataset_name=dataset_name, column="source")
++    numeric = _numeric_columns(frame, dataset_name=dataset_name, columns=("timestamp_ms", "available_time_ms", "open_interest"))
++    if bool((numeric["available_time_ms"] < numeric["timestamp_ms"] + FIVE_MINUTES_MS).any()):
++        raise ValueError("open_interest_5m.available_time_ms must be at or after closed 5m bucket")
++    if bool((numeric["open_interest"] < 0).any()):
++        raise ValueError("open_interest_5m.open_interest must be non-negative")
++
++
++def _validate_liquidation_frame(frame: pd.DataFrame) -> None:
++    dataset_name = "liquidations"
++    _require_non_empty_symbol(frame, dataset_name=dataset_name)
++    _require_non_empty_text(frame, dataset_name=dataset_name, column="source")
++    sides = frame["side"].astype("string").str.strip()
++    if bool((~sides.isin(("long", "short"))).any()):
++        raise ValueError("liquidations.side must be 'long' or 'short'")
++    numeric = _numeric_columns(
++        frame,
++        dataset_name=dataset_name,
++        columns=("event_time_ms", "available_time_ms", "price", "quantity", "quote_quantity"),
++    )
++    if bool((numeric["available_time_ms"] < numeric["event_time_ms"]).any()):
++        raise ValueError("liquidations.available_time_ms must be >= event_time_ms")
++    if bool((numeric["price"] <= 0).any()):
++        raise ValueError("liquidations.price must be positive")
++    if bool((numeric[["quantity", "quote_quantity"]] < 0).any(axis=1).any()):
++        raise ValueError("liquidations quantity fields must be non-negative")
++
++
++def _require_non_empty_symbol(frame: pd.DataFrame, *, dataset_name: str) -> None:
++    _require_non_empty_text(frame, dataset_name=dataset_name, column="symbol")
++
++
++def _require_non_empty_text(frame: pd.DataFrame, *, dataset_name: str, column: str) -> None:
++    if column not in frame.columns:
++        raise ValueError(f"{dataset_name} is missing required column {column!r}")
++    values = frame[column].astype("string").str.strip()
++    if bool(values.isna().any()) or bool((values == "").any()):
++        raise ValueError(f"{dataset_name}.{column} must be non-empty")
++
++
++def _numeric_columns(frame: pd.DataFrame, *, dataset_name: str, columns: tuple[str, ...]) -> pd.DataFrame:
++    missing = [column for column in columns if column not in frame.columns]
++    if missing:
++        raise ValueError(f"{dataset_name} is missing required numeric columns: {missing}")
++    numeric = frame.loc[:, list(columns)].apply(pd.to_numeric, errors="coerce")
++    if bool(numeric.isna().any(axis=1).any()):
++        raise ValueError(f"{dataset_name} has non-numeric or missing values in {columns}")
++    return numeric
++
++
++def _existing_numeric_columns(frame: pd.DataFrame, *, dataset_name: str, columns: tuple[str, ...]) -> pd.DataFrame:
++    existing = [column for column in columns if column in frame.columns]
++    if not existing:
++        return pd.DataFrame(index=frame.index)
++    numeric = frame.loc[:, existing].apply(pd.to_numeric, errors="coerce")
++    present = frame.loc[:, existing].notna()
++    invalid = numeric.isna() & present
++    if bool(invalid.any(axis=1).any()):
++        raise ValueError(f"{dataset_name} has non-numeric values in optional columns {tuple(existing)}")
++    return numeric
+diff --git a/src/anomaly_science/events/detector.py b/src/anomaly_science/events/detector.py
+index 45032277..57af8c64 100644
+--- a/src/anomaly_science/events/detector.py
++++ b/src/anomaly_science/events/detector.py
+@@ -6,6 +6,8 @@ from dataclasses import dataclass
+ from statistics import fmean, pstdev
+ from typing import Iterable, Sequence
+ 
++import pandas as pd
++
+ from anomaly_science.contracts.events import StrategyEvent
+ from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
+ from anomaly_science.events.config import BroadAnomalyDetectorConfig
+@@ -88,6 +90,203 @@ def detect_broad_anomaly_events(
+     return tuple(events)
+ 
+ 
++def detect_broad_anomaly_events_from_frame(
++    frame: pd.DataFrame,
++    *,
++    config: BroadAnomalyDetectorConfig | None = None,
++) -> tuple[StrategyEvent, ...]:
++    """Detect broad anomaly events from a normalized candle frame using vectorized rolling metrics."""
++    cfg = config or BroadAnomalyDetectorConfig()
++    if frame.empty:
++        return ()
++    required = {
++        "symbol",
++        "open_time_ms",
++        "available_time_ms",
++        "open",
++        "high",
++        "low",
++        "close",
++        "volume",
++        "quote_volume",
++    }
++    missing = sorted(required - set(frame.columns))
++    if missing:
++        raise ValueError(f"broad anomaly frame is missing required columns: {missing}")
++
++    work = frame.copy()
++    work["symbol"] = work["symbol"].astype(str)
++    numeric_columns = [
++        "open_time_ms",
++        "available_time_ms",
++        "open",
++        "high",
++        "low",
++        "close",
++        "volume",
++        "quote_volume",
++    ]
++    if "number_of_trades" in work.columns:
++        numeric_columns.append("number_of_trades")
++    for column in numeric_columns:
++        work[column] = pd.to_numeric(work[column], errors="coerce")
++    if work[numeric_columns].isna().any(axis=1).any():
++        raise ValueError("broad anomaly frame contains non-numeric required values")
++    if "number_of_trades" not in work.columns:
++        work["number_of_trades"] = math.nan
++
++    work = work.sort_values(["symbol", "open_time_ms"], kind="mergesort").reset_index(drop=True)
++    grouped = work.groupby("symbol", sort=False)
++    work["raw_candle_gap_minutes"] = (work["open_time_ms"] - grouped["open_time_ms"].shift(1)) / ONE_MINUTE_MS
++    work["technical_noise_shock"] = work["raw_candle_gap_minutes"] > 3.0
++    work["move_pct"] = (work["close"] / work["open"]) - 1.0
++    work["range_pct"] = (work["high"] / work["low"]) - 1.0
++
++    baseline_count = grouped["open_time_ms"].transform(
++        lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).count().shift(1)
++    )
++    for column, metric_name in (
++        ("volume", "volume_zscore"),
++        ("quote_volume", "quote_volume_zscore"),
++        ("number_of_trades", "trade_count_zscore"),
++        ("range_pct", "range_zscore"),
++    ):
++        mean = grouped[column].transform(
++            lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).mean().shift(1)
++        )
++        std = grouped[column].transform(
++            lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).std(ddof=0).shift(1)
++        )
++        work[metric_name] = (work[column] - mean) / std.where(std > 0.0)
++
++    if cfg.fast_burst_window_minutes <= 1:
++        work["fast_burst_return_pct"] = work["move_pct"]
++    else:
++        fast_open = grouped["open"].shift(cfg.fast_burst_window_minutes - 1)
++        work["fast_burst_return_pct"] = (work["close"] / fast_open) - 1.0
++
++    grind_window = cfg.grind_pump_window_minutes
++    grind_open = grouped["open"].shift(grind_window - 1)
++    work["grind_pump_return_pct"] = (work["close"] / grind_open) - 1.0
++    positive = (work["close"] > work["open"]).astype(int)
++    abs_move = work["move_pct"].abs()
++    work["grind_pump_positive_candles"] = positive.groupby(work["symbol"], sort=False).transform(
++        lambda item: item.rolling(grind_window, min_periods=grind_window).sum()
++    )
++    work["grind_pump_max_abs_move_pct"] = abs_move.groupby(work["symbol"], sort=False).transform(
++        lambda item: item.rolling(grind_window, min_periods=grind_window).max()
++    )
++
++    prior_high = grouped["high"].transform(
++        lambda item: item.rolling(cfg.breakout_lookback_minutes, min_periods=1).max().shift(1)
++    )
++    work["breakout_pct"] = (work["close"] / prior_high) - 1.0
++    baseline_high = grouped["high"].transform(
++        lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).max().shift(1)
++    )
++    baseline_low = grouped["low"].transform(
++        lambda item: item.rolling(cfg.baseline_bars, min_periods=cfg.min_baseline_bars).min().shift(1)
++    )
++    work["inside_baseline_range"] = (work["high"] <= baseline_high) & (work["low"] >= baseline_low)
++    work["minutes_since_session_start"] = _session_minutes_series(
++        work["open_time_ms"],
++        cfg.session_activity_start_minutes_utc,
++        cfg.session_activity_window_minutes,
++    )
++
++    market_wide_seed = (
++        work["move_pct"].abs().ge(cfg.min_market_wide_abs_return_pct)
++        & work["quote_volume_zscore"].ge(cfg.min_market_wide_quote_volume_zscore)
++    )
++    market_wide_counts = work.loc[market_wide_seed].groupby("open_time_ms", sort=False)["symbol"].count()
++    market_wide_times = set(market_wide_counts[market_wide_counts >= cfg.market_wide_window_min_symbols].index.astype(int))
++    work["market_wide_impulse"] = work["open_time_ms"].astype("int64").isin(market_wide_times)
++
++    candidate_mask = (
++        baseline_count.ge(cfg.min_baseline_bars)
++        & ~work["technical_noise_shock"].fillna(False)
++        & (
++            work["move_pct"].abs().ge(cfg.min_abs_return_pct)
++            | work["range_zscore"].ge(cfg.min_range_zscore)
++            | work["fast_burst_return_pct"].ge(cfg.min_fast_burst_return_pct)
++            | (
++                work["grind_pump_return_pct"].ge(cfg.min_grind_pump_return_pct)
++                & work["grind_pump_positive_candles"].ge(cfg.min_grind_pump_positive_candles)
++                & work["grind_pump_max_abs_move_pct"].le(cfg.max_grind_pump_single_candle_abs_return_pct)
++            )
++            | work["breakout_pct"].ge(cfg.min_breakout_pct)
++            | (
++                work["move_pct"].ge(cfg.min_pump_inside_noise_return_pct)
++                & work["inside_baseline_range"]
++                & work["quote_volume_zscore"].ge(cfg.min_quote_volume_zscore)
++            )
++            | work["quote_volume_zscore"].ge(cfg.min_quote_volume_zscore)
++            | work["volume_zscore"].ge(cfg.min_volume_zscore)
++            | work["trade_count_zscore"].ge(cfg.min_trade_count_zscore)
++            | (
++                work["minutes_since_session_start"].notna()
++                & work["quote_volume_zscore"].ge(cfg.min_session_activity_quote_volume_zscore)
++            )
++            | work["market_wide_impulse"]
++        )
++    )
++
++    events: list[StrategyEvent] = []
++    last_event_start_by_symbol: dict[str, int] = {}
++    for row in work.loc[candidate_mask].itertuples(index=False):
++        open_time_ms = int(row.open_time_ms)
++        symbol = str(row.symbol)
++        if _in_cooldown(open_time_ms, last_event_start_by_symbol.get(symbol), cfg.cooldown_minutes):
++            continue
++        metrics = {
++            "move_pct": row.move_pct,
++            "range_pct": row.range_pct,
++            "volume_zscore": row.volume_zscore,
++            "quote_volume_zscore": row.quote_volume_zscore,
++            "trade_count_zscore": row.trade_count_zscore,
++            "range_zscore": row.range_zscore,
++            "fast_burst_return_pct": row.fast_burst_return_pct,
++            "grind_pump_return_pct": row.grind_pump_return_pct,
++            "grind_pump_positive_candles": row.grind_pump_positive_candles,
++            "grind_pump_max_abs_move_pct": row.grind_pump_max_abs_move_pct,
++            "breakout_pct": row.breakout_pct,
++            "inside_baseline_range": bool(row.inside_baseline_range),
++            "minutes_since_session_start": row.minutes_since_session_start,
++        }
++        trigger_components = _broad_activity_components(
++            metrics,
++            cfg,
++            market_wide_impulse=bool(row.market_wide_impulse),
++        )
++        if not trigger_components:
++            continue
++        events.append(
++            StrategyEvent(
++                event_id=_event_id(cfg.detector_version, symbol, open_time_ms),
++                symbol=symbol,
++                event_start_time_ms=open_time_ms,
++                event_detection_time_ms=int(row.available_time_ms),
++                seed_time_ms=open_time_ms,
++                seed_open=float(row.open),
++                seed_high=float(row.high),
++                seed_low=float(row.low),
++                seed_close=float(row.close),
++                initial_move_pct=float(row.move_pct),
++                initial_volume_zscore=_metric_float(row.volume_zscore),
++                initial_quote_volume_zscore=_metric_float(row.quote_volume_zscore),
++                initial_trade_count_zscore=_metric_float(row.trade_count_zscore),
++                trigger_component=trigger_components[0],
++                trigger_components=trigger_components,
++                technical_noise_shock=False,
++                raw_candle_gap_minutes=_metric_float(row.raw_candle_gap_minutes),
++                excluded_by_data_quality_gate=False,
++                detector_version=cfg.detector_version,
++            )
++        )
++        last_event_start_by_symbol[symbol] = open_time_ms
++    return tuple(events)
++
++
+ def events_to_artifact(events: Sequence[StrategyEvent]) -> list[dict[str, object]]:
+     rows: list[dict[str, object]] = []
+     for event in sorted(events, key=lambda item: (item.event_detection_time_ms, item.symbol, item.event_id)):
+@@ -276,13 +475,19 @@ def _at_least(value: _MetricValue, threshold: float) -> bool:
+ def _metric_float(value: _MetricValue) -> float | None:
+     if isinstance(value, bool) or value is None:
+         return None
+-    return float(value)
++    result = float(value)
++    if not math.isfinite(result):
++        return None
++    return result
+ 
+ 
+ def _metric_int(value: _MetricValue) -> int:
+     if isinstance(value, bool) or value is None:
+         return 0
+-    return int(value)
++    numeric = float(value)
++    if not math.isfinite(numeric):
++        return 0
++    return int(numeric)
+ 
+ 
+ def _window_candles(candle: Candle1m, baseline: Sequence[Candle1m], window_minutes: int) -> tuple[Candle1m, ...]:
+@@ -334,6 +539,17 @@ def _minutes_since_session_start(open_time_ms: int, start_minutes_utc: Sequence[
+     return nearest
+ 
+ 
++def _session_minutes_series(open_time_ms: pd.Series, start_minutes_utc: Sequence[int], window_minutes: int) -> pd.Series:
++    minute_of_day = (open_time_ms.astype("int64") // ONE_MINUTE_MS) % 1_440
++    if not start_minutes_utc:
++        return pd.Series(math.nan, index=open_time_ms.index)
++    nearest = pd.Series(1_440, index=open_time_ms.index, dtype="int64")
++    for start_minute in start_minutes_utc:
++        distance = (minute_of_day - start_minute) % 1_440
++        nearest = nearest.where(nearest <= distance, distance)
++    return nearest.where(nearest < window_minutes, math.nan)
++
++
+ def _market_wide_impulse_times(
+     contexts: Sequence[_SeedContext],
+     config: BroadAnomalyDetectorConfig,
+diff --git a/src/anomaly_science/events/run.py b/src/anomaly_science/events/run.py
+index fdc72553..0593b520 100644
+--- a/src/anomaly_science/events/run.py
++++ b/src/anomaly_science/events/run.py
+@@ -10,7 +10,7 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.data.normalized import normalize_candles_1m
++from anomaly_science.contracts.events import StrategyEvent
+ from anomaly_science.data.quality import (
+     apply_data_quality_mask,
+     build_candles_1m_data_quality_mask,
+@@ -23,7 +23,7 @@ from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSour
+ from anomaly_science.events.config import BroadAnomalyDetectorConfig
+ from anomaly_science.events.deduplication import suppress_event_cascade
+ from anomaly_science.events.detector import events_to_artifact
+-from anomaly_science.strategy.base import validate_trigger_frame
++from anomaly_science.strategy.base import internal_datetime_to_utc_ms, validate_trigger_frame
+ from anomaly_science.strategy.metadata import format_required_data_streams, strategy_metadata_run_config_rows
+ from anomaly_science.strategy.registry import get_broad_anomaly_strategy, get_strategy
+ 
+@@ -72,19 +72,14 @@ def run_mvp1_events(
+     )
+     blocking_quality_fail = has_detector_blocking_quality_fail(data_quality)
+     if required_stream_reject_count:
+-        event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
++            event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
+     if frames.get("candles_1m") is not None and not blocking_quality_fail and not required_stream_reject_count:
+         try:
+             gated_candles_1m = apply_data_quality_mask(frames["candles_1m"], data_quality_mask)
+-            market_frame = pl.DataFrame(gated_candles_1m.to_dict(orient="list"))
++            market_frame = pl.from_pandas(gated_candles_1m)
+             trigger_frame = strategy.generate_triggers(market_frame)
+             validate_trigger_frame(trigger_frame)
+-            raw_events = (
+-                ()
+-                if gated_candles_1m.empty
+-                else strategy.generate_events(normalize_candles_1m(gated_candles_1m))  # type: ignore[attr-defined]
+-            )
+-            _enforce_trigger_frame_matches_events(trigger_frame=trigger_frame, events=raw_events)
++            raw_events = _events_from_trigger_frame(trigger_frame)
+             cascade_result = suppress_event_cascade(raw_events, horizon_minutes=strategy.metadata.horizon_minutes)
+             events = cascade_result.accepted_events
+             raw_event_count = len(raw_events)
+@@ -307,6 +302,52 @@ def _required_stream_reject_count(*, universe_rows: list, required_streams: obje
+     return reject_count
+ 
+ 
++def _events_from_trigger_frame(trigger_frame: pl.DataFrame) -> tuple[StrategyEvent, ...]:
++    if trigger_frame.height == 0:
++        return ()
++    events: list[StrategyEvent] = []
++    for row in trigger_frame.to_dicts():
++        trigger_components = tuple(
++            item
++            for item in str(row.get("trigger_components") or row.get("trigger_component") or "").split(";")
++            if item
++        )
++        events.append(
++            StrategyEvent(
++                event_id=str(row["event_id"]),
++                symbol=str(row["symbol"]),
++                event_start_time_ms=internal_datetime_to_utc_ms(row["event_start_time"]),
++                event_detection_time_ms=internal_datetime_to_utc_ms(row.get("event_detection_time") or row["state_time"]),
++                seed_time_ms=internal_datetime_to_utc_ms(row.get("seed_time") or row["event_start_time"]),
++                seed_open=float(row["seed_open"]),
++                seed_high=float(row["seed_high"]),
++                seed_low=float(row["seed_low"]),
++                seed_close=float(row["seed_close"]),
++                initial_move_pct=float(row["initial_move_pct"]),
++                initial_volume_zscore=_optional_trigger_float(row.get("initial_volume_zscore")),
++                initial_quote_volume_zscore=_optional_trigger_float(row.get("initial_quote_volume_zscore")),
++                initial_trade_count_zscore=_optional_trigger_float(row.get("initial_trade_count_zscore")),
++                trigger_component=str(row.get("trigger_component") or ""),
++                trigger_components=trigger_components,
++                technical_noise_shock=bool(row.get("technical_noise_shock", False)),
++                raw_candle_gap_minutes=_optional_trigger_float(row.get("raw_candle_gap_minutes")),
++                excluded_by_data_quality_gate=bool(row.get("excluded_by_data_quality_gate", False)),
++                daily_return_asof_t=_optional_trigger_float(row.get("daily_return_asof_t")),
++                trade_count_market_percentile_asof_t=_optional_trigger_float(row.get("trade_count_market_percentile_asof_t")),
++                detector_version=str(row.get("detector_version") or ""),
++            )
++        )
++    return tuple(events)
++
++
++def _optional_trigger_float(value: object) -> float | None:
++    if value is None:
++        return None
++    if pd.isna(value):
++        return None
++    return float(value)
++
++
+ def _enforce_trigger_frame_matches_events(*, trigger_frame: pl.DataFrame, events: tuple) -> None:
+     trigger_event_ids = set(trigger_frame["event_id"].to_list()) if "event_id" in trigger_frame.columns else set()
+     event_ids = {event.event_id for event in events}
+diff --git a/src/anomaly_science/features/matrix.py b/src/anomaly_science/features/matrix.py
+index d3f4236c..a0e0aeeb 100644
+--- a/src/anomaly_science/features/matrix.py
++++ b/src/anomaly_science/features/matrix.py
+@@ -31,6 +31,20 @@ class _CandleSeries:
+         self._rows = tuple(sorted(rows, key=lambda item: (item.available_time_ms, item.open_time_ms)))
+         self._available_times = tuple(item.available_time_ms for item in self._rows)
+         self._open_times = tuple(item.open_time_ms for item in self._rows)
++        prefix: list[float] = []
++        running_sum = 0.0
++        for index, candle in enumerate(self._rows):
++            if index == 0:
++                prefix.append(0.0)
++                continue
++            previous_close = self._rows[index - 1].close
++            running_sum += max(
++                candle.high - candle.low,
++                abs(candle.high - previous_close),
++                abs(candle.low - previous_close),
++            )
++            prefix.append(running_sum)
++        self._true_range_prefix_sums = tuple(prefix)
+ 
+     def __iter__(self):
+         return iter(self._rows)
+@@ -45,6 +59,13 @@ class _CandleSeries:
+         end = bisect_right(self._available_times, snapshot_time_ms)
+         return self._rows[:end]
+ 
++    def asof_count(self, snapshot_time_ms: int) -> int:
++        return bisect_right(self._available_times, snapshot_time_ms)
++
++    def trailing_asof(self, snapshot_time_ms: int, count: int) -> tuple[Candle1m, ...]:
++        end = self.asof_count(snapshot_time_ms)
++        return self._rows[max(0, end - count) : end]
++
+     def current(self, snapshot_time_ms: int) -> Candle1m | None:
+         index = bisect_right(self._available_times, snapshot_time_ms) - 1
+         if index < 0:
+@@ -56,6 +77,8 @@ class _CandleSeries:
+ 
+     def history_before(self, available_time_ms: int, count: int) -> tuple[Candle1m, ...]:
+         end = bisect_left(self._available_times, available_time_ms)
++        if end < count:
++            return ()
+         return self._rows[max(0, end - count) : end]
+ 
+     def window(self, snapshot_time_ms: int, window_minutes: int) -> tuple[Candle1m, ...]:
+@@ -76,25 +99,20 @@ class _CandleSeries:
+         return self._rows[start:end]
+ 
+     def atr_asof(self, *, symbol: str, snapshot_time_ms: int, atr_window_minutes: int):
+-        asof_rows = self.asof(snapshot_time_ms)
++        history_count = self.asof_count(snapshot_time_ms)
+         required_candle_count = atr_window_minutes + 1
+-        if len(asof_rows) < required_candle_count:
++        if history_count < required_candle_count:
+             raise AtrComputationError(
+                 "insufficient as-of 1m candle history for ATR: "
+                 f"need {required_candle_count} closed candles for {atr_window_minutes} true ranges, "
+-                f"got {len(asof_rows)} for {symbol} at {snapshot_time_ms}"
+-            )
+-        source_slice = asof_rows[-required_candle_count:]
+-        true_ranges = [
+-            max(
+-                candle.high - candle.low,
+-                abs(candle.high - previous_candle.close),
+-                abs(candle.low - previous_candle.close),
++                f"got {history_count} for {symbol} at {snapshot_time_ms}"
+             )
+-            for previous_candle, candle in zip(source_slice, source_slice[1:])
+-        ]
+-        atr = sum(true_ranges) / atr_window_minutes
+-        last_close = source_slice[-1].close
++        source_start_index = history_count - atr_window_minutes
++        last_source_index = history_count - 1
++        prefix_before_window = self._true_range_prefix_sums[source_start_index - 1]
++        prefix_at_window_end = self._true_range_prefix_sums[last_source_index]
++        atr = (prefix_at_window_end - prefix_before_window) / atr_window_minutes
++        last_close = self._rows[last_source_index].close
+         if last_close <= 0 or not math.isfinite(atr) or atr <= 0:
+             raise AtrComputationError("computed ATR must be positive and finite")
+         return atr, atr / last_close
+@@ -146,10 +164,23 @@ def build_price_time_feature_matrix(
+     states_by_snapshot: dict[int, list[StrategyState1mRow]] = {}
+     for state in state_rows:
+         states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
++    cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
+ 
+     rows: list[StrategyFeatureMatrixRow] = []
+     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
+         symbol_candles = candles_by_symbol.get(state.symbol, [])
++        if state.snapshot_time_ms not in cross_section_by_snapshot:
++            snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
++            cross_section_by_snapshot[state.snapshot_time_ms] = _cross_section_features_by_symbol(
++                snapshot_time_ms=state.snapshot_time_ms,
++                candles_by_symbol=candles_by_symbol,
++                open_interest_by_symbol=oi_by_symbol,
++                liquidations_by_symbol=liquidations_by_symbol,
++                universe_by_day=universe_by_day,
++                states_at_snapshot=snapshot_states,
++                min_cross_section_symbols=cfg.min_cross_section_symbols,
++            )
++        cross_section_by_symbol, missing_cross_section = cross_section_by_snapshot[state.snapshot_time_ms]
+         rows.append(
+             _build_state_feature_row(
+                 state=state,
+@@ -163,6 +194,7 @@ def build_price_time_feature_matrix(
+                 liquidations_by_symbol=liquidations_by_symbol,
+                 universe_by_day=universe_by_day,
+                 states_at_snapshot=states_by_snapshot.get(state.snapshot_time_ms, []),
++                cross_section_features=cross_section_by_symbol.get(state.symbol, missing_cross_section),
+                 config=cfg,
+             )
+         )
+@@ -337,9 +369,18 @@ def run_mvp1_feature_matrix(
+ 
+     source = CsvDirectoryDataSource(input_path)
+     state_rows = load_strategy_state_1m_csv(state_artifact_path)
+-    matrix_rows = build_price_time_feature_matrix_from_source(
+-        source=source,
+-        state_path=state_artifact_path,
++    frame = source.read_frame("candles_1m", required=True)
++    if frame is None:
++        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
++    oi_frame = source.read_frame("open_interest_5m", required=False)
++    liquidation_frame = source.read_frame("liquidations", required=False)
++    universe_frame = source.read_frame("symbol_universe_by_day", required=False)
++    matrix_rows = build_price_time_feature_matrix(
++        candles_1m=normalize_candles_1m(frame),
++        open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
++        liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
++        symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
++        state_rows=state_rows,
+         config=cfg,
+     )
+     protocol_rows = _protocol_rows(state_row_count=len(state_rows), feature_row_count=len(matrix_rows))
+@@ -396,6 +437,7 @@ def _build_state_feature_row(
+     universe_by_day: Mapping[str, set[str]],
+     states_at_snapshot: Sequence[StrategyState1mRow],
+     config: FeatureMatrixConfig,
++    cross_section_features: _CrossSectionFeatures | None = None,
+ ) -> StrategyFeatureMatrixRow:
+     atr_value: float | None = None
+     atr_pct_value: float | None = None
+@@ -452,15 +494,16 @@ def _build_state_feature_row(
+         atr_value=atr_value,
+         windows_minutes=config.cvd_windows_minutes,
+     )
+-    cross_section_features = _cross_section_features(
+-        state=state,
+-        candles_by_symbol=candles_by_symbol,
+-        open_interest_by_symbol=open_interest_by_symbol,
+-        liquidations_by_symbol=liquidations_by_symbol,
+-        universe_by_day=universe_by_day,
+-        states_at_snapshot=states_at_snapshot,
+-        min_cross_section_symbols=config.min_cross_section_symbols,
+-    )
++    if cross_section_features is None:
++        cross_section_features = _cross_section_features(
++            state=state,
++            candles_by_symbol=candles_by_symbol,
++            open_interest_by_symbol=open_interest_by_symbol,
++            liquidations_by_symbol=liquidations_by_symbol,
++            universe_by_day=universe_by_day,
++            states_at_snapshot=states_at_snapshot,
++            min_cross_section_symbols=config.min_cross_section_symbols,
++        )
+     market_context_features = _market_context_features(
+         state=state,
+         symbol_candles=candles,
+@@ -1186,6 +1229,90 @@ def _cross_section_features(
+     )
+ 
+ 
++def _cross_section_features_by_symbol(
++    *,
++    snapshot_time_ms: int,
++    candles_by_symbol: Mapping[str, Sequence[Candle1m]],
++    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
++    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
++    universe_by_day: Mapping[str, set[str]],
++    states_at_snapshot: Sequence[StrategyState1mRow],
++    min_cross_section_symbols: int,
++) -> tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]:
++    trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
++    universe_symbols = universe_by_day.get(trade_date, set())
++    if not universe_symbols:
++        missing = _missing_cross_section_features(symbol_count=0)
++        return {}, missing
++
++    metric_values: dict[str, dict[str, float]] = {
++        "volume": {},
++        "quote_volume": {},
++        "return_1m": {},
++        "oi_growth": {},
++        "liq_intensity": {},
++        "range_expansion": {},
++    }
++    symbols_with_current_candle = 0
++    for symbol in sorted(universe_symbols):
++        candles = candles_by_symbol.get(symbol, ())
++        current = _current_candle(candles=candles, snapshot_time_ms=snapshot_time_ms)
++        if current is None:
++            continue
++        symbols_with_current_candle += 1
++        metric_values["volume"][symbol] = current.volume
++        metric_values["quote_volume"][symbol] = current.quote_volume
++        return_1m = _one_minute_return(candles=candles, snapshot_time_ms=snapshot_time_ms)
++        if return_1m is not None:
++            metric_values["return_1m"][symbol] = return_1m
++        if current.close > 0:
++            metric_values["range_expansion"][symbol] = (current.high - current.low) / current.close
++        if open_interest_by_symbol is not None:
++            oi = _oi_features(
++                open_interest_rows=open_interest_by_symbol.get(symbol, ()),
++                snapshot_time_ms=snapshot_time_ms,
++            )
++            if oi.oi_change_5m_pct_of_oi is not None:
++                metric_values["oi_growth"][symbol] = oi.oi_change_5m_pct_of_oi
++        if liquidations_by_symbol is not None:
++            liq_intensity = _minute_liq_intensity(
++                current=current,
++                liquidation_rows=liquidations_by_symbol.get(symbol, ()),
++                snapshot_time_ms=snapshot_time_ms,
++            )
++            if liq_intensity is not None:
++                metric_values["liq_intensity"][symbol] = liq_intensity
++
++    missing = _missing_cross_section_features(symbol_count=symbols_with_current_candle)
++    if symbols_with_current_candle < min_cross_section_symbols:
++        return {}, missing
++
++    ranks_by_metric = {
++        metric_name: _rank_percentiles_by_symbol(values)
++        for metric_name, values in metric_values.items()
++    }
++    return_from_event_ranks = _return_from_event_percentiles_by_symbol(
++        states_at_snapshot=states_at_snapshot,
++        min_cross_section_symbols=min_cross_section_symbols,
++    )
++    target_symbols = set().union(*(set(values) for values in metric_values.values()))
++    target_symbols.update(row.symbol for row in states_at_snapshot)
++    return {
++        symbol: _CrossSectionFeatures(
++            volume_market_percentile=ranks_by_metric["volume"].get(symbol),
++            quote_volume_market_percentile=ranks_by_metric["quote_volume"].get(symbol),
++            return_1m_market_percentile=ranks_by_metric["return_1m"].get(symbol),
++            return_from_event_market_percentile=return_from_event_ranks.get(symbol),
++            oi_growth_market_percentile=ranks_by_metric["oi_growth"].get(symbol),
++            liq_intensity_market_percentile=ranks_by_metric["liq_intensity"].get(symbol),
++            range_expansion_market_percentile=ranks_by_metric["range_expansion"].get(symbol),
++            cross_section_available=True,
++            cross_section_symbol_count=symbols_with_current_candle,
++        )
++        for symbol in target_symbols
++    }, missing
++
++
+ def _missing_cross_section_features(*, symbol_count: int) -> _CrossSectionFeatures:
+     return _CrossSectionFeatures(
+         volume_market_percentile=None,
+@@ -1211,7 +1338,10 @@ def _universe_symbols_by_day(rows: Sequence[SymbolDayUniverseRow] | Iterable[Sym
+ 
+ 
+ def _one_minute_return(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> float | None:
+-    asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
++    if isinstance(candles, _CandleSeries):
++        asof_rows = candles.trailing_asof(snapshot_time_ms, 2)
++    else:
++        asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+     if len(asof_rows) < 2:
+         return None
+     current = asof_rows[-1]
+@@ -1264,6 +1394,26 @@ def _return_from_event_percentile(
+     return _rank_percentile(symbol_values, symbol)
+ 
+ 
++def _return_from_event_percentiles_by_symbol(
++    *,
++    states_at_snapshot: Sequence[StrategyState1mRow],
++    min_cross_section_symbols: int,
++) -> dict[str, float]:
++    values = [
++        item
++        for item in states_at_snapshot
++        if item.current_return_from_start is not None
++    ]
++    if len(values) < min_cross_section_symbols:
++        return {}
++    symbol_values: dict[str, float] = {}
++    for item in values:
++        previous = symbol_values.get(item.symbol)
++        if previous is None or item.current_return_from_start > previous:
++            symbol_values[item.symbol] = item.current_return_from_start
++    return _rank_percentiles_by_symbol(symbol_values)
++
++
+ def _rank_percentile(values_by_symbol: Mapping[str, float], symbol: str) -> float | None:
+     if symbol not in values_by_symbol:
+         return None
+@@ -1281,6 +1431,24 @@ def _rank_percentile(values_by_symbol: Mapping[str, float], symbol: str) -> floa
+     return min(max(percentile, 0.0), 1.0)
+ 
+ 
++def _rank_percentiles_by_symbol(values_by_symbol: Mapping[str, float]) -> dict[str, float]:
++    items = [(item_symbol, value) for item_symbol, value in values_by_symbol.items() if math.isfinite(value)]
++    if not items:
++        return {}
++    sorted_values = sorted(value for _, value in items)
++    average_rank_by_value: dict[float, float] = {}
++    for value in sorted_values:
++        if value in average_rank_by_value:
++            continue
++        tied_positions = [index + 1 for index, item_value in enumerate(sorted_values) if item_value == value]
++        average_rank_by_value[value] = statistics.fmean(tied_positions)
++    denominator = max(len(sorted_values) - 1, 1)
++    return {
++        item_symbol: min(max((average_rank_by_value[value] - 1.0) / denominator, 0.0), 1.0)
++        for item_symbol, value in items
++    }
++
++
+ 
+ class _MarketContextFeatures:
+     def __init__(
+@@ -1471,7 +1639,10 @@ def _one_minute_returns_by_available_time(
+     snapshot_time_ms: int,
+     window_minutes: int,
+ ) -> dict[int, float]:
+-    asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
++    if isinstance(candles, _CandleSeries):
++        asof_rows = candles.trailing_asof(snapshot_time_ms, window_minutes + 1)
++    else:
++        asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+     if len(asof_rows) < window_minutes + 1:
+         return {}
+     rows = asof_rows[-(window_minutes + 1) :]
+diff --git a/src/anomaly_science/future/builder.py b/src/anomaly_science/future/builder.py
+index cf3e497d..a5c131a9 100644
+--- a/src/anomaly_science/future/builder.py
++++ b/src/anomaly_science/future/builder.py
+@@ -1,7 +1,8 @@
+ from __future__ import annotations
+ 
+ import math
+-from dataclasses import asdict
++from bisect import bisect_right
++from dataclasses import asdict, dataclass
+ from pathlib import Path
+ from typing import Iterable, Mapping, Sequence
+ 
+@@ -17,7 +18,7 @@ from anomaly_science.contracts.market import Candle1m, MarketDataContractError,
+ from anomaly_science.contracts.state import StrategyState1mRow
+ from anomaly_science.data.normalized import normalize_candles_1m
+ from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
+-from anomaly_science.future.atr import AtrAsOfResult, compute_atr_1d_asof
++from anomaly_science.future.atr import AtrAsOfResult, AtrComputationError
+ from anomaly_science.future.config import FuturePathBuilderConfig
+ 
+ 
+@@ -33,6 +34,26 @@ StrategyStateArtifactError = AnomalyStateArtifactError
+ StrategyFutureArtifactError = AnomalyFutureArtifactError
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class _SymbolFutureCandleIndex:
++    candles: tuple[Candle1m, ...]
++    available_times: tuple[int, ...]
++    true_range_prefix_sums: tuple[float, ...]
++
++
++@dataclass(frozen=True, slots=True)
++class _FutureMetrics:
++    future_return: dict[int, float | None]
++    future_max: dict[int, float | None]
++    future_min: dict[int, float | None]
++    future_return_atr: dict[int, float | None]
++    future_max_atr: dict[int, float | None]
++    future_min_atr: dict[int, float | None]
++    barrier_hit: dict[int, bool | None]
++    reclaimed_running_high: dict[int, bool | None]
++    time_to_new_high_minutes: int | None
++
++
+ def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ...]:
+     """Read anomaly_state_1m.csv through the declared MVP1 artifact schema.
+ 
+@@ -54,33 +75,33 @@ def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ..
+         )
+ 
+     rows: list[StrategyState1mRow] = []
+-    for row_index, row in frame.iterrows():
++    for row_index, row in enumerate(frame.itertuples(index=False)):
+         try:
+             rows.append(
+                 StrategyState1mRow(
+-                    event_id=_required_str(row, "event_id"),
+-                    symbol=_required_str(row, "symbol"),
+-                    state_time_ms=_required_int(row, "state_time_ms"),
+-                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+-                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+-                    minutes_since_event_start=_required_int(row, "minutes_since_event_start"),
+-                    minutes_since_detection=_required_int(row, "minutes_since_detection"),
+-                    event_alive=_required_bool(row, "event_alive"),
+-                    running_high_asof_t=_required_float(row, "running_high_asof_t"),
+-                    running_high_time_asof_t_ms=_required_int(row, "running_high_time_asof_t_ms"),
+-                    running_low_asof_t=_required_float(row, "running_low_asof_t"),
+-                    running_low_time_asof_t_ms=_required_int(row, "running_low_time_asof_t_ms"),
+-                    time_since_running_high_minutes=_required_int(row, "time_since_running_high_minutes"),
+-                    current_close=_required_float(row, "current_close"),
+-                    current_return_from_start=_required_float(row, "current_return_from_start"),
+-                    distance_to_running_high=_required_float(row, "distance_to_running_high"),
+-                    distance_to_running_low=_required_float(row, "distance_to_running_low"),
+-                    distance_to_structural_low=_optional_float(row, "distance_to_structural_low"),
+-                    distance_to_structural_high=_optional_float(row, "distance_to_structural_high"),
+-                    structural_low_asof_t=_optional_float(row, "structural_low_asof_t"),
+-                    structural_low_time_asof_t_ms=_optional_int(row, "structural_low_time_asof_t_ms"),
+-                    structural_high_asof_t=_optional_float(row, "structural_high_asof_t"),
+-                    structural_high_time_asof_t_ms=_optional_int(row, "structural_high_time_asof_t_ms"),
++                    event_id=_tuple_required_str(row, "event_id"),
++                    symbol=_tuple_required_str(row, "symbol"),
++                    state_time_ms=_tuple_required_int(row, "state_time_ms"),
++                    snapshot_time_ms=_tuple_required_int(row, "snapshot_time_ms"),
++                    feature_cutoff_time_ms=_tuple_required_int(row, "feature_cutoff_time_ms"),
++                    minutes_since_event_start=_tuple_required_int(row, "minutes_since_event_start"),
++                    minutes_since_detection=_tuple_required_int(row, "minutes_since_detection"),
++                    event_alive=_tuple_required_bool(row, "event_alive"),
++                    running_high_asof_t=_tuple_required_float(row, "running_high_asof_t"),
++                    running_high_time_asof_t_ms=_tuple_required_int(row, "running_high_time_asof_t_ms"),
++                    running_low_asof_t=_tuple_required_float(row, "running_low_asof_t"),
++                    running_low_time_asof_t_ms=_tuple_required_int(row, "running_low_time_asof_t_ms"),
++                    time_since_running_high_minutes=_tuple_required_int(row, "time_since_running_high_minutes"),
++                    current_close=_tuple_required_float(row, "current_close"),
++                    current_return_from_start=_tuple_required_float(row, "current_return_from_start"),
++                    distance_to_running_high=_tuple_required_float(row, "distance_to_running_high"),
++                    distance_to_running_low=_tuple_required_float(row, "distance_to_running_low"),
++                    distance_to_structural_low=_tuple_optional_float(row, "distance_to_structural_low"),
++                    distance_to_structural_high=_tuple_optional_float(row, "distance_to_structural_high"),
++                    structural_low_asof_t=_tuple_optional_float(row, "structural_low_asof_t"),
++                    structural_low_time_asof_t_ms=_tuple_optional_int(row, "structural_low_time_asof_t_ms"),
++                    structural_high_asof_t=_tuple_optional_float(row, "structural_high_asof_t"),
++                    structural_high_time_asof_t_ms=_tuple_optional_int(row, "structural_high_time_asof_t_ms"),
+                 )
+             )
+         except (TypeError, ValueError) as exc:
+@@ -107,7 +128,8 @@ def load_strategy_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...
+         )
+ 
+     rows: list[FuturePathRow] = []
+-    for row_index, row in frame.iterrows():
++    for row_index, row_tuple in enumerate(frame.itertuples(index=False)):
++        row = row_tuple._asdict()
+         try:
+             rows.append(
+                 FuturePathRow(
+@@ -208,16 +230,18 @@ def build_strategy_future_paths(
+     candles_by_symbol: dict[str, list[Candle1m]] = {}
+     for candle in candles_1m:
+         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
+-    for symbol in candles_by_symbol:
+-        candles_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
++    indexed_candles_by_symbol = {
++        symbol: _build_symbol_future_candle_index(symbol_candles)
++        for symbol, symbol_candles in candles_by_symbol.items()
++    }
+ 
+     rows: list[FuturePathRow] = []
+     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
+-        symbol_candles = candles_by_symbol.get(state.symbol, [])
++        symbol_candles = indexed_candles_by_symbol.get(state.symbol, _empty_symbol_future_candle_index())
+         rows.append(
+             _build_state_future_path(
+                 state=state,
+-                candles=symbol_candles,
++                candle_index=symbol_candles,
+                 max_horizon=max_horizon,
+                 atr_window_minutes=cfg.atr_window_minutes,
+                 double_barrier_k_continuation=cfg.double_barrier_k_continuation,
+@@ -266,7 +290,7 @@ def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
+ def _build_state_future_path(
+     *,
+     state: StrategyState1mRow,
+-    candles: Sequence[Candle1m],
++    candle_index: _SymbolFutureCandleIndex,
+     max_horizon: int,
+     atr_window_minutes: int,
+     double_barrier_k_continuation: float,
+@@ -279,61 +303,19 @@ def _build_state_future_path(
+ 
+     future_start_time_ms = state.snapshot_time_ms + ONE_MINUTE_MS
+     max_future_time_ms = state.snapshot_time_ms + max_horizon * ONE_MINUTE_MS
+-    future_candles = [
+-        candle
+-        for candle in candles
+-        if candle.available_time_ms > state.snapshot_time_ms and candle.available_time_ms <= max_future_time_ms
+-    ]
++    future_start_index = bisect_right(candle_index.available_times, state.snapshot_time_ms)
++    future_end_index = bisect_right(candle_index.available_times, max_future_time_ms)
++    future_candles = candle_index.candles[future_start_index:future_end_index]
+     atr_result = _compute_atr_when_history_available(
+         state=state,
+-        candles=candles,
++        candle_index=candle_index,
+         atr_window_minutes=atr_window_minutes,
+     )
+     atr_value = atr_result.core_atr_1440 if atr_result is not None else None
+-    barrier_5m = _intracandle_double_barrier(
+-        state=state,
+-        candles=future_candles,
+-        horizon_minutes=5,
+-        atr_value=atr_value,
+-        k_continuation=double_barrier_k_continuation,
+-        k_fade=double_barrier_k_fade,
+-    )
+-    barrier_15m = _intracandle_double_barrier(
+-        state=state,
+-        candles=future_candles,
+-        horizon_minutes=15,
+-        atr_value=atr_value,
+-        k_continuation=double_barrier_k_continuation,
+-        k_fade=double_barrier_k_fade,
+-    )
+-    barrier_30m = _intracandle_double_barrier(
++    metrics = _future_metrics(
+         state=state,
+         candles=future_candles,
+-        horizon_minutes=30,
+-        atr_value=atr_value,
+-        k_continuation=double_barrier_k_continuation,
+-        k_fade=double_barrier_k_fade,
+-    )
+-    barrier_60m = _intracandle_double_barrier(
+-        state=state,
+-        candles=future_candles,
+-        horizon_minutes=60,
+-        atr_value=atr_value,
+-        k_continuation=double_barrier_k_continuation,
+-        k_fade=double_barrier_k_fade,
+-    )
+-    barrier_120m = _intracandle_double_barrier(
+-        state=state,
+-        candles=future_candles,
+-        horizon_minutes=120,
+-        atr_value=atr_value,
+-        k_continuation=double_barrier_k_continuation,
+-        k_fade=double_barrier_k_fade,
+-    )
+-    barrier_180m = _intracandle_double_barrier(
+-        state=state,
+-        candles=future_candles,
+-        horizon_minutes=180,
++        horizons=(5, 15, 30, 60, 120, 180),
+         atr_value=atr_value,
+         k_continuation=double_barrier_k_continuation,
+         k_fade=double_barrier_k_fade,
+@@ -350,63 +332,157 @@ def _build_state_future_path(
+         ATR_1d_pct_asof_t=atr_result.atr_1d_pct_asof_t if atr_result is not None else None,
+         double_barrier_k_continuation=double_barrier_k_continuation if atr_value is not None else None,
+         double_barrier_k_fade=double_barrier_k_fade if atr_value is not None else None,
+-        future_return_5m=_future_return(state=state, candles=future_candles, horizon_minutes=5),
+-        future_return_15m=_future_return(state=state, candles=future_candles, horizon_minutes=15),
+-        future_return_30m=_future_return(state=state, candles=future_candles, horizon_minutes=30),
+-        future_return_60m=_future_return(state=state, candles=future_candles, horizon_minutes=60),
+-        future_return_120m=_future_return(state=state, candles=future_candles, horizon_minutes=120),
+-        future_return_180m=_future_return(state=state, candles=future_candles, horizon_minutes=180),
+-        future_max_5m=_future_max(state=state, candles=future_candles, horizon_minutes=5),
+-        future_max_15m=_future_max(state=state, candles=future_candles, horizon_minutes=15),
+-        future_max_30m=_future_max(state=state, candles=future_candles, horizon_minutes=30),
+-        future_max_60m=_future_max(state=state, candles=future_candles, horizon_minutes=60),
+-        future_max_120m=_future_max(state=state, candles=future_candles, horizon_minutes=120),
+-        future_max_180m=_future_max(state=state, candles=future_candles, horizon_minutes=180),
+-        future_min_5m=_future_min(state=state, candles=future_candles, horizon_minutes=5),
+-        future_min_15m=_future_min(state=state, candles=future_candles, horizon_minutes=15),
+-        future_min_30m=_future_min(state=state, candles=future_candles, horizon_minutes=30),
+-        future_min_60m=_future_min(state=state, candles=future_candles, horizon_minutes=60),
+-        future_min_120m=_future_min(state=state, candles=future_candles, horizon_minutes=120),
+-        future_min_180m=_future_min(state=state, candles=future_candles, horizon_minutes=180),
+-        future_return_atr_5m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
+-        future_return_atr_15m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
+-        future_return_atr_30m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
+-        future_return_atr_60m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
+-        future_return_atr_120m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
+-        future_return_atr_180m=_future_return_atr(state=state, candles=future_candles, horizon_minutes=180, atr_value=atr_value),
+-        future_max_atr_5m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
+-        future_max_atr_15m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
+-        future_max_atr_30m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
+-        future_max_atr_60m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
+-        future_max_atr_120m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
+-        future_max_atr_180m=_future_max_atr(state=state, candles=future_candles, horizon_minutes=180, atr_value=atr_value),
+-        future_min_atr_5m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=5, atr_value=atr_value),
+-        future_min_atr_15m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=15, atr_value=atr_value),
+-        future_min_atr_30m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=30, atr_value=atr_value),
+-        future_min_atr_60m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=60, atr_value=atr_value),
+-        future_min_atr_120m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=120, atr_value=atr_value),
+-        future_min_atr_180m=_future_min_atr(state=state, candles=future_candles, horizon_minutes=180, atr_value=atr_value),
+-        intracandle_double_barrier_hit_5m=barrier_5m,
+-        intracandle_double_barrier_hit_15m=barrier_15m,
+-        intracandle_double_barrier_hit_30m=barrier_30m,
+-        intracandle_double_barrier_hit_60m=barrier_60m,
+-        intracandle_double_barrier_hit_120m=barrier_120m,
+-        intracandle_double_barrier_hit_180m=barrier_180m,
+-        barrier_resolution_5m=_barrier_resolution(barrier_5m),
+-        barrier_resolution_15m=_barrier_resolution(barrier_15m),
+-        barrier_resolution_30m=_barrier_resolution(barrier_30m),
+-        barrier_resolution_60m=_barrier_resolution(barrier_60m),
+-        barrier_resolution_120m=_barrier_resolution(barrier_120m),
+-        barrier_resolution_180m=_barrier_resolution(barrier_180m),
+-        reclaimed_running_high_30m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=30),
+-        reclaimed_running_high_60m=_reclaimed_running_high(state=state, candles=future_candles, horizon_minutes=60),
++        future_return_5m=metrics.future_return[5],
++        future_return_15m=metrics.future_return[15],
++        future_return_30m=metrics.future_return[30],
++        future_return_60m=metrics.future_return[60],
++        future_return_120m=metrics.future_return[120],
++        future_return_180m=metrics.future_return[180],
++        future_max_5m=metrics.future_max[5],
++        future_max_15m=metrics.future_max[15],
++        future_max_30m=metrics.future_max[30],
++        future_max_60m=metrics.future_max[60],
++        future_max_120m=metrics.future_max[120],
++        future_max_180m=metrics.future_max[180],
++        future_min_5m=metrics.future_min[5],
++        future_min_15m=metrics.future_min[15],
++        future_min_30m=metrics.future_min[30],
++        future_min_60m=metrics.future_min[60],
++        future_min_120m=metrics.future_min[120],
++        future_min_180m=metrics.future_min[180],
++        future_return_atr_5m=metrics.future_return_atr[5],
++        future_return_atr_15m=metrics.future_return_atr[15],
++        future_return_atr_30m=metrics.future_return_atr[30],
++        future_return_atr_60m=metrics.future_return_atr[60],
++        future_return_atr_120m=metrics.future_return_atr[120],
++        future_return_atr_180m=metrics.future_return_atr[180],
++        future_max_atr_5m=metrics.future_max_atr[5],
++        future_max_atr_15m=metrics.future_max_atr[15],
++        future_max_atr_30m=metrics.future_max_atr[30],
++        future_max_atr_60m=metrics.future_max_atr[60],
++        future_max_atr_120m=metrics.future_max_atr[120],
++        future_max_atr_180m=metrics.future_max_atr[180],
++        future_min_atr_5m=metrics.future_min_atr[5],
++        future_min_atr_15m=metrics.future_min_atr[15],
++        future_min_atr_30m=metrics.future_min_atr[30],
++        future_min_atr_60m=metrics.future_min_atr[60],
++        future_min_atr_120m=metrics.future_min_atr[120],
++        future_min_atr_180m=metrics.future_min_atr[180],
++        intracandle_double_barrier_hit_5m=metrics.barrier_hit[5],
++        intracandle_double_barrier_hit_15m=metrics.barrier_hit[15],
++        intracandle_double_barrier_hit_30m=metrics.barrier_hit[30],
++        intracandle_double_barrier_hit_60m=metrics.barrier_hit[60],
++        intracandle_double_barrier_hit_120m=metrics.barrier_hit[120],
++        intracandle_double_barrier_hit_180m=metrics.barrier_hit[180],
++        barrier_resolution_5m=_barrier_resolution(metrics.barrier_hit[5]),
++        barrier_resolution_15m=_barrier_resolution(metrics.barrier_hit[15]),
++        barrier_resolution_30m=_barrier_resolution(metrics.barrier_hit[30]),
++        barrier_resolution_60m=_barrier_resolution(metrics.barrier_hit[60]),
++        barrier_resolution_120m=_barrier_resolution(metrics.barrier_hit[120]),
++        barrier_resolution_180m=_barrier_resolution(metrics.barrier_hit[180]),
++        reclaimed_running_high_30m=metrics.reclaimed_running_high[30],
++        reclaimed_running_high_60m=metrics.reclaimed_running_high[60],
+         broke_structural_low_30m=None,
+         broke_structural_low_60m=None,
+-        time_to_new_high_minutes=_time_to_new_high_minutes(state=state, candles=future_candles),
++        time_to_new_high_minutes=metrics.time_to_new_high_minutes,
+         time_to_structural_break_minutes=None,
+     )
+ 
+ 
++def _build_symbol_future_candle_index(candles: Sequence[Candle1m]) -> _SymbolFutureCandleIndex:
++    ordered = tuple(sorted(candles, key=lambda item: (item.available_time_ms, item.open_time_ms)))
++    prefix: list[float] = []
++    running_sum = 0.0
++    for index, candle in enumerate(ordered):
++        if index == 0:
++            prefix.append(0.0)
++            continue
++        running_sum += _true_range(candle=candle, previous_close=ordered[index - 1].close)
++        prefix.append(running_sum)
++    return _SymbolFutureCandleIndex(
++        candles=ordered,
++        available_times=tuple(candle.available_time_ms for candle in ordered),
++        true_range_prefix_sums=tuple(prefix),
++    )
++
++
++def _empty_symbol_future_candle_index() -> _SymbolFutureCandleIndex:
++    return _SymbolFutureCandleIndex(candles=(), available_times=(), true_range_prefix_sums=())
++
++
++def _future_metrics(
++    *,
++    state: StrategyState1mRow,
++    candles: Sequence[Candle1m],
++    horizons: Sequence[int],
++    atr_value: float | None,
++    k_continuation: float,
++    k_fade: float,
++) -> _FutureMetrics:
++    sorted_horizons = tuple(sorted(horizons))
++    future_return: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
++    future_max: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
++    future_min: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
++    future_return_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
++    future_max_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
++    future_min_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
++    barrier_hit: dict[int, bool | None] = {horizon: None for horizon in sorted_horizons}
++    reclaimed_running_high: dict[int, bool | None] = {horizon: None for horizon in sorted_horizons}
++
++    cursor = 0
++    running_high: float | None = None
++    running_low: float | None = None
++    running_barrier_hit = False
++    running_reclaimed_high = False
++    time_to_new_high_minutes: int | None = None
++    upper_barrier = state.current_close + k_continuation * atr_value if atr_value is not None else None
++    lower_barrier = state.current_close - k_fade * atr_value if atr_value is not None else None
++
++    for horizon in sorted_horizons:
++        horizon_end_ms = state.snapshot_time_ms + horizon * ONE_MINUTE_MS
++        had_window = False
++        while cursor < len(candles) and candles[cursor].available_time_ms <= horizon_end_ms:
++            candle = candles[cursor]
++            had_window = True
++            running_high = candle.high if running_high is None else max(running_high, candle.high)
++            running_low = candle.low if running_low is None else min(running_low, candle.low)
++            if candle.available_time_ms == horizon_end_ms and future_return[horizon] is None:
++                future_return[horizon] = (candle.close / state.current_close) - 1.0
++                if atr_value is not None:
++                    future_return_atr[horizon] = (candle.close - state.current_close) / atr_value
++            if atr_value is not None and upper_barrier is not None and lower_barrier is not None:
++                running_barrier_hit = running_barrier_hit or (
++                    candle.high >= upper_barrier and candle.low <= lower_barrier
++                )
++            running_reclaimed_high = running_reclaimed_high or candle.high > state.running_high_asof_t
++            if time_to_new_high_minutes is None and candle.high > state.running_high_asof_t:
++                time_to_new_high_minutes = _minutes_between(state.snapshot_time_ms, candle.available_time_ms)
++            cursor += 1
++
++        if running_high is not None and running_low is not None:
++            future_max[horizon] = (running_high / state.current_close) - 1.0
++            future_min[horizon] = (running_low / state.current_close) - 1.0
++            if atr_value is not None:
++                future_max_atr[horizon] = (running_high - state.current_close) / atr_value
++                future_min_atr[horizon] = (running_low - state.current_close) / atr_value
++                barrier_hit[horizon] = running_barrier_hit
++            reclaimed_running_high[horizon] = running_reclaimed_high
++        elif had_window and atr_value is not None:
++            barrier_hit[horizon] = running_barrier_hit
++
++    return _FutureMetrics(
++        future_return=future_return,
++        future_max=future_max,
++        future_min=future_min,
++        future_return_atr=future_return_atr,
++        future_max_atr=future_max_atr,
++        future_min_atr=future_min_atr,
++        barrier_hit=barrier_hit,
++        reclaimed_running_high=reclaimed_running_high,
++        time_to_new_high_minutes=time_to_new_high_minutes,
++    )
++
++
+ def _window(state: StrategyState1mRow, candles: Sequence[Candle1m], horizon_minutes: int) -> list[Candle1m]:
+     horizon_end_ms = state.snapshot_time_ms + horizon_minutes * ONE_MINUTE_MS
+     return [candle for candle in candles if candle.available_time_ms <= horizon_end_ms]
+@@ -535,21 +611,31 @@ def _barrier_resolution(hit: bool | None) -> str | None:
+ def _compute_atr_when_history_available(
+     *,
+     state: StrategyState1mRow,
+-    candles: Sequence[Candle1m],
++    candle_index: _SymbolFutureCandleIndex,
+     atr_window_minutes: int,
+ ) -> AtrAsOfResult | None:
+-    asof_candle_count = sum(
+-        1
+-        for candle in candles
+-        if candle.symbol == state.symbol and candle.available_time_ms <= state.snapshot_time_ms
+-    )
+-    if asof_candle_count < atr_window_minutes + 1:
++    history_count = bisect_right(candle_index.available_times, state.snapshot_time_ms)
++    if history_count < atr_window_minutes + 1:
+         return None
+-    return compute_atr_1d_asof(
+-        candles_1m=candles,
++    source_start_index = history_count - atr_window_minutes
++    last_source_index = history_count - 1
++    prefix_before_window = candle_index.true_range_prefix_sums[source_start_index - 1]
++    prefix_at_window_end = candle_index.true_range_prefix_sums[last_source_index]
++    atr = (prefix_at_window_end - prefix_before_window) / atr_window_minutes
++    last_close = candle_index.candles[last_source_index].close
++    if last_close <= 0:
++        raise AtrComputationError("latest as-of close must be positive")
++    if not math.isfinite(atr) or atr <= 0:
++        raise AtrComputationError("computed ATR must be positive and finite")
++    return AtrAsOfResult(
+         symbol=state.symbol,
+         snapshot_time_ms=state.snapshot_time_ms,
+         atr_window_minutes=atr_window_minutes,
++        core_atr_1440=atr,
++        atr_1d_pct_asof_t=atr / last_close,
++        source_candle_count=atr_window_minutes,
++        first_candle_available_time_ms=candle_index.candles[source_start_index].available_time_ms,
++        last_candle_available_time_ms=candle_index.candles[last_source_index].available_time_ms,
+     )
+ 
+ 
+@@ -578,6 +664,16 @@ def _minutes_between(start_ms: int, end_ms: int) -> int:
+     return (end_ms - start_ms) // ONE_MINUTE_MS
+ 
+ 
++def _true_range(*, candle: Candle1m, previous_close: float) -> float:
++    if previous_close <= 0:
++        raise AtrComputationError("previous close must be positive")
++    return max(
++        candle.high - candle.low,
++        abs(candle.high - previous_close),
++        abs(candle.low - previous_close),
++    )
++
++
+ def _required_str(row: Mapping[str, object], name: str) -> str:
+     value = row[name]
+     if pd.isna(value):
+@@ -673,5 +769,69 @@ def _is_missing(value: object) -> bool:
+         return False
+ 
+ 
++def _tuple_value(row: object, name: str) -> object:
++    return getattr(row, name)
++
++
++def _tuple_required_str(row: object, name: str) -> str:
++    value = _tuple_value(row, name)
++    if pd.isna(value):
++        raise ValueError(f"{name} is required")
++    result = str(value)
++    if not result:
++        raise ValueError(f"{name} is required")
++    return result
++
++
++def _tuple_required_int(row: object, name: str) -> int:
++    value = _tuple_value(row, name)
++    if pd.isna(value):
++        raise ValueError(f"{name} is required")
++    return int(value)
++
++
++def _tuple_required_float(row: object, name: str) -> float:
++    value = _tuple_value(row, name)
++    if pd.isna(value):
++        raise ValueError(f"{name} is required")
++    result = float(value)
++    if not math.isfinite(result):
++        raise ValueError(f"{name} must be finite")
++    return result
++
++
++def _tuple_optional_float(row: object, name: str) -> float | None:
++    value = _tuple_value(row, name)
++    if _is_missing(value):
++        return None
++    result = float(value)
++    if not math.isfinite(result):
++        raise ValueError(f"{name} must be finite when provided")
++    return result
++
++
++def _tuple_optional_int(row: object, name: str) -> int | None:
++    value = _tuple_value(row, name)
++    if _is_missing(value):
++        return None
++    return int(value)
++
++
++def _tuple_required_bool(row: object, name: str) -> bool:
++    value = _tuple_value(row, name)
++    if isinstance(value, bool):
++        return value
++    if _is_missing(value):
++        raise ValueError(f"{name} is required")
++    if isinstance(value, (int, float)) and value in (0, 1):
++        return bool(value)
++    text = str(value).strip().lower()
++    if text in {"true", "1"}:
++        return True
++    if text in {"false", "0"}:
++        return False
++    raise ValueError(f"{name} must be a boolean")
++
++
+ def _csv_value(value: object) -> object:
+     return "" if value is None else value
+diff --git a/src/anomaly_science/future/run.py b/src/anomaly_science/future/run.py
+index e8eb3974..0e2839b2 100644
+--- a/src/anomaly_science/future/run.py
++++ b/src/anomaly_science/future/run.py
+@@ -7,9 +7,10 @@ from pathlib import Path
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+ from anomaly_science.contracts.artifacts import get_artifact_schema
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+-from anomaly_science.data.source import CsvDirectoryDataSource
++from anomaly_science.data.normalized import normalize_candles_1m
++from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
+ from anomaly_science.future.builder import (
+-    build_strategy_future_paths_from_source,
++    build_strategy_future_paths,
+     future_rows_to_artifact,
+     load_strategy_state_1m_csv,
+ )
+@@ -32,9 +33,12 @@ def run_mvp1_future(
+ 
+     source = CsvDirectoryDataSource(input_path)
+     state_rows = load_strategy_state_1m_csv(state_artifact_path)
+-    future_rows = build_strategy_future_paths_from_source(
+-        source=source,
+-        state_path=state_artifact_path,
++    candle_frame = source.read_frame("candles_1m", required=True)
++    if candle_frame is None:
++        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
++    future_rows = build_strategy_future_paths(
++        candles_1m=normalize_candles_1m(candle_frame),
++        state_rows=state_rows,
+         config=cfg,
+     )
+     protocol_rows = _protocol_rows(state_row_count=len(state_rows), future_row_count=len(future_rows))
+diff --git a/src/anomaly_science/labels/builder.py b/src/anomaly_science/labels/builder.py
+index 14e7915d..8677211f 100644
+--- a/src/anomaly_science/labels/builder.py
++++ b/src/anomaly_science/labels/builder.py
+@@ -70,8 +70,8 @@ def build_outcome_label_inputs(
+         )
+ 
+     rows: list[OutcomeLabelInputRow] = []
+-    for key in sorted(state_keys):
+-        state = state_by_key[key]
++    for state in states:
++        key = _join_key(state)
+         future = future_by_key[key]
+         _enforce_label_temporal_contract(state=state, future=future)
+         rows.append(OutcomeLabelInputRow(state=state, future=future))
+diff --git a/src/anomaly_science/research/run.py b/src/anomaly_science/research/run.py
+index b34ca888..f9e1e007 100644
+--- a/src/anomaly_science/research/run.py
++++ b/src/anomaly_science/research/run.py
+@@ -24,6 +24,7 @@ from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_pre
+ from anomaly_science.rejection import write_rejection_funnel
+ from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
+ from anomaly_science.state import run_mvp1_state
++from anomaly_science.state.config import OnlineStateBuilderConfig
+ from anomaly_science.strategy.metadata import active_strategy_h_max_minutes, strategy_metadata_run_config_rows
+ from anomaly_science.strategy.registry import get_strategy
+ from anomaly_science.validation import run_mvp1_holdout_governance
+@@ -69,6 +70,12 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         )
+     )
+     full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
++    effective_holdout_days = _effective_holdout_days(
++        full_start_date=full_start_date,
++        full_end_date=full_end_date,
++        requested_holdout_days=config.holdout_days,
++        research_mode=config.research_mode,
++    )
+     protocol_freeze_id = config.protocol_freeze_id or _protocol_freeze_id(
+         strategy_name=config.strategy_name,
+         start_date=full_start_date,
+@@ -79,7 +86,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         start_date=full_start_date,
+         end_date=full_end_date,
+         protocol_freeze_id=protocol_freeze_id,
+-        holdout_days=config.holdout_days,
++        holdout_days=effective_holdout_days,
+         research_mode=config.research_mode,
+         holdout_access_artifact="run-research downstream input boundary",
+     )
+@@ -87,7 +94,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         input_dir=input_dir,
+         full_start_date=full_start_date,
+         full_end_date=full_end_date,
+-        holdout_days=config.holdout_days,
++        holdout_days=effective_holdout_days,
+         research_mode=config.research_mode,
+     )
+ 
+@@ -97,6 +104,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         input_dir=input_dir,
+         events_path=events_dir / "strategy_events.csv",
+         out_dir=stages_dir / "state",
++        config=_state_config_for_strategy(strategy_name=config.strategy_name),
+     )
+     future_dir = run_mvp1_future(
+         input_dir=input_dir,
+@@ -167,6 +175,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         end_date=research_end_date,
+         full_start_date=full_start_date,
+         full_end_date=full_end_date,
++        effective_holdout_days=effective_holdout_days,
+         governance_dir=governance_dir,
+         protocol_freeze_id=protocol_freeze_id,
+         forensic_audit_dir=stages_dir / "forensic_audit",
+@@ -180,6 +189,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         config=config,
+         start_date=research_start_date,
+         end_date=research_end_date,
++        effective_holdout_days=effective_holdout_days,
+         governance_dir=governance_dir,
+         protocol_freeze_id=protocol_freeze_id,
+         forensic_audit_dir=forensic_audit_dir,
+@@ -194,6 +204,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         end_date=research_end_date,
+         full_start_date=full_start_date,
+         full_end_date=full_end_date,
++        effective_holdout_days=effective_holdout_days,
+         governance_dir=governance_dir,
+         protocol_freeze_id=protocol_freeze_id,
+         forensic_audit_dir=forensic_audit_dir,
+@@ -218,6 +229,7 @@ def _write_research_run_manifest(
+     end_date: date,
+     full_start_date: date,
+     full_end_date: date,
++    effective_holdout_days: int,
+     governance_dir: Path,
+     protocol_freeze_id: str,
+     forensic_audit_dir: Path,
+@@ -231,7 +243,8 @@ def _write_research_run_manifest(
+     extra_config = {
+         "strategy_name": config.strategy_name,
+         "research_mode": config.research_mode,
+-        "holdout_days": config.holdout_days,
++        "requested_holdout_days": config.holdout_days,
++        "effective_holdout_days": effective_holdout_days,
+         "protocol_freeze_id": protocol_freeze_id,
+         "target_horizon_minutes": strategy.metadata.horizon_minutes,
+         "active_h_max_minutes": active_h_max,
+@@ -248,7 +261,9 @@ def _write_research_run_manifest(
+             RunConfigRow(key="full_input_start_date", value=full_start_date.isoformat(), source="run_research"),
+             RunConfigRow(key="full_input_end_date", value=full_end_date.isoformat(), source="run_research"),
+             RunConfigRow(key="research_mode", value=config.research_mode, source="run_research"),
+-            RunConfigRow(key="holdout_days", value=str(config.holdout_days), source="run_research"),
++            RunConfigRow(key="holdout_days", value=str(effective_holdout_days), source="run_research"),
++            RunConfigRow(key="requested_holdout_days", value=str(config.holdout_days), source="run_research"),
++            RunConfigRow(key="effective_holdout_days", value=str(effective_holdout_days), source="run_research"),
+             RunConfigRow(key="protocol_freeze_id", value=protocol_freeze_id, source="run_research"),
+             RunConfigRow(key="holdout_governance_dir", value=str(governance_dir), source="run_research"),
+             RunConfigRow(key="forensic_audit_dir", value=str(forensic_audit_dir), source="run_research"),
+@@ -313,6 +328,7 @@ def _write_summary(
+     config: ResearchRunConfig,
+     start_date: date,
+     end_date: date,
++    effective_holdout_days: int,
+     governance_dir: Path,
+     protocol_freeze_id: str,
+     forensic_audit_dir: Path,
+@@ -334,7 +350,9 @@ def _write_summary(
+         f"research_start_date,{start_date.isoformat()}",
+         f"research_end_date,{end_date.isoformat()}",
+         f"research_mode,{config.research_mode}",
+-        f"holdout_days,{config.holdout_days}",
++        f"holdout_days,{effective_holdout_days}",
++        f"requested_holdout_days,{config.holdout_days}",
++        f"effective_holdout_days,{effective_holdout_days}",
+         f"protocol_freeze_id,{protocol_freeze_id}",
+         f"holdout_governance_dir,{governance_dir}",
+         f"forensic_audit_dir,{forensic_audit_dir}",
+@@ -363,6 +381,10 @@ def _write_forensic_audit(run_dir: Path) -> tuple[Path, str, int, int, str]:
+     return forensic_audit_dir, status, fail_count, warn_count, failed_checks
+ 
+ 
++def _state_config_for_strategy(*, strategy_name: str) -> OnlineStateBuilderConfig:
++    return OnlineStateBuilderConfig(max_state_minutes_after_detection=active_strategy_h_max_minutes((strategy_name,)))
++
++
+ def _apply_holdout_lock_to_input(
+     *,
+     input_dir: Path,
+@@ -395,6 +417,32 @@ def _apply_holdout_lock_to_input(
+     return _input_date_range(input_dir / "candles_1m.csv")
+ 
+ 
++def _effective_holdout_days(
++    *,
++    full_start_date: date,
++    full_end_date: date,
++    requested_holdout_days: int,
++    research_mode: str,
++) -> int:
++    if requested_holdout_days <= 0:
++        raise ValueError("holdout_days must be positive")
++    if full_end_date < full_start_date:
++        raise ValueError("full_end_date must be >= full_start_date")
++    if research_mode == "frozen_holdout":
++        return requested_holdout_days
++    if research_mode != "is":
++        raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
++
++    total_days = (full_end_date - full_start_date).days + 1
++    if total_days <= requested_holdout_days:
++        if total_days < 2:
++            raise ValueError(
++                "IS research mode requires at least 2 calendar days when the requested holdout covers the whole period"
++            )
++        return total_days - 1
++    return requested_holdout_days
++
++
+ def _filter_input_csv_by_end_date(path: Path, *, time_column: str, end_date: date) -> None:
+     frame = pd.read_csv(path)
+     if frame.empty:
+diff --git a/src/anomaly_science/state/builder.py b/src/anomaly_science/state/builder.py
+index 1e8f16da..0640eea8 100644
+--- a/src/anomaly_science/state/builder.py
++++ b/src/anomaly_science/state/builder.py
+@@ -1,7 +1,8 @@
+ from __future__ import annotations
+ 
+ import math
+-from dataclasses import asdict
++from bisect import bisect_left, bisect_right
++from dataclasses import asdict, dataclass
+ from pathlib import Path
+ from typing import Iterable, Mapping, Sequence
+ 
+@@ -26,6 +27,13 @@ class StrategyEventsArtifactError(ValueError):
+ AnomalyEventsArtifactError = StrategyEventsArtifactError
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class _SymbolCandleIndex:
++    candles: tuple[Candle1m, ...]
++    open_times: tuple[int, ...]
++    available_times: tuple[int, ...]
++
++
+ def load_strategy_events_csv(path: str | Path) -> tuple[StrategyEvent, ...]:
+     """Read anomaly_events.csv through the declared MVP1 artifact schema.
+ 
+@@ -98,15 +106,21 @@ def build_online_strategy_state_1m(
+     candles_by_symbol: dict[str, list[Candle1m]] = {}
+     for candle in candles_1m:
+         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
+-    for symbol in candles_by_symbol:
+-        candles_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
++    indexed_candles_by_symbol: dict[str, _SymbolCandleIndex] = {}
++    for symbol, symbol_candles in candles_by_symbol.items():
++        ordered = tuple(sorted(symbol_candles, key=lambda item: (item.available_time_ms, item.open_time_ms)))
++        indexed_candles_by_symbol[symbol] = _SymbolCandleIndex(
++            candles=ordered,
++            open_times=tuple(candle.open_time_ms for candle in ordered),
++            available_times=tuple(candle.available_time_ms for candle in ordered),
++        )
+ 
+     rows: list[StrategyState1mRow] = []
+     for event in sorted(events, key=lambda item: (item.symbol, item.event_detection_time_ms, item.event_id)):
+         if event.technical_noise_shock or event.excluded_by_data_quality_gate:
+             continue
+-        symbol_candles = candles_by_symbol.get(event.symbol, [])
+-        if not symbol_candles:
++        symbol_candles = indexed_candles_by_symbol.get(event.symbol)
++        if symbol_candles is None:
+             continue
+         rows.extend(_build_event_rows(event=event, candles=symbol_candles, config=cfg))
+     return tuple(rows)
+@@ -147,25 +161,22 @@ def state_rows_to_artifact(rows: Sequence[StrategyState1mRow]) -> list[dict[str,
+ def _build_event_rows(
+     *,
+     event: StrategyEvent,
+-    candles: Sequence[Candle1m],
++    candles: _SymbolCandleIndex,
+     config: OnlineStateBuilderConfig,
+ ) -> list[StrategyState1mRow]:
+-    candidate_candles = [
+-        candle
+-        for candle in candles
+-        if candle.open_time_ms >= event.event_start_time_ms
+-        and candle.available_time_ms >= event.event_detection_time_ms
+-        and _minutes_between(event.event_detection_time_ms, candle.available_time_ms)
+-        <= config.max_state_minutes_after_detection
+-    ]
++    event_start_index = bisect_left(candles.open_times, event.event_start_time_ms)
++    detection_index = bisect_left(candles.available_times, event.event_detection_time_ms)
++    max_available_time_ms = event.event_detection_time_ms + config.max_state_minutes_after_detection * ONE_MINUTE_MS
++    end_index = bisect_right(candles.available_times, max_available_time_ms)
++    start_index = max(event_start_index, detection_index)
++    candidate_indexes = range(start_index, end_index)
+     event_rows: list[StrategyState1mRow] = []
+-    for current in candidate_candles:
++    for current_index in candidate_indexes:
++        current = candles.candles[current_index]
++        if current.open_time_ms < event.event_start_time_ms:
++            continue
+         state_time_ms = current.available_time_ms
+-        asof_candles = [
+-            candle
+-            for candle in candles
+-            if candle.open_time_ms >= event.event_start_time_ms and candle.available_time_ms <= state_time_ms
+-        ]
++        asof_candles = candles.candles[event_start_index : current_index + 1]
+         if not asof_candles:
+             continue
+         first_candle = min(asof_candles, key=lambda item: item.open_time_ms)
+diff --git a/src/anomaly_science/strategy/anomaly.py b/src/anomaly_science/strategy/anomaly.py
+index bded37c7..59d4f084 100644
+--- a/src/anomaly_science/strategy/anomaly.py
++++ b/src/anomaly_science/strategy/anomaly.py
+@@ -11,7 +11,7 @@ from anomaly_science.contracts.events import StrategyEvent
+ from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
+ from anomaly_science.data.normalized import normalize_candles_1m
+ from anomaly_science.events.config import BroadAnomalyDetectorConfig
+-from anomaly_science.events.detector import detect_broad_anomaly_events
++from anomaly_science.events.detector import detect_broad_anomaly_events, detect_broad_anomaly_events_from_frame
+ from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION
+ from anomaly_science.labels.config import OutcomeLabelConfig
+ from anomaly_science.strategy.base import (
+@@ -205,9 +205,7 @@ class BroadAnomalyStrategy(BaseStrategy):
+     def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+         if market_frame_asof.height == 0:
+             return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+-        pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
+-        candles = normalize_candles_1m(pandas_frame)
+-        events = self.generate_events(candles)
++        events = detect_broad_anomaly_events_from_frame(market_frame_asof.to_pandas(), config=self.config)
+         trigger_frame = events_to_trigger_frame(events)
+         validate_trigger_frame(trigger_frame)
+         return trigger_frame
+diff --git a/tests/test_data_audit.py b/tests/test_data_audit.py
+index eec9ffdd..77dacb53 100644
+--- a/tests/test_data_audit.py
++++ b/tests/test_data_audit.py
+@@ -21,6 +21,7 @@ from anomaly_science.data.quality import (
+     has_critical_fail,
+     has_detector_blocking_quality_fail,
+ )
++from anomaly_science.data.normalized import validate_market_data_boundary
+ from anomaly_science.universe import build_symbol_universe_by_day, universe_rows_to_artifact
+ 
+ 
+@@ -45,6 +46,47 @@ def test_csv_source_requires_explicit_quote_volume(tmp_path: Path) -> None:
+         CsvDirectoryDataSource(source_dir).read_frame("candles_1m")
+ 
+ 
++def test_market_data_boundary_validator_rejects_unclosed_candles_vectorized() -> None:
++    candles_1m = pd.DataFrame(
++        [
++            {
++                "symbol": "AAAUSDT",
++                "open_time_ms": 0,
++                "available_time_ms": 59_000,
++                "open": 1.0,
++                "high": 1.1,
++                "low": 0.9,
++                "close": 1.0,
++                "volume": 1.0,
++                "quote_volume": 10.0,
++            }
++        ]
++    )
++    candles_5m = pd.DataFrame(
++        [
++            {
++                "symbol": "AAAUSDT",
++                "open_time_ms": 0,
++                "available_time_ms": 300_000,
++                "open": 1.0,
++                "high": 1.1,
++                "low": 0.9,
++                "close": 1.0,
++                "volume": 1.0,
++                "quote_volume": 10.0,
++            }
++        ]
++    )
++
++    with pytest.raises(ValueError, match="candles_1m.available_time_ms"):
++        validate_market_data_boundary(
++            candles_1m=candles_1m,
++            candles_5m=candles_5m,
++            open_interest_5m=None,
++            liquidations=None,
++        )
++
++
+ def test_data_quality_flags_duplicate_candles() -> None:
+     frame = pd.DataFrame(
+         [
+diff --git a/tests/test_research_run.py b/tests/test_research_run.py
+index b245a00f..3168f731 100644
+--- a/tests/test_research_run.py
++++ b/tests/test_research_run.py
+@@ -6,22 +6,29 @@ import pandas as pd
+ 
+ from anomaly_science.cli import build_parser
+ from anomaly_science.research import ResearchRunConfig, run_research_pipeline
++from anomaly_science.research.run import _effective_holdout_days, _state_config_for_strategy
+ 
+ 
+-def _write_cache(path: Path) -> None:
++def _write_cache(path: Path, *, day_count: int = 1) -> None:
+     path.mkdir()
++    base_timestamp = 1704067200000
++    timestamps = [
++        base_timestamp + day_offset * 86_400_000 + minute_offset * 60_000
++        for day_offset in range(day_count)
++        for minute_offset in range(4)
++    ]
+     pd.DataFrame(
+         {
+-            "timestamp": [1704067200000, 1704067260000, 1704067320000, 1704067380000],
+-            "open": [100.0, 100.5, 101.0, 101.5],
+-            "high": [101.0, 101.5, 102.0, 102.5],
+-            "low": [99.5, 100.0, 100.5, 101.0],
+-            "close": [100.5, 101.0, 101.5, 102.0],
+-            "volume": [10.0, 11.0, 12.0, 13.0],
+-            "quote_volume": [1005.0, 1111.0, 1218.0, 1326.0],
+-            "trade_count": [20, 22, 24, 26],
+-            "taker_buy_quote_volume": [550.0, 600.0, 650.0, 700.0],
+-            "open_interest": [1000.0, 1001.0, 1002.0, 1003.0],
++            "timestamp": timestamps,
++            "open": [100.0 + index * 0.5 for index in range(len(timestamps))],
++            "high": [101.0 + index * 0.5 for index in range(len(timestamps))],
++            "low": [99.5 + index * 0.5 for index in range(len(timestamps))],
++            "close": [100.5 + index * 0.5 for index in range(len(timestamps))],
++            "volume": [10.0 + index for index in range(len(timestamps))],
++            "quote_volume": [1005.0 + index * 100.0 for index in range(len(timestamps))],
++            "trade_count": [20 + index for index in range(len(timestamps))],
++            "taker_buy_quote_volume": [550.0 + index * 50.0 for index in range(len(timestamps))],
++            "open_interest": [1000.0 + index for index in range(len(timestamps))],
+         }
+     ).to_parquet(path / "AAAUSDT.parquet")
+ 
+@@ -91,6 +98,38 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
+     assert coverage.loc[0, "first_date"] == "2024-01-01"
+ 
+ 
++def test_run_research_is_mode_auto_scales_holdout_for_short_windows(tmp_path: Path) -> None:
++    cache_dir = tmp_path / "cache"
++    _write_cache(cache_dir, day_count=2)
++
++    run_dir = run_research_pipeline(
++        ResearchRunConfig(
++            strategy_name="broad_anomaly_v1_h30",
++            cache_dir=cache_dir,
++            days=2,
++            output_root=tmp_path / "runs",
++        )
++    )
++
++    summary = pd.read_csv(run_dir / "research_run_summary.csv")
++    summary_by_key = dict(zip(summary["key"], summary["value"], strict=True))
++    assert summary_by_key["research_mode"] == "is"
++    assert summary_by_key["requested_holdout_days"] == "60"
++    assert summary_by_key["effective_holdout_days"] == "1"
++    assert summary_by_key["research_start_date"] == "2024-01-01"
++    assert summary_by_key["research_end_date"] == "2024-01-01"
++
++    ledger = pd.read_csv(run_dir / "stages" / "holdout_governance" / "research_ledger.csv")
++    assert ledger.loc[0, "final_holdout_start_date"] == "2024-01-02"
++    assert pd.read_csv(run_dir / "stages" / "holdout_governance" / "holdout_access_log.csv").empty
++
++    run_config = pd.read_csv(run_dir / "strategy_run_config.csv")
++    run_config_by_key = dict(zip(run_config["key"], run_config["value"].astype(str), strict=True))
++    assert run_config_by_key["holdout_days"] == "1"
++    assert run_config_by_key["requested_holdout_days"] == "60"
++    assert run_config_by_key["effective_holdout_days"] == "1"
++
++
+ def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
+     args = build_parser().parse_args(["run-research", "broad_anomaly_v1_h30", "--days", "30"])
+ 
+@@ -101,6 +140,26 @@ def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
+     assert args.holdout_days == 60
+ 
+ 
++def test_effective_holdout_days_keeps_non_holdout_rows_for_short_is_windows() -> None:
++    assert _effective_holdout_days(
++        full_start_date=pd.Timestamp("2024-01-01").date(),
++        full_end_date=pd.Timestamp("2024-01-02").date(),
++        requested_holdout_days=60,
++        research_mode="is",
++    ) == 1
++    assert _effective_holdout_days(
++        full_start_date=pd.Timestamp("2024-01-01").date(),
++        full_end_date=pd.Timestamp("2024-03-31").date(),
++        requested_holdout_days=60,
++        research_mode="is",
++    ) == 60
++
++
++def test_run_research_state_window_uses_active_strategy_hmax() -> None:
++    assert _state_config_for_strategy(strategy_name="broad_anomaly_v1_h30").max_state_minutes_after_detection == 30
++    assert _state_config_for_strategy(strategy_name="post_anomaly_extension_v1_h180").max_state_minutes_after_detection == 180
++
++
+ def test_run_research_config_requires_freeze_id_for_frozen_holdout(tmp_path: Path) -> None:
+     try:
+         ResearchRunConfig(

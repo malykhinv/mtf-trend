@@ -21,6 +21,7 @@ from anomaly_science.data.quality import (
     has_critical_fail,
     has_detector_blocking_quality_fail,
 )
+from anomaly_science.data.normalized import validate_market_data_boundary
 from anomaly_science.universe import build_symbol_universe_by_day, universe_rows_to_artifact
 
 
@@ -43,6 +44,47 @@ def test_csv_source_requires_explicit_quote_volume(tmp_path: Path) -> None:
 
     with pytest.raises(CsvDataSourceError, match="quote_volume"):
         CsvDirectoryDataSource(source_dir).read_frame("candles_1m")
+
+
+def test_market_data_boundary_validator_rejects_unclosed_candles_vectorized() -> None:
+    candles_1m = pd.DataFrame(
+        [
+            {
+                "symbol": "AAAUSDT",
+                "open_time_ms": 0,
+                "available_time_ms": 59_000,
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.0,
+                "volume": 1.0,
+                "quote_volume": 10.0,
+            }
+        ]
+    )
+    candles_5m = pd.DataFrame(
+        [
+            {
+                "symbol": "AAAUSDT",
+                "open_time_ms": 0,
+                "available_time_ms": 300_000,
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.0,
+                "volume": 1.0,
+                "quote_volume": 10.0,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="candles_1m.available_time_ms"):
+        validate_market_data_boundary(
+            candles_1m=candles_1m,
+            candles_5m=candles_5m,
+            open_interest_5m=None,
+            liquidations=None,
+        )
 
 
 def test_data_quality_flags_duplicate_candles() -> None:

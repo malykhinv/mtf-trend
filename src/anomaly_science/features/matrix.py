@@ -31,6 +31,20 @@ class _CandleSeries:
         self._rows = tuple(sorted(rows, key=lambda item: (item.available_time_ms, item.open_time_ms)))
         self._available_times = tuple(item.available_time_ms for item in self._rows)
         self._open_times = tuple(item.open_time_ms for item in self._rows)
+        prefix: list[float] = []
+        running_sum = 0.0
+        for index, candle in enumerate(self._rows):
+            if index == 0:
+                prefix.append(0.0)
+                continue
+            previous_close = self._rows[index - 1].close
+            running_sum += max(
+                candle.high - candle.low,
+                abs(candle.high - previous_close),
+                abs(candle.low - previous_close),
+            )
+            prefix.append(running_sum)
+        self._true_range_prefix_sums = tuple(prefix)
 
     def __iter__(self):
         return iter(self._rows)
@@ -45,6 +59,13 @@ class _CandleSeries:
         end = bisect_right(self._available_times, snapshot_time_ms)
         return self._rows[:end]
 
+    def asof_count(self, snapshot_time_ms: int) -> int:
+        return bisect_right(self._available_times, snapshot_time_ms)
+
+    def trailing_asof(self, snapshot_time_ms: int, count: int) -> tuple[Candle1m, ...]:
+        end = self.asof_count(snapshot_time_ms)
+        return self._rows[max(0, end - count) : end]
+
     def current(self, snapshot_time_ms: int) -> Candle1m | None:
         index = bisect_right(self._available_times, snapshot_time_ms) - 1
         if index < 0:
@@ -56,6 +77,8 @@ class _CandleSeries:
 
     def history_before(self, available_time_ms: int, count: int) -> tuple[Candle1m, ...]:
         end = bisect_left(self._available_times, available_time_ms)
+        if end < count:
+            return ()
         return self._rows[max(0, end - count) : end]
 
     def window(self, snapshot_time_ms: int, window_minutes: int) -> tuple[Candle1m, ...]:
@@ -76,25 +99,20 @@ class _CandleSeries:
         return self._rows[start:end]
 
     def atr_asof(self, *, symbol: str, snapshot_time_ms: int, atr_window_minutes: int):
-        asof_rows = self.asof(snapshot_time_ms)
+        history_count = self.asof_count(snapshot_time_ms)
         required_candle_count = atr_window_minutes + 1
-        if len(asof_rows) < required_candle_count:
+        if history_count < required_candle_count:
             raise AtrComputationError(
                 "insufficient as-of 1m candle history for ATR: "
                 f"need {required_candle_count} closed candles for {atr_window_minutes} true ranges, "
-                f"got {len(asof_rows)} for {symbol} at {snapshot_time_ms}"
+                f"got {history_count} for {symbol} at {snapshot_time_ms}"
             )
-        source_slice = asof_rows[-required_candle_count:]
-        true_ranges = [
-            max(
-                candle.high - candle.low,
-                abs(candle.high - previous_candle.close),
-                abs(candle.low - previous_candle.close),
-            )
-            for previous_candle, candle in zip(source_slice, source_slice[1:])
-        ]
-        atr = sum(true_ranges) / atr_window_minutes
-        last_close = source_slice[-1].close
+        source_start_index = history_count - atr_window_minutes
+        last_source_index = history_count - 1
+        prefix_before_window = self._true_range_prefix_sums[source_start_index - 1]
+        prefix_at_window_end = self._true_range_prefix_sums[last_source_index]
+        atr = (prefix_at_window_end - prefix_before_window) / atr_window_minutes
+        last_close = self._rows[last_source_index].close
         if last_close <= 0 or not math.isfinite(atr) or atr <= 0:
             raise AtrComputationError("computed ATR must be positive and finite")
         return atr, atr / last_close
@@ -146,10 +164,23 @@ def build_price_time_feature_matrix(
     states_by_snapshot: dict[int, list[StrategyState1mRow]] = {}
     for state in state_rows:
         states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
+    cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
 
     rows: list[StrategyFeatureMatrixRow] = []
     for state in sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id)):
         symbol_candles = candles_by_symbol.get(state.symbol, [])
+        if state.snapshot_time_ms not in cross_section_by_snapshot:
+            snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
+            cross_section_by_snapshot[state.snapshot_time_ms] = _cross_section_features_by_symbol(
+                snapshot_time_ms=state.snapshot_time_ms,
+                candles_by_symbol=candles_by_symbol,
+                open_interest_by_symbol=oi_by_symbol,
+                liquidations_by_symbol=liquidations_by_symbol,
+                universe_by_day=universe_by_day,
+                states_at_snapshot=snapshot_states,
+                min_cross_section_symbols=cfg.min_cross_section_symbols,
+            )
+        cross_section_by_symbol, missing_cross_section = cross_section_by_snapshot[state.snapshot_time_ms]
         rows.append(
             _build_state_feature_row(
                 state=state,
@@ -163,6 +194,7 @@ def build_price_time_feature_matrix(
                 liquidations_by_symbol=liquidations_by_symbol,
                 universe_by_day=universe_by_day,
                 states_at_snapshot=states_by_snapshot.get(state.snapshot_time_ms, []),
+                cross_section_features=cross_section_by_symbol.get(state.symbol, missing_cross_section),
                 config=cfg,
             )
         )
@@ -337,9 +369,18 @@ def run_mvp1_feature_matrix(
 
     source = CsvDirectoryDataSource(input_path)
     state_rows = load_strategy_state_1m_csv(state_artifact_path)
-    matrix_rows = build_price_time_feature_matrix_from_source(
-        source=source,
-        state_path=state_artifact_path,
+    frame = source.read_frame("candles_1m", required=True)
+    if frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    oi_frame = source.read_frame("open_interest_5m", required=False)
+    liquidation_frame = source.read_frame("liquidations", required=False)
+    universe_frame = source.read_frame("symbol_universe_by_day", required=False)
+    matrix_rows = build_price_time_feature_matrix(
+        candles_1m=normalize_candles_1m(frame),
+        open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
+        liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
+        symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
+        state_rows=state_rows,
         config=cfg,
     )
     protocol_rows = _protocol_rows(state_row_count=len(state_rows), feature_row_count=len(matrix_rows))
@@ -396,6 +437,7 @@ def _build_state_feature_row(
     universe_by_day: Mapping[str, set[str]],
     states_at_snapshot: Sequence[StrategyState1mRow],
     config: FeatureMatrixConfig,
+    cross_section_features: _CrossSectionFeatures | None = None,
 ) -> StrategyFeatureMatrixRow:
     atr_value: float | None = None
     atr_pct_value: float | None = None
@@ -452,15 +494,16 @@ def _build_state_feature_row(
         atr_value=atr_value,
         windows_minutes=config.cvd_windows_minutes,
     )
-    cross_section_features = _cross_section_features(
-        state=state,
-        candles_by_symbol=candles_by_symbol,
-        open_interest_by_symbol=open_interest_by_symbol,
-        liquidations_by_symbol=liquidations_by_symbol,
-        universe_by_day=universe_by_day,
-        states_at_snapshot=states_at_snapshot,
-        min_cross_section_symbols=config.min_cross_section_symbols,
-    )
+    if cross_section_features is None:
+        cross_section_features = _cross_section_features(
+            state=state,
+            candles_by_symbol=candles_by_symbol,
+            open_interest_by_symbol=open_interest_by_symbol,
+            liquidations_by_symbol=liquidations_by_symbol,
+            universe_by_day=universe_by_day,
+            states_at_snapshot=states_at_snapshot,
+            min_cross_section_symbols=config.min_cross_section_symbols,
+        )
     market_context_features = _market_context_features(
         state=state,
         symbol_candles=candles,
@@ -1186,6 +1229,90 @@ def _cross_section_features(
     )
 
 
+def _cross_section_features_by_symbol(
+    *,
+    snapshot_time_ms: int,
+    candles_by_symbol: Mapping[str, Sequence[Candle1m]],
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
+    universe_by_day: Mapping[str, set[str]],
+    states_at_snapshot: Sequence[StrategyState1mRow],
+    min_cross_section_symbols: int,
+) -> tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]:
+    trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
+    universe_symbols = universe_by_day.get(trade_date, set())
+    if not universe_symbols:
+        missing = _missing_cross_section_features(symbol_count=0)
+        return {}, missing
+
+    metric_values: dict[str, dict[str, float]] = {
+        "volume": {},
+        "quote_volume": {},
+        "return_1m": {},
+        "oi_growth": {},
+        "liq_intensity": {},
+        "range_expansion": {},
+    }
+    symbols_with_current_candle = 0
+    for symbol in sorted(universe_symbols):
+        candles = candles_by_symbol.get(symbol, ())
+        current = _current_candle(candles=candles, snapshot_time_ms=snapshot_time_ms)
+        if current is None:
+            continue
+        symbols_with_current_candle += 1
+        metric_values["volume"][symbol] = current.volume
+        metric_values["quote_volume"][symbol] = current.quote_volume
+        return_1m = _one_minute_return(candles=candles, snapshot_time_ms=snapshot_time_ms)
+        if return_1m is not None:
+            metric_values["return_1m"][symbol] = return_1m
+        if current.close > 0:
+            metric_values["range_expansion"][symbol] = (current.high - current.low) / current.close
+        if open_interest_by_symbol is not None:
+            oi = _oi_features(
+                open_interest_rows=open_interest_by_symbol.get(symbol, ()),
+                snapshot_time_ms=snapshot_time_ms,
+            )
+            if oi.oi_change_5m_pct_of_oi is not None:
+                metric_values["oi_growth"][symbol] = oi.oi_change_5m_pct_of_oi
+        if liquidations_by_symbol is not None:
+            liq_intensity = _minute_liq_intensity(
+                current=current,
+                liquidation_rows=liquidations_by_symbol.get(symbol, ()),
+                snapshot_time_ms=snapshot_time_ms,
+            )
+            if liq_intensity is not None:
+                metric_values["liq_intensity"][symbol] = liq_intensity
+
+    missing = _missing_cross_section_features(symbol_count=symbols_with_current_candle)
+    if symbols_with_current_candle < min_cross_section_symbols:
+        return {}, missing
+
+    ranks_by_metric = {
+        metric_name: _rank_percentiles_by_symbol(values)
+        for metric_name, values in metric_values.items()
+    }
+    return_from_event_ranks = _return_from_event_percentiles_by_symbol(
+        states_at_snapshot=states_at_snapshot,
+        min_cross_section_symbols=min_cross_section_symbols,
+    )
+    target_symbols = set().union(*(set(values) for values in metric_values.values()))
+    target_symbols.update(row.symbol for row in states_at_snapshot)
+    return {
+        symbol: _CrossSectionFeatures(
+            volume_market_percentile=ranks_by_metric["volume"].get(symbol),
+            quote_volume_market_percentile=ranks_by_metric["quote_volume"].get(symbol),
+            return_1m_market_percentile=ranks_by_metric["return_1m"].get(symbol),
+            return_from_event_market_percentile=return_from_event_ranks.get(symbol),
+            oi_growth_market_percentile=ranks_by_metric["oi_growth"].get(symbol),
+            liq_intensity_market_percentile=ranks_by_metric["liq_intensity"].get(symbol),
+            range_expansion_market_percentile=ranks_by_metric["range_expansion"].get(symbol),
+            cross_section_available=True,
+            cross_section_symbol_count=symbols_with_current_candle,
+        )
+        for symbol in target_symbols
+    }, missing
+
+
 def _missing_cross_section_features(*, symbol_count: int) -> _CrossSectionFeatures:
     return _CrossSectionFeatures(
         volume_market_percentile=None,
@@ -1211,7 +1338,10 @@ def _universe_symbols_by_day(rows: Sequence[SymbolDayUniverseRow] | Iterable[Sym
 
 
 def _one_minute_return(*, candles: Sequence[Candle1m], snapshot_time_ms: int) -> float | None:
-    asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+    if isinstance(candles, _CandleSeries):
+        asof_rows = candles.trailing_asof(snapshot_time_ms, 2)
+    else:
+        asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
     if len(asof_rows) < 2:
         return None
     current = asof_rows[-1]
@@ -1264,6 +1394,26 @@ def _return_from_event_percentile(
     return _rank_percentile(symbol_values, symbol)
 
 
+def _return_from_event_percentiles_by_symbol(
+    *,
+    states_at_snapshot: Sequence[StrategyState1mRow],
+    min_cross_section_symbols: int,
+) -> dict[str, float]:
+    values = [
+        item
+        for item in states_at_snapshot
+        if item.current_return_from_start is not None
+    ]
+    if len(values) < min_cross_section_symbols:
+        return {}
+    symbol_values: dict[str, float] = {}
+    for item in values:
+        previous = symbol_values.get(item.symbol)
+        if previous is None or item.current_return_from_start > previous:
+            symbol_values[item.symbol] = item.current_return_from_start
+    return _rank_percentiles_by_symbol(symbol_values)
+
+
 def _rank_percentile(values_by_symbol: Mapping[str, float], symbol: str) -> float | None:
     if symbol not in values_by_symbol:
         return None
@@ -1279,6 +1429,24 @@ def _rank_percentile(values_by_symbol: Mapping[str, float], symbol: str) -> floa
     denominator = max(len(sorted_values) - 1, 1)
     percentile = (average_rank - 1.0) / denominator
     return min(max(percentile, 0.0), 1.0)
+
+
+def _rank_percentiles_by_symbol(values_by_symbol: Mapping[str, float]) -> dict[str, float]:
+    items = [(item_symbol, value) for item_symbol, value in values_by_symbol.items() if math.isfinite(value)]
+    if not items:
+        return {}
+    sorted_values = sorted(value for _, value in items)
+    average_rank_by_value: dict[float, float] = {}
+    for value in sorted_values:
+        if value in average_rank_by_value:
+            continue
+        tied_positions = [index + 1 for index, item_value in enumerate(sorted_values) if item_value == value]
+        average_rank_by_value[value] = statistics.fmean(tied_positions)
+    denominator = max(len(sorted_values) - 1, 1)
+    return {
+        item_symbol: min(max((average_rank_by_value[value] - 1.0) / denominator, 0.0), 1.0)
+        for item_symbol, value in items
+    }
 
 
 
@@ -1471,7 +1639,10 @@ def _one_minute_returns_by_available_time(
     snapshot_time_ms: int,
     window_minutes: int,
 ) -> dict[int, float]:
-    asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+    if isinstance(candles, _CandleSeries):
+        asof_rows = candles.trailing_asof(snapshot_time_ms, window_minutes + 1)
+    else:
+        asof_rows = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
     if len(asof_rows) < window_minutes + 1:
         return {}
     rows = asof_rows[-(window_minutes + 1) :]

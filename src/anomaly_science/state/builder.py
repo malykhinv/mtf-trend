@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict
+from bisect import bisect_left, bisect_right
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -24,6 +25,13 @@ class StrategyEventsArtifactError(ValueError):
 
 
 AnomalyEventsArtifactError = StrategyEventsArtifactError
+
+
+@dataclass(frozen=True, slots=True)
+class _SymbolCandleIndex:
+    candles: tuple[Candle1m, ...]
+    open_times: tuple[int, ...]
+    available_times: tuple[int, ...]
 
 
 def load_strategy_events_csv(path: str | Path) -> tuple[StrategyEvent, ...]:
@@ -98,15 +106,21 @@ def build_online_strategy_state_1m(
     candles_by_symbol: dict[str, list[Candle1m]] = {}
     for candle in candles_1m:
         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
-    for symbol in candles_by_symbol:
-        candles_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
+    indexed_candles_by_symbol: dict[str, _SymbolCandleIndex] = {}
+    for symbol, symbol_candles in candles_by_symbol.items():
+        ordered = tuple(sorted(symbol_candles, key=lambda item: (item.available_time_ms, item.open_time_ms)))
+        indexed_candles_by_symbol[symbol] = _SymbolCandleIndex(
+            candles=ordered,
+            open_times=tuple(candle.open_time_ms for candle in ordered),
+            available_times=tuple(candle.available_time_ms for candle in ordered),
+        )
 
     rows: list[StrategyState1mRow] = []
     for event in sorted(events, key=lambda item: (item.symbol, item.event_detection_time_ms, item.event_id)):
         if event.technical_noise_shock or event.excluded_by_data_quality_gate:
             continue
-        symbol_candles = candles_by_symbol.get(event.symbol, [])
-        if not symbol_candles:
+        symbol_candles = indexed_candles_by_symbol.get(event.symbol)
+        if symbol_candles is None:
             continue
         rows.extend(_build_event_rows(event=event, candles=symbol_candles, config=cfg))
     return tuple(rows)
@@ -147,25 +161,22 @@ def state_rows_to_artifact(rows: Sequence[StrategyState1mRow]) -> list[dict[str,
 def _build_event_rows(
     *,
     event: StrategyEvent,
-    candles: Sequence[Candle1m],
+    candles: _SymbolCandleIndex,
     config: OnlineStateBuilderConfig,
 ) -> list[StrategyState1mRow]:
-    candidate_candles = [
-        candle
-        for candle in candles
-        if candle.open_time_ms >= event.event_start_time_ms
-        and candle.available_time_ms >= event.event_detection_time_ms
-        and _minutes_between(event.event_detection_time_ms, candle.available_time_ms)
-        <= config.max_state_minutes_after_detection
-    ]
+    event_start_index = bisect_left(candles.open_times, event.event_start_time_ms)
+    detection_index = bisect_left(candles.available_times, event.event_detection_time_ms)
+    max_available_time_ms = event.event_detection_time_ms + config.max_state_minutes_after_detection * ONE_MINUTE_MS
+    end_index = bisect_right(candles.available_times, max_available_time_ms)
+    start_index = max(event_start_index, detection_index)
+    candidate_indexes = range(start_index, end_index)
     event_rows: list[StrategyState1mRow] = []
-    for current in candidate_candles:
+    for current_index in candidate_indexes:
+        current = candles.candles[current_index]
+        if current.open_time_ms < event.event_start_time_ms:
+            continue
         state_time_ms = current.available_time_ms
-        asof_candles = [
-            candle
-            for candle in candles
-            if candle.open_time_ms >= event.event_start_time_ms and candle.available_time_ms <= state_time_ms
-        ]
+        asof_candles = candles.candles[event_start_index : current_index + 1]
         if not asof_candles:
             continue
         first_candle = min(asof_candles, key=lambda item: item.open_time_ms)

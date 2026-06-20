@@ -24,6 +24,7 @@ from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_pre
 from anomaly_science.rejection import write_rejection_funnel
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
+from anomaly_science.state.config import OnlineStateBuilderConfig
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes, strategy_metadata_run_config_rows
 from anomaly_science.strategy.registry import get_strategy
 from anomaly_science.validation import run_mvp1_holdout_governance
@@ -69,6 +70,12 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         )
     )
     full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
+    effective_holdout_days = _effective_holdout_days(
+        full_start_date=full_start_date,
+        full_end_date=full_end_date,
+        requested_holdout_days=config.holdout_days,
+        research_mode=config.research_mode,
+    )
     protocol_freeze_id = config.protocol_freeze_id or _protocol_freeze_id(
         strategy_name=config.strategy_name,
         start_date=full_start_date,
@@ -79,7 +86,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         start_date=full_start_date,
         end_date=full_end_date,
         protocol_freeze_id=protocol_freeze_id,
-        holdout_days=config.holdout_days,
+        holdout_days=effective_holdout_days,
         research_mode=config.research_mode,
         holdout_access_artifact="run-research downstream input boundary",
     )
@@ -87,7 +94,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         input_dir=input_dir,
         full_start_date=full_start_date,
         full_end_date=full_end_date,
-        holdout_days=config.holdout_days,
+        holdout_days=effective_holdout_days,
         research_mode=config.research_mode,
     )
 
@@ -97,6 +104,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         input_dir=input_dir,
         events_path=events_dir / "strategy_events.csv",
         out_dir=stages_dir / "state",
+        config=_state_config_for_strategy(strategy_name=config.strategy_name),
     )
     future_dir = run_mvp1_future(
         input_dir=input_dir,
@@ -167,6 +175,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         end_date=research_end_date,
         full_start_date=full_start_date,
         full_end_date=full_end_date,
+        effective_holdout_days=effective_holdout_days,
         governance_dir=governance_dir,
         protocol_freeze_id=protocol_freeze_id,
         forensic_audit_dir=stages_dir / "forensic_audit",
@@ -180,6 +189,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         config=config,
         start_date=research_start_date,
         end_date=research_end_date,
+        effective_holdout_days=effective_holdout_days,
         governance_dir=governance_dir,
         protocol_freeze_id=protocol_freeze_id,
         forensic_audit_dir=forensic_audit_dir,
@@ -194,6 +204,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         end_date=research_end_date,
         full_start_date=full_start_date,
         full_end_date=full_end_date,
+        effective_holdout_days=effective_holdout_days,
         governance_dir=governance_dir,
         protocol_freeze_id=protocol_freeze_id,
         forensic_audit_dir=forensic_audit_dir,
@@ -218,6 +229,7 @@ def _write_research_run_manifest(
     end_date: date,
     full_start_date: date,
     full_end_date: date,
+    effective_holdout_days: int,
     governance_dir: Path,
     protocol_freeze_id: str,
     forensic_audit_dir: Path,
@@ -231,7 +243,8 @@ def _write_research_run_manifest(
     extra_config = {
         "strategy_name": config.strategy_name,
         "research_mode": config.research_mode,
-        "holdout_days": config.holdout_days,
+        "requested_holdout_days": config.holdout_days,
+        "effective_holdout_days": effective_holdout_days,
         "protocol_freeze_id": protocol_freeze_id,
         "target_horizon_minutes": strategy.metadata.horizon_minutes,
         "active_h_max_minutes": active_h_max,
@@ -248,7 +261,9 @@ def _write_research_run_manifest(
             RunConfigRow(key="full_input_start_date", value=full_start_date.isoformat(), source="run_research"),
             RunConfigRow(key="full_input_end_date", value=full_end_date.isoformat(), source="run_research"),
             RunConfigRow(key="research_mode", value=config.research_mode, source="run_research"),
-            RunConfigRow(key="holdout_days", value=str(config.holdout_days), source="run_research"),
+            RunConfigRow(key="holdout_days", value=str(effective_holdout_days), source="run_research"),
+            RunConfigRow(key="requested_holdout_days", value=str(config.holdout_days), source="run_research"),
+            RunConfigRow(key="effective_holdout_days", value=str(effective_holdout_days), source="run_research"),
             RunConfigRow(key="protocol_freeze_id", value=protocol_freeze_id, source="run_research"),
             RunConfigRow(key="holdout_governance_dir", value=str(governance_dir), source="run_research"),
             RunConfigRow(key="forensic_audit_dir", value=str(forensic_audit_dir), source="run_research"),
@@ -313,6 +328,7 @@ def _write_summary(
     config: ResearchRunConfig,
     start_date: date,
     end_date: date,
+    effective_holdout_days: int,
     governance_dir: Path,
     protocol_freeze_id: str,
     forensic_audit_dir: Path,
@@ -334,7 +350,9 @@ def _write_summary(
         f"research_start_date,{start_date.isoformat()}",
         f"research_end_date,{end_date.isoformat()}",
         f"research_mode,{config.research_mode}",
-        f"holdout_days,{config.holdout_days}",
+        f"holdout_days,{effective_holdout_days}",
+        f"requested_holdout_days,{config.holdout_days}",
+        f"effective_holdout_days,{effective_holdout_days}",
         f"protocol_freeze_id,{protocol_freeze_id}",
         f"holdout_governance_dir,{governance_dir}",
         f"forensic_audit_dir,{forensic_audit_dir}",
@@ -361,6 +379,10 @@ def _write_forensic_audit(run_dir: Path) -> tuple[Path, str, int, int, str]:
     status = "FAIL" if fail_count else "WARN" if warn_count else "PASS"
     failed_checks = ", ".join(row.check_name for row in rows if row.status is AuditStatus.FAIL)
     return forensic_audit_dir, status, fail_count, warn_count, failed_checks
+
+
+def _state_config_for_strategy(*, strategy_name: str) -> OnlineStateBuilderConfig:
+    return OnlineStateBuilderConfig(max_state_minutes_after_detection=active_strategy_h_max_minutes((strategy_name,)))
 
 
 def _apply_holdout_lock_to_input(
@@ -393,6 +415,32 @@ def _apply_holdout_lock_to_input(
     _filter_input_csv_by_end_date(input_dir / "candles_5m.csv", time_column="open_time_ms", end_date=research_end_date)
     _filter_input_csv_by_end_date(input_dir / "open_interest_5m.csv", time_column="timestamp_ms", end_date=research_end_date)
     return _input_date_range(input_dir / "candles_1m.csv")
+
+
+def _effective_holdout_days(
+    *,
+    full_start_date: date,
+    full_end_date: date,
+    requested_holdout_days: int,
+    research_mode: str,
+) -> int:
+    if requested_holdout_days <= 0:
+        raise ValueError("holdout_days must be positive")
+    if full_end_date < full_start_date:
+        raise ValueError("full_end_date must be >= full_start_date")
+    if research_mode == "frozen_holdout":
+        return requested_holdout_days
+    if research_mode != "is":
+        raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
+
+    total_days = (full_end_date - full_start_date).days + 1
+    if total_days <= requested_holdout_days:
+        if total_days < 2:
+            raise ValueError(
+                "IS research mode requires at least 2 calendar days when the requested holdout covers the whole period"
+            )
+        return total_days - 1
+    return requested_holdout_days
 
 
 def _filter_input_csv_by_end_date(path: Path, *, time_column: str, end_date: date) -> None:

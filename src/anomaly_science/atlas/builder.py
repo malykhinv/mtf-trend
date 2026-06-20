@@ -103,8 +103,8 @@ def build_atlas_inputs(
         )
 
     rows: list[AtlasInputRow] = []
-    for key in sorted(state_keys):
-        state = state_by_key[key]
+    for state in states:
+        key = _join_key(state)
         future = future_by_key[key]
         feature = feature_by_key[key]
         if not isinstance(state, StrategyState1mRow) or not isinstance(future, FuturePathRow):
@@ -619,11 +619,15 @@ def _unique_by_join_key(
 ) -> dict[tuple[str, str, int, int], object]:
     result: dict[tuple[str, str, int, int], object] = {}
     for row in rows:
-        key = (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
+        key = _join_key(row)
         if key in result:
             raise AtlasInputError(f"{artifact_name} duplicate atlas join key: {key}")
         result[key] = row
     return result
+
+
+def _join_key(row: StrategyState1mRow | FuturePathRow | StrategyFeatureMatrixRow) -> tuple[str, str, int, int]:
+    return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
 
 
 def _enforce_atlas_temporal_contract(

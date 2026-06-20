@@ -9,7 +9,7 @@ import pandas as pd
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.data.normalized import normalize_market_data
+from anomaly_science.data.normalized import validate_market_data_boundary
 from anomaly_science.data.quality import has_critical_fail, rows_to_artifact, run_data_quality
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.universe import build_symbol_universe_by_day, universe_rows_to_artifact
@@ -83,7 +83,7 @@ def _read_source_frames(input_path: Path) -> tuple[dict[str, pd.DataFrame | None
 
     if frames.get("candles_1m") is not None and frames.get("candles_5m") is not None:
         try:
-            normalize_market_data(
+            validate_market_data_boundary(
                 candles_1m=frames["candles_1m"],
                 candles_5m=frames["candles_5m"],
                 open_interest_5m=frames.get("open_interest_5m"),
