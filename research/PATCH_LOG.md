@@ -1,5 +1,17 @@
 # Patch log
 
+## methodology: keep WFA proof rows in short IS runs
+
+Status: APPLIED.
+
+Intent:
+- Keep `run-research <strategy> --days N` compact without requiring extra holdout flags for short proof runs.
+- Preserve at least one final holdout day while keeping up to 8 non-holdout research days when the exported window allows it.
+- Reduce short-window forensic WARNs caused by empty OOS/EV/simulation proof rows.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py -q`
+
 ## audit: name canonical artifacts in protocol rows
 
 Status: APPLIED.

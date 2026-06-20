@@ -149,6 +149,18 @@ def test_effective_holdout_days_keeps_non_holdout_rows_for_short_is_windows() ->
     ) == 1
     assert _effective_holdout_days(
         full_start_date=pd.Timestamp("2024-01-01").date(),
+        full_end_date=pd.Timestamp("2024-01-09").date(),
+        requested_holdout_days=60,
+        research_mode="is",
+    ) == 1
+    assert _effective_holdout_days(
+        full_start_date=pd.Timestamp("2024-01-01").date(),
+        full_end_date=pd.Timestamp("2024-03-01").date(),
+        requested_holdout_days=60,
+        research_mode="is",
+    ) == 53
+    assert _effective_holdout_days(
+        full_start_date=pd.Timestamp("2024-01-01").date(),
         full_end_date=pd.Timestamp("2024-03-31").date(),
         requested_holdout_days=60,
         research_mode="is",

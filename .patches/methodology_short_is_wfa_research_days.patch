@@ -1,0 +1,126 @@
+﻿diff --git a/COMMANDS.md b/COMMANDS.md
+index 0c1b76ca..94fe2d84 100644
+--- a/COMMANDS.md
++++ b/COMMANDS.md
+@@ -67,7 +67,7 @@ python main.py run-mvp1-labels --state tmp/mvp1_state/strategy_state_1m.csv --fu
+ 
+ Low-level target-horizon commands use the same horizon contract as `run-research`: `--horizon-minutes` must be one of `15/30/60/120/180`, and the selected `--strategy-name` must be an executable registry variant that semantically allows that horizon. Omitting `--strategy-name` resolves to `broad_anomaly_v1_h{horizon}` for compatibility; use explicit post-anomaly/post-pump strategy names for executable `120/180` research.
+ 
+-`run-research` defaults to `--research-mode is`, which excludes the final holdout from downstream research stages before data audit/events/state/features/prediction. For short exported windows where the requested holdout would cover the whole period, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to keep one non-holdout research day. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records an explicit approved holdout access row. `run-research` writes `stages/forensic_audit/strategy_protocol_audit.csv` after simulation and exits non-zero if the independent forensic audit has any `FAIL` row. `research_run_summary.csv` records holdout mode plus forensic audit status/counts.
++`run-research` defaults to `--research-mode is`, which excludes the final holdout from downstream research stages before data audit/events/state/features/prediction. For short exported windows, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to preserve the final holdout while keeping up to 8 non-holdout research days for weekly WFA proof when the window allows it. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records an explicit approved holdout access row. `run-research` writes `stages/forensic_audit/strategy_protocol_audit.csv` after simulation and exits non-zero if the independent forensic audit has any `FAIL` row. `research_run_summary.csv` records holdout mode plus forensic audit status/counts.
+ 
+ MVP1 weekly CatBoost+Isotonic calibrated prediction:
+ 
+diff --git a/README.md b/README.md
+index b5bd69d9..098e8827 100644
+--- a/README.md
++++ b/README.md
+@@ -28,7 +28,7 @@ python main.py run-research broad_anomaly_v1_h30 --days 380
+ python main.py run-research broad_anomaly_v1_h30 --research-mode frozen_holdout --protocol-freeze-id protocol_freeze_v1
+ ```
+ 
+-`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, applies the holdout lock, runs the full research pipeline through simulation, then writes root reproducibility manifests and an independent forensic protocol audit; the run fails if that audit emits any `FAIL` row. Root outputs include `strategy_run_config.csv`, `anomaly_run_config.csv`, `artifact_manifest.json`, and `research_run_summary.csv`. Input-boundary outputs include `cache_export_coverage.csv` and `cache_export_manifest.json`, so the actual exported symbols, excluded delivery-contract symbols, period, missing UTC days, row count, lifecycle gaps, and file hashes are inspectable for every run. Default `--research-mode is` excludes the final holdout from downstream research stages; for short exported windows where the requested holdout would cover the whole period, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to keep one non-holdout research day. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records explicit approved holdout access. If `--days` is omitted, it uses the full available cache period. The current full-cache proof is recorded in `research/validation/cache_export_380d_validation.json` and validates 2025-06-03..2026-06-17, 796 perpetual symbols, 344,895,197 1m rows, no missing UTC days, no duplicate 1m rows, and no unclassified 1m gaps; 3,570 missing 1m rows are explicitly classified as settlement-transition gaps with `{symbol}SETTLED` evidence.
++`run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, applies the holdout lock, runs the full research pipeline through simulation, then writes root reproducibility manifests and an independent forensic protocol audit; the run fails if that audit emits any `FAIL` row. Root outputs include `strategy_run_config.csv`, `anomaly_run_config.csv`, `artifact_manifest.json`, and `research_run_summary.csv`. Input-boundary outputs include `cache_export_coverage.csv` and `cache_export_manifest.json`, so the actual exported symbols, excluded delivery-contract symbols, period, missing UTC days, row count, lifecycle gaps, and file hashes are inspectable for every run. Default `--research-mode is` excludes the final holdout from downstream research stages; for short exported windows, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to preserve the final holdout while keeping up to 8 non-holdout research days for weekly WFA proof when the window allows it. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records explicit approved holdout access. If `--days` is omitted, it uses the full available cache period. The current full-cache proof is recorded in `research/validation/cache_export_380d_validation.json` and validates 2025-06-03..2026-06-17, 796 perpetual symbols, 344,895,197 1m rows, no missing UTC days, no duplicate 1m rows, and no unclassified 1m gaps; 3,570 missing 1m rows are explicitly classified as settlement-transition gaps with `{symbol}SETTLED` evidence.
+ 
+ Low-level MVP1 stage commands remain available for debugging:
+ 
+diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 5c3c75e6..343c8b5d 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -87,7 +87,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Strategy registry truthfulness for specified-only variants | IMPLEMENTED | Registry exposes executable anomaly variants explicitly, writes `strategy_implementation_status.csv` as a generated truth table, and registry-level `validate_strategy_horizon()` rejects unknown, arbitrary, and mismatched strategy/horizon pairs. The current anomaly strategy spec has no remaining specified-only executable gaps. | Keep status artifact and registry tests as permanent gates. |
+ | Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, validates them against the Core whitelist, registry-level `validate_strategy_horizon()` enforces executable strategy/horizon compatibility before prediction, controls, EV, and simulation configs are accepted, and low-level CLI commands now use the same Core whitelist plus registry validation before file IO. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Keep horizon compatibility tests as permanent regression gate. |
+ | Data source boundary / normalized market data | IMPLEMENTED | Binance Vision cache, normalized CSV boundary, run-level data snapshot hashing, and export-level `cache_export_coverage.csv` / `cache_export_manifest.json` proof artifacts exist. Full local 380d export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, 0 unclassified 1m gaps. The only missing 1m rows are 3,570 explicitly classified settlement-transition rows across AIAUSDT/CVXUSDT/LITUSDT/PUMPUSDT/SLPUSDT with `{symbol}SETTLED` sibling evidence. Fixed-date delivery contracts are excluded from perpetual exports by default and recorded in the manifest. `run-research` uses the full available cache period when `--days` is omitted. | Keep `validate-cache-export-proof --expected-days 380 --allow-settlement-transition-gaps` as the permanent full-cache proof gate. |
+-| Compact all-symbol `run-research` executability | IMPLEMENTED | `run-research <strategy> --days N` creates output automatically, uses the full cache period when `--days` is omitted, auto-scales default IS holdout for short windows, and completed the all-symbol 2d command `python main.py run-research broad_anomaly_v1_h30 --days 2`. Atlas now builds through the strict CSV boundary with vectorized grouping; the same run reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the short smoke window lacking non-empty OOS/simulation proof rows. | Keep compact-run smoke plus full tests as regression gates; improve short-window OOS proof depth separately if needed. |
++| Compact all-symbol `run-research` executability | IMPLEMENTED | `run-research <strategy> --days N` creates output automatically, uses the full cache period when `--days` is omitted, and auto-scales default IS holdout for short windows while preserving the final holdout. The short-window rule keeps up to 8 non-holdout research days when available, so weekly WFA can produce OOS proof on compact windows larger than a 2d smoke. The all-symbol 2d command `python main.py run-research broad_anomaly_v1_h30 --days 2` completed with forensic `0` FAIL rows and expected WARN rows from the intentionally tiny window. Atlas now builds through the strict CSV boundary with vectorized grouping. | Keep compact-run smoke plus full tests as regression gates; use >=9d compact windows when non-empty OOS/EV/simulation proof is required. |
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 82dc113c..6e852207 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,17 @@
+ # Patch log
+ 
++## methodology: keep WFA proof rows in short IS runs
++
++Status: APPLIED.
++
++Intent:
++- Keep `run-research <strategy> --days N` compact without requiring extra holdout flags for short proof runs.
++- Preserve at least one final holdout day while keeping up to 8 non-holdout research days when the exported window allows it.
++- Reduce short-window forensic WARNs caused by empty OOS/EV/simulation proof rows.
++
++Validation:
++- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py -q`
++
+ ## audit: name canonical artifacts in protocol rows
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 8937c23f..09c48fb4 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -18,7 +18,7 @@ Active rule:
+ - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
+ - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
+ - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+-- Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days and keep one non-holdout research day, state windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the short smoke window lacking non-empty OOS/simulation proof rows, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
++- Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days, preserve the final holdout, and keep up to 8 non-holdout research days when available for weekly WFA proof. State windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the intentionally tiny smoke window, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
+ - Stage protocol audits now name canonical `strategy_*` artifacts as the primary schema/input/output boundary. `anomaly_*` files remain compatibility aliases, not the documented primary artifact names.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+diff --git a/src/anomaly_science/research/run.py b/src/anomaly_science/research/run.py
+index f9e1e007..ee60a2b0 100644
+--- a/src/anomaly_science/research/run.py
++++ b/src/anomaly_science/research/run.py
+@@ -31,6 +31,7 @@ from anomaly_science.validation import run_mvp1_holdout_governance
+ 
+ 
+ DEFAULT_RESEARCH_OUTPUT_ROOT = Path(".output/results/research_runs")
++MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA = 8
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+@@ -434,12 +435,15 @@ def _effective_holdout_days(
+         raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
+ 
+     total_days = (full_end_date - full_start_date).days + 1
++    min_research_days = min(total_days - 1, MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA)
+     if total_days <= requested_holdout_days:
+         if total_days < 2:
+             raise ValueError(
+                 "IS research mode requires at least 2 calendar days when the requested holdout covers the whole period"
+             )
+-        return total_days - 1
++        return total_days - min_research_days
++    if total_days - requested_holdout_days < MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA:
++        return max(1, total_days - MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA)
+     return requested_holdout_days
+ 
+ 
+diff --git a/tests/test_research_run.py b/tests/test_research_run.py
+index 3168f731..666e33e2 100644
+--- a/tests/test_research_run.py
++++ b/tests/test_research_run.py
+@@ -147,6 +147,18 @@ def test_effective_holdout_days_keeps_non_holdout_rows_for_short_is_windows() ->
+         requested_holdout_days=60,
+         research_mode="is",
+     ) == 1
++    assert _effective_holdout_days(
++        full_start_date=pd.Timestamp("2024-01-01").date(),
++        full_end_date=pd.Timestamp("2024-01-09").date(),
++        requested_holdout_days=60,
++        research_mode="is",
++    ) == 1
++    assert _effective_holdout_days(
++        full_start_date=pd.Timestamp("2024-01-01").date(),
++        full_end_date=pd.Timestamp("2024-03-01").date(),
++        requested_holdout_days=60,
++        research_mode="is",
++    ) == 53
+     assert _effective_holdout_days(
+         full_start_date=pd.Timestamp("2024-01-01").date(),
+         full_end_date=pd.Timestamp("2024-03-31").date(),

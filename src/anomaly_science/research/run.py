@@ -31,6 +31,7 @@ from anomaly_science.validation import run_mvp1_holdout_governance
 
 
 DEFAULT_RESEARCH_OUTPUT_ROOT = Path(".output/results/research_runs")
+MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,12 +435,15 @@ def _effective_holdout_days(
         raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
 
     total_days = (full_end_date - full_start_date).days + 1
+    min_research_days = min(total_days - 1, MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA)
     if total_days <= requested_holdout_days:
         if total_days < 2:
             raise ValueError(
                 "IS research mode requires at least 2 calendar days when the requested holdout covers the whole period"
             )
-        return total_days - 1
+        return total_days - min_research_days
+    if total_days - requested_holdout_days < MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA:
+        return max(1, total_days - MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA)
     return requested_holdout_days
 
 
