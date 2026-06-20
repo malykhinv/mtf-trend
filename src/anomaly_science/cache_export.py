@@ -72,6 +72,7 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
         candles_1m = _read_symbol_cache(
             config.cache_dir,
             symbol,
+            start_ms=start_ms,
             parquet_use_threads=config.parquet_use_threads,
         )
         candles_1m = _filter_from_start_ms(candles_1m, start_ms=start_ms).sort_values(["symbol", "open_time_ms"])
@@ -275,7 +276,13 @@ def _discover_cache_symbols_with_exclusions(
     return symbols, excluded_delivery_symbols
 
 
-def _read_symbol_cache(cache_dir: Path, symbol: str, *, parquet_use_threads: bool = False) -> pd.DataFrame:
+def _read_symbol_cache(
+    cache_dir: Path,
+    symbol: str,
+    *,
+    start_ms: int | None = None,
+    parquet_use_threads: bool = False,
+) -> pd.DataFrame:
     path = cache_dir / f"{symbol}.parquet"
     if not path.exists():
         raise FileNotFoundError(f"cache parquet is missing for {symbol}: {path}")
@@ -297,7 +304,8 @@ def _read_symbol_cache(cache_dir: Path, symbol: str, *, parquet_use_threads: boo
     selected_columns = sorted(required)
     if "open_interest" in schema_columns:
         selected_columns.append("open_interest")
-    frame = pd.read_parquet(path, columns=selected_columns, use_threads=parquet_use_threads)
+    filters = [("timestamp", ">=", start_ms)] if start_ms is not None else None
+    frame = pd.read_parquet(path, columns=selected_columns, filters=filters, use_threads=parquet_use_threads)
     result = pd.DataFrame(
         {
             "symbol": symbol,

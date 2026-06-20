@@ -1,5 +1,19 @@
 # Patch log
 
+## perf: push cache export day filter into parquet reads
+
+Status: APPLIED.
+
+Intent:
+- Avoid reading each full 380d symbol parquet when exporting a short `--days` window from the local cache.
+- Keep the global window scan over `timestamp` only, then pass `filters=[("timestamp", ">=", start_ms)]` into the per-symbol parquet read.
+- Preserve the existing post-read filter as a contract guard, so behavior stays identical while IO drops sharply for small windows.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_cache_export.py -q`
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\cache_export.py tests\test_cache_export.py`
+- `Measure-Command { .venv\Scripts\python.exe main.py export-cache-mvp1-csv --cache-dir .output\market\binance_vision\um_futures\enriched_1m --out tmp\cache_export_2d_perf --days 2 --expected-days 2 --fail-on-missing-utc-days --progress-every 200 }` -> `186.99s`
+
 ## docs: canonicalize low-level CLI artifact help
 
 Status: APPLIED.

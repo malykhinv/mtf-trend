@@ -5,6 +5,7 @@ import json
 import pandas as pd
 import pytest
 
+import anomaly_science.cache_export as cache_export
 from anomaly_science.cli import build_parser
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, discover_cache_symbols, export_cache_to_mvp1_csv
 
@@ -330,3 +331,67 @@ def test_export_cache_progress_includes_scan_write_eta(tmp_path, capsys) -> None
     assert "cache export write 1/2 symbol=AAAUSDT" in stderr
     assert "elapsed=" in stderr
     assert "eta=" in stderr
+
+
+def test_export_cache_applies_parquet_timestamp_filter_after_window_scan(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    out_dir = tmp_path / "mvp1"
+    cache_dir.mkdir()
+    parquet_path = cache_dir / "AAAUSDT.parquet"
+    parquet_path.write_bytes(b"placeholder")
+    columns = (
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "trade_count",
+        "taker_buy_quote_volume",
+        "open_interest",
+    )
+    read_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(cache_export, "_read_parquet_schema_columns", lambda path: columns)
+
+    def fake_read_parquet(path, *, columns=None, filters=None, use_threads=False):
+        read_calls.append({"columns": tuple(columns or ()), "filters": filters})
+        frame = pd.DataFrame(
+            {
+                "timestamp": [1704067200000, 1704153600000],
+                "open": [1.0, 2.0],
+                "high": [1.0, 2.0],
+                "low": [1.0, 2.0],
+                "close": [1.0, 2.0],
+                "volume": [1.0, 2.0],
+                "quote_volume": [1.0, 2.0],
+                "trade_count": [1, 2],
+                "taker_buy_quote_volume": [1.0, 2.0],
+                "open_interest": [1.0, 2.0],
+            }
+        )
+        if filters:
+            for column, operator, value in filters:
+                assert column == "timestamp"
+                assert operator == ">="
+                frame = frame[frame[column] >= value].copy()
+        return frame[list(columns or frame.columns)]
+
+    monkeypatch.setattr(pd, "read_parquet", fake_read_parquet)
+
+    export_cache_to_mvp1_csv(
+        CacheMvp1CsvExportConfig(
+            cache_dir=cache_dir,
+            out_dir=out_dir,
+            symbols=("AAAUSDT",),
+            days=1,
+            progress_every=0,
+        )
+    )
+
+    assert read_calls[0]["columns"] == ("timestamp",)
+    assert read_calls[0]["filters"] is None
+    assert read_calls[1]["filters"] == [("timestamp", ">=", 1704153600000)]
+    candles = pd.read_csv(out_dir / "candles_1m.csv")
+    assert candles["open_time_ms"].tolist() == [1704153600000]
