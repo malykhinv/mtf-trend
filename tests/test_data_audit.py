@@ -245,6 +245,53 @@ def test_universe_materializes_missing_days_between_observations() -> None:
     assert missing.last_seen_data_time_ms == day2
 
 
+def test_universe_uses_all_dataset_bounds_without_row_iteration_semantics() -> None:
+    day0 = 1_893_456_000_000  # 2030-01-01 00:00 UTC
+    day1 = day0 + 24 * 60 * 60 * 1000
+    day2 = day0 + 2 * 24 * 60 * 60 * 1000
+    candles_1m = pd.DataFrame(
+        [
+            {"symbol": "123", "open_time_ms": day1 + 60_000},
+            {"symbol": "123", "open_time_ms": day1 + 120_000},
+        ]
+    )
+    candles_5m = pd.DataFrame(
+        [
+            {"symbol": 123, "open_time_ms": day1},
+        ]
+    )
+    open_interest_5m = pd.DataFrame(
+        [
+            {"symbol": "123", "timestamp_ms": day0},
+            {"symbol": "123", "timestamp_ms": day2},
+        ]
+    )
+    liquidations = pd.DataFrame(
+        [
+            {"symbol": 123, "event_time_ms": day2 + 60_000},
+        ]
+    )
+
+    rows = build_symbol_universe_by_day(
+        candles_1m=candles_1m,
+        candles_5m=candles_5m,
+        open_interest_5m=open_interest_5m,
+        liquidations=liquidations,
+    )
+
+    assert [row.trade_date for row in rows] == ["2030-01-01", "2030-01-02", "2030-01-03"]
+    assert {row.symbol for row in rows} == {"123"}
+    assert all(row.first_seen_data_time_ms == day0 for row in rows)
+    assert all(row.last_seen_data_time_ms == day2 + 60_000 for row in rows)
+    assert rows[0].has_oi_data is True
+    assert rows[0].tradable_on_day is False
+    assert rows[1].has_1m_data is True
+    assert rows[1].has_5m_data is True
+    assert rows[1].tradable_on_day is True
+    assert rows[2].has_liquidation_data is True
+    assert rows[2].tradable_on_day is False
+
+
 def test_universe_artifact_contains_anti_survivorship_fields() -> None:
     candles_1m = pd.read_csv(FIXTURE_DIR / "candles_1m.csv")
     candles_5m = pd.read_csv(FIXTURE_DIR / "candles_5m.csv")

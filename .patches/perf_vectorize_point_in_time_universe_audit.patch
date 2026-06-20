@@ -1,0 +1,176 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 72bcf617..4a43bfbf 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -88,7 +88,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, validates them against the Core whitelist, registry-level `validate_strategy_horizon()` enforces executable strategy/horizon compatibility before prediction, controls, EV, and simulation configs are accepted, and low-level CLI commands now use the same Core whitelist plus registry validation before file IO. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Keep horizon compatibility tests as permanent regression gate. |
+ | Data source boundary / normalized market data | IMPLEMENTED | Binance Vision cache, normalized CSV boundary, run-level data snapshot hashing, and export-level `cache_export_coverage.csv` / `cache_export_manifest.json` proof artifacts exist. Full local 380d export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, 0 unclassified 1m gaps. The only missing 1m rows are 3,570 explicitly classified settlement-transition rows across AIAUSDT/CVXUSDT/LITUSDT/PUMPUSDT/SLPUSDT with `{symbol}SETTLED` sibling evidence. Fixed-date delivery contracts are excluded from perpetual exports by default and recorded in the manifest. `run-research` uses the full available cache period when `--days` is omitted. | Keep `validate-cache-export-proof --expected-days 380 --allow-settlement-transition-gaps` as the permanent full-cache proof gate. |
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+-| Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. | Keep universe and cross-section eligibility tests as permanent regression gates. |
++| Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+ | Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. | Keep catalog membership tests as permanent gate. |
+ | Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. | Keep temporal/no-leakage tests as permanent gate. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 01e055dc..b0a47f62 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,19 @@
+ # Patch log
+ 
++## perf: vectorize point-in-time universe audit
++
++Status: APPLIED.
++
++Intent:
++- Remove per-source-row `iterrows()` scans from `build_symbol_universe_by_day`.
++- Keep point-in-time universe behavior unchanged: dated dataset presence, string symbol identity, first/last seen timestamps, explicit missing days, and cross-section eligibility remain the same.
++- Make `run-mvp1-data-audit` viable after all-symbol cache export instead of stalling in universe construction.
++
++Validation:
++- `.venv\Scripts\python.exe -m pytest tests\test_data_audit.py -q`
++- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
++- `Measure-Command { .venv\Scripts\python.exe main.py run-mvp1-data-audit --input .output\results\research_runs\20260620T032748623164Z_broad_anomaly_v1_h30\input --out tmp\data_audit_2d_perf }` -> `577.49s`
++
+ ## perf: push cache export day filter into parquet reads
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index c3080793..e68653e5 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -17,14 +17,18 @@ Active rule:
+ - Shadow live and production live are still intentionally absent.
+ - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
+ - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
++- Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+ 
+-Current Git head before the active CLI canonical-help patch: `df5b516e`.
++Current Git head before the active universe-performance patch: `0a0f11ca`.
+ - Verified with `git rev-parse --short HEAD` in the local repository.
+ - Do not treat old patch-queue notes in previous chats as current state unless they match the checked-out Git head.
+ 
+-Last known local validation before this documentation sync:
++Last known local validation before this universe-performance patch:
++- `.venv\Scripts\python.exe -m pytest tests\test_data_audit.py -q`
++- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
++- `.venv\Scripts\python.exe main.py run-mvp1-data-audit --input .output\results\research_runs\20260620T032748623164Z_broad_anomaly_v1_h30\input --out tmp\data_audit_2d_perf` completed in 577.49s
+ - `.venv\Scripts\python.exe -m compileall -q main.py src tests zip_project.py`
+ - `.venv\Scripts\python.exe -m pytest -q`
+ - `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --cache-dir tmp\codex_smoke_cache --research-mode frozen_holdout --protocol-freeze-id smoke_20260620_fixture`
+diff --git a/src/anomaly_science/universe/builder.py b/src/anomaly_science/universe/builder.py
+index e77f6369..63c3dd00 100644
+--- a/src/anomaly_science/universe/builder.py
++++ b/src/anomaly_science/universe/builder.py
+@@ -86,11 +86,12 @@ def build_symbol_universe_by_day(
+ def _symbol_dates(frame: pd.DataFrame | None, *, time_column: str) -> set[tuple[str, str]]:
+     if frame is None or frame.empty or "symbol" not in frame.columns or time_column not in frame.columns:
+         return set()
+-    result: set[tuple[str, str]] = set()
+-    for _, row in frame[["symbol", time_column]].dropna().iterrows():
+-        trade_date = utc_ms_to_datetime(int(row[time_column])).date().isoformat()
+-        result.add((trade_date, str(row["symbol"])))
+-    return result
++    subset = frame[["symbol", time_column]].dropna()
++    if subset.empty:
++        return set()
++    symbols = subset["symbol"].astype(str)
++    trade_dates = pd.to_datetime(subset[time_column].astype("int64"), unit="ms", utc=True).dt.date.astype(str)
++    return set(zip(trade_dates, symbols, strict=True))
+ 
+ 
+ def _symbol_time_bounds(**datasets: tuple[pd.DataFrame | None, str]) -> dict[str, tuple[int, int]]:
+@@ -98,14 +99,27 @@ def _symbol_time_bounds(**datasets: tuple[pd.DataFrame | None, str]) -> dict[str
+     for frame, time_column in datasets.values():
+         if frame is None or frame.empty or "symbol" not in frame.columns or time_column not in frame.columns:
+             continue
+-        for _, row in frame[["symbol", time_column]].dropna().iterrows():
+-            symbol = str(row["symbol"])
+-            timestamp_ms = int(row[time_column])
++        subset = frame[["symbol", time_column]].dropna()
++        if subset.empty:
++            continue
++        normalized = pd.DataFrame(
++            {
++                "symbol": subset["symbol"].astype(str),
++                "timestamp_ms": subset[time_column].astype("int64"),
++            }
++        )
++        bounds = normalized.groupby("symbol", sort=False)["timestamp_ms"].agg(["min", "max"])
++        for symbol, first_ms in bounds["min"].astype("int64").to_dict().items():
++            last_ms = int(bounds.at[symbol, "max"])
++            timestamp_bounds = (int(first_ms), last_ms)
+             if symbol not in result:
+-                result[symbol] = (timestamp_ms, timestamp_ms)
++                result[symbol] = timestamp_bounds
+                 continue
+-            first_ms, last_ms = result[symbol]
+-            result[symbol] = (min(first_ms, timestamp_ms), max(last_ms, timestamp_ms))
++            current_first_ms, current_last_ms = result[symbol]
++            result[symbol] = (
++                min(current_first_ms, timestamp_bounds[0]),
++                max(current_last_ms, timestamp_bounds[1]),
++            )
+     return result
+ 
+ 
+diff --git a/tests/test_data_audit.py b/tests/test_data_audit.py
+index 5898a562..eec9ffdd 100644
+--- a/tests/test_data_audit.py
++++ b/tests/test_data_audit.py
+@@ -245,6 +245,53 @@ def test_universe_materializes_missing_days_between_observations() -> None:
+     assert missing.last_seen_data_time_ms == day2
+ 
+ 
++def test_universe_uses_all_dataset_bounds_without_row_iteration_semantics() -> None:
++    day0 = 1_893_456_000_000  # 2030-01-01 00:00 UTC
++    day1 = day0 + 24 * 60 * 60 * 1000
++    day2 = day0 + 2 * 24 * 60 * 60 * 1000
++    candles_1m = pd.DataFrame(
++        [
++            {"symbol": "123", "open_time_ms": day1 + 60_000},
++            {"symbol": "123", "open_time_ms": day1 + 120_000},
++        ]
++    )
++    candles_5m = pd.DataFrame(
++        [
++            {"symbol": 123, "open_time_ms": day1},
++        ]
++    )
++    open_interest_5m = pd.DataFrame(
++        [
++            {"symbol": "123", "timestamp_ms": day0},
++            {"symbol": "123", "timestamp_ms": day2},
++        ]
++    )
++    liquidations = pd.DataFrame(
++        [
++            {"symbol": 123, "event_time_ms": day2 + 60_000},
++        ]
++    )
++
++    rows = build_symbol_universe_by_day(
++        candles_1m=candles_1m,
++        candles_5m=candles_5m,
++        open_interest_5m=open_interest_5m,
++        liquidations=liquidations,
++    )
++
++    assert [row.trade_date for row in rows] == ["2030-01-01", "2030-01-02", "2030-01-03"]
++    assert {row.symbol for row in rows} == {"123"}
++    assert all(row.first_seen_data_time_ms == day0 for row in rows)
++    assert all(row.last_seen_data_time_ms == day2 + 60_000 for row in rows)
++    assert rows[0].has_oi_data is True
++    assert rows[0].tradable_on_day is False
++    assert rows[1].has_1m_data is True
++    assert rows[1].has_5m_data is True
++    assert rows[1].tradable_on_day is True
++    assert rows[2].has_liquidation_data is True
++    assert rows[2].tradable_on_day is False
++
++
+ def test_universe_artifact_contains_anti_survivorship_fields() -> None:
+     candles_1m = pd.read_csv(FIXTURE_DIR / "candles_1m.csv")
+     candles_5m = pd.read_csv(FIXTURE_DIR / "candles_5m.csv")

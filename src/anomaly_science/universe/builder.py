@@ -86,11 +86,12 @@ def build_symbol_universe_by_day(
 def _symbol_dates(frame: pd.DataFrame | None, *, time_column: str) -> set[tuple[str, str]]:
     if frame is None or frame.empty or "symbol" not in frame.columns or time_column not in frame.columns:
         return set()
-    result: set[tuple[str, str]] = set()
-    for _, row in frame[["symbol", time_column]].dropna().iterrows():
-        trade_date = utc_ms_to_datetime(int(row[time_column])).date().isoformat()
-        result.add((trade_date, str(row["symbol"])))
-    return result
+    subset = frame[["symbol", time_column]].dropna()
+    if subset.empty:
+        return set()
+    symbols = subset["symbol"].astype(str)
+    trade_dates = pd.to_datetime(subset[time_column].astype("int64"), unit="ms", utc=True).dt.date.astype(str)
+    return set(zip(trade_dates, symbols, strict=True))
 
 
 def _symbol_time_bounds(**datasets: tuple[pd.DataFrame | None, str]) -> dict[str, tuple[int, int]]:
@@ -98,14 +99,27 @@ def _symbol_time_bounds(**datasets: tuple[pd.DataFrame | None, str]) -> dict[str
     for frame, time_column in datasets.values():
         if frame is None or frame.empty or "symbol" not in frame.columns or time_column not in frame.columns:
             continue
-        for _, row in frame[["symbol", time_column]].dropna().iterrows():
-            symbol = str(row["symbol"])
-            timestamp_ms = int(row[time_column])
+        subset = frame[["symbol", time_column]].dropna()
+        if subset.empty:
+            continue
+        normalized = pd.DataFrame(
+            {
+                "symbol": subset["symbol"].astype(str),
+                "timestamp_ms": subset[time_column].astype("int64"),
+            }
+        )
+        bounds = normalized.groupby("symbol", sort=False)["timestamp_ms"].agg(["min", "max"])
+        for symbol, first_ms in bounds["min"].astype("int64").to_dict().items():
+            last_ms = int(bounds.at[symbol, "max"])
+            timestamp_bounds = (int(first_ms), last_ms)
             if symbol not in result:
-                result[symbol] = (timestamp_ms, timestamp_ms)
+                result[symbol] = timestamp_bounds
                 continue
-            first_ms, last_ms = result[symbol]
-            result[symbol] = (min(first_ms, timestamp_ms), max(last_ms, timestamp_ms))
+            current_first_ms, current_last_ms = result[symbol]
+            result[symbol] = (
+                min(current_first_ms, timestamp_bounds[0]),
+                max(current_last_ms, timestamp_bounds[1]),
+            )
     return result
 
 

@@ -17,14 +17,18 @@ Active rule:
 - Shadow live and production live are still intentionally absent.
 - Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
 - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
+- Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
 - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
 - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
 
-Current Git head before the active CLI canonical-help patch: `df5b516e`.
+Current Git head before the active universe-performance patch: `0a0f11ca`.
 - Verified with `git rev-parse --short HEAD` in the local repository.
 - Do not treat old patch-queue notes in previous chats as current state unless they match the checked-out Git head.
 
-Last known local validation before this documentation sync:
+Last known local validation before this universe-performance patch:
+- `.venv\Scripts\python.exe -m pytest tests\test_data_audit.py -q`
+- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+- `.venv\Scripts\python.exe main.py run-mvp1-data-audit --input .output\results\research_runs\20260620T032748623164Z_broad_anomaly_v1_h30\input --out tmp\data_audit_2d_perf` completed in 577.49s
 - `.venv\Scripts\python.exe -m compileall -q main.py src tests zip_project.py`
 - `.venv\Scripts\python.exe -m pytest -q`
 - `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --cache-dir tmp\codex_smoke_cache --research-mode frozen_holdout --protocol-freeze-id smoke_20260620_fixture`

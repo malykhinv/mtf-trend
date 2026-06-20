@@ -1,5 +1,19 @@
 # Patch log
 
+## perf: vectorize point-in-time universe audit
+
+Status: APPLIED.
+
+Intent:
+- Remove per-source-row `iterrows()` scans from `build_symbol_universe_by_day`.
+- Keep point-in-time universe behavior unchanged: dated dataset presence, string symbol identity, first/last seen timestamps, explicit missing days, and cross-section eligibility remain the same.
+- Make `run-mvp1-data-audit` viable after all-symbol cache export instead of stalling in universe construction.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_data_audit.py -q`
+- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
+- `Measure-Command { .venv\Scripts\python.exe main.py run-mvp1-data-audit --input .output\results\research_runs\20260620T032748623164Z_broad_anomaly_v1_h30\input --out tmp\data_audit_2d_perf }` -> `577.49s`
+
 ## perf: push cache export day filter into parquet reads
 
 Status: APPLIED.
