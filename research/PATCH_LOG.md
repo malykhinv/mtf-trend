@@ -1,5 +1,19 @@
 # Patch log
 
+## perf: index feature matrix as-of hot paths
+
+Status: APPLIED.
+
+Intent:
+- Keep feature-matrix computation inside Core artifact/feature infrastructure without changing strategy, training, EV, or simulation contracts.
+- Replace repeated per-row Open Interest filtering/sorting with an explicit as-of `OpenInterest5m` series index.
+- Replace repeated rolling volume/quote-volume sample standard deviation over 1440 candles with exact prefix-sum moments.
+- Preserve exact feature semantics: no fallback, no threshold changes, no strategy-specific branches.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
+- 9d probe improved first `100,000` feature rows from about `954.64s` to about `716.42s` total elapsed, including unchanged startup state/candle indexing.
+
 ## perf: stream feature matrix artifact writes
 
 Status: APPLIED.

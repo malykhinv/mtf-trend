@@ -35,8 +35,24 @@ class _CandleSeries:
         self._available_times = tuple(item.available_time_ms for item in self._rows)
         self._open_times = tuple(item.open_time_ms for item in self._rows)
         prefix: list[float] = []
+        volume_prefix: list[float] = []
+        volume_square_prefix: list[float] = []
+        quote_volume_prefix: list[float] = []
+        quote_volume_square_prefix: list[float] = []
         running_sum = 0.0
+        running_volume_sum = 0.0
+        running_volume_square_sum = 0.0
+        running_quote_volume_sum = 0.0
+        running_quote_volume_square_sum = 0.0
         for index, candle in enumerate(self._rows):
+            running_volume_sum += candle.volume
+            running_volume_square_sum += candle.volume * candle.volume
+            running_quote_volume_sum += candle.quote_volume
+            running_quote_volume_square_sum += candle.quote_volume * candle.quote_volume
+            volume_prefix.append(running_volume_sum)
+            volume_square_prefix.append(running_volume_square_sum)
+            quote_volume_prefix.append(running_quote_volume_sum)
+            quote_volume_square_prefix.append(running_quote_volume_square_sum)
             if index == 0:
                 prefix.append(0.0)
                 continue
@@ -48,6 +64,10 @@ class _CandleSeries:
             )
             prefix.append(running_sum)
         self._true_range_prefix_sums = tuple(prefix)
+        self._volume_prefix_sums = tuple(volume_prefix)
+        self._volume_square_prefix_sums = tuple(volume_square_prefix)
+        self._quote_volume_prefix_sums = tuple(quote_volume_prefix)
+        self._quote_volume_square_prefix_sums = tuple(quote_volume_square_prefix)
 
     def __iter__(self):
         return iter(self._rows)
@@ -84,6 +104,23 @@ class _CandleSeries:
             return ()
         return self._rows[max(0, end - count) : end]
 
+    def trailing_moments_before(self, available_time_ms: int, count: int, field_name: str) -> tuple[int, float, float] | None:
+        end = bisect_left(self._available_times, available_time_ms)
+        start = end - count
+        if start < 0:
+            return None
+        if field_name == "volume":
+            sums = self._volume_prefix_sums
+            square_sums = self._volume_square_prefix_sums
+        elif field_name == "quote_volume":
+            sums = self._quote_volume_prefix_sums
+            square_sums = self._quote_volume_square_prefix_sums
+        else:
+            raise ValueError(f"unsupported candle moment field: {field_name}")
+        total = sums[end - 1] - (sums[start - 1] if start > 0 else 0.0)
+        square_total = square_sums[end - 1] - (square_sums[start - 1] if start > 0 else 0.0)
+        return count, total, square_total
+
     def window(self, snapshot_time_ms: int, window_minutes: int) -> tuple[Candle1m, ...]:
         end = bisect_right(self._available_times, snapshot_time_ms)
         rows = self._rows[max(0, end - window_minutes) : end]
@@ -119,6 +156,26 @@ class _CandleSeries:
         if last_close <= 0 or not math.isfinite(atr) or atr <= 0:
             raise AtrComputationError("computed ATR must be positive and finite")
         return atr, atr / last_close
+
+
+class _OpenInterestSeries:
+    def __init__(self, rows: Sequence[OpenInterest5m]) -> None:
+        self._rows = tuple(sorted(rows, key=lambda item: (item.timestamp_ms, item.available_time_ms)))
+        self._timestamps = tuple(item.timestamp_ms for item in self._rows)
+
+    def asof_latest(self, snapshot_time_ms: int) -> OpenInterest5m | None:
+        return self.at_or_before_timestamp(snapshot_time_ms, snapshot_time_ms)
+
+    def at_or_before_timestamp(self, timestamp_ms: int, snapshot_time_ms: int) -> OpenInterest5m | None:
+        index = bisect_right(self._timestamps, timestamp_ms) - 1
+        while index >= 0:
+            item = self._rows[index]
+            if item.timestamp_ms <= timestamp_ms and (
+                item.available_time_ms <= snapshot_time_ms
+            ):
+                return item
+            index -= 1
+        return None
 
 
 def build_price_time_feature_matrix(
@@ -170,13 +227,12 @@ def iter_price_time_feature_matrix(
         for symbol, rows in raw_candles_by_symbol.items()
     }
 
-    oi_by_symbol: dict[str, list[OpenInterest5m]] | None = None
+    oi_by_symbol: dict[str, _OpenInterestSeries] | None = None
     if open_interest_5m is not None:
-        oi_by_symbol = {}
+        raw_oi_by_symbol: dict[str, list[OpenInterest5m]] = {}
         for item in open_interest_5m:
-            oi_by_symbol.setdefault(item.symbol, []).append(item)
-        for symbol in oi_by_symbol:
-            oi_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.timestamp_ms))
+            raw_oi_by_symbol.setdefault(item.symbol, []).append(item)
+        oi_by_symbol = {symbol: _OpenInterestSeries(rows) for symbol, rows in raw_oi_by_symbol.items()}
 
     liquidations_by_symbol: dict[str, list[LiquidationEvent]] | None = None
     if liquidations is not None:
@@ -503,10 +559,10 @@ def _build_state_feature_row(
     *,
     state: StrategyState1mRow,
     candles: Sequence[Candle1m],
-    open_interest_rows: Sequence[OpenInterest5m] | None,
+    open_interest_rows: Sequence[OpenInterest5m] | _OpenInterestSeries | None,
     liquidation_rows: Sequence[LiquidationEvent] | None,
     candles_by_symbol: Mapping[str, Sequence[Candle1m]],
-    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
     universe_by_day: Mapping[str, set[str]],
     states_at_snapshot: Sequence[StrategyState1mRow],
@@ -907,21 +963,41 @@ def _volume_features(*, candles: Sequence[Candle1m], state: StrategyState1mRow, 
         return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
     if isinstance(candles, _CandleSeries):
         history = candles.history_before(current.available_time_ms, config.volume_baseline_window_minutes)
+        volume_moments = candles.trailing_moments_before(
+            current.available_time_ms,
+            config.volume_baseline_window_minutes,
+            "volume",
+        )
+        quote_moments = candles.trailing_moments_before(
+            current.available_time_ms,
+            config.volume_baseline_window_minutes,
+            "quote_volume",
+        )
     else:
         history = [candle for candle in candles if candle.available_time_ms < current.available_time_ms]
         history.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
         history = history[-config.volume_baseline_window_minutes :]
+        volume_moments = None
+        quote_moments = None
     if len(history) < config.volume_baseline_window_minutes:
         return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
 
     quote_values = [candle.quote_volume for candle in history]
-    volume_values = [candle.volume for candle in history]
+    volume_values = [] if volume_moments is not None else [candle.volume for candle in history]
     quote_median = statistics.median(quote_values)
     quote_ratio = None if quote_median <= 0 else current.quote_volume / quote_median
     return _VolumeFeatures(
         quote_volume_1m_to_24h_median=quote_ratio,
-        volume_zscore=_zscore(current.volume, volume_values),
-        quote_volume_zscore=_zscore(current.quote_volume, quote_values),
+        volume_zscore=(
+            _zscore_from_moments(current.volume, volume_moments)
+            if volume_moments is not None
+            else _zscore(current.volume, volume_values)
+        ),
+        quote_volume_zscore=(
+            _zscore_from_moments(current.quote_volume, quote_moments)
+            if quote_moments is not None
+            else _zscore(current.quote_volume, quote_values)
+        ),
     )
 
 
@@ -944,9 +1020,20 @@ class _OiFeatures:
         self.missing_oi_flag = missing_oi_flag
 
 
-def _oi_features(*, open_interest_rows: Sequence[OpenInterest5m] | None, snapshot_time_ms: int) -> _OiFeatures:
+def _oi_features(
+    *,
+    open_interest_rows: Sequence[OpenInterest5m] | _OpenInterestSeries | None,
+    snapshot_time_ms: int,
+) -> _OiFeatures:
     if open_interest_rows is None:
         return _missing_oi_features()
+    if isinstance(open_interest_rows, _OpenInterestSeries):
+        latest = open_interest_rows.asof_latest(snapshot_time_ms)
+        if latest is None:
+            return _missing_oi_features()
+        prev_5m = open_interest_rows.at_or_before_timestamp(latest.timestamp_ms - FIVE_MINUTES_MS, snapshot_time_ms)
+        prev_10m = open_interest_rows.at_or_before_timestamp(latest.timestamp_ms - 2 * FIVE_MINUTES_MS, snapshot_time_ms)
+        return _oi_features_from_points(latest=latest, prev_5m=prev_5m, prev_10m=prev_10m)
     asof_rows = [item for item in open_interest_rows if item.available_time_ms <= snapshot_time_ms]
     if not asof_rows:
         return _missing_oi_features()
@@ -954,6 +1041,15 @@ def _oi_features(*, open_interest_rows: Sequence[OpenInterest5m] | None, snapsho
     latest = asof_rows[-1]
     prev_5m = _last_oi_at_or_before(asof_rows, latest.timestamp_ms - FIVE_MINUTES_MS)
     prev_10m = _last_oi_at_or_before(asof_rows, latest.timestamp_ms - 2 * FIVE_MINUTES_MS)
+    return _oi_features_from_points(latest=latest, prev_5m=prev_5m, prev_10m=prev_10m)
+
+
+def _oi_features_from_points(
+    *,
+    latest: OpenInterest5m,
+    prev_5m: OpenInterest5m | None,
+    prev_10m: OpenInterest5m | None,
+) -> _OiFeatures:
     change_5m = None if prev_5m is None else latest.open_interest - prev_5m.open_interest
     change_10m = None if prev_10m is None else latest.open_interest - prev_10m.open_interest
     pct_5m = None if change_5m is None or latest.open_interest <= 0 else change_5m / latest.open_interest
@@ -1160,6 +1256,22 @@ def _zscore(value: float, history_values: Sequence[float]) -> float | None:
         return None
     mean_value = statistics.fmean(history_values)
     std_value = statistics.stdev(history_values)
+    if std_value <= 0 or not math.isfinite(std_value):
+        return None
+    return (value - mean_value) / std_value
+
+
+def _zscore_from_moments(value: float, moments: tuple[int, float, float] | None) -> float | None:
+    if moments is None:
+        return None
+    count, total, square_total = moments
+    if count < 2:
+        return None
+    mean_value = total / count
+    variance_numerator = square_total - (total * total / count)
+    if variance_numerator <= 0:
+        return None
+    std_value = math.sqrt(variance_numerator / (count - 1))
     if std_value <= 0 or not math.isfinite(std_value):
         return None
     return (value - mean_value) / std_value
