@@ -110,20 +110,20 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
         ProtocolAuditRow(
             check_name="decision_timing_schema_boundary",
             status=AuditStatus.PASS,
-            message=f"anomaly_decision_timing.csv accepted through strict schema boundary with {decision_row_count} rows",
-            artifact="anomaly_decision_timing.csv",
+            message=f"strategy_decision_timing.csv accepted through strict schema boundary with {decision_row_count} rows",
+            artifact="strategy_decision_timing.csv",
         ),
         ProtocolAuditRow(
             check_name="next_open_entry_with_slippage",
             status=AuditStatus.PASS,
             message="each simulated trade enters at the next 1m open after snapshot_time_ms with pessimistic slippage and toxic-entry penalty applied",
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="stop_target_are_atr_normalized",
             status=AuditStatus.PASS,
             message="stop and target distances are read from decision timing rows derived from StrategyMetadata ATR defaults and core_atr_1440",
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="funding_rate_boundary",
@@ -133,13 +133,13 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
                 if funding_rate_present
                 else "funding_rate stream absent; short-distribution conclusions are audit-limited, not zero-cost funding proof"
             ),
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="trade_simulation_rows_written",
             status=AuditStatus.PASS if simulation_row_count > 0 else AuditStatus.WARN,
-            message=f"wrote {simulation_row_count} anomaly_trade_simulation.csv rows",
-            artifact="anomaly_trade_simulation.csv",
+            message=f"wrote {simulation_row_count} strategy_trade_simulation.csv rows",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -152,37 +152,37 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
             check_name="trade_simulation_after_calibration_and_decision_timing",
             status=AuditStatus.PASS,
             message="simulation consumes decision timing rows, which are produced after OOS prediction/calibration and EV",
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="execution_reference_model_aligned_between_ev_and_simulation",
             status=AuditStatus.PASS,
             message="simulation validates decision execution_reference_model/cost_model and records the same execution model with actual next-open entry basis",
-            artifact="anomaly_decision_timing.csv;anomaly_trade_simulation.csv",
+            artifact="strategy_decision_timing.csv;strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="pessimistic_entry_price_includes_slippage_penalty",
             status=AuditStatus.PASS,
             message="entry prices include side-aware pessimistic slippage plus toxic-entry 1m range penalty; exit prices include pessimistic slippage",
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="anti_pyramiding_one_open_position_per_symbol_strategy",
             status=AuditStatus.PASS,
             message="simulation suppresses parallel open positions per symbol + strategy variant",
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
             status=AuditStatus.PASS,
             message="if target and stop are both reachable in the same 1m candle, simulation exits at stop_loss",
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
             check_name="fixed_percent_stop_target_forbidden",
             status=AuditStatus.PASS,
             message="simulation consumes EV stop/target distances derived from StrategyMetadata ATR defaults and core_atr_1440; no fixed-percent universal stop/target path exists",
-            artifact="anomaly_trade_simulation.csv",
+            artifact="strategy_trade_simulation.csv",
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_simulation", implemented=implemented_methodology_rows)

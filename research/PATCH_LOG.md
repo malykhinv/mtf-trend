@@ -11,6 +11,7 @@ Intent:
 Validation:
 - `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\atlas\run.py src\anomaly_science\labels\run.py src\anomaly_science\prediction\run.py src\anomaly_science\controls\run.py tests\test_artifact_schemas.py`
 - `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py tests\test_atlas.py tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_prediction.py tests\test_controls.py -q`
+- `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py tests\test_state_builder.py tests\test_trade_simulation.py tests\test_research_run.py -q`
 
 ## perf: vectorize atlas aggregation for compact run-research
 

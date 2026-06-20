@@ -89,26 +89,26 @@ def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_cou
         ProtocolAuditRow(
             check_name="events_artifact_schema_boundary",
             status=AuditStatus.PASS,
-            message=f"anomaly_events.csv accepted through strict schema boundary with {event_count} event rows",
-            artifact="anomaly_events.csv",
+            message=f"strategy_events.csv accepted through strict schema boundary with {event_count} event rows",
+            artifact="strategy_events.csv",
         ),
         ProtocolAuditRow(
             check_name="state_temporal_contract",
             status=AuditStatus.PASS,
             message="each state row uses closed 1m candles with available_time_ms <= state_time_ms; feature_cutoff_time_ms <= state_time_ms",
-            artifact="anomaly_state_1m.csv",
+            artifact="strategy_state_1m.csv",
         ),
         ProtocolAuditRow(
             check_name="running_high_low_asof_only",
             status=AuditStatus.PASS,
             message="running high/low are computed from event_start_time_ms through each state_time_ms, not from future event extremes",
-            artifact="anomaly_state_1m.csv",
+            artifact="strategy_state_1m.csv",
         ),
         ProtocolAuditRow(
             check_name="state_rows_written",
             status=AuditStatus.PASS,
-            message=f"anomaly_state_1m.csv written with {state_row_count} rows",
-            artifact="anomaly_state_1m.csv",
+            message=f"strategy_state_1m.csv written with {state_row_count} rows",
+            artifact="strategy_state_1m.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -124,7 +124,7 @@ def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_cou
                 f"state builder excluded {excluded_event_count} technical-noise/data-quality-gated events before "
                 "state/label/prediction/control artifacts can be built"
             ),
-            artifact="anomaly_state_1m.csv",
+            artifact="strategy_state_1m.csv",
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(

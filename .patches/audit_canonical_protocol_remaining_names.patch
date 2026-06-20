@@ -1,0 +1,166 @@
+﻿diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index b506fefd..82dc113c 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -11,6 +11,7 @@ Intent:
+ Validation:
+ - `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\atlas\run.py src\anomaly_science\labels\run.py src\anomaly_science\prediction\run.py src\anomaly_science\controls\run.py tests\test_artifact_schemas.py`
+ - `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py tests\test_atlas.py tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_prediction.py tests\test_controls.py -q`
++- `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py tests\test_state_builder.py tests\test_trade_simulation.py tests\test_research_run.py -q`
+ 
+ ## perf: vectorize atlas aggregation for compact run-research
+ 
+diff --git a/src/anomaly_science/simulation/run.py b/src/anomaly_science/simulation/run.py
+index f23064af..1cbb1c1c 100644
+--- a/src/anomaly_science/simulation/run.py
++++ b/src/anomaly_science/simulation/run.py
+@@ -110,20 +110,20 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
+         ProtocolAuditRow(
+             check_name="decision_timing_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_decision_timing.csv accepted through strict schema boundary with {decision_row_count} rows",
+-            artifact="anomaly_decision_timing.csv",
++            message=f"strategy_decision_timing.csv accepted through strict schema boundary with {decision_row_count} rows",
++            artifact="strategy_decision_timing.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="next_open_entry_with_slippage",
+             status=AuditStatus.PASS,
+             message="each simulated trade enters at the next 1m open after snapshot_time_ms with pessimistic slippage and toxic-entry penalty applied",
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="stop_target_are_atr_normalized",
+             status=AuditStatus.PASS,
+             message="stop and target distances are read from decision timing rows derived from StrategyMetadata ATR defaults and core_atr_1440",
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="funding_rate_boundary",
+@@ -133,13 +133,13 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
+                 if funding_rate_present
+                 else "funding_rate stream absent; short-distribution conclusions are audit-limited, not zero-cost funding proof"
+             ),
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="trade_simulation_rows_written",
+             status=AuditStatus.PASS if simulation_row_count > 0 else AuditStatus.WARN,
+-            message=f"wrote {simulation_row_count} anomaly_trade_simulation.csv rows",
+-            artifact="anomaly_trade_simulation.csv",
++            message=f"wrote {simulation_row_count} strategy_trade_simulation.csv rows",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -152,37 +152,37 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
+             check_name="trade_simulation_after_calibration_and_decision_timing",
+             status=AuditStatus.PASS,
+             message="simulation consumes decision timing rows, which are produced after OOS prediction/calibration and EV",
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="execution_reference_model_aligned_between_ev_and_simulation",
+             status=AuditStatus.PASS,
+             message="simulation validates decision execution_reference_model/cost_model and records the same execution model with actual next-open entry basis",
+-            artifact="anomaly_decision_timing.csv;anomaly_trade_simulation.csv",
++            artifact="strategy_decision_timing.csv;strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="pessimistic_entry_price_includes_slippage_penalty",
+             status=AuditStatus.PASS,
+             message="entry prices include side-aware pessimistic slippage plus toxic-entry 1m range penalty; exit prices include pessimistic slippage",
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="anti_pyramiding_one_open_position_per_symbol_strategy",
+             status=AuditStatus.PASS,
+             message="simulation suppresses parallel open positions per symbol + strategy variant",
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="intracandle_double_barrier_resolved_as_stop_loss_first",
+             status=AuditStatus.PASS,
+             message="if target and stop are both reachable in the same 1m candle, simulation exits at stop_loss",
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="fixed_percent_stop_target_forbidden",
+             status=AuditStatus.PASS,
+             message="simulation consumes EV stop/target distances derived from StrategyMetadata ATR defaults and core_atr_1440; no fixed-percent universal stop/target path exists",
+-            artifact="anomaly_trade_simulation.csv",
++            artifact="strategy_trade_simulation.csv",
+         ),
+     ]
+     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_simulation", implemented=implemented_methodology_rows)
+diff --git a/src/anomaly_science/state/run.py b/src/anomaly_science/state/run.py
+index 0a9e4e1b..73e75b09 100644
+--- a/src/anomaly_science/state/run.py
++++ b/src/anomaly_science/state/run.py
+@@ -89,26 +89,26 @@ def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_cou
+         ProtocolAuditRow(
+             check_name="events_artifact_schema_boundary",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_events.csv accepted through strict schema boundary with {event_count} event rows",
+-            artifact="anomaly_events.csv",
++            message=f"strategy_events.csv accepted through strict schema boundary with {event_count} event rows",
++            artifact="strategy_events.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="state_temporal_contract",
+             status=AuditStatus.PASS,
+             message="each state row uses closed 1m candles with available_time_ms <= state_time_ms; feature_cutoff_time_ms <= state_time_ms",
+-            artifact="anomaly_state_1m.csv",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="running_high_low_asof_only",
+             status=AuditStatus.PASS,
+             message="running high/low are computed from event_start_time_ms through each state_time_ms, not from future event extremes",
+-            artifact="anomaly_state_1m.csv",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="state_rows_written",
+             status=AuditStatus.PASS,
+-            message=f"anomaly_state_1m.csv written with {state_row_count} rows",
+-            artifact="anomaly_state_1m.csv",
++            message=f"strategy_state_1m.csv written with {state_row_count} rows",
++            artifact="strategy_state_1m.csv",
+         ),
+         ProtocolAuditRow(
+             check_name="legacy_import_boundary",
+@@ -124,7 +124,7 @@ def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_cou
+                 f"state builder excluded {excluded_event_count} technical-noise/data-quality-gated events before "
+                 "state/label/prediction/control artifacts can be built"
+             ),
+-            artifact="anomaly_state_1m.csv",
++            artifact="strategy_state_1m.csv",
+         ),
+     ]
+     return base_rows + build_methodology_v2_audit_rows(
+diff --git a/tests/test_artifact_schemas.py b/tests/test_artifact_schemas.py
+index 2ed7c039..a4356e08 100644
+--- a/tests/test_artifact_schemas.py
++++ b/tests/test_artifact_schemas.py
+@@ -147,10 +147,12 @@ def test_stage_protocol_audits_name_canonical_strategy_artifacts() -> None:
+     from anomaly_science.future import run as future_run
+     from anomaly_science.labels import run as labels_run
+     from anomaly_science.prediction import run as prediction_run
++    from anomaly_science.simulation import run as simulation_run
++    from anomaly_science.state import run as state_run
+ 
+     protocol_sources = [
+         inspect.getsource(module._protocol_rows)
+-        for module in (atlas_run, controls_run, feature_matrix, future_run, labels_run, prediction_run)
++        for module in (atlas_run, controls_run, feature_matrix, future_run, labels_run, prediction_run, simulation_run, state_run)
+     ]
+ 
+     for source in protocol_sources:

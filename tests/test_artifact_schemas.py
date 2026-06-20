@@ -147,10 +147,12 @@ def test_stage_protocol_audits_name_canonical_strategy_artifacts() -> None:
     from anomaly_science.future import run as future_run
     from anomaly_science.labels import run as labels_run
     from anomaly_science.prediction import run as prediction_run
+    from anomaly_science.simulation import run as simulation_run
+    from anomaly_science.state import run as state_run
 
     protocol_sources = [
         inspect.getsource(module._protocol_rows)
-        for module in (atlas_run, controls_run, feature_matrix, future_run, labels_run, prediction_run)
+        for module in (atlas_run, controls_run, feature_matrix, future_run, labels_run, prediction_run, simulation_run, state_run)
     ]
 
     for source in protocol_sources:
