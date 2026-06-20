@@ -115,10 +115,18 @@ Export local cache into the normalized MVP1 CSV boundary:
 python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input
 python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input --days 30
 python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input --symbols BTCUSDT,ETHUSDT --days 7
-python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input_380d --days 380 --expected-days 380 --fail-on-missing-utc-days --fail-on-missing-1m-rows
+python main.py export-cache-mvp1-csv --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out tmp/mvp1_input_380d --days 380 --expected-days 380 --fail-on-missing-utc-days
 ```
 
-If `--days` is omitted, the export uses the full available cache period. If `--symbols` is omitted, it exports every perpetual `{symbol}.parquet` file discovered in the cache and excludes fixed-date delivery-contract files such as `BTCUSDT_250627` by default. The exclusion is recorded in `cache_export_manifest.json` as `excluded_delivery_contract_symbols`. Explicit delivery-contract symbols are rejected unless `--include-delivery-contracts` is passed for a dedicated delivery-contract experiment. The export writes `cache_export_coverage.csv` and `cache_export_manifest.json` next to `candles_1m.csv`, `candles_5m.csv`, and `open_interest_5m.csv`. Use `--expected-days 380 --fail-on-missing-utc-days --fail-on-missing-1m-rows` for the full local 380d proof gate. `--fail-on-missing-open-interest` is intentionally separate because some historical/delisted symbols can have absent optional OI archives; enable it only when that is the intended hard requirement.
+If `--days` is omitted, the export uses the full available cache period. If `--symbols` is omitted, it exports every perpetual `{symbol}.parquet` file discovered in the cache and excludes fixed-date delivery-contract files such as `BTCUSDT_250627` by default. The exclusion is recorded in `cache_export_manifest.json` as `excluded_delivery_contract_symbols`. Explicit delivery-contract symbols are rejected unless `--include-delivery-contracts` is passed for a dedicated delivery-contract experiment. The export writes `cache_export_coverage.csv` and `cache_export_manifest.json` next to `candles_1m.csv`, `candles_5m.csv`, and `open_interest_5m.csv`. `--fail-on-missing-1m-rows` is available for strict continuous-symbol experiments, but the full perpetual proof should use `validate-cache-export-proof --allow-settlement-transition-gaps` so exchange settlement discontinuities remain explicit instead of being hidden or misclassified. `--fail-on-missing-open-interest` is intentionally separate because some historical/delisted symbols can have absent optional OI archives; enable it only when that is the intended hard requirement.
+
+Validate an existing full export proof without rewriting large CSV files:
+
+```bash
+python main.py validate-cache-export-proof --manifest tmp/mvp1_input_380d/cache_export_manifest.json --coverage tmp/mvp1_input_380d/cache_export_coverage.csv --out research/validation/cache_export_380d_validation.json --expected-days 380 --allow-settlement-transition-gaps
+```
+
+This proof gate requires the global 380d span, no missing UTC days, no duplicate 1m rows, and no unclassified 1m gaps. Gaps are accepted only when explicitly classified as settlement transitions with `{symbol}SETTLED` sibling evidence.
 
 Smoke test on a small subset:
 

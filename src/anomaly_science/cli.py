@@ -9,6 +9,7 @@ from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.contracts.horizons import SUPPORTED_RESEARCH_HORIZONS
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
+from anomaly_science.cache_validation import CacheExportProofValidationConfig, validate_cache_export_proof
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.decision import ExpectedValueConfig, run_mvp1_expected_value
 from anomaly_science.events.run import run_mvp1_events
@@ -351,6 +352,18 @@ def build_parser() -> argparse.ArgumentParser:
     export_cache.add_argument("--parquet-use-threads", action="store_true", help="Allow the parquet reader to use multiple threads. Disabled by default to keep CPU/RAM bounded on laptop hardware.")
     export_cache.add_argument("--out", required=True, help="Directory where MVP1 CSV files will be written.")
 
+    validate_cache = subparsers.add_parser(
+        "validate-cache-export-proof",
+        help="Validate cache_export_manifest.json and cache_export_coverage.csv without rewriting large CSV files.",
+    )
+    validate_cache.add_argument("--manifest", required=True, help="Path to cache_export_manifest.json.")
+    validate_cache.add_argument("--coverage", required=True, help="Path to cache_export_coverage.csv.")
+    validate_cache.add_argument("--out", required=True, help="Path where validation JSON will be written.")
+    validate_cache.add_argument("--expected-days", type=int, default=380, help="Required exported global calendar span. Default: 380.")
+    validate_cache.add_argument("--allow-settlement-transition-gaps", action="store_true", help="Classify gaps covered by a {symbol}SETTLED sibling as explicit lifecycle transitions.")
+    validate_cache.add_argument("--allow-missing-utc-days", action="store_true", help="Do not fail if a symbol has missing UTC days inside its exported first/last date span.")
+    validate_cache.add_argument("--allow-unclassified-1m-gaps", action="store_true", help="Do not fail if missing 1m rows cannot be classified.")
+
 
     return parser
 
@@ -589,6 +602,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         print(f"mvp1 csv export written: {output_dir}")
+        return 0
+
+    if args.command == "validate-cache-export-proof":
+        output_path = validate_cache_export_proof(
+            CacheExportProofValidationConfig(
+                manifest_path=Path(args.manifest),
+                coverage_path=Path(args.coverage),
+                out_path=Path(args.out),
+                expected_days=args.expected_days,
+                fail_on_missing_utc_days=not bool(args.allow_missing_utc_days),
+                fail_on_unclassified_1m_gaps=not bool(args.allow_unclassified_1m_gaps),
+                allow_settlement_transition_gaps=args.allow_settlement_transition_gaps,
+            )
+        )
+        print(f"cache export proof validation written: {output_path}")
         return 0
 
     parser.print_help()

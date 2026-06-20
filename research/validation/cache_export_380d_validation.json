@@ -1,0 +1,89 @@
+{
+  "cache_dir": ".output\\market\\binance_vision\\um_futures\\enriched_1m",
+  "coverage_path": "tmp\\mvp1_input_380d\\cache_export_coverage.csv",
+  "coverage_sha256": "a99cf77dd8bb0b723dc4f866f6c2239986fd57671445fe82308688a9f678f023",
+  "created_at_utc": "2026-06-20T03:21:11.494928+00:00",
+  "duplicate_1m_rows_total": 0,
+  "effective_calendar_days": 380,
+  "effective_end_date": "2026-06-17",
+  "effective_start_date": "2025-06-03",
+  "excluded_delivery_contract_symbols": [
+    "BTCUSDT_250627",
+    "BTCUSDT_250926",
+    "BTCUSDT_251226",
+    "BTCUSDT_260327",
+    "BTCUSDT_260626",
+    "BTCUSDT_260925"
+  ],
+  "expected_days": 380,
+  "exported_symbol_count": 796,
+  "gap_details": [
+    {
+      "classification": "settlement_transition",
+      "missing_rows": 675,
+      "next_open_time_ms": 1768907700000,
+      "next_open_time_utc": "2026-01-20T11:15:00+00:00",
+      "previous_open_time_ms": 1768867140000,
+      "previous_open_time_utc": "2026-01-19T23:59:00+00:00",
+      "settled_symbol": "AIAUSDTSETTLED",
+      "symbol": "AIAUSDT"
+    },
+    {
+      "classification": "settlement_transition",
+      "missing_rows": 690,
+      "next_open_time_ms": 1753270200000,
+      "next_open_time_utc": "2025-07-23T11:30:00+00:00",
+      "previous_open_time_ms": 1753228740000,
+      "previous_open_time_utc": "2025-07-22T23:59:00+00:00",
+      "settled_symbol": "CVXUSDTSETTLED",
+      "symbol": "CVXUSDT"
+    },
+    {
+      "classification": "settlement_transition",
+      "missing_rows": 1050,
+      "next_open_time_ms": 1766511000000,
+      "next_open_time_utc": "2025-12-23T17:30:00+00:00",
+      "previous_open_time_ms": 1766447940000,
+      "previous_open_time_utc": "2025-12-22T23:59:00+00:00",
+      "settled_symbol": "LITUSDTSETTLED",
+      "symbol": "LITUSDT"
+    },
+    {
+      "classification": "settlement_transition",
+      "missing_rows": 450,
+      "next_open_time_ms": 1752132600000,
+      "next_open_time_utc": "2025-07-10T07:30:00+00:00",
+      "previous_open_time_ms": 1752105540000,
+      "previous_open_time_utc": "2025-07-09T23:59:00+00:00",
+      "settled_symbol": "PUMPUSDTSETTLED",
+      "symbol": "PUMPUSDT"
+    },
+    {
+      "classification": "settlement_transition",
+      "missing_rows": 705,
+      "next_open_time_ms": 1753271100000,
+      "next_open_time_utc": "2025-07-23T11:45:00+00:00",
+      "previous_open_time_ms": 1753228740000,
+      "previous_open_time_utc": "2025-07-22T23:59:00+00:00",
+      "settled_symbol": "SLPUSDTSETTLED",
+      "symbol": "SLPUSDT"
+    }
+  ],
+  "manifest_path": "tmp\\mvp1_input_380d\\cache_export_manifest.json",
+  "manifest_sha256": "ace70914551ceef0d35a95435ed9b84c77c11e0779853216d0ea83dc01de0a98",
+  "missing_1m_rows_total": 3570,
+  "missing_utc_days_total": 0,
+  "rows_1m": 344895197,
+  "settlement_transition_missing_1m_rows": 3570,
+  "symbols_with_missing_1m_rows": [
+    "AIAUSDT",
+    "CVXUSDT",
+    "LITUSDT",
+    "PUMPUSDT",
+    "SLPUSDT"
+  ],
+  "unclassified_missing_1m_rows": 0,
+  "validation_failures": [],
+  "validation_passed": true,
+  "validation_version": "cache_export_proof_validation_v1"
+}

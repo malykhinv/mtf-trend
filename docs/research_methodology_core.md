@@ -1170,7 +1170,9 @@ artifact_manifest.json
 
 For `run-research`, the root-level `strategy_run_config.csv` is the canonical run manifest. It must include strategy identity, target horizon, active `H_max`, research/holdout mode, protocol freeze id, data snapshot hash, config hash, dependency versions, methodology ledger status, and forensic audit status. Stage-level `strategy_run_config.csv` files may exist, but they do not replace the root run manifest.
 
-The normalized market-data input boundary must also be reproducible. Cache exports must write `cache_export_coverage.csv` and `cache_export_manifest.json` next to the normalized CSV inputs. Those files record exported symbols, effective date range, row counts, missing UTC days, and hashes for the exported input artifacts. When `run-research` is called without `--days`, the export uses the full available local cache period.
+The normalized market-data input boundary must also be reproducible. Cache exports must write `cache_export_coverage.csv` and `cache_export_manifest.json` next to the normalized CSV inputs. Those files record exported symbols, effective date range, row counts, missing UTC days, duplicate/missing 1m rows, excluded delivery contracts, and hashes for the exported input artifacts. When `run-research` is called without `--days`, the export uses the full available local cache period.
+
+Full-cache validation must use a separate proof artifact when the normalized CSVs are too large to rewrite during every audit. `validate-cache-export-proof` validates the manifest and coverage files, requires the expected global calendar span, fails on missing UTC days and duplicate rows, and fails on any missing 1m rows that cannot be classified. Settlement-transition gaps may be allowed only when a `{symbol}SETTLED` sibling exists in the same cache and has timestamps inside the gap; those rows remain explicit lifecycle gaps, not hidden data fills.
 
 ## 24. Canonical artifact naming
 

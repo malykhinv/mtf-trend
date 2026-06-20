@@ -1,8 +1,26 @@
 # Patch log
 
+## methodology: validate full 380d cache export proof
+
+Status: APPLIED.
+
+Intent:
+- Add `validate-cache-export-proof` so the full cache/export proof can be verified without rewriting multi-GB normalized CSVs.
+- Classify missing 1m rows as settlement transitions only when a `{symbol}SETTLED` sibling parquet has timestamps inside the gap.
+- Record the local full 380d proof in `research/validation/cache_export_380d_validation.json`.
+- Promote the data-source boundary ledger row after validation proved 380 global days, 796 exported perpetual symbols, 344,895,197 1m rows, no missing UTC days, no duplicate rows, and no unclassified 1m gaps.
+
+Validation:
+- `.venv\Scripts\python.exe main.py validate-cache-export-proof --manifest tmp\mvp1_input_380d\cache_export_manifest.json --coverage tmp\mvp1_input_380d\cache_export_coverage.csv --out research\validation\cache_export_380d_validation.json --expected-days 380 --allow-settlement-transition-gaps`
+- `.venv\Scripts\python.exe -m pytest tests\test_cache_validation.py tests\test_cache_export.py -q`
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\cache_validation.py src\anomaly_science\cli.py tests\test_cache_validation.py`
+- `.venv\Scripts\python.exe -m compileall -q main.py src tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest -q`
+- `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --cache-dir tmp\codex_smoke_cache --research-mode frozen_holdout --protocol-freeze-id smoke_20260620_fixture`
+
 ## methodology: exclude delivery contracts from cache export discovery
 
-Status: PROPOSED.
+Status: APPLIED.
 
 Intent:
 - Keep the MVP1 perpetual export aligned with the Binance Vision cache builder universe by excluding fixed-date delivery-contract parquet files such as `BTCUSDT_250627` during automatic symbol discovery.
@@ -16,7 +34,7 @@ Validation:
 
 ## methodology: harden cache export proof gates
 
-Status: PROPOSED.
+Status: APPLIED.
 
 Intent:
 - Add explicit cache export validation gates for expected global calendar span, missing UTC days, missing 1m rows, duplicate 1m rows, and optional missing open interest.
