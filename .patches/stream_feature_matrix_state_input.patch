@@ -1,0 +1,213 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index ce716dbc..6451556c 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -91,7 +91,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+-| Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. Feature-matrix CLI writes the canonical matrix artifact through a strict streaming writer and keeps identical aliases hardlink-first for compatibility only. Core feature-matrix hot paths now use explicit as-of OI indexing, exact rolling moment prefix sums, exact cached rolling medians, and indexed liquidation event windows instead of repeated row scans. | Keep catalog membership tests as permanent gate. |
++| Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. Feature-matrix CLI writes the canonical matrix artifact through a strict streaming writer, streams state rows from CSV after building only a compact per-snapshot state summary for cross-section fields, and keeps identical aliases hardlink-first for compatibility only. Core feature-matrix hot paths now use explicit as-of OI indexing, exact rolling moment prefix sums, exact cached rolling medians, and indexed liquidation event windows instead of repeated row scans. | Keep catalog membership tests as permanent gate. |
+ | Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. The CLI reads candles/events through strict CSV boundaries, processes grouped candle input one symbol at a time, streams state rows through the canonical schema, and creates a hardlink-first compatibility alias, avoiding pandas input-frame materialization, full-market candle index materialization, multi-million-row output list materialization, and duplicate alias bytes when supported by the filesystem. | Keep temporal/no-leakage tests as permanent gate. |
+ | Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. The CLI writer streams rows through the strict canonical schema, reads grouped state/candle CSV boundaries one symbol at a time, creates identical aliases hardlink-first, and treats zero as-of ATR as explicit missing ATR fields rather than fallback or crash. | Keep horizon/schema tests as permanent gate. |
+ | Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. The CLI labels stage streams row-aligned state/future artifacts, parses only labels-owned strict fields, writes canonical labels incrementally, and keeps `anomaly_*` as a hardlink-first compatibility alias. | Keep label horizon, row-aligned join, and strict schema tests as permanent gates. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 9e298ba1..570c08cd 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,18 @@
+ # Patch log
+ 
++## perf: stream feature-matrix state input
++
++Status: APPLIED.
++
++Intent:
++- Stop `run-mvp1-feature-matrix` from materializing full `strategy_state_1m.csv` as a tuple before writing features.
++- Build a compact per-snapshot state summary for cross-section fields, then stream state rows from CSV during feature writing.
++- Keep feature semantics unchanged: cross-section return/event-alive context still uses only as-of state rows.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\features tests\test_feature_matrix.py tests\test_research_run.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py tests\test_research_run.py -q`
++
+ ## perf: stream forensic alias comparison
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 19a82125..67a16528 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -30,6 +30,7 @@ Active rule:
+ - Runtime artifacts from previous local proofs were cleaned from `.output\results` and `tmp`; the source cache `.output\market` was preserved. Local C: free space after cleanup was about `93.2GB`.
+ - Rejection funnel now stays compact for large runs: included rows from state/future/labels/prediction/decision/simulation are represented by auditable stage summary rows with `row_count`, while excluded rows keep explicit aggregate `reason_code`. This preserves forensic stage coverage without duplicating multi-million-row artifacts.
+ - Independent forensic alias comparison now uses a same-file hardlink fast path and streaming CSV comparison, so canonical/compatibility alias checks no longer materialize both sides of large artifact pairs.
++- Feature-matrix CLI no longer materializes full `strategy_state_1m.csv` as a tuple before writing. It builds a compact per-snapshot state summary for cross-section fields and then streams state rows from the canonical CSV boundary.
+ - Atlas now reads strict state/future/feature CSV inputs in bounded chunks with per-chunk row-alignment checks. This reduces the old full input merge pressure, but the 9d atlas/prediction/EV/simulation proof is still not claimed after cleanup.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+diff --git a/src/anomaly_science/features/matrix.py b/src/anomaly_science/features/matrix.py
+index 207c6374..c2ec6874 100644
+--- a/src/anomaly_science/features/matrix.py
++++ b/src/anomaly_science/features/matrix.py
+@@ -265,6 +265,21 @@ class _LiquidationSeries:
+         )
+ 
+ 
++class _StateSnapshotRow:
++    def __init__(
++        self,
++        *,
++        symbol: str,
++        event_id: str,
++        current_return_from_start: float | None,
++        event_alive: bool,
++    ) -> None:
++        self.symbol = symbol
++        self.event_id = event_id
++        self.current_return_from_start = current_return_from_start
++        self.event_alive = event_alive
++
++
+ def build_price_time_feature_matrix(
+     *,
+     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+@@ -294,6 +309,7 @@ def iter_price_time_feature_matrix(
+     open_interest_5m: Sequence[OpenInterest5m] | Iterable[OpenInterest5m] | None = None,
+     liquidations: Sequence[LiquidationEvent] | Iterable[LiquidationEvent] | None = None,
+     symbol_universe_by_day: Sequence[SymbolDayUniverseRow] | Iterable[SymbolDayUniverseRow] | None = None,
++    states_by_snapshot: Mapping[int, Sequence[StrategyState1mRow | _StateSnapshotRow]] | None = None,
+     config: FeatureMatrixConfig | None = None,
+     sort_state_rows: bool = False,
+ ) -> Iterable[StrategyFeatureMatrixRow]:
+@@ -305,7 +321,10 @@ def iter_price_time_feature_matrix(
+     dependency on future outcome artifacts.
+     """
+     cfg = config or FeatureMatrixConfig()
+-    state_rows = tuple(state_rows)
++    if sort_state_rows or states_by_snapshot is None:
++        state_rows = tuple(state_rows)
++    else:
++        state_rows = state_rows
+     raw_candles_by_symbol: dict[str, list[Candle1m]] = {}
+     for candle in candles_1m:
+         raw_candles_by_symbol.setdefault(candle.symbol, []).append(candle)
+@@ -332,9 +351,11 @@ def iter_price_time_feature_matrix(
+         }
+ 
+     universe_by_day = _universe_symbols_by_day(symbol_universe_by_day)
+-    states_by_snapshot: dict[int, list[StrategyState1mRow]] = {}
+-    for state in state_rows:
+-        states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
++    if states_by_snapshot is None:
++        built_states_by_snapshot: dict[int, list[StrategyState1mRow | _StateSnapshotRow]] = {}
++        for state in state_rows:
++            built_states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
++        states_by_snapshot = built_states_by_snapshot
+     cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
+ 
+     ordered_state_rows = (
+@@ -445,6 +466,22 @@ def load_strategy_feature_matrix_csv(path: str | Path) -> tuple[StrategyFeatureM
+ load_anomaly_feature_matrix_csv = load_strategy_feature_matrix_csv
+ 
+ 
++def _state_snapshot_index_from_csv(path: Path) -> tuple[dict[int, tuple[_StateSnapshotRow, ...]], int]:
++    raw: dict[int, list[_StateSnapshotRow]] = {}
++    row_count = 0
++    for row in iter_strategy_state_1m_csv(path):
++        row_count += 1
++        raw.setdefault(row.snapshot_time_ms, []).append(
++            _StateSnapshotRow(
++                symbol=row.symbol,
++                event_id=row.event_id,
++                current_return_from_start=row.current_return_from_start,
++                event_alive=row.event_alive,
++            )
++        )
++    return {snapshot_time_ms: tuple(rows) for snapshot_time_ms, rows in raw.items()}, row_count
++
++
+ def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> StrategyFeatureMatrixRow:
+     return StrategyFeatureMatrixRow(
+         feature_schema_version=_required_str(row, "feature_schema_version"),
+@@ -541,7 +578,7 @@ def run_mvp1_feature_matrix(
+     cfg = config or FeatureMatrixConfig()
+ 
+     source = CsvDirectoryDataSource(input_path)
+-    state_rows = tuple(iter_strategy_state_1m_csv(state_artifact_path))
++    states_by_snapshot, state_row_count = _state_snapshot_index_from_csv(state_artifact_path)
+     oi_frame = source.read_frame("open_interest_5m", required=False)
+     liquidation_frame = source.read_frame("liquidations", required=False)
+     universe_frame = source.read_frame("symbol_universe_by_day", required=False)
+@@ -554,14 +591,15 @@ def run_mvp1_feature_matrix(
+             open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
+             liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
+             symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
+-            state_rows=state_rows,
++            states_by_snapshot=states_by_snapshot,
++            state_rows=iter_strategy_state_1m_csv(state_artifact_path),
+             config=cfg,
+             sort_state_rows=False,
+         ),
+         get_artifact_schema("strategy_feature_matrix.csv"),
+     )
+     written.extend(feature_written)
+-    protocol_rows = _protocol_rows(state_row_count=len(state_rows), feature_row_count=feature_row_count)
++    protocol_rows = _protocol_rows(state_row_count=state_row_count, feature_row_count=feature_row_count)
+     run_config_rows = _run_config_rows(
+         input_path=input_path,
+         state_path=state_artifact_path,
+@@ -654,7 +692,7 @@ def _build_state_feature_row(
+     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
+     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
+     universe_by_day: Mapping[str, set[str]],
+-    states_at_snapshot: Sequence[StrategyState1mRow],
++    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
+     config: FeatureMatrixConfig,
+     cross_section_features: _CrossSectionFeatures | None = None,
+ ) -> StrategyFeatureMatrixRow:
+@@ -1464,7 +1502,7 @@ def _cross_section_features(
+     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
+     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
+     universe_by_day: Mapping[str, set[str]],
+-    states_at_snapshot: Sequence[StrategyState1mRow],
++    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
+     min_cross_section_symbols: int,
+ ) -> _CrossSectionFeatures:
+     trade_date = utc_ms_to_datetime(state.snapshot_time_ms).date().isoformat()
+@@ -1537,7 +1575,7 @@ def _cross_section_features_by_symbol(
+     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
+     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
+     universe_by_day: Mapping[str, set[str]],
+-    states_at_snapshot: Sequence[StrategyState1mRow],
++    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
+     min_cross_section_symbols: int,
+ ) -> tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]:
+     trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
+@@ -1678,7 +1716,7 @@ def _minute_liq_intensity(
+ 
+ def _return_from_event_percentile(
+     *,
+-    states_at_snapshot: Sequence[StrategyState1mRow],
++    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
+     symbol: str,
+     min_cross_section_symbols: int,
+ ) -> float | None:
+@@ -1704,7 +1742,7 @@ def _return_from_event_percentile(
+ 
+ def _return_from_event_percentiles_by_symbol(
+     *,
+-    states_at_snapshot: Sequence[StrategyState1mRow],
++    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
+     min_cross_section_symbols: int,
+ ) -> dict[str, float]:
+     values = [
+@@ -1784,7 +1822,7 @@ def _market_context_features(
+     state: StrategyState1mRow,
+     symbol_candles: Sequence[Candle1m],
+     btc_candles: Sequence[Candle1m],
+-    states_at_snapshot: Sequence[StrategyState1mRow],
++    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
+     cross_section_symbol_count: int,
+     volume_market_percentile: float | None,
+     ATR_1d_pct_asof_t: float | None,

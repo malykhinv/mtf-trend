@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: stream feature-matrix state input
+
+Status: APPLIED.
+
+Intent:
+- Stop `run-mvp1-feature-matrix` from materializing full `strategy_state_1m.csv` as a tuple before writing features.
+- Build a compact per-snapshot state summary for cross-section fields, then stream state rows from CSV during feature writing.
+- Keep feature semantics unchanged: cross-section return/event-alive context still uses only as-of state rows.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\features tests\test_feature_matrix.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py tests\test_research_run.py -q`
+
 ## perf: stream forensic alias comparison
 
 Status: APPLIED.

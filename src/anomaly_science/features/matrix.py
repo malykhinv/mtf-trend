@@ -265,6 +265,21 @@ class _LiquidationSeries:
         )
 
 
+class _StateSnapshotRow:
+    def __init__(
+        self,
+        *,
+        symbol: str,
+        event_id: str,
+        current_return_from_start: float | None,
+        event_alive: bool,
+    ) -> None:
+        self.symbol = symbol
+        self.event_id = event_id
+        self.current_return_from_start = current_return_from_start
+        self.event_alive = event_alive
+
+
 def build_price_time_feature_matrix(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
@@ -294,6 +309,7 @@ def iter_price_time_feature_matrix(
     open_interest_5m: Sequence[OpenInterest5m] | Iterable[OpenInterest5m] | None = None,
     liquidations: Sequence[LiquidationEvent] | Iterable[LiquidationEvent] | None = None,
     symbol_universe_by_day: Sequence[SymbolDayUniverseRow] | Iterable[SymbolDayUniverseRow] | None = None,
+    states_by_snapshot: Mapping[int, Sequence[StrategyState1mRow | _StateSnapshotRow]] | None = None,
     config: FeatureMatrixConfig | None = None,
     sort_state_rows: bool = False,
 ) -> Iterable[StrategyFeatureMatrixRow]:
@@ -305,7 +321,10 @@ def iter_price_time_feature_matrix(
     dependency on future outcome artifacts.
     """
     cfg = config or FeatureMatrixConfig()
-    state_rows = tuple(state_rows)
+    if sort_state_rows or states_by_snapshot is None:
+        state_rows = tuple(state_rows)
+    else:
+        state_rows = state_rows
     raw_candles_by_symbol: dict[str, list[Candle1m]] = {}
     for candle in candles_1m:
         raw_candles_by_symbol.setdefault(candle.symbol, []).append(candle)
@@ -332,9 +351,11 @@ def iter_price_time_feature_matrix(
         }
 
     universe_by_day = _universe_symbols_by_day(symbol_universe_by_day)
-    states_by_snapshot: dict[int, list[StrategyState1mRow]] = {}
-    for state in state_rows:
-        states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
+    if states_by_snapshot is None:
+        built_states_by_snapshot: dict[int, list[StrategyState1mRow | _StateSnapshotRow]] = {}
+        for state in state_rows:
+            built_states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
+        states_by_snapshot = built_states_by_snapshot
     cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
 
     ordered_state_rows = (
@@ -445,6 +466,22 @@ def load_strategy_feature_matrix_csv(path: str | Path) -> tuple[StrategyFeatureM
 load_anomaly_feature_matrix_csv = load_strategy_feature_matrix_csv
 
 
+def _state_snapshot_index_from_csv(path: Path) -> tuple[dict[int, tuple[_StateSnapshotRow, ...]], int]:
+    raw: dict[int, list[_StateSnapshotRow]] = {}
+    row_count = 0
+    for row in iter_strategy_state_1m_csv(path):
+        row_count += 1
+        raw.setdefault(row.snapshot_time_ms, []).append(
+            _StateSnapshotRow(
+                symbol=row.symbol,
+                event_id=row.event_id,
+                current_return_from_start=row.current_return_from_start,
+                event_alive=row.event_alive,
+            )
+        )
+    return {snapshot_time_ms: tuple(rows) for snapshot_time_ms, rows in raw.items()}, row_count
+
+
 def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> StrategyFeatureMatrixRow:
     return StrategyFeatureMatrixRow(
         feature_schema_version=_required_str(row, "feature_schema_version"),
@@ -541,7 +578,7 @@ def run_mvp1_feature_matrix(
     cfg = config or FeatureMatrixConfig()
 
     source = CsvDirectoryDataSource(input_path)
-    state_rows = tuple(iter_strategy_state_1m_csv(state_artifact_path))
+    states_by_snapshot, state_row_count = _state_snapshot_index_from_csv(state_artifact_path)
     oi_frame = source.read_frame("open_interest_5m", required=False)
     liquidation_frame = source.read_frame("liquidations", required=False)
     universe_frame = source.read_frame("symbol_universe_by_day", required=False)
@@ -554,14 +591,15 @@ def run_mvp1_feature_matrix(
             open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
             liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
             symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
-            state_rows=state_rows,
+            states_by_snapshot=states_by_snapshot,
+            state_rows=iter_strategy_state_1m_csv(state_artifact_path),
             config=cfg,
             sort_state_rows=False,
         ),
         get_artifact_schema("strategy_feature_matrix.csv"),
     )
     written.extend(feature_written)
-    protocol_rows = _protocol_rows(state_row_count=len(state_rows), feature_row_count=feature_row_count)
+    protocol_rows = _protocol_rows(state_row_count=state_row_count, feature_row_count=feature_row_count)
     run_config_rows = _run_config_rows(
         input_path=input_path,
         state_path=state_artifact_path,
@@ -654,7 +692,7 @@ def _build_state_feature_row(
     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
     universe_by_day: Mapping[str, set[str]],
-    states_at_snapshot: Sequence[StrategyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     config: FeatureMatrixConfig,
     cross_section_features: _CrossSectionFeatures | None = None,
 ) -> StrategyFeatureMatrixRow:
@@ -1464,7 +1502,7 @@ def _cross_section_features(
     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
     universe_by_day: Mapping[str, set[str]],
-    states_at_snapshot: Sequence[StrategyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     min_cross_section_symbols: int,
 ) -> _CrossSectionFeatures:
     trade_date = utc_ms_to_datetime(state.snapshot_time_ms).date().isoformat()
@@ -1537,7 +1575,7 @@ def _cross_section_features_by_symbol(
     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
     liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
     universe_by_day: Mapping[str, set[str]],
-    states_at_snapshot: Sequence[StrategyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     min_cross_section_symbols: int,
 ) -> tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]:
     trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
@@ -1678,7 +1716,7 @@ def _minute_liq_intensity(
 
 def _return_from_event_percentile(
     *,
-    states_at_snapshot: Sequence[StrategyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     symbol: str,
     min_cross_section_symbols: int,
 ) -> float | None:
@@ -1704,7 +1742,7 @@ def _return_from_event_percentile(
 
 def _return_from_event_percentiles_by_symbol(
     *,
-    states_at_snapshot: Sequence[StrategyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     min_cross_section_symbols: int,
 ) -> dict[str, float]:
     values = [
@@ -1784,7 +1822,7 @@ def _market_context_features(
     state: StrategyState1mRow,
     symbol_candles: Sequence[Candle1m],
     btc_candles: Sequence[Candle1m],
-    states_at_snapshot: Sequence[StrategyState1mRow],
+    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     cross_section_symbol_count: int,
     volume_market_percentile: float | None,
     ATR_1d_pct_asof_t: float | None,
