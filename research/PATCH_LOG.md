@@ -1,5 +1,17 @@
 # Patch log
 
+## perf: compact rejection funnel for large research runs
+
+Status: APPLIED.
+
+Intent:
+- Stop `strategy_rejection_funnel.csv` from duplicating every included `state/future/labels/prediction/decision/simulation` row as a second large artifact.
+- Keep explicit per-stage lineage by writing stage summary rows with `row_count` and explicit aggregate exclusion reasons.
+- Preserve forensic requirements: every required funnel stage is present, excluded rows always carry `reason_code`, and summary rows are auditable.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_rejection_funnel.py tests\test_forensic_audit.py -q`
+
 ## perf: stream future stage by symbol
 
 Status: APPLIED.

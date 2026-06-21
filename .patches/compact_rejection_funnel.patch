@@ -1,0 +1,453 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index c229eca3..2b210c58 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -122,7 +122,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | 180m anomaly horizon | IMPLEMENTED | 180m fields are supported in future paths, labels, prediction target dispatch, controls, EV target dispatch, artifact schemas, tests, and executable post-pump/post-extension strategy variants. | Keep horizon compatibility tests as permanent gate. |
+ | Relaxed geometry features | IMPLEMENTED | Feature matrix now materializes the required continuous shelf/sweep/consolidation geometry fields from data available <= state_time; raw shelf prices are audit-only and ATR/relative coordinates are cataloged as model features. | Keep point-in-time equivalence tests and anti-binary catalog checks. |
+ | Required anomaly controls | IMPLEMENTED | Anomaly-specific controls include always-follow, always-fade, fade-after-extension, follow-early-squeeze, no-CVD/no-OI/no-liquidation ablations, and idiosyncratic/systemic subsets. Forensic audit verifies the complete required set in `strategy_baseline_comparison.csv`. | Keep required-control forensic tests as permanent gate. |
+-| Reject reasons | IMPLEMENTED | `strategy_rejection_funnel.csv` / `anomaly_rejection_funnel.csv` now records artifact-driven lineage across data quality, universe, events, state, future paths, labels, prediction, decision, and simulation. Excluded rows require explicit `reason_code`; forensic audit fails if the funnel is missing, empty, has invalid statuses, or omits a required stage. | Keep funnel completeness and explicit reason-code tests as permanent gates. |
++| Reject reasons | IMPLEMENTED | `strategy_rejection_funnel.csv` / `anomaly_rejection_funnel.csv` now records artifact-driven lineage across data quality, universe, events, state, future paths, labels, prediction, decision, and simulation. Large included stage rows are represented as explicit summary rows with `row_count` so the funnel does not duplicate multi-million-row artifacts. Excluded rows require explicit `reason_code`; forensic audit fails if the funnel is missing, empty, has invalid statuses, or omits a required stage. | Keep funnel completeness, compact included-row summaries, and explicit reason-code tests as permanent gates. |
+ | Strategy-specific artifact aliases | IMPLEMENTED | Strategy-owned stages write canonical `strategy_*` artifacts first, protocol audit rows name canonical `strategy_*` artifacts as the primary boundary, and `anomaly_*` remains only as compatibility aliases, with schema/writer/audit-wording tests. | Keep canonical-first writer and protocol-audit wording tests as permanent gates. |
+ | Strategy/Core separation | IMPLEMENTED | Artifact boundaries are strategy-neutral. Core contracts now expose strategy-neutral `StrategyEvent`, `StrategyState1mRow`, `StrategyFeatureMatrixRow`, and `StrategyOutcomeLabelRow` names, with old `Anomaly*` names retained only as compatibility aliases. Core loaders/builders now expose and use `strategy_*` entrypoints while `anomaly_*` functions remain compatibility wrappers for documented alias artifacts. | Keep compatibility alias tests and avoid adding strategy-specific branches inside Core. |
+ 
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 3a440a65..edc4e501 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,17 @@
+ # Patch log
+ 
++## perf: compact rejection funnel for large research runs
++
++Status: APPLIED.
++
++Intent:
++- Stop `strategy_rejection_funnel.csv` from duplicating every included `state/future/labels/prediction/decision/simulation` row as a second large artifact.
++- Keep explicit per-stage lineage by writing stage summary rows with `row_count` and explicit aggregate exclusion reasons.
++- Preserve forensic requirements: every required funnel stage is present, excluded rows always carry `reason_code`, and summary rows are auditable.
++
++Validation:
++- `.venv\Scripts\python.exe -m pytest tests\test_rejection_funnel.py tests\test_forensic_audit.py -q`
++
+ ## perf: stream future stage by symbol
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 3f4edc78..90379b12 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -27,7 +27,8 @@ Active rule:
+ - Outcome labels now stream row-aligned state/future artifacts through the strict labels boundary, parse only labels-owned fields, and write canonical labels incrementally before creating the compatibility alias hardlink-first. The 9d all-symbol h30 labels proof completed at `tmp\labels_9d_hotpath_final`, writing `7,308,031` `strategy_outcome_labels.csv` rows in about `25m23s` with label-stage audit `12` PASS / `0` FAIL rows.
+ - Stage protocol audits and default audit row contracts now name canonical `strategy_*` artifacts as the primary schema/input/output boundary. `anomaly_*` files remain compatibility aliases, not the documented primary artifact names.
+ - Same-schema compatibility aliases are hardlink-first and copy-only fallback, so large `strategy_*` / `anomaly_*` artifact pairs no longer duplicate bytes on filesystems with hardlink support.
+-- Runtime artifacts from previous local proofs were cleaned from `.output\results` and `tmp`; the source cache `.output\market` was preserved. Local C: free space after cleanup was about `91.8GB`.
++- Runtime artifacts from previous local proofs were cleaned from `.output\results` and `tmp`; the source cache `.output\market` was preserved. Local C: free space after cleanup was about `93.2GB`.
++- Rejection funnel now stays compact for large runs: included rows from state/future/labels/prediction/decision/simulation are represented by auditable stage summary rows with `row_count`, while excluded rows keep explicit aggregate `reason_code`. This preserves forensic stage coverage without duplicating multi-million-row artifacts.
+ - Atlas now reads strict state/future/feature CSV inputs in bounded chunks with per-chunk row-alignment checks. This reduces the old full input merge pressure, but the 9d atlas/prediction/EV/simulation proof is still not claimed after cleanup.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+diff --git a/src/anomaly_science/rejection/builder.py b/src/anomaly_science/rejection/builder.py
+index 9bb22aef..285a80c5 100644
+--- a/src/anomaly_science/rejection/builder.py
++++ b/src/anomaly_science/rejection/builder.py
+@@ -64,23 +64,35 @@ def build_rejection_funnel_rows(run_dir: str | Path) -> tuple[RejectionFunnelRow
+     simulation_path = root / "stages" / "simulation" / "strategy_trade_simulation.csv"
+ 
+     event_rows = _read_csv(events_path)
+-    state_rows = _read_csv(state_path)
+-    future_rows = _read_csv(future_path)
+-    label_rows = _read_csv(labels_path)
+-    prediction_rows = _read_csv(predictions_path)
+-    decision_rows = _read_csv(decision_path)
+-    simulation_rows = _read_csv(simulation_path)
++    state_summary = _state_summary(state_path)
++    future_count = _csv_row_count(future_path)
++    label_summary = _label_summary(labels_path, target_horizon_minutes=context.target_horizon_minutes)
++    prediction_count = _csv_row_count(predictions_path)
++    decision_summary = _decision_summary(decision_path)
++    simulation_count = _csv_row_count(simulation_path)
+ 
+     rows: list[RejectionFunnelRow] = []
+     rows.extend(_data_quality_rows(root=root, context=context))
+     rows.extend(_universe_rows(root=root, context=context))
+     rows.extend(_event_rows(context=context, event_rows=event_rows))
+-    rows.extend(_state_rows(context=context, event_rows=event_rows, state_rows=state_rows))
+-    rows.extend(_future_rows(context=context, state_rows=state_rows, future_rows=future_rows))
+-    rows.extend(_label_rows(context=context, label_rows=label_rows))
+-    rows.extend(_prediction_rows(context=context, label_rows=label_rows, prediction_rows=prediction_rows))
+-    rows.extend(_decision_rows(context=context, prediction_rows=prediction_rows, decision_rows=decision_rows))
+-    rows.extend(_simulation_rows(context=context, decision_rows=decision_rows, simulation_rows=simulation_rows))
++    rows.extend(_compact_state_rows(context=context, event_rows=event_rows, state_summary=state_summary))
++    rows.extend(_compact_future_rows(context=context, state_count=state_summary.row_count, future_count=future_count))
++    rows.extend(_compact_label_rows(context=context, label_summary=label_summary))
++    rows.extend(_compact_prediction_rows(
++        context=context,
++        available_label_count=label_summary.available_count,
++        prediction_count=prediction_count,
++    ))
++    rows.extend(_compact_decision_rows(
++        context=context,
++        prediction_count=prediction_count,
++        decision_summary=decision_summary,
++    ))
++    rows.extend(_compact_simulation_rows(
++        context=context,
++        actionable_decision_count=decision_summary.actionable_count,
++        simulation_count=simulation_count,
++    ))
+     rows.extend(_empty_stage_placeholder_rows(context=context, rows=rows))
+     rows.extend(_summary_rows(context=context, rows=rows))
+     return tuple(rows)
+@@ -140,6 +152,261 @@ class _Context:
+         )
+ 
+ 
++class _StateSummary:
++    def __init__(self, *, row_count: int, event_ids: frozenset[str]) -> None:
++        self.row_count = row_count
++        self.event_ids = event_ids
++
++
++class _LabelSummary:
++    def __init__(self, *, row_count: int, available_count: int, unavailable_count: int) -> None:
++        self.row_count = row_count
++        self.available_count = available_count
++        self.unavailable_count = unavailable_count
++
++
++class _DecisionSummary:
++    def __init__(self, *, row_count: int, actionable_count: int, non_actionable_count: int) -> None:
++        self.row_count = row_count
++        self.actionable_count = actionable_count
++        self.non_actionable_count = non_actionable_count
++
++
++def _compact_state_rows(
++    *,
++    context: _Context,
++    event_rows: Sequence[Mapping[str, str]],
++    state_summary: _StateSummary,
++) -> list[RejectionFunnelRow]:
++    result: list[RejectionFunnelRow] = []
++    missing_event_count = sum(
++        1
++        for event in event_rows
++        if event.get("event_id", _EMPTY) and event.get("event_id", _EMPTY) not in state_summary.event_ids
++    )
++    if missing_event_count:
++        result.append(
++            context.row(
++                stage="state",
++                source_artifact="strategy_state_1m.csv",
++                row_key="state|missing_event_state_summary",
++                status=_STATUS_EXCLUDED,
++                reason_code="outside_strategy_lifecycle",
++                reason_detail="accepted event rows with no online state rows",
++                upstream_stage="events",
++                downstream_stage="future",
++                row_count=missing_event_count,
++            )
++        )
++    if state_summary.row_count:
++        result.append(
++            context.row(
++                stage="state",
++                source_artifact="strategy_state_1m.csv",
++                row_key="state|included_summary",
++                status=_STATUS_INCLUDED,
++                reason_detail="aggregate included online state rows",
++                upstream_stage="events",
++                downstream_stage="future",
++                row_count=state_summary.row_count,
++            )
++        )
++    return result
++
++
++def _compact_future_rows(*, context: _Context, state_count: int, future_count: int) -> list[RejectionFunnelRow]:
++    result: list[RejectionFunnelRow] = []
++    missing_count = max(0, state_count - future_count)
++    if missing_count:
++        result.append(
++            context.row(
++                stage="future_path",
++                source_artifact="strategy_future_paths.csv",
++                row_key="future_path|missing_summary",
++                status=_STATUS_EXCLUDED,
++                reason_code="future_path_incomplete",
++                reason_detail="state rows with no matching future path row",
++                upstream_stage="state",
++                downstream_stage="labels",
++                row_count=missing_count,
++            )
++        )
++    if future_count:
++        result.append(
++            context.row(
++                stage="future_path",
++                source_artifact="strategy_future_paths.csv",
++                row_key="future_path|included_summary",
++                status=_STATUS_INCLUDED,
++                reason_detail="aggregate included future path rows",
++                upstream_stage="state",
++                downstream_stage="labels",
++                row_count=future_count,
++            )
++        )
++    return result
++
++
++def _compact_label_rows(*, context: _Context, label_summary: _LabelSummary) -> list[RejectionFunnelRow]:
++    result: list[RejectionFunnelRow] = []
++    if label_summary.unavailable_count:
++        result.append(
++            context.row(
++                stage="labels",
++                source_artifact="strategy_outcome_labels.csv",
++                row_key="labels|horizon_not_available_summary",
++                status=_STATUS_EXCLUDED,
++                reason_code="horizon_not_available",
++                reason_detail="target horizon label unavailable or missing_future",
++                upstream_stage="future_path",
++                downstream_stage="prediction",
++                row_count=label_summary.unavailable_count,
++            )
++        )
++    if label_summary.available_count:
++        result.append(
++            context.row(
++                stage="labels",
++                source_artifact="strategy_outcome_labels.csv",
++                row_key="labels|included_summary",
++                status=_STATUS_INCLUDED,
++                reason_detail="aggregate target-horizon available label rows",
++                upstream_stage="future_path",
++                downstream_stage="prediction",
++                row_count=label_summary.available_count,
++            )
++        )
++    return result
++
++
++def _compact_prediction_rows(
++    *,
++    context: _Context,
++    available_label_count: int,
++    prediction_count: int,
++) -> list[RejectionFunnelRow]:
++    result: list[RejectionFunnelRow] = []
++    missing_count = max(0, available_label_count - prediction_count)
++    if missing_count:
++        result.append(
++            context.row(
++                stage="prediction",
++                source_artifact="strategy_oos_predictions.csv",
++                row_key="prediction|not_oos_summary",
++                status=_STATUS_EXCLUDED,
++                reason_code="not_in_oos_window_or_insufficient_training",
++                reason_detail="available label rows with no OOS prediction row",
++                upstream_stage="labels",
++                downstream_stage="decision",
++                row_count=missing_count,
++            )
++        )
++    if prediction_count:
++        result.append(
++            context.row(
++                stage="prediction",
++                source_artifact="strategy_oos_predictions.csv",
++                row_key="prediction|included_summary",
++                status=_STATUS_INCLUDED,
++                reason_detail="aggregate included OOS prediction rows",
++                upstream_stage="labels",
++                downstream_stage="decision",
++                row_count=prediction_count,
++            )
++        )
++    return result
++
++
++def _compact_decision_rows(
++    *,
++    context: _Context,
++    prediction_count: int,
++    decision_summary: _DecisionSummary,
++) -> list[RejectionFunnelRow]:
++    result: list[RejectionFunnelRow] = []
++    missing_count = max(0, prediction_count - decision_summary.row_count)
++    if missing_count:
++        result.append(
++            context.row(
++                stage="decision",
++                source_artifact="strategy_decision_timing.csv",
++                row_key="decision|missing_summary",
++                status=_STATUS_EXCLUDED,
++                reason_code="decision_timing_missing",
++                reason_detail="prediction rows with no EV/decision timing row",
++                upstream_stage="prediction",
++                downstream_stage="simulation",
++                row_count=missing_count,
++            )
++        )
++    if decision_summary.non_actionable_count:
++        result.append(
++            context.row(
++                stage="decision",
++                source_artifact="strategy_decision_timing.csv",
++                row_key="decision|no_trade_summary",
++                status=_STATUS_EXCLUDED,
++                reason_code="EV_no_trade_or_wait",
++                reason_detail="decision rows whose best_action is not long/short",
++                upstream_stage="prediction",
++                downstream_stage="simulation",
++                row_count=decision_summary.non_actionable_count,
++            )
++        )
++    if decision_summary.actionable_count:
++        result.append(
++            context.row(
++                stage="decision",
++                source_artifact="strategy_decision_timing.csv",
++                row_key="decision|included_summary",
++                status=_STATUS_INCLUDED,
++                reason_detail="aggregate actionable decision rows",
++                upstream_stage="prediction",
++                downstream_stage="simulation",
++                row_count=decision_summary.actionable_count,
++            )
++        )
++    return result
++
++
++def _compact_simulation_rows(
++    *,
++    context: _Context,
++    actionable_decision_count: int,
++    simulation_count: int,
++) -> list[RejectionFunnelRow]:
++    result: list[RejectionFunnelRow] = []
++    skipped_count = max(0, actionable_decision_count - simulation_count)
++    if skipped_count:
++        result.append(
++            context.row(
++                stage="simulation",
++                source_artifact="strategy_trade_simulation.csv",
++                row_key="simulation|skipped_summary",
++                status=_STATUS_EXCLUDED,
++                reason_code="simulation_skipped_by_execution_gate",
++                reason_detail="actionable decision rows with no simulated trade row",
++                upstream_stage="decision",
++                downstream_stage="final_artifacts",
++                row_count=skipped_count,
++            )
++        )
++    if simulation_count:
++        result.append(
++            context.row(
++                stage="simulation",
++                source_artifact="strategy_trade_simulation.csv",
++                row_key="simulation|included_summary",
++                status=_STATUS_INCLUDED,
++                reason_detail="aggregate included simulated trade rows",
++                upstream_stage="decision",
++                downstream_stage="final_artifacts",
++                row_count=simulation_count,
++            )
++        )
++    return result
++
++
+ def _data_quality_rows(*, root: Path, context: _Context) -> list[RejectionFunnelRow]:
+     path = root / "stages" / "events" / "strategy_data_quality.csv"
+     result: list[RejectionFunnelRow] = []
+@@ -517,11 +784,65 @@ def _run_config(path: Path) -> dict[str, str]:
+     return result
+ 
+ 
++def _state_summary(path: Path) -> _StateSummary:
++    row_count = 0
++    event_ids: set[str] = set()
++    for row in _iter_csv(path):
++        row_count += 1
++        event_id = row.get("event_id", _EMPTY)
++        if event_id:
++            event_ids.add(event_id)
++    return _StateSummary(row_count=row_count, event_ids=frozenset(event_ids))
++
++
++def _label_summary(path: Path, *, target_horizon_minutes: str) -> _LabelSummary:
++    row_count = 0
++    available_count = 0
++    unavailable_count = 0
++    for row in _iter_csv(path):
++        row_count += 1
++        if _label_is_available(row, target_horizon_minutes):
++            available_count += 1
++        else:
++            unavailable_count += 1
++    return _LabelSummary(
++        row_count=row_count,
++        available_count=available_count,
++        unavailable_count=unavailable_count,
++    )
++
++
++def _decision_summary(path: Path) -> _DecisionSummary:
++    row_count = 0
++    actionable_count = 0
++    non_actionable_count = 0
++    for row in _iter_csv(path):
++        row_count += 1
++        if row.get("best_action", _EMPTY) in {"long", "short"}:
++            actionable_count += 1
++        else:
++            non_actionable_count += 1
++    return _DecisionSummary(
++        row_count=row_count,
++        actionable_count=actionable_count,
++        non_actionable_count=non_actionable_count,
++    )
++
++
++def _csv_row_count(path: Path) -> int:
++    return sum(1 for _ in _iter_csv(path))
++
++
+ def _read_csv(path: Path) -> list[dict[str, str]]:
++    return list(_iter_csv(path))
++
++
++def _iter_csv(path: Path):
+     if not path.exists():
+-        return []
++        return
+     with path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+-        return [dict(row) for row in csv.DictReader(file_obj)]
++        for row in csv.DictReader(file_obj):
++            yield dict(row)
+ 
+ 
+ def _truthy(value: object) -> bool:
+diff --git a/tests/test_rejection_funnel.py b/tests/test_rejection_funnel.py
+index 8698d7c6..8cf77c8a 100644
+--- a/tests/test_rejection_funnel.py
++++ b/tests/test_rejection_funnel.py
+@@ -158,6 +158,17 @@ def test_rejection_funnel_records_stage_lineage_and_explicit_reasons(tmp_path: P
+     assert any(row.stage.startswith("summary:") for row in rows)
+ 
+ 
++def test_rejection_funnel_compacts_large_included_stage_rows(tmp_path: Path) -> None:
++    _fixture_run(tmp_path)
++
++    rows = build_rejection_funnel_rows(tmp_path)
++    state_rows = [row for row in rows if row.stage == "state" and row.status == "INCLUDED"]
++
++    assert len(state_rows) == 1
++    assert state_rows[0].row_key == "state|included_summary"
++    assert state_rows[0].row_count == 1
++
++
+ def test_write_rejection_funnel_writes_strategy_and_anomaly_alias(tmp_path: Path) -> None:
+     _fixture_run(tmp_path)
+ 

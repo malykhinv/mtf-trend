@@ -158,6 +158,17 @@ def test_rejection_funnel_records_stage_lineage_and_explicit_reasons(tmp_path: P
     assert any(row.stage.startswith("summary:") for row in rows)
 
 
+def test_rejection_funnel_compacts_large_included_stage_rows(tmp_path: Path) -> None:
+    _fixture_run(tmp_path)
+
+    rows = build_rejection_funnel_rows(tmp_path)
+    state_rows = [row for row in rows if row.stage == "state" and row.status == "INCLUDED"]
+
+    assert len(state_rows) == 1
+    assert state_rows[0].row_key == "state|included_summary"
+    assert state_rows[0].row_count == 1
+
+
 def test_write_rejection_funnel_writes_strategy_and_anomaly_alias(tmp_path: Path) -> None:
     _fixture_run(tmp_path)
 
