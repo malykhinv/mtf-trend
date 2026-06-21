@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import gc
 import os
 from dataclasses import dataclass, asdict
 from datetime import date, datetime, time, timedelta, timezone
@@ -70,6 +71,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             days=config.days,
         )
     )
+    _release_stage_memory()
     full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
     effective_holdout_days = _effective_holdout_days(
         full_start_date=full_start_date,
@@ -98,37 +100,46 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         holdout_days=effective_holdout_days,
         research_mode=config.research_mode,
     )
+    _release_stage_memory()
 
     run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
+    _release_stage_memory()
     events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events", strategy_name=config.strategy_name)
+    _release_stage_memory()
     state_dir = run_mvp1_state(
         input_dir=input_dir,
         events_path=events_dir / "strategy_events.csv",
         out_dir=stages_dir / "state",
         config=_state_config_for_strategy(strategy_name=config.strategy_name),
     )
+    _release_stage_memory()
     future_dir = run_mvp1_future(
         input_dir=input_dir,
         state_path=state_dir / "strategy_state_1m.csv",
         out_dir=stages_dir / "future",
     )
+    _release_stage_memory()
     run_mvp1_features(out_dir=stages_dir / "features")
+    _release_stage_memory()
     feature_matrix_dir = run_mvp1_feature_matrix(
         input_dir=input_dir,
         state_path=state_dir / "strategy_state_1m.csv",
         out_dir=stages_dir / "feature_matrix",
     )
+    _release_stage_memory()
     run_mvp1_atlas(
         state_path=state_dir / "strategy_state_1m.csv",
         future_path=future_dir / "strategy_future_paths.csv",
         feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
         out_dir=stages_dir / "atlas",
     )
+    _release_stage_memory()
     labels_dir = run_mvp1_labels(
         state_path=state_dir / "strategy_state_1m.csv",
         future_path=future_dir / "strategy_future_paths.csv",
         out_dir=stages_dir / "labels",
     )
+    _release_stage_memory()
     prediction_dir = run_mvp1_prediction(
         state_path=state_dir / "strategy_state_1m.csv",
         labels_path=labels_dir / "strategy_outcome_labels.csv",
@@ -139,6 +150,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             target_horizon_minutes=strategy.metadata.horizon_minutes,
         ),
     )
+    _release_stage_memory()
     run_mvp1_controls(
         state_path=state_dir / "strategy_state_1m.csv",
         labels_path=labels_dir / "strategy_outcome_labels.csv",
@@ -149,6 +161,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             target_horizon_minutes=strategy.metadata.horizon_minutes,
         ),
     )
+    _release_stage_memory()
     ev_dir = run_mvp1_expected_value(
         state_path=state_dir / "strategy_state_1m.csv",
         labels_path=labels_dir / "strategy_outcome_labels.csv",
@@ -159,6 +172,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             target_horizon_minutes=strategy.metadata.horizon_minutes,
         ),
     )
+    _release_stage_memory()
     run_mvp1_trade_simulation(
         input_dir=input_dir,
         decision_timing_path=ev_dir / "strategy_decision_timing.csv",
@@ -168,7 +182,9 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             target_horizon_minutes=strategy.metadata.horizon_minutes,
         ),
     )
+    _release_stage_memory()
     write_rejection_funnel(run_dir=run_dir, out_dir=stages_dir / "rejection_funnel")
+    _release_stage_memory()
     _write_research_run_manifest(
         run_dir=run_dir,
         config=config,
@@ -219,6 +235,10 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             f"{forensic_fail_count} FAIL row(s): {forensic_failed_checks}"
         )
     return run_dir
+
+
+def _release_stage_memory() -> None:
+    gc.collect()
 
 
 

@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: release run-research stage memory
+
+Status: APPLIED.
+
+Intent:
+- Add an explicit memory barrier between `run-research` stages so one long-lived Python process does not carry large temporary stage structures into later stages.
+- Keep the single-command pipeline unchanged; strategy/methodology/simulation boundaries are unchanged.
+- Reduce retained memory pressure after cache export, data audit, events, state, future, feature matrix, atlas, labels, prediction, controls, EV, simulation, and rejection funnel.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\research tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py -q`
+
 ## perf: stream feature-matrix state input
 
 Status: APPLIED.

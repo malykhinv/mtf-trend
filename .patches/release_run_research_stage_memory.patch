@@ -1,0 +1,160 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 6451556c..5aa1c038 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -87,7 +87,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Strategy registry truthfulness for specified-only variants | IMPLEMENTED | Registry exposes executable anomaly variants explicitly, writes `strategy_implementation_status.csv` as a generated truth table, and registry-level `validate_strategy_horizon()` rejects unknown, arbitrary, and mismatched strategy/horizon pairs. The current anomaly strategy spec has no remaining specified-only executable gaps. | Keep status artifact and registry tests as permanent gates. |
+ | Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, validates them against the Core whitelist, registry-level `validate_strategy_horizon()` enforces executable strategy/horizon compatibility before prediction, controls, EV, and simulation configs are accepted, and low-level CLI commands now use the same Core whitelist plus registry validation before file IO. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Keep horizon compatibility tests as permanent regression gate. |
+ | Data source boundary / normalized market data | IMPLEMENTED | Binance Vision cache, normalized CSV boundary, run-level data snapshot hashing, and export-level `cache_export_coverage.csv` / `cache_export_manifest.json` proof artifacts exist. Full local 380d export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, 0 unclassified 1m gaps. The only missing 1m rows are 3,570 explicitly classified settlement-transition rows across AIAUSDT/CVXUSDT/LITUSDT/PUMPUSDT/SLPUSDT with `{symbol}SETTLED` sibling evidence. Fixed-date delivery contracts are excluded from perpetual exports by default and recorded in the manifest. `run-research` uses the full available cache period when `--days` is omitted. | Keep `validate-cache-export-proof --expected-days 380 --allow-settlement-transition-gaps` as the permanent full-cache proof gate. |
+-| Compact all-symbol `run-research` executability | IMPLEMENTED | `run-research <strategy> --days N` creates output automatically, uses the full cache period when `--days` is omitted, and auto-scales default IS holdout for short windows while preserving the final holdout. The short-window rule keeps up to 8 non-holdout research days when available, so weekly WFA can produce OOS proof on compact windows larger than a 2d smoke. The all-symbol 2d command `python main.py run-research broad_anomaly_v1_h30 --days 2` completed with forensic `0` FAIL rows and expected WARN rows from the intentionally tiny window. Atlas now reads strict state/future/feature CSV boundaries in bounded chunks and enforces row alignment per chunk. The 9d all-symbol state/future/feature-matrix/labels proof completed through `strategy_outcome_labels.csv` with `7,308,031` rows and label-stage audit `12` PASS / `0` FAIL rows. Downstream 9d atlas/prediction/EV/simulation proof remains the next compact-run validation target. | Keep compact-run smoke plus full tests as regression gates; use >=9d compact windows when non-empty OOS/EV/simulation proof is required. |
++| Compact all-symbol `run-research` executability | IMPLEMENTED | `run-research <strategy> --days N` creates output automatically, uses the full cache period when `--days` is omitted, and auto-scales default IS holdout for short windows while preserving the final holdout. The short-window rule keeps up to 8 non-holdout research days when available, so weekly WFA can produce OOS proof on compact windows larger than a 2d smoke. The all-symbol 2d command `python main.py run-research broad_anomaly_v1_h30 --days 2` completed with forensic `0` FAIL rows and expected WARN rows from the intentionally tiny window. The single-command pipeline now releases stage-local memory between major stages. Atlas reads strict state/future/feature CSV boundaries in bounded chunks and enforces row alignment per chunk. The 9d all-symbol state/future/feature-matrix/labels proof completed through `strategy_outcome_labels.csv` with `7,308,031` rows and label-stage audit `12` PASS / `0` FAIL rows. Downstream 9d atlas/prediction/EV/simulation proof remains the next compact-run validation target. | Keep compact-run smoke plus full tests as regression gates; use >=9d compact windows when non-empty OOS/EV/simulation proof is required. |
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 570c08cd..8c5f6ff9 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,18 @@
+ # Patch log
+ 
++## perf: release run-research stage memory
++
++Status: APPLIED.
++
++Intent:
++- Add an explicit memory barrier between `run-research` stages so one long-lived Python process does not carry large temporary stage structures into later stages.
++- Keep the single-command pipeline unchanged; strategy/methodology/simulation boundaries are unchanged.
++- Reduce retained memory pressure after cache export, data audit, events, state, future, feature matrix, atlas, labels, prediction, controls, EV, simulation, and rejection funnel.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\research tests\test_research_run.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py -q`
++
+ ## perf: stream feature-matrix state input
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 67a16528..c33313f8 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -31,6 +31,7 @@ Active rule:
+ - Rejection funnel now stays compact for large runs: included rows from state/future/labels/prediction/decision/simulation are represented by auditable stage summary rows with `row_count`, while excluded rows keep explicit aggregate `reason_code`. This preserves forensic stage coverage without duplicating multi-million-row artifacts.
+ - Independent forensic alias comparison now uses a same-file hardlink fast path and streaming CSV comparison, so canonical/compatibility alias checks no longer materialize both sides of large artifact pairs.
+ - Feature-matrix CLI no longer materializes full `strategy_state_1m.csv` as a tuple before writing. It builds a compact per-snapshot state summary for cross-section fields and then streams state rows from the canonical CSV boundary.
++- `run-research` now releases stage-local memory between major stages with an explicit garbage-collection barrier, reducing retained memory pressure in the single-command offline pipeline.
+ - Atlas now reads strict state/future/feature CSV inputs in bounded chunks with per-chunk row-alignment checks. This reduces the old full input merge pressure, but the 9d atlas/prediction/EV/simulation proof is still not claimed after cleanup.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+diff --git a/src/anomaly_science/research/run.py b/src/anomaly_science/research/run.py
+index 311be600..e85431d3 100644
+--- a/src/anomaly_science/research/run.py
++++ b/src/anomaly_science/research/run.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import csv
++import gc
+ import os
+ from dataclasses import dataclass, asdict
+ from datetime import date, datetime, time, timedelta, timezone
+@@ -70,6 +71,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+             days=config.days,
+         )
+     )
++    _release_stage_memory()
+     full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
+     effective_holdout_days = _effective_holdout_days(
+         full_start_date=full_start_date,
+@@ -98,37 +100,46 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+         holdout_days=effective_holdout_days,
+         research_mode=config.research_mode,
+     )
++    _release_stage_memory()
+ 
+     run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
++    _release_stage_memory()
+     events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events", strategy_name=config.strategy_name)
++    _release_stage_memory()
+     state_dir = run_mvp1_state(
+         input_dir=input_dir,
+         events_path=events_dir / "strategy_events.csv",
+         out_dir=stages_dir / "state",
+         config=_state_config_for_strategy(strategy_name=config.strategy_name),
+     )
++    _release_stage_memory()
+     future_dir = run_mvp1_future(
+         input_dir=input_dir,
+         state_path=state_dir / "strategy_state_1m.csv",
+         out_dir=stages_dir / "future",
+     )
++    _release_stage_memory()
+     run_mvp1_features(out_dir=stages_dir / "features")
++    _release_stage_memory()
+     feature_matrix_dir = run_mvp1_feature_matrix(
+         input_dir=input_dir,
+         state_path=state_dir / "strategy_state_1m.csv",
+         out_dir=stages_dir / "feature_matrix",
+     )
++    _release_stage_memory()
+     run_mvp1_atlas(
+         state_path=state_dir / "strategy_state_1m.csv",
+         future_path=future_dir / "strategy_future_paths.csv",
+         feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
+         out_dir=stages_dir / "atlas",
+     )
++    _release_stage_memory()
+     labels_dir = run_mvp1_labels(
+         state_path=state_dir / "strategy_state_1m.csv",
+         future_path=future_dir / "strategy_future_paths.csv",
+         out_dir=stages_dir / "labels",
+     )
++    _release_stage_memory()
+     prediction_dir = run_mvp1_prediction(
+         state_path=state_dir / "strategy_state_1m.csv",
+         labels_path=labels_dir / "strategy_outcome_labels.csv",
+@@ -139,6 +150,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+             target_horizon_minutes=strategy.metadata.horizon_minutes,
+         ),
+     )
++    _release_stage_memory()
+     run_mvp1_controls(
+         state_path=state_dir / "strategy_state_1m.csv",
+         labels_path=labels_dir / "strategy_outcome_labels.csv",
+@@ -149,6 +161,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+             target_horizon_minutes=strategy.metadata.horizon_minutes,
+         ),
+     )
++    _release_stage_memory()
+     ev_dir = run_mvp1_expected_value(
+         state_path=state_dir / "strategy_state_1m.csv",
+         labels_path=labels_dir / "strategy_outcome_labels.csv",
+@@ -159,6 +172,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+             target_horizon_minutes=strategy.metadata.horizon_minutes,
+         ),
+     )
++    _release_stage_memory()
+     run_mvp1_trade_simulation(
+         input_dir=input_dir,
+         decision_timing_path=ev_dir / "strategy_decision_timing.csv",
+@@ -168,7 +182,9 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+             target_horizon_minutes=strategy.metadata.horizon_minutes,
+         ),
+     )
++    _release_stage_memory()
+     write_rejection_funnel(run_dir=run_dir, out_dir=stages_dir / "rejection_funnel")
++    _release_stage_memory()
+     _write_research_run_manifest(
+         run_dir=run_dir,
+         config=config,
+@@ -221,6 +237,10 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
+     return run_dir
+ 
+ 
++def _release_stage_memory() -> None:
++    gc.collect()
++
++
+ 
+ def _write_research_run_manifest(
+     *,
