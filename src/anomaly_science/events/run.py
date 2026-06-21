@@ -55,12 +55,14 @@ def run_mvp1_events(
     data_quality = run_data_quality(frames, read_errors=read_errors)
     data_quality_mask = build_candles_1m_data_quality_mask(frames.get("candles_1m"))
     data_quality = [*data_quality, data_quality_mask_audit_row(data_quality_mask)]
+    candles_1m_frame = frames.get("candles_1m")
     universe_rows = build_symbol_universe_by_day(
-        candles_1m=frames.get("candles_1m"),
+        candles_1m=candles_1m_frame,
         candles_5m=frames.get("candles_5m"),
         open_interest_5m=frames.get("open_interest_5m"),
         liquidations=frames.get("liquidations"),
     )
+    frames.clear()
 
     events = ()
     raw_event_count = 0
@@ -73,13 +75,14 @@ def run_mvp1_events(
     blocking_quality_fail = has_detector_blocking_quality_fail(data_quality)
     if required_stream_reject_count:
             event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
-    if frames.get("candles_1m") is not None and not blocking_quality_fail and not required_stream_reject_count:
+    if candles_1m_frame is not None and not blocking_quality_fail and not required_stream_reject_count:
         try:
-            gated_candles_1m = apply_data_quality_mask(frames["candles_1m"], data_quality_mask)
-            market_frame = pl.from_pandas(gated_candles_1m)
-            trigger_frame = strategy.generate_triggers(market_frame)
+            gated_candles_1m = apply_data_quality_mask(candles_1m_frame, data_quality_mask)
+            candles_1m_frame = None
+            trigger_frame = strategy.generate_triggers_from_pandas(gated_candles_1m)
             validate_trigger_frame(trigger_frame)
             raw_events = _events_from_trigger_frame(trigger_frame)
+            del gated_candles_1m
             cascade_result = suppress_event_cascade(raw_events, horizon_minutes=strategy.metadata.horizon_minutes)
             events = cascade_result.accepted_events
             raw_event_count = len(raw_events)

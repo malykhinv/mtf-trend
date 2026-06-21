@@ -210,6 +210,14 @@ class BroadAnomalyStrategy(BaseStrategy):
         validate_trigger_frame(trigger_frame)
         return trigger_frame
 
+    def generate_triggers_from_pandas(self, market_frame_asof: pd.DataFrame) -> pl.DataFrame:
+        if market_frame_asof.empty:
+            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+        events = detect_broad_anomaly_events_from_frame(market_frame_asof, config=self.config)
+        trigger_frame = events_to_trigger_frame(events)
+        validate_trigger_frame(trigger_frame)
+        return trigger_frame
+
     def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
         return detect_broad_anomaly_events(candles_1m, config=self.config)
 
@@ -235,6 +243,12 @@ class PostAnomalyExtensionStrategy(BaseStrategy):
         if market_frame_asof.height == 0:
             return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
         pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
+        return self.generate_triggers_from_pandas(pandas_frame)
+
+    def generate_triggers_from_pandas(self, market_frame_asof: pd.DataFrame) -> pl.DataFrame:
+        if market_frame_asof.empty:
+            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+        pandas_frame = market_frame_asof
         events = self.generate_events(normalize_candles_1m(pandas_frame))
         trigger_frame = events_to_trigger_frame(events)
         validate_trigger_frame(trigger_frame)
@@ -265,6 +279,12 @@ class PostPumpDistributionStrategy(BaseStrategy):
         if market_frame_asof.height == 0:
             return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
         pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
+        return self.generate_triggers_from_pandas(pandas_frame)
+
+    def generate_triggers_from_pandas(self, market_frame_asof: pd.DataFrame) -> pl.DataFrame:
+        if market_frame_asof.empty:
+            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+        pandas_frame = market_frame_asof
         events = self.generate_events(normalize_candles_1m(pandas_frame))
         trigger_frame = events_to_trigger_frame(events)
         validate_trigger_frame(trigger_frame)

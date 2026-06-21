@@ -1,0 +1,136 @@
+﻿diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 3bb3ba7e..09c76452 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,18 @@
+ # Patch log
+ 
++## perf: avoid duplicate events trigger-frame conversions
++
++Status: APPLIED.
++
++Intent:
++- Add a strategy-owned pandas trigger boundary so Core can reuse the already-loaded event input frame without pandas->polars->pandas roundtrips.
++- Release source frame references after data-quality/universe checks before trigger generation.
++- Keep Core/strategy separation: Core calls a BaseStrategy method; concrete strategies own their trigger conversion path.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\strategy src\anomaly_science\events tests\test_events_detector.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_events_detector.py tests\test_strategy_contract.py -q`
++
+ ## perf: stream state-stage CSV input boundary
+ 
+ Status: APPLIED.
+diff --git a/src/anomaly_science/events/run.py b/src/anomaly_science/events/run.py
+index 0615d620..086bec99 100644
+--- a/src/anomaly_science/events/run.py
++++ b/src/anomaly_science/events/run.py
+@@ -55,12 +55,14 @@ def run_mvp1_events(
+     data_quality = run_data_quality(frames, read_errors=read_errors)
+     data_quality_mask = build_candles_1m_data_quality_mask(frames.get("candles_1m"))
+     data_quality = [*data_quality, data_quality_mask_audit_row(data_quality_mask)]
++    candles_1m_frame = frames.get("candles_1m")
+     universe_rows = build_symbol_universe_by_day(
+-        candles_1m=frames.get("candles_1m"),
++        candles_1m=candles_1m_frame,
+         candles_5m=frames.get("candles_5m"),
+         open_interest_5m=frames.get("open_interest_5m"),
+         liquidations=frames.get("liquidations"),
+     )
++    frames.clear()
+ 
+     events = ()
+     raw_event_count = 0
+@@ -73,13 +75,14 @@ def run_mvp1_events(
+     blocking_quality_fail = has_detector_blocking_quality_fail(data_quality)
+     if required_stream_reject_count:
+             event_error = f"required data streams missing for {required_stream_reject_count} symbol-day rows before trigger generation"
+-    if frames.get("candles_1m") is not None and not blocking_quality_fail and not required_stream_reject_count:
++    if candles_1m_frame is not None and not blocking_quality_fail and not required_stream_reject_count:
+         try:
+-            gated_candles_1m = apply_data_quality_mask(frames["candles_1m"], data_quality_mask)
+-            market_frame = pl.from_pandas(gated_candles_1m)
+-            trigger_frame = strategy.generate_triggers(market_frame)
++            gated_candles_1m = apply_data_quality_mask(candles_1m_frame, data_quality_mask)
++            candles_1m_frame = None
++            trigger_frame = strategy.generate_triggers_from_pandas(gated_candles_1m)
+             validate_trigger_frame(trigger_frame)
+             raw_events = _events_from_trigger_frame(trigger_frame)
++            del gated_candles_1m
+             cascade_result = suppress_event_cascade(raw_events, horizon_minutes=strategy.metadata.horizon_minutes)
+             events = cascade_result.accepted_events
+             raw_event_count = len(raw_events)
+diff --git a/src/anomaly_science/strategy/anomaly.py b/src/anomaly_science/strategy/anomaly.py
+index 59d4f084..0d0beec3 100644
+--- a/src/anomaly_science/strategy/anomaly.py
++++ b/src/anomaly_science/strategy/anomaly.py
+@@ -210,6 +210,14 @@ class BroadAnomalyStrategy(BaseStrategy):
+         validate_trigger_frame(trigger_frame)
+         return trigger_frame
+ 
++    def generate_triggers_from_pandas(self, market_frame_asof: pd.DataFrame) -> pl.DataFrame:
++        if market_frame_asof.empty:
++            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
++        events = detect_broad_anomaly_events_from_frame(market_frame_asof, config=self.config)
++        trigger_frame = events_to_trigger_frame(events)
++        validate_trigger_frame(trigger_frame)
++        return trigger_frame
++
+     def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
+         return detect_broad_anomaly_events(candles_1m, config=self.config)
+ 
+@@ -235,6 +243,12 @@ class PostAnomalyExtensionStrategy(BaseStrategy):
+         if market_frame_asof.height == 0:
+             return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+         pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
++        return self.generate_triggers_from_pandas(pandas_frame)
++
++    def generate_triggers_from_pandas(self, market_frame_asof: pd.DataFrame) -> pl.DataFrame:
++        if market_frame_asof.empty:
++            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
++        pandas_frame = market_frame_asof
+         events = self.generate_events(normalize_candles_1m(pandas_frame))
+         trigger_frame = events_to_trigger_frame(events)
+         validate_trigger_frame(trigger_frame)
+@@ -265,6 +279,12 @@ class PostPumpDistributionStrategy(BaseStrategy):
+         if market_frame_asof.height == 0:
+             return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
+         pandas_frame = pd.DataFrame(market_frame_asof.to_dicts())
++        return self.generate_triggers_from_pandas(pandas_frame)
++
++    def generate_triggers_from_pandas(self, market_frame_asof: pd.DataFrame) -> pl.DataFrame:
++        if market_frame_asof.empty:
++            return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
++        pandas_frame = market_frame_asof
+         events = self.generate_events(normalize_candles_1m(pandas_frame))
+         trigger_frame = events_to_trigger_frame(events)
+         validate_trigger_frame(trigger_frame)
+diff --git a/src/anomaly_science/strategy/base.py b/src/anomaly_science/strategy/base.py
+index cf0c3814..efdf1e3c 100644
+--- a/src/anomaly_science/strategy/base.py
++++ b/src/anomaly_science/strategy/base.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ from abc import ABC, abstractmethod
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+-from typing import Mapping, Sequence
++from typing import Any, Mapping, Sequence
+ 
+ import polars as pl
+ 
+@@ -124,6 +124,15 @@ class BaseStrategy(ABC):
+         ``state_time`` and ``event_start_time`` must be native Polars datetimes.
+         """
+ 
++    def generate_triggers_from_pandas(self, market_frame_asof: Any) -> pl.DataFrame:
++        """Return a trigger frame from a pandas input boundary.
++
++        Core CSV inputs are commonly loaded as pandas frames for data-quality and
++        universe checks. Strategies may override this to avoid pandas->polars->pandas
++        copies while preserving the same trigger-frame contract.
++        """
++        return self.generate_triggers(pl.from_pandas(market_frame_asof))
++
+     @abstractmethod
+     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+         """Return strictly causal strategy-specific as-of features.

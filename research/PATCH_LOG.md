@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: avoid duplicate events trigger-frame conversions
+
+Status: APPLIED.
+
+Intent:
+- Add a strategy-owned pandas trigger boundary so Core can reuse the already-loaded event input frame without pandas->polars->pandas roundtrips.
+- Release source frame references after data-quality/universe checks before trigger generation.
+- Keep Core/strategy separation: Core calls a BaseStrategy method; concrete strategies own their trigger conversion path.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\strategy src\anomaly_science\events tests\test_events_detector.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_events_detector.py tests\test_strategy_contract.py -q`
+
 ## perf: stream state-stage CSV input boundary
 
 Status: APPLIED.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import polars as pl
 
@@ -123,6 +123,15 @@ class BaseStrategy(ABC):
         add audit columns; Core stores them only through declared artifact schemas.
         ``state_time`` and ``event_start_time`` must be native Polars datetimes.
         """
+
+    def generate_triggers_from_pandas(self, market_frame_asof: Any) -> pl.DataFrame:
+        """Return a trigger frame from a pandas input boundary.
+
+        Core CSV inputs are commonly loaded as pandas frames for data-quality and
+        universe checks. Strategies may override this to avoid pandas->polars->pandas
+        copies while preserving the same trigger-frame contract.
+        """
+        return self.generate_triggers(pl.from_pandas(market_frame_asof))
 
     @abstractmethod
     def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
