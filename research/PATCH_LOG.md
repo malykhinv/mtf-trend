@@ -13,6 +13,7 @@ Intent:
 Validation:
 - `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
 - 9d probe improved first `100,000` feature rows from about `954.64s` to about `716.42s` total elapsed, including unchanged startup state/candle indexing.
+- After exact rolling median caching, `.venv\Scripts\python.exe main.py run-mvp1-feature-matrix --input .output\results\research_runs\20260620T134600533596Z_broad_anomaly_v1_h30\input --state tmp\state_9d_streaming_perf_h30\strategy_state_1m.csv --out tmp\feature_matrix_9d_hotpath_median_final` completed in about `2h05m`, wrote `7,308,031` `strategy_feature_matrix.csv` rows, and stage audit had `13` PASS / `0` FAIL rows.
 
 ## perf: stream feature matrix artifact writes
 

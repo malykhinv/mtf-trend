@@ -68,6 +68,7 @@ class _CandleSeries:
         self._volume_square_prefix_sums = tuple(volume_square_prefix)
         self._quote_volume_prefix_sums = tuple(quote_volume_prefix)
         self._quote_volume_square_prefix_sums = tuple(quote_volume_square_prefix)
+        self._rolling_median_cache: dict[tuple[str, int], tuple[float | None, ...]] = {}
 
     def __iter__(self):
         return iter(self._rows)
@@ -120,6 +121,36 @@ class _CandleSeries:
         total = sums[end - 1] - (sums[start - 1] if start > 0 else 0.0)
         square_total = square_sums[end - 1] - (square_sums[start - 1] if start > 0 else 0.0)
         return count, total, square_total
+
+    def trailing_median_before(self, available_time_ms: int, count: int, field_name: str) -> float | None:
+        index = bisect_left(self._available_times, available_time_ms)
+        medians = self._rolling_medians(field_name=field_name, count=count)
+        if index < 0 or index >= len(medians):
+            return None
+        return medians[index]
+
+    def _rolling_medians(self, *, field_name: str, count: int) -> tuple[float | None, ...]:
+        cache_key = (field_name, count)
+        cached = self._rolling_median_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if field_name == "quote_volume":
+            values = [row.quote_volume for row in self._rows]
+        elif field_name == "volume":
+            values = [row.volume for row in self._rows]
+        else:
+            raise ValueError(f"unsupported candle median field: {field_name}")
+        medians: list[float | None] = [None] * len(values)
+        if count > 0 and len(values) > count:
+            import pandas as pd
+
+            rolling = pd.Series(values, dtype="float64").rolling(window=count).median()
+            for index in range(count, len(values)):
+                value = rolling.iat[index - 1]
+                medians[index] = None if math.isnan(value) else float(value)
+        result = tuple(medians)
+        self._rolling_median_cache[cache_key] = result
+        return result
 
     def window(self, snapshot_time_ms: int, window_minutes: int) -> tuple[Candle1m, ...]:
         end = bisect_right(self._available_times, snapshot_time_ms)
@@ -962,7 +993,6 @@ def _volume_features(*, candles: Sequence[Candle1m], state: StrategyState1mRow, 
     if current is None:
         return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
     if isinstance(candles, _CandleSeries):
-        history = candles.history_before(current.available_time_ms, config.volume_baseline_window_minutes)
         volume_moments = candles.trailing_moments_before(
             current.available_time_ms,
             config.volume_baseline_window_minutes,
@@ -972,6 +1002,19 @@ def _volume_features(*, candles: Sequence[Candle1m], state: StrategyState1mRow, 
             current.available_time_ms,
             config.volume_baseline_window_minutes,
             "quote_volume",
+        )
+        quote_median = candles.trailing_median_before(
+            current.available_time_ms,
+            config.volume_baseline_window_minutes,
+            "quote_volume",
+        )
+        if volume_moments is None or quote_moments is None or quote_median is None:
+            return _VolumeFeatures(quote_volume_1m_to_24h_median=None, volume_zscore=None, quote_volume_zscore=None)
+        quote_ratio = None if quote_median <= 0 else current.quote_volume / quote_median
+        return _VolumeFeatures(
+            quote_volume_1m_to_24h_median=quote_ratio,
+            volume_zscore=_zscore_from_moments(current.volume, volume_moments),
+            quote_volume_zscore=_zscore_from_moments(current.quote_volume, quote_moments),
         )
     else:
         history = [candle for candle in candles if candle.available_time_ms < current.available_time_ms]
