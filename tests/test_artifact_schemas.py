@@ -113,6 +113,22 @@ def test_csv_writer_requires_declared_schema_columns(tmp_path: Path) -> None:
         )
 
 
+def test_csv_writer_streams_iterable_rows(tmp_path: Path) -> None:
+    schema = get_artifact_schema("anomaly_run_config.csv")
+
+    def rows():
+        yield {"key": "git_commit", "value": "abc123", "source": "runtime"}
+        yield {"key": "stage", "value": "test", "source": "config"}
+
+    out = write_csv_artifact(tmp_path / schema.name, rows(), schema)
+
+    assert out.read_text(encoding="utf-8-sig").splitlines() == [
+        "key,value,source",
+        "git_commit,abc123,runtime",
+        "stage,test,config",
+    ]
+
+
 def test_runtime_reproducibility_rows_include_methodology_keys(tmp_path: Path) -> None:
     input_file = tmp_path / "input.csv"
     input_file.write_text("symbol,value\nBTCUSDT,1\n", encoding="utf-8")

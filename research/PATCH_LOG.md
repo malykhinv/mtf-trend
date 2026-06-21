@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: stream strict CSV artifact writer
+
+Status: APPLIED.
+
+Intent:
+- Make the shared strict CSV artifact writer validate and write rows incrementally instead of normalizing the full input into memory first.
+- Keep strict schema behavior unchanged: missing and extra columns still fail with row index context.
+- Keep compatibility aliases hardlink-first when schemas are identical; materialize rows only if a future non-identical alias schema requires a second pass.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\artifacts\writer.py tests\test_artifact_schemas.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_artifact_schemas.py -q`
+
 ## perf: index feature-matrix liquidation windows
 
 Status: APPLIED.
