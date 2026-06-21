@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,12 @@ import pytest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.events import AnomalyEvent
 from anomaly_science.contracts.market import Candle1m
+from anomaly_science.data.source import CsvDataSourceError
 from anomaly_science.state import (
     AnomalyEventsArtifactError,
     OnlineStateBuilderConfig,
     build_online_anomaly_state_1m,
+    iter_online_strategy_state_1m_from_grouped_csv,
     load_anomaly_events_csv,
 )
 
@@ -101,6 +104,27 @@ def _write_events_csv(path: Path) -> None:
                 "detector_version": "test_detector",
             }
         )
+
+
+def _write_candles_csv(path: Path, candles: list[Candle1m]) -> None:
+    fieldnames = [
+        "symbol",
+        "open_time_ms",
+        "available_time_ms",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "number_of_trades",
+        "taker_buy_quote_volume",
+    ]
+    with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+        writer.writeheader()
+        for candle in candles:
+            writer.writerow({name: getattr(candle, name) for name in fieldnames})
 
 
 def test_state_builder_uses_only_closed_candles_available_asof_state_time() -> None:
@@ -203,6 +227,42 @@ def test_events_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
 
     with pytest.raises(AnomalyEventsArtifactError, match="columns must match"):
         load_anomaly_events_csv(path)
+
+
+def test_grouped_csv_state_builder_streams_one_symbol_at_a_time(tmp_path: Path) -> None:
+    candles_path = tmp_path / "candles_1m.csv"
+    candles = [
+        _candle(0, open_price=99.0, high=100.0, low=98.0, close=99.5),
+        _candle(1, open_price=100.0, high=103.0, low=99.0, close=102.0),
+        _candle(2, open_price=102.0, high=104.0, low=101.0, close=103.0),
+        replace(_candle(0, open_price=50.0, high=51.0, low=49.0, close=50.5), symbol="BBB/USDT:USDT"),
+        replace(_candle(1, open_price=50.5, high=52.0, low=50.0, close=51.5), symbol="BBB/USDT:USDT"),
+    ]
+    _write_candles_csv(candles_path, candles)
+
+    rows = list(
+        iter_online_strategy_state_1m_from_grouped_csv(
+            candles_path=candles_path,
+            events=[_event()],
+            config=OnlineStateBuilderConfig(max_state_minutes_after_detection=1),
+        )
+    )
+
+    assert [row.event_id for row in rows] == ["evt_state_test", "evt_state_test"]
+    assert {row.symbol for row in rows} == {"AAA/USDT:USDT"}
+
+
+def test_grouped_csv_state_builder_rejects_repeated_symbol_groups(tmp_path: Path) -> None:
+    candles_path = tmp_path / "candles_1m.csv"
+    candles = [
+        _candle(0, open_price=99.0, high=100.0, low=98.0, close=99.5),
+        replace(_candle(0, open_price=50.0, high=51.0, low=49.0, close=50.5), symbol="BBB/USDT:USDT"),
+        _candle(1, open_price=100.0, high=103.0, low=99.0, close=102.0),
+    ]
+    _write_candles_csv(candles_path, candles)
+
+    with pytest.raises(CsvDataSourceError, match="grouped by symbol"):
+        list(iter_online_strategy_state_1m_from_grouped_csv(candles_path=candles_path, events=[_event()]))
 
 
 def test_run_mvp1_state_cli_writes_state_artifacts(tmp_path: Path) -> None:

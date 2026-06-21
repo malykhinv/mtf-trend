@@ -13,8 +13,7 @@ from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_sch
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.state.builder import (
-    iter_candles_1m_csv,
-    iter_online_strategy_state_1m,
+    iter_online_strategy_state_1m_from_grouped_csv,
     load_strategy_events_csv,
 )
 from anomaly_science.state.config import OnlineStateBuilderConfig
@@ -38,8 +37,8 @@ def run_mvp1_state(
     written: list[Path] = []
     state_written, state_row_count = _write_state_rows_with_aliases(
         output_path / "strategy_state_1m.csv",
-        iter_online_strategy_state_1m(
-            candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
+        iter_online_strategy_state_1m_from_grouped_csv(
+            candles_path=input_path / "candles_1m.csv",
             events=events,
             config=cfg,
         ),

@@ -7,6 +7,7 @@ Status: APPLIED.
 Intent:
 - Stop `run-mvp1-state` from loading the full `candles_1m.csv` input into a pandas DataFrame before state writing.
 - Parse `strategy_events.csv` through a strict streaming CSV boundary instead of a pandas frame.
+- Process state candles by explicit symbol groups so the CLI keeps only one symbol's 1m candle history in memory instead of building a full-market candle index.
 - Keep state semantics unchanged: state rows remain causal and use only candles with `available_time_ms <= state_time_ms`.
 
 Validation:

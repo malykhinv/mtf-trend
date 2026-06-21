@@ -184,6 +184,78 @@ def iter_online_strategy_state_1m(
 build_online_anomaly_state_1m = build_online_strategy_state_1m
 
 
+def iter_online_strategy_state_1m_from_grouped_csv(
+    *,
+    candles_path: str | Path,
+    events: Sequence[StrategyEvent] | Iterable[StrategyEvent],
+    config: OnlineStateBuilderConfig | None = None,
+) -> Iterable[StrategyState1mRow]:
+    """Stream state rows while holding only one symbol's candles in memory.
+
+    The cache export writes `candles_1m.csv` grouped by symbol. This optimized
+    boundary makes that grouping explicit instead of silently falling back to a
+    full-market in-memory index.
+    """
+    cfg = config or OnlineStateBuilderConfig()
+    events_by_symbol: dict[str, list[StrategyEvent]] = {}
+    for event in events:
+        events_by_symbol.setdefault(event.symbol, []).append(event)
+
+    current_symbol: str | None = None
+    current_candles: list[Candle1m] = []
+    completed_symbols: set[str] = set()
+    for candle in iter_candles_1m_csv(candles_path):
+        if current_symbol is None:
+            current_symbol = candle.symbol
+        if candle.symbol != current_symbol:
+            completed_symbols.add(current_symbol)
+            yield from _iter_symbol_state_rows(
+                symbol=current_symbol,
+                candles=current_candles,
+                events=events_by_symbol.get(current_symbol, ()),
+                config=cfg,
+            )
+            current_candles = []
+            current_symbol = candle.symbol
+            if current_symbol in completed_symbols:
+                raise CsvDataSourceError(
+                    "candles_1m.csv must be grouped by symbol for streaming state build; "
+                    f"symbol {current_symbol!r} appears in multiple groups"
+                )
+        current_candles.append(candle)
+
+    if current_symbol is not None:
+        yield from _iter_symbol_state_rows(
+            symbol=current_symbol,
+            candles=current_candles,
+            events=events_by_symbol.get(current_symbol, ()),
+            config=cfg,
+        )
+
+
+def _iter_symbol_state_rows(
+    *,
+    symbol: str,
+    candles: Sequence[Candle1m],
+    events: Sequence[StrategyEvent],
+    config: OnlineStateBuilderConfig,
+) -> Iterable[StrategyState1mRow]:
+    if not candles or not events:
+        return
+    ordered = tuple(sorted(candles, key=lambda item: (item.available_time_ms, item.open_time_ms)))
+    index = _SymbolCandleIndex(
+        candles=ordered,
+        open_times=tuple(candle.open_time_ms for candle in ordered),
+        available_times=tuple(candle.available_time_ms for candle in ordered),
+    )
+    for event in sorted(events, key=lambda item: (item.event_detection_time_ms, item.event_id)):
+        if event.symbol != symbol:
+            raise MarketDataContractError("symbol-grouped state builder received mismatched event symbol")
+        if event.technical_noise_shock or event.excluded_by_data_quality_gate:
+            continue
+        yield from _build_event_rows(event=event, candles=index, config=config)
+
+
 def build_online_strategy_state_1m_from_source(
     *,
     source: MarketDataSource,
