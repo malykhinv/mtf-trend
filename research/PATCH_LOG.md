@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: stream future stage by symbol
+
+Status: APPLIED.
+
+Intent:
+- Stop `run-mvp1-future` from building a full-market candle index before writing future rows.
+- Stream grouped `candles_1m.csv` and grouped `strategy_state_1m.csv` one symbol at a time while preserving row order inside each state group.
+- Keep future semantics unchanged: labels still use only candles strictly after `snapshot_time_ms`, and ATR is computed from closed as-of history.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py -q`
+
 ## perf: avoid duplicate events trigger-frame conversions
 
 Status: APPLIED.

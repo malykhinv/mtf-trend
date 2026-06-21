@@ -1,0 +1,317 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index b661d649..c229eca3 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -93,7 +93,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+ | Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. Feature-matrix CLI writes the canonical matrix artifact through a strict streaming writer and keeps identical aliases hardlink-first for compatibility only. Core feature-matrix hot paths now use explicit as-of OI indexing, exact rolling moment prefix sums, exact cached rolling medians, and indexed liquidation event windows instead of repeated row scans. | Keep catalog membership tests as permanent gate. |
+ | Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. The CLI reads candles/events through strict CSV boundaries, processes grouped candle input one symbol at a time, streams state rows through the canonical schema, and creates a hardlink-first compatibility alias, avoiding pandas input-frame materialization, full-market candle index materialization, multi-million-row output list materialization, and duplicate alias bytes when supported by the filesystem. | Keep temporal/no-leakage tests as permanent gate. |
+-| Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. The CLI writer streams rows through the strict canonical schema, reads state/candle CSV boundaries incrementally, creates identical aliases hardlink-first, and treats zero as-of ATR as explicit missing ATR fields rather than fallback or crash. | Keep horizon/schema tests as permanent gate. |
++| Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. The CLI writer streams rows through the strict canonical schema, reads grouped state/candle CSV boundaries one symbol at a time, creates identical aliases hardlink-first, and treats zero as-of ATR as explicit missing ATR fields rather than fallback or crash. | Keep horizon/schema tests as permanent gate. |
+ | Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. The CLI labels stage streams row-aligned state/future artifacts, parses only labels-owned strict fields, writes canonical labels incrementally, and keeps `anomaly_*` as a hardlink-first compatibility alias. | Keep label horizon, row-aligned join, and strict schema tests as permanent gates. |
+ | Atlas / discovery layer | IMPLEMENTED | Descriptive atlas now writes 15/30/60/120/180m ATR-normalized slices, session/market-context/speed/systemic contexts, and relaxed shelf/sweep/consolidation geometry response surfaces. Atlas remains discovery-only and is not consumed by decision logic. | Keep atlas schema/tests as permanent gate; add only descriptive slices, never trade rules. |
+ | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Prediction protocol audit now verifies Core whitelist, registry strategy/horizon compatibility, target label column, active H_max, purge horizon, OOS prediction artifact identity, and model metadata horizon identity. Tests cover multi-strategy H_max, artifact horizon identity, and horizon audit pass/fail rows. | Keep as permanent regression gate. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index 09c76452..3a440a65 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,18 @@
+ # Patch log
+ 
++## perf: stream future stage by symbol
++
++Status: APPLIED.
++
++Intent:
++- Stop `run-mvp1-future` from building a full-market candle index before writing future rows.
++- Stream grouped `candles_1m.csv` and grouped `strategy_state_1m.csv` one symbol at a time while preserving row order inside each state group.
++- Keep future semantics unchanged: labels still use only candles strictly after `snapshot_time_ms`, and ATR is computed from closed as-of history.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py -q`
++
+ ## perf: avoid duplicate events trigger-frame conversions
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 8ee47198..3f4edc78 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -19,7 +19,7 @@ Active rule:
+ - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
+ - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+ - Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days, preserve the final holdout, and keep up to 8 non-holdout research days when available for weekly WFA proof. State windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the intentionally tiny smoke window, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
+-- State and future writers now stream multi-million-row artifacts through strict canonical schemas instead of materializing full row lists before writing. The state CLI also reads `candles_1m.csv` and `strategy_events.csv` through strict CSV iterators and processes grouped candle input one symbol at a time instead of loading the full state input boundary into pandas or building a full-market candle index. The 9d all-symbol h30 proof wrote `7,308,031` `strategy_future_paths.csv` rows with future-stage audit `11` PASS / `0` FAIL rows. Zero as-of ATR from flat history is represented as explicit missing ATR fields, not fallback and not a crash.
++- State and future writers now stream multi-million-row artifacts through strict canonical schemas instead of materializing full row lists before writing. The state CLI reads `candles_1m.csv` and `strategy_events.csv` through strict CSV iterators and processes grouped candle input one symbol at a time instead of loading the full state input boundary into pandas or building a full-market candle index. The future CLI also streams grouped state/candle CSV boundaries one symbol at a time instead of building a full-market future candle index. The 9d all-symbol h30 proof wrote `7,308,031` `strategy_future_paths.csv` rows with future-stage audit `11` PASS / `0` FAIL rows. Zero as-of ATR from flat history is represented as explicit missing ATR fields, not fallback and not a crash.
+ - Feature-matrix artifact writing now streams rows through the canonical schema and creates identical compatibility aliases hardlink-first after validation.
+ - Feature-matrix hot paths now use explicit as-of Open Interest indexing and exact prefix-sum rolling moments for volume/quote-volume z-scores. A 9d probe for the first `100,000` rows improved from about `954.64s` total elapsed to about `716.42s`, including unchanged startup state/candle indexing.
+ - Exact rolling quote-volume median caching removed the remaining per-row 1440-candle median scan. The 9d all-symbol h30 feature-matrix proof completed at `tmp\feature_matrix_9d_hotpath_median_final`, writing `7,308,031` `strategy_feature_matrix.csv` rows in about `2h05m` with feature-stage audit `13` PASS / `0` FAIL rows.
+diff --git a/src/anomaly_science/future/__init__.py b/src/anomaly_science/future/__init__.py
+index ff4772b4..80369d9a 100644
+--- a/src/anomaly_science/future/__init__.py
++++ b/src/anomaly_science/future/__init__.py
+@@ -23,6 +23,7 @@ from anomaly_science.future.builder import (
+     iter_anomaly_future_paths_from_source,
+     iter_anomaly_state_1m_csv,
+     iter_candles_1m_csv,
++    iter_strategy_future_paths_from_grouped_csv,
+     iter_strategy_future_paths_from_csv,
+     iter_strategy_future_paths_artifact_csv,
+     iter_strategy_future_paths,
+@@ -51,6 +52,7 @@ __all__ = [
+     "build_anomaly_future_paths",
+     "build_anomaly_future_paths_from_source",
+     "iter_strategy_future_paths",
++    "iter_strategy_future_paths_from_grouped_csv",
+     "iter_strategy_future_paths_from_csv",
+     "iter_strategy_future_paths_artifact_csv",
+     "iter_strategy_future_paths_from_source",
+diff --git a/src/anomaly_science/future/builder.py b/src/anomaly_science/future/builder.py
+index 7158e17d..63d8e121 100644
+--- a/src/anomaly_science/future/builder.py
++++ b/src/anomaly_science/future/builder.py
+@@ -5,7 +5,7 @@ import math
+ from bisect import bisect_right
+ from dataclasses import asdict, dataclass
+ from pathlib import Path
+-from typing import Iterable, Mapping, Sequence
++from typing import Callable, Iterable, Mapping, Sequence, TypeVar
+ 
+ import pandas as pd
+ 
+@@ -33,6 +33,7 @@ class AnomalyFutureArtifactError(ValueError):
+ 
+ StrategyStateArtifactError = AnomalyStateArtifactError
+ StrategyFutureArtifactError = AnomalyFutureArtifactError
++T = TypeVar("T")
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+@@ -379,17 +380,126 @@ def iter_strategy_future_paths_from_csv(
+     config: FuturePathBuilderConfig | None = None,
+ ) -> Iterable[FuturePathRow]:
+     input_path = Path(input_dir)
+-    return iter_strategy_future_paths(
+-        candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
+-        state_rows=iter_strategy_state_1m_csv(state_path),
++    return iter_strategy_future_paths_from_grouped_csv(
++        candles_path=input_path / "candles_1m.csv",
++        state_path=state_path,
+         config=config,
+-        sort_state_rows=False,
+     )
+ 
+ 
+ iter_anomaly_future_paths_from_csv = iter_strategy_future_paths_from_csv
+ 
+ 
++def iter_strategy_future_paths_from_grouped_csv(
++    *,
++    candles_path: str | Path,
++    state_path: str | Path,
++    config: FuturePathBuilderConfig | None = None,
++) -> Iterable[FuturePathRow]:
++    """Stream future rows while holding one symbol's candles and states in memory."""
++    cfg = config or FuturePathBuilderConfig()
++    max_horizon = max(cfg.future_return_horizons_minutes)
++    empty_index = _empty_symbol_future_candle_index()
++    state_groups = _symbol_groups(
++        iter_strategy_state_1m_csv(state_path),
++        symbol_getter=lambda row: row.symbol,
++        source_name="strategy_state_1m.csv",
++    )
++    try:
++        current_state_symbol, current_states = next(state_groups)
++    except StopIteration:
++        return
++
++    for candle_symbol, symbol_candles in _symbol_groups(
++        iter_candles_1m_csv(candles_path),
++        symbol_getter=lambda row: row.symbol,
++        source_name="candles_1m.csv",
++    ):
++        while current_state_symbol < candle_symbol:
++            yield from _iter_state_group_future_rows(
++                states=current_states,
++                candle_index=empty_index,
++                max_horizon=max_horizon,
++                config=cfg,
++            )
++            try:
++                current_state_symbol, current_states = next(state_groups)
++            except StopIteration:
++                return
++        if current_state_symbol != candle_symbol:
++            continue
++        yield from _iter_state_group_future_rows(
++            states=current_states,
++            candle_index=_build_symbol_future_candle_index(symbol_candles),
++            max_horizon=max_horizon,
++            config=cfg,
++        )
++        try:
++            current_state_symbol, current_states = next(state_groups)
++        except StopIteration:
++            return
++
++    yield from _iter_state_group_future_rows(
++        states=current_states,
++        candle_index=empty_index,
++        max_horizon=max_horizon,
++        config=cfg,
++    )
++    for _, remaining_states in state_groups:
++        yield from _iter_state_group_future_rows(
++            states=remaining_states,
++            candle_index=empty_index,
++            max_horizon=max_horizon,
++            config=cfg,
++        )
++
++
++def _iter_state_group_future_rows(
++    *,
++    states: Sequence[StrategyState1mRow],
++    candle_index: _SymbolFutureCandleIndex,
++    max_horizon: int,
++    config: FuturePathBuilderConfig,
++) -> Iterable[FuturePathRow]:
++    for state in states:
++        yield _build_state_future_path(
++            state=state,
++            candle_index=candle_index,
++            max_horizon=max_horizon,
++            atr_window_minutes=config.atr_window_minutes,
++            double_barrier_k_continuation=config.double_barrier_k_continuation,
++            double_barrier_k_fade=config.double_barrier_k_fade,
++        )
++
++
++def _symbol_groups(
++    rows: Iterable[T],
++    *,
++    symbol_getter: Callable[[T], str],
++    source_name: str,
++) -> Iterable[tuple[str, list[T]]]:
++    current_symbol: str | None = None
++    current_rows: list[T] = []
++    completed_symbols: set[str] = set()
++    for row in rows:
++        symbol = symbol_getter(row)
++        if current_symbol is None:
++            current_symbol = symbol
++        if symbol != current_symbol:
++            completed_symbols.add(current_symbol)
++            yield current_symbol, current_rows
++            current_rows = []
++            current_symbol = symbol
++            if current_symbol in completed_symbols:
++                raise CsvDataSourceError(
++                    f"{source_name} must be grouped by symbol for streaming future build; "
++                    f"symbol {current_symbol!r} appears in multiple groups"
++                )
++        current_rows.append(row)
++    if current_symbol is not None:
++        yield current_symbol, current_rows
++
++
+ def future_rows_to_artifact(rows: Sequence[FuturePathRow]) -> list[dict[str, object]]:
+     return [future_row_to_artifact(row) for row in rows]
+ 
+diff --git a/tests/test_future_paths.py b/tests/test_future_paths.py
+index 70af897c..96fb6b62 100644
+--- a/tests/test_future_paths.py
++++ b/tests/test_future_paths.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import csv
+ import subprocess
+ import sys
++from dataclasses import asdict
+ from pathlib import Path
+ 
+ import pytest
+@@ -15,6 +16,7 @@ from anomaly_science.future import (
+     AnomalyStateArtifactError,
+     FuturePathBuilderConfig,
+     build_anomaly_future_paths,
++    iter_strategy_future_paths_from_grouped_csv,
+     load_anomaly_future_paths_csv,
+     load_anomaly_state_1m_csv,
+ )
+@@ -95,6 +97,36 @@ def _write_state_csv(path: Path) -> None:
+         )
+ 
+ 
++def _write_state_rows_csv(path: Path, rows: list[AnomalyState1mRow]) -> None:
++    schema = get_artifact_schema("strategy_state_1m.csv")
++    with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
++        writer = csv.DictWriter(file_obj, fieldnames=schema.required_columns)
++        writer.writeheader()
++        for row in rows:
++            writer.writerow({key: "" if value is None else value for key, value in asdict(row).items()})
++
++
++def _write_candles_csv(path: Path, candles: list[Candle1m]) -> None:
++    fieldnames = [
++        "symbol",
++        "open_time_ms",
++        "available_time_ms",
++        "open",
++        "high",
++        "low",
++        "close",
++        "volume",
++        "quote_volume",
++        "number_of_trades",
++        "taker_buy_quote_volume",
++    ]
++    with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
++        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
++        writer.writeheader()
++        for candle in candles:
++            writer.writerow({name: getattr(candle, name) for name in fieldnames})
++
++
+ def test_future_builder_uses_only_candles_after_snapshot_time() -> None:
+     candles = [
+         _candle(0, open_price=100.0, high=500.0, low=1.0, close=101.0),
+@@ -194,6 +226,38 @@ def test_state_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
+         load_anomaly_state_1m_csv(path)
+ 
+ 
++def test_grouped_csv_future_builder_matches_in_memory_builder(tmp_path: Path) -> None:
++    candles = [
++        _candle(0, open_price=100.0, high=500.0, low=1.0, close=101.0),
++        _candle(1, open_price=101.0, high=103.0, low=99.0, close=102.0),
++        _candle(2, open_price=102.0, high=102.5, low=101.0, close=102.2),
++        _candle(3, open_price=102.2, high=106.0, low=101.5, close=105.0),
++        _candle(4, open_price=105.0, high=105.5, low=100.0, close=101.0),
++        _candle(5, open_price=101.0, high=103.0, low=98.0, close=99.0),
++        _candle(6, open_price=99.0, high=104.0, low=97.5, close=103.0),
++    ]
++    state = _state_row()
++    candles_path = tmp_path / "candles_1m.csv"
++    state_path = tmp_path / "strategy_state_1m.csv"
++    _write_candles_csv(candles_path, candles)
++    _write_state_rows_csv(state_path, [state])
++
++    expected = build_anomaly_future_paths(
++        candles_1m=candles,
++        state_rows=[state],
++        config=FuturePathBuilderConfig(atr_window_minutes=1),
++    )
++    actual = tuple(
++        iter_strategy_future_paths_from_grouped_csv(
++            candles_path=candles_path,
++            state_path=state_path,
++            config=FuturePathBuilderConfig(atr_window_minutes=1),
++        )
++    )
++
++    assert actual == expected
++
++
+ def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
+     state_path = tmp_path / "anomaly_state_1m.csv"
+     out_dir = tmp_path / "future"

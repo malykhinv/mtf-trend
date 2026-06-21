@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from anomaly_science.future import (
     AnomalyStateArtifactError,
     FuturePathBuilderConfig,
     build_anomaly_future_paths,
+    iter_strategy_future_paths_from_grouped_csv,
     load_anomaly_future_paths_csv,
     load_anomaly_state_1m_csv,
 )
@@ -93,6 +95,36 @@ def _write_state_csv(path: Path) -> None:
                 "distance_to_structural_high": "",
             }
         )
+
+
+def _write_state_rows_csv(path: Path, rows: list[AnomalyState1mRow]) -> None:
+    schema = get_artifact_schema("strategy_state_1m.csv")
+    with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=schema.required_columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: "" if value is None else value for key, value in asdict(row).items()})
+
+
+def _write_candles_csv(path: Path, candles: list[Candle1m]) -> None:
+    fieldnames = [
+        "symbol",
+        "open_time_ms",
+        "available_time_ms",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "number_of_trades",
+        "taker_buy_quote_volume",
+    ]
+    with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+        writer.writeheader()
+        for candle in candles:
+            writer.writerow({name: getattr(candle, name) for name in fieldnames})
 
 
 def test_future_builder_uses_only_candles_after_snapshot_time() -> None:
@@ -192,6 +224,38 @@ def test_state_artifact_boundary_rejects_extra_columns(tmp_path: Path) -> None:
 
     with pytest.raises(AnomalyStateArtifactError, match="columns must match"):
         load_anomaly_state_1m_csv(path)
+
+
+def test_grouped_csv_future_builder_matches_in_memory_builder(tmp_path: Path) -> None:
+    candles = [
+        _candle(0, open_price=100.0, high=500.0, low=1.0, close=101.0),
+        _candle(1, open_price=101.0, high=103.0, low=99.0, close=102.0),
+        _candle(2, open_price=102.0, high=102.5, low=101.0, close=102.2),
+        _candle(3, open_price=102.2, high=106.0, low=101.5, close=105.0),
+        _candle(4, open_price=105.0, high=105.5, low=100.0, close=101.0),
+        _candle(5, open_price=101.0, high=103.0, low=98.0, close=99.0),
+        _candle(6, open_price=99.0, high=104.0, low=97.5, close=103.0),
+    ]
+    state = _state_row()
+    candles_path = tmp_path / "candles_1m.csv"
+    state_path = tmp_path / "strategy_state_1m.csv"
+    _write_candles_csv(candles_path, candles)
+    _write_state_rows_csv(state_path, [state])
+
+    expected = build_anomaly_future_paths(
+        candles_1m=candles,
+        state_rows=[state],
+        config=FuturePathBuilderConfig(atr_window_minutes=1),
+    )
+    actual = tuple(
+        iter_strategy_future_paths_from_grouped_csv(
+            candles_path=candles_path,
+            state_path=state_path,
+            config=FuturePathBuilderConfig(atr_window_minutes=1),
+        )
+    )
+
+    assert actual == expected
 
 
 def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:

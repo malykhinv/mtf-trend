@@ -5,7 +5,7 @@ import math
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence, TypeVar
 
 import pandas as pd
 
@@ -33,6 +33,7 @@ class AnomalyFutureArtifactError(ValueError):
 
 StrategyStateArtifactError = AnomalyStateArtifactError
 StrategyFutureArtifactError = AnomalyFutureArtifactError
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,15 +380,124 @@ def iter_strategy_future_paths_from_csv(
     config: FuturePathBuilderConfig | None = None,
 ) -> Iterable[FuturePathRow]:
     input_path = Path(input_dir)
-    return iter_strategy_future_paths(
-        candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
-        state_rows=iter_strategy_state_1m_csv(state_path),
+    return iter_strategy_future_paths_from_grouped_csv(
+        candles_path=input_path / "candles_1m.csv",
+        state_path=state_path,
         config=config,
-        sort_state_rows=False,
     )
 
 
 iter_anomaly_future_paths_from_csv = iter_strategy_future_paths_from_csv
+
+
+def iter_strategy_future_paths_from_grouped_csv(
+    *,
+    candles_path: str | Path,
+    state_path: str | Path,
+    config: FuturePathBuilderConfig | None = None,
+) -> Iterable[FuturePathRow]:
+    """Stream future rows while holding one symbol's candles and states in memory."""
+    cfg = config or FuturePathBuilderConfig()
+    max_horizon = max(cfg.future_return_horizons_minutes)
+    empty_index = _empty_symbol_future_candle_index()
+    state_groups = _symbol_groups(
+        iter_strategy_state_1m_csv(state_path),
+        symbol_getter=lambda row: row.symbol,
+        source_name="strategy_state_1m.csv",
+    )
+    try:
+        current_state_symbol, current_states = next(state_groups)
+    except StopIteration:
+        return
+
+    for candle_symbol, symbol_candles in _symbol_groups(
+        iter_candles_1m_csv(candles_path),
+        symbol_getter=lambda row: row.symbol,
+        source_name="candles_1m.csv",
+    ):
+        while current_state_symbol < candle_symbol:
+            yield from _iter_state_group_future_rows(
+                states=current_states,
+                candle_index=empty_index,
+                max_horizon=max_horizon,
+                config=cfg,
+            )
+            try:
+                current_state_symbol, current_states = next(state_groups)
+            except StopIteration:
+                return
+        if current_state_symbol != candle_symbol:
+            continue
+        yield from _iter_state_group_future_rows(
+            states=current_states,
+            candle_index=_build_symbol_future_candle_index(symbol_candles),
+            max_horizon=max_horizon,
+            config=cfg,
+        )
+        try:
+            current_state_symbol, current_states = next(state_groups)
+        except StopIteration:
+            return
+
+    yield from _iter_state_group_future_rows(
+        states=current_states,
+        candle_index=empty_index,
+        max_horizon=max_horizon,
+        config=cfg,
+    )
+    for _, remaining_states in state_groups:
+        yield from _iter_state_group_future_rows(
+            states=remaining_states,
+            candle_index=empty_index,
+            max_horizon=max_horizon,
+            config=cfg,
+        )
+
+
+def _iter_state_group_future_rows(
+    *,
+    states: Sequence[StrategyState1mRow],
+    candle_index: _SymbolFutureCandleIndex,
+    max_horizon: int,
+    config: FuturePathBuilderConfig,
+) -> Iterable[FuturePathRow]:
+    for state in states:
+        yield _build_state_future_path(
+            state=state,
+            candle_index=candle_index,
+            max_horizon=max_horizon,
+            atr_window_minutes=config.atr_window_minutes,
+            double_barrier_k_continuation=config.double_barrier_k_continuation,
+            double_barrier_k_fade=config.double_barrier_k_fade,
+        )
+
+
+def _symbol_groups(
+    rows: Iterable[T],
+    *,
+    symbol_getter: Callable[[T], str],
+    source_name: str,
+) -> Iterable[tuple[str, list[T]]]:
+    current_symbol: str | None = None
+    current_rows: list[T] = []
+    completed_symbols: set[str] = set()
+    for row in rows:
+        symbol = symbol_getter(row)
+        if current_symbol is None:
+            current_symbol = symbol
+        if symbol != current_symbol:
+            completed_symbols.add(current_symbol)
+            yield current_symbol, current_rows
+            current_rows = []
+            current_symbol = symbol
+            if current_symbol in completed_symbols:
+                raise CsvDataSourceError(
+                    f"{source_name} must be grouped by symbol for streaming future build; "
+                    f"symbol {current_symbol!r} appears in multiple groups"
+                )
+        current_rows.append(row)
+    if current_symbol is not None:
+        yield current_symbol, current_rows
 
 
 def future_rows_to_artifact(rows: Sequence[FuturePathRow]) -> list[dict[str, object]]:
