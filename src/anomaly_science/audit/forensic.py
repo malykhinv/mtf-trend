@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from itertools import zip_longest
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -696,17 +697,26 @@ def _canonical_alias_consistency_row(root: Path) -> ProtocolAuditRow:
 
 
 def _csv_artifact_mismatch_reason(left_path: Path, right_path: Path) -> str | None:
+    try:
+        if left_path.samefile(right_path):
+            return None
+    except OSError:
+        pass
+
     left_header = _read_csv_header(left_path)
     right_header = _read_csv_header(right_path)
     if left_header != right_header:
         return f"header mismatch left={left_header!r} right={right_header!r}"
 
-    left_rows = _read_csv_rows(left_path)
-    right_rows = _read_csv_rows(right_path)
-    if len(left_rows) != len(right_rows):
-        return f"row count mismatch left={len(left_rows)} right={len(right_rows)}"
-
-    for row_index, (left_row, right_row) in enumerate(zip(left_rows, right_rows), start=2):
+    sentinel = object()
+    for row_index, (left_row, right_row) in enumerate(
+        zip_longest(_read_csv_rows(left_path), _read_csv_rows(right_path), fillvalue=sentinel),
+        start=2,
+    ):
+        if left_row is sentinel:
+            return f"row count mismatch left={row_index - 2} right>left"
+        if right_row is sentinel:
+            return f"row count mismatch right={row_index - 2} left>right"
         if left_row != right_row:
             return f"row {row_index} mismatch"
     return None
@@ -1477,9 +1487,10 @@ def _read_csv_header(path: Path) -> list[str]:
             return []
 
 
-def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+def _read_csv_rows(path: Path) -> Iterable[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as file_obj:
-        return [dict(row) for row in csv.DictReader(file_obj)]
+        for row in csv.DictReader(file_obj):
+            yield dict(row)
 
 
 def _to_int(value: object) -> int | None:

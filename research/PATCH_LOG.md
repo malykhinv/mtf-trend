@@ -1,5 +1,17 @@
 # Patch log
 
+## perf: stream forensic alias comparison
+
+Status: APPLIED.
+
+Intent:
+- Stop independent forensic alias consistency checks from materializing both sides of large CSV alias pairs.
+- Use a same-file hardlink fast path and stream row comparison only when aliases are separate files.
+- Keep forensic semantics unchanged: header drift, row-count mismatch, and first row mismatch still fail explicitly.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_forensic_audit.py tests\test_artifact_schemas.py -q`
+
 ## perf: compact rejection funnel for large research runs
 
 Status: APPLIED.
