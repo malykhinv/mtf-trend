@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
@@ -18,6 +19,17 @@ from anomaly_science.state.config import OnlineStateBuilderConfig
 
 STRUCTURAL_PIVOT_LEFT_CANDLES = 2
 STRUCTURAL_PIVOT_RIGHT_CANDLES = 1
+CANDLE_1M_REQUIRED_COLUMNS = (
+    "symbol",
+    "open_time_ms",
+    "available_time_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quote_volume",
+)
 
 
 class StrategyEventsArtifactError(ValueError):
@@ -45,49 +57,85 @@ def load_strategy_events_csv(path: str | Path) -> tuple[StrategyEvent, ...]:
     if not event_path.exists():
         raise StrategyEventsArtifactError(f"events artifact is missing: {event_path}")
 
-    frame = pd.read_csv(event_path)
     schema = get_artifact_schema("anomaly_events.csv")
     expected_columns = list(schema.required_columns)
-    actual_columns = list(frame.columns)
-    if actual_columns != expected_columns:
-        raise StrategyEventsArtifactError(
-            f"events artifact columns must match {expected_columns}, got {actual_columns}"
-        )
-
     events: list[StrategyEvent] = []
-    for row_index, row in frame.iterrows():
-        try:
-            events.append(
-                StrategyEvent(
-                    event_id=_required_str(row, "event_id"),
-                    symbol=_required_str(row, "symbol"),
-                    event_start_time_ms=_required_int(row, "event_start_time_ms"),
-                    event_detection_time_ms=_required_int(row, "event_detection_time_ms"),
-                    seed_time_ms=_required_int(row, "seed_time_ms"),
-                    seed_open=_required_float(row, "seed_open"),
-                    seed_high=_required_float(row, "seed_high"),
-                    seed_low=_required_float(row, "seed_low"),
-                    seed_close=_required_float(row, "seed_close"),
-                    initial_move_pct=_required_float(row, "initial_move_pct"),
-                    initial_volume_zscore=_optional_float(row, "initial_volume_zscore"),
-                    initial_quote_volume_zscore=_optional_float(row, "initial_quote_volume_zscore"),
-                    initial_trade_count_zscore=_optional_float(row, "initial_trade_count_zscore"),
-                    trigger_component=_required_str(row, "trigger_component"),
-                    trigger_components=_required_components(row, "trigger_components"),
-                    detector_version=_required_str(row, "detector_version"),
-                    technical_noise_shock=_optional_bool(row, "technical_noise_shock", default=False),
-                    raw_candle_gap_minutes=_optional_float(row, "raw_candle_gap_minutes"),
-                    excluded_by_data_quality_gate=_optional_bool(row, "excluded_by_data_quality_gate", default=False),
-                    daily_return_asof_t=_optional_float(row, "daily_return_asof_t"),
-                    trade_count_market_percentile_asof_t=_optional_float(row, "trade_count_market_percentile_asof_t"),
-                )
+    with event_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_columns:
+            raise StrategyEventsArtifactError(
+                f"events artifact columns must match {expected_columns}, got {actual_columns}"
             )
-        except (TypeError, ValueError) as exc:
-            raise StrategyEventsArtifactError(f"invalid anomaly_events.csv row {row_index}: {exc}") from exc
+        for row_index, row in enumerate(reader):
+            try:
+                events.append(_strategy_event_from_mapping(row))
+            except (TypeError, ValueError) as exc:
+                raise StrategyEventsArtifactError(f"invalid anomaly_events.csv row {row_index}: {exc}") from exc
     return tuple(events)
 
 
 load_anomaly_events_csv = load_strategy_events_csv
+
+
+def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
+    """Stream normalized 1m candles from the state-stage CSV boundary."""
+    candles_path = Path(path)
+    if not candles_path.exists():
+        raise CsvDataSourceError(f"required dataset 'candles_1m.csv' is missing: {candles_path}")
+    with candles_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = tuple(reader.fieldnames or ())
+        missing = [name for name in CANDLE_1M_REQUIRED_COLUMNS if name not in actual_columns]
+        if missing:
+            raise CsvDataSourceError(f"dataset 'candles_1m.csv' is missing required columns: {missing}")
+        has_number_of_trades = "number_of_trades" in actual_columns
+        has_taker_buy_quote_volume = "taker_buy_quote_volume" in actual_columns
+        for row_index, row in enumerate(reader):
+            try:
+                yield Candle1m(
+                    symbol=_required_str(row, "symbol"),
+                    open_time_ms=_required_int(row, "open_time_ms"),
+                    available_time_ms=_required_int(row, "available_time_ms"),
+                    open=_required_float(row, "open"),
+                    high=_required_float(row, "high"),
+                    low=_required_float(row, "low"),
+                    close=_required_float(row, "close"),
+                    volume=_required_float(row, "volume"),
+                    quote_volume=_required_float(row, "quote_volume"),
+                    number_of_trades=_optional_float(row, "number_of_trades") if has_number_of_trades else None,
+                    taker_buy_quote_volume=(
+                        _optional_float(row, "taker_buy_quote_volume") if has_taker_buy_quote_volume else None
+                    ),
+                )
+            except (TypeError, ValueError) as exc:
+                raise CsvDataSourceError(f"invalid candles_1m.csv row {row_index}: {exc}") from exc
+
+
+def _strategy_event_from_mapping(row: Mapping[str, object]) -> StrategyEvent:
+    return StrategyEvent(
+        event_id=_required_str(row, "event_id"),
+        symbol=_required_str(row, "symbol"),
+        event_start_time_ms=_required_int(row, "event_start_time_ms"),
+        event_detection_time_ms=_required_int(row, "event_detection_time_ms"),
+        seed_time_ms=_required_int(row, "seed_time_ms"),
+        seed_open=_required_float(row, "seed_open"),
+        seed_high=_required_float(row, "seed_high"),
+        seed_low=_required_float(row, "seed_low"),
+        seed_close=_required_float(row, "seed_close"),
+        initial_move_pct=_required_float(row, "initial_move_pct"),
+        initial_volume_zscore=_optional_float(row, "initial_volume_zscore"),
+        initial_quote_volume_zscore=_optional_float(row, "initial_quote_volume_zscore"),
+        initial_trade_count_zscore=_optional_float(row, "initial_trade_count_zscore"),
+        trigger_component=_required_str(row, "trigger_component"),
+        trigger_components=_required_components(row, "trigger_components"),
+        detector_version=_required_str(row, "detector_version"),
+        technical_noise_shock=_optional_bool(row, "technical_noise_shock", default=False),
+        raw_candle_gap_minutes=_optional_float(row, "raw_candle_gap_minutes"),
+        excluded_by_data_quality_gate=_optional_bool(row, "excluded_by_data_quality_gate", default=False),
+        daily_return_asof_t=_optional_float(row, "daily_return_asof_t"),
+        trade_count_market_percentile_asof_t=_optional_float(row, "trade_count_market_percentile_asof_t"),
+    )
 
 
 def build_online_strategy_state_1m(

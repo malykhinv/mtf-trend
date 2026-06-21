@@ -1,0 +1,255 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 5057096e..6b7f2de1 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -92,7 +92,7 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+ | Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. Feature-matrix CLI writes the canonical matrix artifact through a strict streaming writer and keeps identical aliases hardlink-first for compatibility only. Core feature-matrix hot paths now use explicit as-of OI indexing, exact rolling moment prefix sums, exact cached rolling medians, and indexed liquidation event windows instead of repeated row scans. | Keep catalog membership tests as permanent gate. |
+-| Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. The CLI writer streams rows through the strict canonical schema before creating a hardlink-first compatibility alias, avoiding multi-million-row list materialization and duplicate alias bytes when supported by the filesystem. | Keep temporal/no-leakage tests as permanent gate. |
++| Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. The CLI reads candles/events through strict CSV boundaries, streams state rows through the canonical schema, and creates a hardlink-first compatibility alias, avoiding pandas input-frame materialization, multi-million-row output list materialization, and duplicate alias bytes when supported by the filesystem. | Keep temporal/no-leakage tests as permanent gate. |
+ | Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. The CLI writer streams rows through the strict canonical schema, reads state/candle CSV boundaries incrementally, creates identical aliases hardlink-first, and treats zero as-of ATR as explicit missing ATR fields rather than fallback or crash. | Keep horizon/schema tests as permanent gate. |
+ | Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. The CLI labels stage streams row-aligned state/future artifacts, parses only labels-owned strict fields, writes canonical labels incrementally, and keeps `anomaly_*` as a hardlink-first compatibility alias. | Keep label horizon, row-aligned join, and strict schema tests as permanent gates. |
+ | Atlas / discovery layer | IMPLEMENTED | Descriptive atlas now writes 15/30/60/120/180m ATR-normalized slices, session/market-context/speed/systemic contexts, and relaxed shelf/sweep/consolidation geometry response surfaces. Atlas remains discovery-only and is not consumed by decision logic. | Keep atlas schema/tests as permanent gate; add only descriptive slices, never trade rules. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index b2d39cfb..5633c828 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,18 @@
+ # Patch log
+ 
++## perf: stream state-stage CSV input boundary
++
++Status: APPLIED.
++
++Intent:
++- Stop `run-mvp1-state` from loading the full `candles_1m.csv` input into a pandas DataFrame before state writing.
++- Parse `strategy_events.csv` through a strict streaming CSV boundary instead of a pandas frame.
++- Keep state semantics unchanged: state rows remain causal and use only candles with `available_time_ms <= state_time_ms`.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\state src\anomaly_science\research\run.py tests\test_state_builder.py tests\test_research_run.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_state_builder.py tests\test_research_run.py -q`
++
+ ## perf: stream run-research holdout input filtering
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 746fe8a2..f156f7df 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -19,7 +19,7 @@ Active rule:
+ - Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
+ - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+ - Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days, preserve the final holdout, and keep up to 8 non-holdout research days when available for weekly WFA proof. State windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the intentionally tiny smoke window, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
+-- State and future writers now stream multi-million-row artifacts through strict canonical schemas instead of materializing full row lists before writing. The 9d all-symbol h30 proof wrote `7,308,031` `strategy_future_paths.csv` rows with future-stage audit `11` PASS / `0` FAIL rows. Zero as-of ATR from flat history is represented as explicit missing ATR fields, not fallback and not a crash.
++- State and future writers now stream multi-million-row artifacts through strict canonical schemas instead of materializing full row lists before writing. The state CLI also reads `candles_1m.csv` and `strategy_events.csv` through strict CSV iterators instead of loading the full state input boundary into pandas. The 9d all-symbol h30 proof wrote `7,308,031` `strategy_future_paths.csv` rows with future-stage audit `11` PASS / `0` FAIL rows. Zero as-of ATR from flat history is represented as explicit missing ATR fields, not fallback and not a crash.
+ - Feature-matrix artifact writing now streams rows through the canonical schema and creates identical compatibility aliases hardlink-first after validation.
+ - Feature-matrix hot paths now use explicit as-of Open Interest indexing and exact prefix-sum rolling moments for volume/quote-volume z-scores. A 9d probe for the first `100,000` rows improved from about `954.64s` total elapsed to about `716.42s`, including unchanged startup state/candle indexing.
+ - Exact rolling quote-volume median caching removed the remaining per-row 1440-candle median scan. The 9d all-symbol h30 feature-matrix proof completed at `tmp\feature_matrix_9d_hotpath_median_final`, writing `7,308,031` `strategy_feature_matrix.csv` rows in about `2h05m` with feature-stage audit `13` PASS / `0` FAIL rows.
+diff --git a/src/anomaly_science/state/__init__.py b/src/anomaly_science/state/__init__.py
+index 8b5c7895..bec6d8bb 100644
+--- a/src/anomaly_science/state/__init__.py
++++ b/src/anomaly_science/state/__init__.py
+@@ -7,6 +7,7 @@ from anomaly_science.state.builder import (
+     build_online_anomaly_state_1m_from_source,
+     build_online_strategy_state_1m,
+     build_online_strategy_state_1m_from_source,
++    iter_candles_1m_csv,
+     iter_online_anomaly_state_1m_from_source,
+     iter_online_strategy_state_1m,
+     iter_online_strategy_state_1m_from_source,
+@@ -24,6 +25,7 @@ __all__ = [
+     "STATE_BUILDER_VERSION",
+     "build_online_strategy_state_1m",
+     "build_online_strategy_state_1m_from_source",
++    "iter_candles_1m_csv",
+     "build_online_anomaly_state_1m",
+     "build_online_anomaly_state_1m_from_source",
+     "iter_online_strategy_state_1m",
+diff --git a/src/anomaly_science/state/builder.py b/src/anomaly_science/state/builder.py
+index e622538c..72d8f118 100644
+--- a/src/anomaly_science/state/builder.py
++++ b/src/anomaly_science/state/builder.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import csv
+ import math
+ from bisect import bisect_left, bisect_right
+ from dataclasses import asdict, dataclass
+@@ -18,6 +19,17 @@ from anomaly_science.state.config import OnlineStateBuilderConfig
+ 
+ STRUCTURAL_PIVOT_LEFT_CANDLES = 2
+ STRUCTURAL_PIVOT_RIGHT_CANDLES = 1
++CANDLE_1M_REQUIRED_COLUMNS = (
++    "symbol",
++    "open_time_ms",
++    "available_time_ms",
++    "open",
++    "high",
++    "low",
++    "close",
++    "volume",
++    "quote_volume",
++)
+ 
+ 
+ class StrategyEventsArtifactError(ValueError):
+@@ -45,51 +57,87 @@ def load_strategy_events_csv(path: str | Path) -> tuple[StrategyEvent, ...]:
+     if not event_path.exists():
+         raise StrategyEventsArtifactError(f"events artifact is missing: {event_path}")
+ 
+-    frame = pd.read_csv(event_path)
+     schema = get_artifact_schema("anomaly_events.csv")
+     expected_columns = list(schema.required_columns)
+-    actual_columns = list(frame.columns)
+-    if actual_columns != expected_columns:
+-        raise StrategyEventsArtifactError(
+-            f"events artifact columns must match {expected_columns}, got {actual_columns}"
+-        )
+-
+     events: list[StrategyEvent] = []
+-    for row_index, row in frame.iterrows():
+-        try:
+-            events.append(
+-                StrategyEvent(
+-                    event_id=_required_str(row, "event_id"),
+-                    symbol=_required_str(row, "symbol"),
+-                    event_start_time_ms=_required_int(row, "event_start_time_ms"),
+-                    event_detection_time_ms=_required_int(row, "event_detection_time_ms"),
+-                    seed_time_ms=_required_int(row, "seed_time_ms"),
+-                    seed_open=_required_float(row, "seed_open"),
+-                    seed_high=_required_float(row, "seed_high"),
+-                    seed_low=_required_float(row, "seed_low"),
+-                    seed_close=_required_float(row, "seed_close"),
+-                    initial_move_pct=_required_float(row, "initial_move_pct"),
+-                    initial_volume_zscore=_optional_float(row, "initial_volume_zscore"),
+-                    initial_quote_volume_zscore=_optional_float(row, "initial_quote_volume_zscore"),
+-                    initial_trade_count_zscore=_optional_float(row, "initial_trade_count_zscore"),
+-                    trigger_component=_required_str(row, "trigger_component"),
+-                    trigger_components=_required_components(row, "trigger_components"),
+-                    detector_version=_required_str(row, "detector_version"),
+-                    technical_noise_shock=_optional_bool(row, "technical_noise_shock", default=False),
+-                    raw_candle_gap_minutes=_optional_float(row, "raw_candle_gap_minutes"),
+-                    excluded_by_data_quality_gate=_optional_bool(row, "excluded_by_data_quality_gate", default=False),
+-                    daily_return_asof_t=_optional_float(row, "daily_return_asof_t"),
+-                    trade_count_market_percentile_asof_t=_optional_float(row, "trade_count_market_percentile_asof_t"),
+-                )
++    with event_path.open(encoding="utf-8-sig", newline="") as file_obj:
++        reader = csv.DictReader(file_obj)
++        actual_columns = list(reader.fieldnames or [])
++        if actual_columns != expected_columns:
++            raise StrategyEventsArtifactError(
++                f"events artifact columns must match {expected_columns}, got {actual_columns}"
+             )
+-        except (TypeError, ValueError) as exc:
+-            raise StrategyEventsArtifactError(f"invalid anomaly_events.csv row {row_index}: {exc}") from exc
++        for row_index, row in enumerate(reader):
++            try:
++                events.append(_strategy_event_from_mapping(row))
++            except (TypeError, ValueError) as exc:
++                raise StrategyEventsArtifactError(f"invalid anomaly_events.csv row {row_index}: {exc}") from exc
+     return tuple(events)
+ 
+ 
+ load_anomaly_events_csv = load_strategy_events_csv
+ 
+ 
++def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
++    """Stream normalized 1m candles from the state-stage CSV boundary."""
++    candles_path = Path(path)
++    if not candles_path.exists():
++        raise CsvDataSourceError(f"required dataset 'candles_1m.csv' is missing: {candles_path}")
++    with candles_path.open(encoding="utf-8-sig", newline="") as file_obj:
++        reader = csv.DictReader(file_obj)
++        actual_columns = tuple(reader.fieldnames or ())
++        missing = [name for name in CANDLE_1M_REQUIRED_COLUMNS if name not in actual_columns]
++        if missing:
++            raise CsvDataSourceError(f"dataset 'candles_1m.csv' is missing required columns: {missing}")
++        has_number_of_trades = "number_of_trades" in actual_columns
++        has_taker_buy_quote_volume = "taker_buy_quote_volume" in actual_columns
++        for row_index, row in enumerate(reader):
++            try:
++                yield Candle1m(
++                    symbol=_required_str(row, "symbol"),
++                    open_time_ms=_required_int(row, "open_time_ms"),
++                    available_time_ms=_required_int(row, "available_time_ms"),
++                    open=_required_float(row, "open"),
++                    high=_required_float(row, "high"),
++                    low=_required_float(row, "low"),
++                    close=_required_float(row, "close"),
++                    volume=_required_float(row, "volume"),
++                    quote_volume=_required_float(row, "quote_volume"),
++                    number_of_trades=_optional_float(row, "number_of_trades") if has_number_of_trades else None,
++                    taker_buy_quote_volume=(
++                        _optional_float(row, "taker_buy_quote_volume") if has_taker_buy_quote_volume else None
++                    ),
++                )
++            except (TypeError, ValueError) as exc:
++                raise CsvDataSourceError(f"invalid candles_1m.csv row {row_index}: {exc}") from exc
++
++
++def _strategy_event_from_mapping(row: Mapping[str, object]) -> StrategyEvent:
++    return StrategyEvent(
++        event_id=_required_str(row, "event_id"),
++        symbol=_required_str(row, "symbol"),
++        event_start_time_ms=_required_int(row, "event_start_time_ms"),
++        event_detection_time_ms=_required_int(row, "event_detection_time_ms"),
++        seed_time_ms=_required_int(row, "seed_time_ms"),
++        seed_open=_required_float(row, "seed_open"),
++        seed_high=_required_float(row, "seed_high"),
++        seed_low=_required_float(row, "seed_low"),
++        seed_close=_required_float(row, "seed_close"),
++        initial_move_pct=_required_float(row, "initial_move_pct"),
++        initial_volume_zscore=_optional_float(row, "initial_volume_zscore"),
++        initial_quote_volume_zscore=_optional_float(row, "initial_quote_volume_zscore"),
++        initial_trade_count_zscore=_optional_float(row, "initial_trade_count_zscore"),
++        trigger_component=_required_str(row, "trigger_component"),
++        trigger_components=_required_components(row, "trigger_components"),
++        detector_version=_required_str(row, "detector_version"),
++        technical_noise_shock=_optional_bool(row, "technical_noise_shock", default=False),
++        raw_candle_gap_minutes=_optional_float(row, "raw_candle_gap_minutes"),
++        excluded_by_data_quality_gate=_optional_bool(row, "excluded_by_data_quality_gate", default=False),
++        daily_return_asof_t=_optional_float(row, "daily_return_asof_t"),
++        trade_count_market_percentile_asof_t=_optional_float(row, "trade_count_market_percentile_asof_t"),
++    )
++
++
+ def build_online_strategy_state_1m(
+     *,
+     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+diff --git a/src/anomaly_science/state/run.py b/src/anomaly_science/state/run.py
+index 8d659a09..bdd59960 100644
+--- a/src/anomaly_science/state/run.py
++++ b/src/anomaly_science/state/run.py
+@@ -12,9 +12,9 @@ from anomaly_science.artifacts.writer import link_or_copy_identical_artifact
+ from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+ from anomaly_science.contracts.state import StrategyState1mRow
+-from anomaly_science.data.source import CsvDirectoryDataSource
+ from anomaly_science.state.builder import (
+-    iter_online_strategy_state_1m_from_source,
++    iter_candles_1m_csv,
++    iter_online_strategy_state_1m,
+     load_strategy_events_csv,
+ )
+ from anomaly_science.state.config import OnlineStateBuilderConfig
+@@ -34,14 +34,13 @@ def run_mvp1_state(
+     output_path.mkdir(parents=True, exist_ok=True)
+     cfg = config or OnlineStateBuilderConfig()
+ 
+-    source = CsvDirectoryDataSource(input_path)
+     events = load_strategy_events_csv(events_artifact_path)
+     written: list[Path] = []
+     state_written, state_row_count = _write_state_rows_with_aliases(
+         output_path / "strategy_state_1m.csv",
+-        iter_online_strategy_state_1m_from_source(
+-            source=source,
+-            events_path=events_artifact_path,
++        iter_online_strategy_state_1m(
++            candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
++            events=events,
+             config=cfg,
+         ),
+         get_artifact_schema("strategy_state_1m.csv"),

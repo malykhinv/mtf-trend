@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: stream state-stage CSV input boundary
+
+Status: APPLIED.
+
+Intent:
+- Stop `run-mvp1-state` from loading the full `candles_1m.csv` input into a pandas DataFrame before state writing.
+- Parse `strategy_events.csv` through a strict streaming CSV boundary instead of a pandas frame.
+- Keep state semantics unchanged: state rows remain causal and use only candles with `available_time_ms <= state_time_ms`.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\state src\anomaly_science\research\run.py tests\test_state_builder.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_state_builder.py tests\test_research_run.py -q`
+
 ## perf: stream run-research holdout input filtering
 
 Status: APPLIED.
