@@ -208,6 +208,63 @@ class _OpenInterestSeries:
         return None
 
 
+class _LiquidationSeries:
+    def __init__(self, rows: Sequence[LiquidationEvent]) -> None:
+        self._rows = tuple(sorted(rows, key=lambda item: (item.event_time_ms, item.available_time_ms)))
+        self._event_times = tuple(item.event_time_ms for item in self._rows)
+
+    def quote_by_side_in_window_asof(
+        self,
+        *,
+        start_time_ms: int,
+        end_time_ms: int,
+        snapshot_time_ms: int,
+    ) -> tuple[float, float]:
+        short_quote = 0.0
+        long_quote = 0.0
+        for item in self._window_asof(
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            snapshot_time_ms=snapshot_time_ms,
+        ):
+            if item.side == "short":
+                short_quote += item.quote_quantity
+            elif item.side == "long":
+                long_quote += item.quote_quantity
+        return short_quote, long_quote
+
+    def quote_in_window_asof(
+        self,
+        *,
+        start_time_ms: int,
+        end_time_ms: int,
+        snapshot_time_ms: int,
+    ) -> float:
+        return sum(
+            item.quote_quantity
+            for item in self._window_asof(
+                start_time_ms=start_time_ms,
+                end_time_ms=end_time_ms,
+                snapshot_time_ms=snapshot_time_ms,
+            )
+        )
+
+    def _window_asof(
+        self,
+        *,
+        start_time_ms: int,
+        end_time_ms: int,
+        snapshot_time_ms: int,
+    ) -> tuple[LiquidationEvent, ...]:
+        start_index = bisect_left(self._event_times, start_time_ms)
+        end_index = bisect_left(self._event_times, end_time_ms, start_index)
+        return tuple(
+            item
+            for item in self._rows[start_index:end_index]
+            if item.available_time_ms <= snapshot_time_ms
+        )
+
+
 def build_price_time_feature_matrix(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
@@ -264,13 +321,15 @@ def iter_price_time_feature_matrix(
             raw_oi_by_symbol.setdefault(item.symbol, []).append(item)
         oi_by_symbol = {symbol: _OpenInterestSeries(rows) for symbol, rows in raw_oi_by_symbol.items()}
 
-    liquidations_by_symbol: dict[str, list[LiquidationEvent]] | None = None
+    liquidations_by_symbol: dict[str, _LiquidationSeries] | None = None
     if liquidations is not None:
-        liquidations_by_symbol = {}
+        raw_liquidations_by_symbol: dict[str, list[LiquidationEvent]] = {}
         for item in liquidations:
-            liquidations_by_symbol.setdefault(item.symbol, []).append(item)
-        for symbol in liquidations_by_symbol:
-            liquidations_by_symbol[symbol].sort(key=lambda item: (item.available_time_ms, item.event_time_ms))
+            raw_liquidations_by_symbol.setdefault(item.symbol, []).append(item)
+        liquidations_by_symbol = {
+            symbol: _LiquidationSeries(rows)
+            for symbol, rows in raw_liquidations_by_symbol.items()
+        }
 
     universe_by_day = _universe_symbols_by_day(symbol_universe_by_day)
     states_by_snapshot: dict[int, list[StrategyState1mRow]] = {}
@@ -590,10 +649,10 @@ def _build_state_feature_row(
     state: StrategyState1mRow,
     candles: Sequence[Candle1m],
     open_interest_rows: Sequence[OpenInterest5m] | _OpenInterestSeries | None,
-    liquidation_rows: Sequence[LiquidationEvent] | None,
+    liquidation_rows: Sequence[LiquidationEvent] | _LiquidationSeries | None,
     candles_by_symbol: Mapping[str, Sequence[Candle1m]],
     open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
-    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
     universe_by_day: Mapping[str, set[str]],
     states_at_snapshot: Sequence[StrategyState1mRow],
     config: FeatureMatrixConfig,
@@ -1137,7 +1196,7 @@ class _LiquidationFeatures:
 def _liquidation_features(
     *,
     candles: Sequence[Candle1m],
-    liquidation_rows: Sequence[LiquidationEvent] | None,
+    liquidation_rows: Sequence[LiquidationEvent] | _LiquidationSeries | None,
     state: StrategyState1mRow,
 ) -> _LiquidationFeatures:
     if liquidation_rows is None:
@@ -1146,16 +1205,30 @@ def _liquidation_features(
     if current is None:
         return _missing_liquidation_features()
     minute_start_ms = state.snapshot_time_ms - ONE_MINUTE_MS
-    asof_rows = [item for item in liquidation_rows if item.available_time_ms <= state.snapshot_time_ms]
-    minute_rows = [item for item in asof_rows if minute_start_ms <= item.event_time_ms < state.snapshot_time_ms]
-    short_quote = sum(item.quote_quantity for item in minute_rows if item.side == "short")
-    long_quote = sum(item.quote_quantity for item in minute_rows if item.side == "long")
+    if isinstance(liquidation_rows, _LiquidationSeries):
+        short_quote, long_quote = liquidation_rows.quote_by_side_in_window_asof(
+            start_time_ms=minute_start_ms,
+            end_time_ms=state.snapshot_time_ms,
+            snapshot_time_ms=state.snapshot_time_ms,
+        )
+    else:
+        asof_rows = [item for item in liquidation_rows if item.available_time_ms <= state.snapshot_time_ms]
+        minute_rows = [item for item in asof_rows if minute_start_ms <= item.event_time_ms < state.snapshot_time_ms]
+        short_quote = sum(item.quote_quantity for item in minute_rows if item.side == "short")
+        long_quote = sum(item.quote_quantity for item in minute_rows if item.side == "long")
     total_quote = short_quote + long_quote
     quote_volume = max(current.quote_volume, EPS)
     event_start_time_ms = _event_start_time_ms(state)
-    cumulative_liq_quote = sum(
-        item.quote_quantity for item in asof_rows if event_start_time_ms <= item.event_time_ms < state.snapshot_time_ms
-    )
+    if isinstance(liquidation_rows, _LiquidationSeries):
+        cumulative_liq_quote = liquidation_rows.quote_in_window_asof(
+            start_time_ms=event_start_time_ms,
+            end_time_ms=state.snapshot_time_ms,
+            snapshot_time_ms=state.snapshot_time_ms,
+        )
+    else:
+        cumulative_liq_quote = sum(
+            item.quote_quantity for item in asof_rows if event_start_time_ms <= item.event_time_ms < state.snapshot_time_ms
+        )
     if isinstance(candles, _CandleSeries):
         cumulative_quote_volume = sum(
             candle.quote_volume
@@ -1388,8 +1461,8 @@ def _cross_section_features(
     *,
     state: StrategyState1mRow,
     candles_by_symbol: Mapping[str, Sequence[Candle1m]],
-    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
-    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
     universe_by_day: Mapping[str, set[str]],
     states_at_snapshot: Sequence[StrategyState1mRow],
     min_cross_section_symbols: int,
@@ -1461,8 +1534,8 @@ def _cross_section_features_by_symbol(
     *,
     snapshot_time_ms: int,
     candles_by_symbol: Mapping[str, Sequence[Candle1m]],
-    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m]] | None,
-    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent]] | None,
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
     universe_by_day: Mapping[str, set[str]],
     states_at_snapshot: Sequence[StrategyState1mRow],
     min_cross_section_symbols: int,
@@ -1582,15 +1655,22 @@ def _one_minute_return(*, candles: Sequence[Candle1m], snapshot_time_ms: int) ->
 def _minute_liq_intensity(
     *,
     current: Candle1m,
-    liquidation_rows: Sequence[LiquidationEvent],
+    liquidation_rows: Sequence[LiquidationEvent] | _LiquidationSeries,
     snapshot_time_ms: int,
 ) -> float | None:
     minute_start_ms = snapshot_time_ms - ONE_MINUTE_MS
-    quote = sum(
-        item.quote_quantity
-        for item in liquidation_rows
-        if item.available_time_ms <= snapshot_time_ms and minute_start_ms <= item.event_time_ms < snapshot_time_ms
-    )
+    if isinstance(liquidation_rows, _LiquidationSeries):
+        quote = liquidation_rows.quote_in_window_asof(
+            start_time_ms=minute_start_ms,
+            end_time_ms=snapshot_time_ms,
+            snapshot_time_ms=snapshot_time_ms,
+        )
+    else:
+        quote = sum(
+            item.quote_quantity
+            for item in liquidation_rows
+            if item.available_time_ms <= snapshot_time_ms and minute_start_ms <= item.event_time_ms < snapshot_time_ms
+        )
     if current.quote_volume <= 0:
         return None
     return quote / current.quote_volume

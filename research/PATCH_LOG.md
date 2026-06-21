@@ -1,5 +1,17 @@
 # Patch log
 
+## perf: index feature-matrix liquidation windows
+
+Status: APPLIED.
+
+Intent:
+- Remove repeated full-list liquidation scans from feature-matrix per-state rows and cross-section liquidation percentiles.
+- Keep the same causal contract: liquidation rows are usable only when `available_time_ms <= snapshot_time_ms`, and event windows stay bounded by `event_time_ms`.
+- Keep the change inside Core feature infrastructure; strategy thresholds, labels, training, EV, and simulation are unchanged.
+
+Validation:
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
+
 ## perf: hardlink artifact aliases and chunk atlas inputs
 
 Status: APPLIED.
