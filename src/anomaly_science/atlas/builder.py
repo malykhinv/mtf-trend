@@ -63,27 +63,159 @@ def build_atlas_artifacts_from_csv_paths(
     feature_matrix_path: str | Path,
     config: AtlasConfig | None = None,
 ) -> AtlasArtifacts:
-    """Build atlas artifacts from strict CSV boundaries using vectorized grouping."""
+    """Build atlas artifacts from strict CSV boundaries using bounded-memory chunks."""
     cfg = config or AtlasConfig()
-    state_frame = _read_atlas_state_frame(Path(state_path))
-    future_frame = _read_atlas_future_frame(Path(future_path), horizons=cfg.outcome_horizon_minutes_list)
-    feature_frame = _read_atlas_feature_frame(Path(feature_matrix_path))
-    joined = state_frame.merge(
-        future_frame,
-        on=["event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms"],
-        how="inner",
-        validate="one_to_one",
-    ).merge(
-        feature_frame,
-        on=["event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms"],
-        how="inner",
-        validate="one_to_one",
+    return _build_atlas_artifacts_from_csv_chunks(
+        state_path=Path(state_path),
+        future_path=Path(future_path),
+        feature_matrix_path=Path(feature_matrix_path),
+        config=cfg,
     )
-    if len(joined) != len(state_frame) or len(joined) != len(future_frame) or len(joined) != len(feature_frame):
-        raise AtlasInputError("state/future/feature atlas join must be one-to-one on event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms")
-    _enforce_atlas_frame_temporal_contract(joined)
-    _add_atlas_context_columns(joined)
-    return _build_atlas_artifacts_from_frame(joined=joined, config=cfg)
+
+
+def _build_atlas_artifacts_from_csv_chunks(
+    *,
+    state_path: Path,
+    future_path: Path,
+    feature_matrix_path: Path,
+    config: AtlasConfig,
+) -> AtlasArtifacts:
+    chunk_size = 250_000
+    context_columns = _atlas_context_columns()
+    nature_groups: dict[tuple[str, str, int, str], _NatureAccumulator] = {}
+    context_groups: dict[tuple[str, str, int], _ContextAccumulator] = {}
+    response_groups: dict[tuple[str, str, str, str, str, int], _ResponseSurfaceAccumulator] = {}
+    market_groups: dict[tuple[str, str, int, int], _MarketShockAccumulator] = {}
+
+    state_reader = _read_strict_artifact_frame_chunks(
+        path=state_path,
+        usecols=_atlas_state_usecols(),
+        chunksize=chunk_size,
+    )
+    future_reader = _read_strict_artifact_frame_chunks(
+        path=future_path,
+        usecols=_atlas_future_usecols(config.outcome_horizon_minutes_list),
+        chunksize=chunk_size,
+    )
+    feature_reader = _read_strict_artifact_frame_chunks(
+        path=feature_matrix_path,
+        usecols=_atlas_feature_usecols(),
+        chunksize=chunk_size,
+    )
+    for chunk_index, (state_frame, future_frame, feature_frame) in enumerate(
+        zip(state_reader, future_reader, feature_reader, strict=True)
+    ):
+        joined = _join_row_aligned_atlas_frames(
+            state_frame=state_frame.reset_index(drop=True),
+            future_frame=future_frame.reset_index(drop=True),
+            feature_frame=feature_frame.reset_index(drop=True),
+            chunk_index=chunk_index,
+        )
+        _enforce_atlas_frame_temporal_contract(joined)
+        _add_atlas_context_columns(joined)
+        for horizon in config.outcome_horizon_minutes_list:
+            horizon_frame = joined.copy(deep=False)
+            _add_horizon_columns(horizon_frame, horizon=horizon, config=config)
+            _accumulate_nature_and_context_groups(
+                frame=horizon_frame,
+                context_columns=context_columns,
+                horizon=horizon,
+                nature_groups=nature_groups,
+                context_groups=context_groups,
+            )
+            _accumulate_response_groups(
+                frame=horizon_frame,
+                horizon=horizon,
+                response_groups=response_groups,
+            )
+            _accumulate_market_groups(
+                frame=horizon_frame,
+                horizon=horizon,
+                market_groups=market_groups,
+            )
+
+    return AtlasArtifacts(
+        nature_atlas_rows=_nature_rows_from_accumulators(nature_groups=nature_groups, config=config),
+        context_split_rows=_context_rows_from_accumulators(context_groups=context_groups, config=config),
+        response_surface_rows=_response_rows_from_accumulators(response_groups=response_groups, config=config),
+        market_shock_group_rows=_market_rows_from_accumulators(market_groups=market_groups, config=config),
+    )
+
+
+def _atlas_state_usecols() -> list[str]:
+    return [
+        "event_id",
+        "symbol",
+        "snapshot_time_ms",
+        "feature_cutoff_time_ms",
+        "minutes_since_detection",
+        "event_alive",
+        "current_return_from_start",
+    ]
+
+
+def _atlas_future_usecols(horizons: Sequence[int]) -> list[str]:
+    horizon_columns: list[str] = []
+    for horizon in horizons:
+        suffix = f"{horizon}m"
+        horizon_columns.extend(
+            [
+                f"future_return_{suffix}",
+                f"future_max_{suffix}",
+                f"future_min_{suffix}",
+                f"future_return_atr_{suffix}",
+                f"future_max_atr_{suffix}",
+                f"future_min_atr_{suffix}",
+                f"barrier_resolution_{suffix}",
+            ]
+        )
+    return [
+        "event_id",
+        "symbol",
+        "snapshot_time_ms",
+        "feature_cutoff_time_ms",
+        "future_start_time_ms",
+        "reclaimed_running_high_30m",
+        "reclaimed_running_high_60m",
+        *horizon_columns,
+    ]
+
+
+def _atlas_feature_usecols() -> list[str]:
+    return [
+        "event_id",
+        "symbol",
+        "snapshot_time_ms",
+        "feature_cutoff_time_ms",
+        "minutes_since_trigger",
+        "range_since_start_atr",
+        "distance_to_running_high_atr",
+        "price_speed_atr",
+        "alpha_decay_bucket",
+        "quote_volume_market_percentile",
+        "oi_growth_market_percentile",
+        "liq_intensity_market_percentile",
+        "liquidation_imbalance",
+        "return_from_event_market_percentile",
+        "cvd_price_divergence_5m",
+        "price_up_cvd_down_flag",
+        "price_down_cvd_up_flag",
+        "cvd_failed_to_confirm_high_flag",
+        "corr_with_btc_30m",
+        "symbol_return_minus_btc_return_15m",
+        "idiosyncratic_momentum_score",
+        "simultaneous_anomalies_count_1m",
+        "simultaneous_anomalies_share_1m",
+        "systemic_cluster_regime",
+        "market_shock_id",
+        "initial_pump_height_core_atr_1440",
+        "consolidation_width_ratio",
+        "current_close_minus_shelf_low_core_atr_1440",
+        "current_low_minus_shelf_low_core_atr_1440",
+        "minutes_since_reclaim",
+        "volume_on_sweep_percentile",
+        "liq_intensity_during_sweep",
+    ]
 
 
 def _read_atlas_state_frame(path: Path) -> pd.DataFrame:
@@ -172,6 +304,46 @@ def _read_strict_artifact_frame(*, path: Path, usecols: Sequence[str]) -> pd.Dat
     if actual_columns != expected_columns:
         raise AtlasInputError(f"{path.name} columns must match {expected_columns}, got {actual_columns}")
     return pd.read_csv(path, usecols=list(usecols), low_memory=False)
+
+
+def _read_strict_artifact_frame_chunks(
+    *,
+    path: Path,
+    usecols: Sequence[str],
+    chunksize: int,
+) -> Iterable[pd.DataFrame]:
+    schema = get_artifact_schema(path.name)
+    actual_columns = list(pd.read_csv(path, nrows=0).columns)
+    expected_columns = list(schema.required_columns)
+    if actual_columns != expected_columns:
+        raise AtlasInputError(f"{path.name} columns must match {expected_columns}, got {actual_columns}")
+    return pd.read_csv(path, usecols=list(usecols), low_memory=False, chunksize=chunksize)
+
+
+def _join_row_aligned_atlas_frames(
+    *,
+    state_frame: pd.DataFrame,
+    future_frame: pd.DataFrame,
+    feature_frame: pd.DataFrame,
+    chunk_index: int,
+) -> pd.DataFrame:
+    join_columns = ["event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms"]
+    if len(state_frame) != len(future_frame) or len(state_frame) != len(feature_frame):
+        raise AtlasInputError(f"state/future/feature atlas chunk {chunk_index} must have identical row counts")
+    for column in join_columns:
+        if not state_frame[column].equals(future_frame[column]):
+            raise AtlasInputError(f"state/future atlas chunk {chunk_index} must be row-aligned on {column}")
+        if not state_frame[column].equals(feature_frame[column]):
+            raise AtlasInputError(f"state/feature atlas chunk {chunk_index} must be row-aligned on {column}")
+    return pd.concat(
+        [
+            state_frame,
+            future_frame.drop(columns=join_columns),
+            feature_frame.drop(columns=join_columns),
+        ],
+        axis=1,
+        copy=False,
+    )
 
 
 def _enforce_atlas_frame_temporal_contract(frame: pd.DataFrame) -> None:
@@ -450,6 +622,284 @@ def _market_rows_from_grouped_frame(frame: pd.DataFrame, horizon: int, config: A
             )
         )
     return rows
+
+
+def _accumulate_nature_and_context_groups(
+    *,
+    frame: pd.DataFrame,
+    context_columns: tuple[tuple[str, str], ...],
+    horizon: int,
+    nature_groups: dict[tuple[str, str, int, str], "_NatureAccumulator"],
+    context_groups: dict[tuple[str, str, int], "_ContextAccumulator"],
+) -> None:
+    expected_bins = tuple(_outcome_bin_name(prefix, horizon) for prefix in (
+        "upside_continuation",
+        "downside_extension",
+        "two_sided",
+        "range_chop",
+        "mixed_drift",
+        "missing_atr_future",
+        "stop_first_double_barrier",
+    ))
+    for context_name, context_column in context_columns:
+        for (context_value, outcome_bin), group in frame.groupby([context_column, "_outcome_bin"], dropna=False, sort=True):
+            nature_key = (context_name, str(context_value), horizon, str(outcome_bin))
+            _accumulate_nature_group(nature_groups.setdefault(nature_key, _NatureAccumulator()), group)
+
+        for context_value, group in frame.groupby(context_column, dropna=False, sort=True):
+            context_key = (context_name, str(context_value), horizon)
+            context_acc = context_groups.setdefault(context_key, _ContextAccumulator())
+            _accumulate_context_group(context_acc, group)
+            counts = group["_outcome_bin"].value_counts()
+            for outcome_bin in expected_bins:
+                context_acc.outcome_counts[outcome_bin] += int(counts.get(outcome_bin, 0))
+
+
+def _accumulate_response_groups(
+    *,
+    frame: pd.DataFrame,
+    horizon: int,
+    response_groups: dict[tuple[str, str, str, str, str, int], "_ResponseSurfaceAccumulator"],
+) -> None:
+    surfaces = (
+        ("price_shape_atr_x_alpha_decay", "price_shape_atr", "ctx_price_shape_atr", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
+        ("liquidation_x_cvd_divergence", "liquidation_regime_relative", "ctx_liquidation_regime_relative", "cvd_divergence_regime", "ctx_cvd_divergence_regime"),
+        ("cross_section_x_systemic_cluster", "cross_sectional_rank_regime", "ctx_cross_sectional_rank_regime", "systemic_cluster_regime", "ctx_systemic_cluster_regime"),
+        ("btc_relative_x_volume_rank", "btc_relative_regime", "ctx_btc_relative_regime", "volume_regime_relative", "ctx_volume_regime_relative"),
+        ("session_x_market_context", "session", "ctx_session", "market_context", "ctx_market_context"),
+        ("speed_x_alpha_decay", "speed_regime", "ctx_speed_regime", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
+        ("initial_pump_x_consolidation", "initial_pump_height_atr", "ctx_initial_pump_height_atr", "consolidation_width_ratio", "ctx_consolidation_width_ratio"),
+        ("shelf_position_x_alpha_decay", "shelf_position_atr", "ctx_shelf_position_atr", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
+        ("shelf_break_x_systemic_cluster", "shelf_break_risk", "ctx_shelf_break_risk", "systemic_cluster_regime", "ctx_systemic_cluster_regime"),
+        ("sweep_flow_x_liquidation", "sweep_flow_regime", "ctx_sweep_flow_regime", "liquidation_regime_relative", "ctx_liquidation_regime_relative"),
+    )
+    for surface_name, x_axis, x_column, y_axis, y_column in surfaces:
+        for (x_bin, y_bin), group in frame.groupby([x_column, y_column], dropna=False, sort=True):
+            key = (surface_name, x_axis, str(x_bin), y_axis, str(y_bin), horizon)
+            _accumulate_response_group(
+                response_groups.setdefault(key, _ResponseSurfaceAccumulator()),
+                group,
+            )
+
+
+def _accumulate_market_groups(
+    *,
+    frame: pd.DataFrame,
+    horizon: int,
+    market_groups: dict[tuple[str, str, int, int], "_MarketShockAccumulator"],
+) -> None:
+    for (market_shock_id, systemic_cluster_regime, snapshot_time_ms), group in frame.groupby(
+        ["market_shock_id", "systemic_cluster_regime", "snapshot_time_ms"],
+        dropna=False,
+        sort=True,
+    ):
+        key = (str(market_shock_id), str(systemic_cluster_regime), int(snapshot_time_ms), horizon)
+        _accumulate_market_group(market_groups.setdefault(key, _MarketShockAccumulator()), group)
+
+
+def _accumulate_nature_group(accumulator: "_NatureAccumulator", group: pd.DataFrame) -> None:
+    _accumulate_identity(accumulator, group)
+    if accumulator.row_count == len(group):
+        accumulator.min_snapshot_time_ms = int(group["snapshot_time_ms"].min())
+        accumulator.max_snapshot_time_ms = int(group["snapshot_time_ms"].max())
+    else:
+        accumulator.min_snapshot_time_ms = min(accumulator.min_snapshot_time_ms, int(group["snapshot_time_ms"].min()))
+        accumulator.max_snapshot_time_ms = max(accumulator.max_snapshot_time_ms, int(group["snapshot_time_ms"].max()))
+    _accumulate_mean(accumulator.future_return_atr, group["_future_return_atr"])
+    _accumulate_mean(accumulator.future_max_atr, group["_future_max_atr"])
+    _accumulate_mean(accumulator.future_min_atr, group["_future_min_atr"])
+    _accumulate_mean(accumulator.future_return, group["_future_return"])
+    _accumulate_mean(accumulator.future_max, group["_future_max"])
+    _accumulate_mean(accumulator.future_min, group["_future_min"])
+    _accumulate_bool(accumulator.reclaimed_running_high, group["_reclaimed_running_high"])
+    _accumulate_bool(accumulator.stop_first, group["_stop_first"])
+
+
+def _accumulate_context_group(accumulator: "_ContextAccumulator", group: pd.DataFrame) -> None:
+    _accumulate_identity(accumulator, group)
+    _accumulate_mean(accumulator.minutes_since_trigger, group["minutes_since_trigger"])
+    _accumulate_mean(accumulator.current_return_from_start, group["current_return_from_start"])
+    _accumulate_mean(accumulator.distance_to_running_high_atr, group["distance_to_running_high_atr"])
+
+
+def _accumulate_response_group(accumulator: "_ResponseSurfaceAccumulator", group: pd.DataFrame) -> None:
+    accumulator.row_count += int(len(group))
+    accumulator.event_ids.update(str(value) for value in group["event_id"].dropna().unique())
+    _accumulate_mean(accumulator.future_return_atr, group["_future_return_atr"])
+    _accumulate_mean(accumulator.future_max_atr, group["_future_max_atr"])
+    _accumulate_mean(accumulator.future_min_atr, group["_future_min_atr"])
+    _accumulate_bool(accumulator.reclaimed_running_high, group["_reclaimed_running_high"])
+    _accumulate_bool(accumulator.stop_first, group["_stop_first"])
+    accumulator.outcome_counts.update({str(key): int(value) for key, value in group["_outcome_bin"].value_counts().items()})
+
+
+def _accumulate_market_group(accumulator: "_MarketShockAccumulator", group: pd.DataFrame) -> None:
+    _accumulate_identity(accumulator, group)
+    accumulator.max_simultaneous_count = max(
+        accumulator.max_simultaneous_count,
+        int(pd.to_numeric(group["simultaneous_anomalies_count_1m"], errors="coerce").fillna(0).max()),
+    )
+    _accumulate_mean(accumulator.simultaneous_share, group["simultaneous_anomalies_share_1m"])
+    _accumulate_mean(accumulator.current_return_from_start, group["current_return_from_start"])
+    _accumulate_mean(accumulator.future_return_atr, group["_future_return_atr"])
+    accumulator.outcome_counts.update({str(key): int(value) for key, value in group["_outcome_bin"].value_counts().items()})
+
+
+def _accumulate_identity(accumulator: object, group: pd.DataFrame) -> None:
+    accumulator.row_count += int(len(group))
+    accumulator.event_ids.update(str(value) for value in group["event_id"].dropna().unique())
+    accumulator.symbols.update(str(value) for value in group["symbol"].dropna().unique())
+
+
+def _accumulate_mean(accumulator: "_MeanAccumulator", series: pd.Series) -> None:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    if values.empty:
+        return
+    accumulator.total += float(values.sum())
+    accumulator.count += int(len(values))
+    if accumulator.values is not None:
+        accumulator.values.extend(float(value) for value in values)
+
+
+def _accumulate_bool(accumulator: "_BoolRateAccumulator", series: pd.Series) -> None:
+    observed = series.dropna()
+    if observed.empty:
+        return
+    bool_values = observed.map(_bool_value)
+    accumulator.observed_count += int(len(bool_values))
+    accumulator.true_count += int(bool_values.sum())
+
+
+def _nature_rows_from_accumulators(
+    *,
+    nature_groups: dict[tuple[str, str, int, str], "_NatureAccumulator"],
+    config: AtlasConfig,
+) -> tuple[AtlasNatureRow, ...]:
+    result: list[AtlasNatureRow] = []
+    for (split_family, split_value, horizon, outcome_bin), stats in sorted(nature_groups.items()):
+        result.append(
+            AtlasNatureRow(
+                atlas_version=config.atlas_version,
+                split_family=split_family,
+                split_value=split_value,
+                outcome_horizon_minutes=horizon,
+                atlas_outcome_bin=outcome_bin,
+                outcome_coordinate=_outcome_coordinate(horizon),
+                row_count=stats.row_count,
+                unique_event_count=len(stats.event_ids),
+                unique_symbol_count=len(stats.symbols),
+                mean_future_return_atr=stats.future_return_atr.mean(),
+                median_future_return_atr=stats.future_return_atr.median(),
+                mean_future_max_atr=stats.future_max_atr.mean(),
+                mean_future_min_atr=stats.future_min_atr.mean(),
+                mean_future_return=stats.future_return.mean(),
+                median_future_return=stats.future_return.median(),
+                mean_future_max=stats.future_max.mean(),
+                mean_future_min=stats.future_min.mean(),
+                reclaim_rate=stats.reclaimed_running_high.rate(),
+                double_barrier_stop_first_rate=stats.stop_first.rate(),
+                feature_min_snapshot_time_ms=stats.min_snapshot_time_ms,
+                feature_max_snapshot_time_ms=stats.max_snapshot_time_ms,
+                temporal_contract=TEMPORAL_CONTRACT_TEXT,
+            )
+        )
+    return tuple(result)
+
+
+def _context_rows_from_accumulators(
+    *,
+    context_groups: dict[tuple[str, str, int], "_ContextAccumulator"],
+    config: AtlasConfig,
+) -> tuple[AtlasContextSplitRow, ...]:
+    result: list[AtlasContextSplitRow] = []
+    for (context_name, context_value, horizon), stats in sorted(context_groups.items()):
+        result.append(
+            AtlasContextSplitRow(
+                atlas_version=config.atlas_version,
+                context_name=context_name,
+                context_value=context_value,
+                outcome_horizon_minutes=horizon,
+                outcome_coordinate=_outcome_coordinate(horizon),
+                row_count=stats.row_count,
+                unique_event_count=len(stats.event_ids),
+                unique_symbol_count=len(stats.symbols),
+                mean_minutes_since_trigger=stats.minutes_since_trigger.mean(),
+                mean_current_return_from_start=stats.current_return_from_start.mean(),
+                mean_distance_to_running_high_atr=stats.distance_to_running_high_atr.mean(),
+                upside_continuation_share=stats.outcome_share(_outcome_bin_name("upside_continuation", horizon)),
+                downside_extension_share=stats.outcome_share(_outcome_bin_name("downside_extension", horizon)),
+                two_sided_share=stats.outcome_share(_outcome_bin_name("two_sided", horizon)),
+                range_chop_share=stats.outcome_share(_outcome_bin_name("range_chop", horizon)),
+                mixed_drift_share=stats.outcome_share(_outcome_bin_name("mixed_drift", horizon)),
+                missing_atr_future_share=stats.outcome_share(_outcome_bin_name("missing_atr_future", horizon)),
+                stop_first_barrier_share=stats.outcome_share(_outcome_bin_name("stop_first_double_barrier", horizon)),
+            )
+        )
+    return tuple(result)
+
+
+def _response_rows_from_accumulators(
+    *,
+    response_groups: dict[tuple[str, str, str, str, str, int], "_ResponseSurfaceAccumulator"],
+    config: AtlasConfig,
+) -> tuple[AtlasResponseSurfaceRow, ...]:
+    result: list[AtlasResponseSurfaceRow] = []
+    for (surface_name, x_axis, x_bin, y_axis, y_bin, horizon), stats in sorted(response_groups.items()):
+        result.append(
+            AtlasResponseSurfaceRow(
+                atlas_version=config.atlas_version,
+                surface_name=surface_name,
+                x_axis=x_axis,
+                x_bin=x_bin,
+                y_axis=y_axis,
+                y_bin=y_bin,
+                outcome_horizon_minutes=horizon,
+                outcome_coordinate=_outcome_coordinate(horizon),
+                row_count=stats.row_count,
+                unique_event_count=len(stats.event_ids),
+                mean_future_return_atr=stats.future_return_atr.mean(),
+                mean_future_max_atr=stats.future_max_atr.mean(),
+                mean_future_min_atr=stats.future_min_atr.mean(),
+                reclaim_rate=stats.reclaimed_running_high.rate(),
+                double_barrier_stop_first_rate=stats.stop_first.rate(),
+                dominant_outcome_bin=stats.dominant_outcome_bin(),
+            )
+        )
+    return tuple(result)
+
+
+def _market_rows_from_accumulators(
+    *,
+    market_groups: dict[tuple[str, str, int, int], "_MarketShockAccumulator"],
+    config: AtlasConfig,
+) -> tuple[AtlasMarketShockGroupRow, ...]:
+    result: list[AtlasMarketShockGroupRow] = []
+    for (market_shock_id, systemic_cluster_regime, snapshot_time_ms, horizon), stats in sorted(market_groups.items()):
+        symbols = sorted(stats.symbols)
+        result.append(
+            AtlasMarketShockGroupRow(
+                atlas_version=config.atlas_version,
+                market_shock_group_id=f"{market_shock_id}:{snapshot_time_ms}:{horizon}m",
+                market_shock_id=market_shock_id,
+                systemic_cluster_regime=systemic_cluster_regime,
+                snapshot_time_ms=snapshot_time_ms,
+                outcome_horizon_minutes=horizon,
+                outcome_coordinate=_outcome_coordinate(horizon),
+                row_count=stats.row_count,
+                unique_event_count=len(stats.event_ids),
+                unique_symbol_count=len(symbols),
+                simultaneous_anomalies_count_1m=stats.max_simultaneous_count,
+                simultaneous_anomalies_share_1m=stats.simultaneous_share.mean(),
+                symbols="|".join(symbols),
+                market_shock_candidate=systemic_cluster_regime == "systemic_beta_shock"
+                or len(symbols) >= config.min_symbols_for_market_shock_candidate,
+                mean_current_return_from_start=stats.current_return_from_start.mean(),
+                mean_future_return_atr=stats.future_return_atr.mean(),
+                dominant_outcome_bin=stats.dominant_outcome_bin(),
+                temporal_contract=TEMPORAL_CONTRACT_TEXT,
+            )
+        )
+    return tuple(result)
 
 
 def _series_mean(series: pd.Series) -> float | None:

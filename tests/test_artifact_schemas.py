@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from pathlib import Path
 import re
 
@@ -194,6 +195,33 @@ def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
 
     assert [path.name for path in written] == ["strategy_events.csv", "anomaly_events.csv"]
     assert (tmp_path / "anomaly_events.csv").is_file()
+
+
+def test_csv_writer_uses_hardlink_for_identical_strategy_aliases(tmp_path: Path) -> None:
+    probe_source = tmp_path / "probe_source.txt"
+    probe_alias = tmp_path / "probe_alias.txt"
+    probe_source.write_text("probe", encoding="utf-8")
+    try:
+        os.link(probe_source, probe_alias)
+    except OSError:
+        pytest.skip("filesystem does not support hardlinks")
+
+    schema = get_artifact_schema("strategy_protocol_audit.csv")
+    rows = [
+        {
+            "check_name": "temporal_contract",
+            "status": "PASS",
+            "message": "ok",
+            "artifact": "strategy_protocol_audit.csv",
+        }
+    ]
+
+    write_csv_artifact_with_aliases(tmp_path / "strategy_protocol_audit.csv", rows, schema)
+
+    source = tmp_path / "strategy_protocol_audit.csv"
+    alias = tmp_path / "anomaly_protocol_audit.csv"
+    assert source.samefile(alias)
+    assert source.stat().st_nlink >= 2
 
 
 def test_manifest_records_written_artifacts(tmp_path: Path) -> None:

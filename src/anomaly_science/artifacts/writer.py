@@ -63,8 +63,19 @@ def write_csv_artifact_with_aliases(
         alias_path = path.with_name(alias_name)
         alias_schema = get_artifact_schema(alias_name)
         if tuple(alias_schema.required_columns) == tuple(schema.required_columns):
-            shutil.copyfile(path, alias_path)
+            link_or_copy_identical_artifact(path, alias_path)
             written.append(alias_path)
         else:
             written.append(write_csv_artifact(alias_path, rows, alias_schema))
     return written
+
+
+def link_or_copy_identical_artifact(source_path: Path, alias_path: Path) -> Path:
+    """Create a same-schema compatibility alias without duplicating bytes when possible."""
+    if alias_path.exists():
+        alias_path.unlink()
+    try:
+        os.link(source_path, alias_path)
+    except OSError:
+        shutil.copyfile(source_path, alias_path)
+    return alias_path

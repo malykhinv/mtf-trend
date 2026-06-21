@@ -1,5 +1,22 @@
 # Patch log
 
+## perf: hardlink artifact aliases and chunk atlas inputs
+
+Status: APPLIED.
+
+Intent:
+- Stop duplicating large canonical/compatibility CSV artifacts when the schemas are identical: `anomaly_*` aliases are now hardlink-first and copy-only fallback.
+- Keep canonical `strategy_*` artifacts as the Core contract; aliases remain compatibility files and do not change methodology semantics.
+- Reduce atlas input pressure by reading strict state/future/feature CSV boundaries in bounded chunks and enforcing row alignment per chunk.
+- Clean generated run artifacts after large local proofs: `.output/results` and `tmp/*` were removed; `.output/market` cache was preserved as source data.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q main.py src tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest -q`
+- Targeted hardlink regression: identical `strategy_protocol_audit.csv` / `anomaly_protocol_audit.csv` aliases share the same filesystem file when hardlinks are supported.
+- Disk after cleanup: C: free space recovered from about `1.5GB` to about `91.8GB`; remaining large project data is the preserved `.output\market` source cache.
+- Atlas 9d proof is not yet claimed after cleanup; downstream 9d atlas/prediction/EV/simulation remains the next validation target.
+
 ## perf: stream 9d labels artifact generation
 
 Status: APPLIED.

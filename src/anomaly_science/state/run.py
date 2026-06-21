@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import csv
 import os
-import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts.writer import link_or_copy_identical_artifact
 from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.state import StrategyState1mRow
@@ -94,7 +94,7 @@ def _write_state_rows_with_aliases(
         alias_schema = get_artifact_schema(alias_name)
         if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
             raise ValueError(f"{schema.name} streaming alias {alias_name} must have identical columns")
-        shutil.copyfile(path, alias_path)
+        link_or_copy_identical_artifact(path, alias_path)
         written.append(alias_path)
     return written, row_count
 
