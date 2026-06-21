@@ -1,5 +1,21 @@
 # Patch log
 
+## perf: stream 9d labels artifact generation
+
+Status: APPLIED.
+
+Intent:
+- Remove the 9d labels bottleneck caused by materializing all state/future inputs and label rows in memory before writing.
+- Keep labels inside the Core artifact/methodology layer: no strategy thresholds, training, EV, simulation, or live behavior changed.
+- Parse only the labels-owned strict artifact fields: state is used for join/temporal checks, future paths are used for ATR-normalized scenario labels.
+- Preserve canonical `strategy_outcome_labels.csv` as primary and copy identical `anomaly_outcome_labels.csv` only as compatibility alias.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\builder.py src\anomaly_science\future\__init__.py src\anomaly_science\labels\builder.py src\anomaly_science\labels\run.py src\anomaly_science\labels\__init__.py tests\test_labels.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_labels.py tests\test_future_paths.py tests\test_artifact_schemas.py -q`
+- First `100,000` streaming label input rows plus label assignment completed in `12.65s` (`~7,903.7 rows/s`).
+- `.venv\Scripts\python.exe main.py run-mvp1-labels --state tmp\state_9d_streaming_perf_h30\strategy_state_1m.csv --future tmp\future_9d_streaming_state_h30_final\strategy_future_paths.csv --out tmp\labels_9d_hotpath_final` completed in about `25m23s`, wrote `7,308,031` `strategy_outcome_labels.csv` rows, and stage audit had `12` PASS / `0` FAIL rows.
+
 ## perf: index feature matrix as-of hot paths
 
 Status: APPLIED.

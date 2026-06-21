@@ -1,0 +1,846 @@
+﻿diff --git a/research/METHODOLOGY_GAP_LEDGER.md b/research/METHODOLOGY_GAP_LEDGER.md
+index 9ff66887..a3e2601a 100644
+--- a/research/METHODOLOGY_GAP_LEDGER.md
++++ b/research/METHODOLOGY_GAP_LEDGER.md
+@@ -87,14 +87,14 @@ canonical strategy_* artifacts exist, with anomaly_* only as aliases
+ | Strategy registry truthfulness for specified-only variants | IMPLEMENTED | Registry exposes executable anomaly variants explicitly, writes `strategy_implementation_status.csv` as a generated truth table, and registry-level `validate_strategy_horizon()` rejects unknown, arbitrary, and mismatched strategy/horizon pairs. The current anomaly strategy spec has no remaining specified-only executable gaps. | Keep status artifact and registry tests as permanent gates. |
+ | Horizon ownership contract | IMPLEMENTED | Core methodology states the supported research horizon set and separates Core mechanics from strategy variant selection and registry enforcement. Code has a single Core whitelist/validator for supported research horizons. StrategyMetadata stores selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`, validates them against the Core whitelist, registry-level `validate_strategy_horizon()` enforces executable strategy/horizon compatibility before prediction, controls, EV, and simulation configs are accepted, and low-level CLI commands now use the same Core whitelist plus registry validation before file IO. Strategy docs explicitly reject unknown/arbitrary horizon suffixes such as h11/h32. | Keep horizon compatibility tests as permanent regression gate. |
+ | Data source boundary / normalized market data | IMPLEMENTED | Binance Vision cache, normalized CSV boundary, run-level data snapshot hashing, and export-level `cache_export_coverage.csv` / `cache_export_manifest.json` proof artifacts exist. Full local 380d export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, 0 unclassified 1m gaps. The only missing 1m rows are 3,570 explicitly classified settlement-transition rows across AIAUSDT/CVXUSDT/LITUSDT/PUMPUSDT/SLPUSDT with `{symbol}SETTLED` sibling evidence. Fixed-date delivery contracts are excluded from perpetual exports by default and recorded in the manifest. `run-research` uses the full available cache period when `--days` is omitted. | Keep `validate-cache-export-proof --expected-days 380 --allow-settlement-transition-gaps` as the permanent full-cache proof gate. |
+-| Compact all-symbol `run-research` executability | IMPLEMENTED | `run-research <strategy> --days N` creates output automatically, uses the full cache period when `--days` is omitted, and auto-scales default IS holdout for short windows while preserving the final holdout. The short-window rule keeps up to 8 non-holdout research days when available, so weekly WFA can produce OOS proof on compact windows larger than a 2d smoke. The all-symbol 2d command `python main.py run-research broad_anomaly_v1_h30 --days 2` completed with forensic `0` FAIL rows and expected WARN rows from the intentionally tiny window. Atlas now builds through the strict CSV boundary with vectorized grouping. The 9d all-symbol state/future/feature-matrix proof completed through `strategy_feature_matrix.csv` with `7,308,031` rows and feature-stage audit `0` FAIL rows. Downstream 9d labels/atlas/prediction/EV/simulation proof remains the next compact-run validation target. | Keep compact-run smoke plus full tests as regression gates; use >=9d compact windows when non-empty OOS/EV/simulation proof is required. |
++| Compact all-symbol `run-research` executability | IMPLEMENTED | `run-research <strategy> --days N` creates output automatically, uses the full cache period when `--days` is omitted, and auto-scales default IS holdout for short windows while preserving the final holdout. The short-window rule keeps up to 8 non-holdout research days when available, so weekly WFA can produce OOS proof on compact windows larger than a 2d smoke. The all-symbol 2d command `python main.py run-research broad_anomaly_v1_h30 --days 2` completed with forensic `0` FAIL rows and expected WARN rows from the intentionally tiny window. Atlas now builds through the strict CSV boundary with vectorized grouping. The 9d all-symbol state/future/feature-matrix/labels proof completed through `strategy_outcome_labels.csv` with `7,308,031` rows and label-stage audit `12` PASS / `0` FAIL rows. Downstream 9d atlas/prediction/EV/simulation proof remains the next compact-run validation target. | Keep compact-run smoke plus full tests as regression gates; use >=9d compact windows when non-empty OOS/EV/simulation proof is required. |
+ | Data quality gates | IMPLEMENTED | Shared `DataQualityMask` excludes maskable bad 1m candle rows, technical-noise rows, and post-gap warm-up rows before `strategy.generate_triggers`; dataset/schema/source failures remain blocking FAIL. Event-stage audit writes mask exclusion counts and tests cover row-local bad candle exclusion before trigger. | Keep expanding downstream forensic checks as new stages add quality-sensitive inputs. |
+ | Point-in-time universe | IMPLEMENTED | Universe is now conservative and data-inferred: `symbol_universe_by_day.csv` includes first/last seen timestamps, source status, listing/delisting confidence, explicit missing days between first and last observations, and `eligible_for_cross_section`. Cross-section features use only eligible rows, so missing/delisted-like data conditions do not silently enter market ranks. External exchange listing metadata remains optional; unknown delisting is represented as unknown confidence rather than a false fact. Dataset-date and first/last-seen aggregation is vectorized so all-symbol data audit can execute without per-row universe scans. | Keep universe and cross-section eligibility tests as permanent regression gates. |
+ | Market context engine | IMPLEMENTED | BTC-relative, cross-sectional market-relative, idiosyncratic momentum, simultaneous anomaly, systemic cluster, and market-shock id features are materialized in `strategy_feature_matrix.csv`, declared in `strategy_feature_catalog.csv`, and independently checked by forensic audit for required field coverage and value ranges. | Keep market-context forensic and feature-matrix tests as permanent gates. |
+ | Feature registry / feature schema | IMPLEMENTED | Prediction now validates every numeric/bool state and feature-matrix model feature against `build_default_feature_catalog()` before training; undeclared model features raise `PredictionInputError`. Catalog rows cover the current prediction state feature set, and tests cover both accepted catalog-backed features and rejection of an undeclared feature. Feature-matrix CLI writes the canonical matrix artifact through a strict streaming writer and keeps the alias copy compatibility-only. Core feature-matrix hot paths now use explicit as-of OI indexing, exact rolling moment prefix sums, and exact cached rolling medians instead of repeated row scans. | Keep catalog membership tests as permanent gate. |
+ | Generic online state builder | IMPLEMENTED | Online state is causal and written as canonical `strategy_state_1m.csv` with `anomaly_state_1m.csv` as compatibility alias. The CLI writer streams rows through the strict canonical schema before copying the compatibility alias, avoiding multi-million-row list materialization. | Keep temporal/no-leakage tests as permanent gate. |
+ | Generic future path builder | IMPLEMENTED | Future path uses post-snapshot candles, pessimistic double-barrier, and Core constants for 5/15/30/60/120/180m raw outcome windows with tests. The CLI writer streams rows through the strict canonical schema, reads state/candle CSV boundaries incrementally, and treats zero as-of ATR as explicit missing ATR fields rather than fallback or crash. | Keep horizon/schema tests as permanent gate. |
+-| Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. | Keep label horizon tests as permanent gate. |
++| Generic label builder | IMPLEMENTED | ATR labels use the Core `SUPPORTED_RESEARCH_HORIZONS` whitelist for 15/30/60/120/180 with strict schema and tests. The CLI labels stage streams row-aligned state/future artifacts, parses only labels-owned strict fields, writes canonical labels incrementally, and keeps `anomaly_*` as a compatibility alias. | Keep label horizon, row-aligned join, and strict schema tests as permanent gates. |
+ | Atlas / discovery layer | IMPLEMENTED | Descriptive atlas now writes 15/30/60/120/180m ATR-normalized slices, session/market-context/speed/systemic contexts, and relaxed shelf/sweep/consolidation geometry response surfaces. Atlas remains discovery-only and is not consumed by decision logic. | Keep atlas schema/tests as permanent gate; add only descriptive slices, never trade rules. |
+ | Weekly walk-forward prediction | IMPLEMENTED | Weekly CatBoost + Isotonic exists. Prediction and controls compute purge from active strategy `H_max`; prediction/model artifacts now store `strategy_name`, strategy version/contract, `target_horizon_minutes`, `target_label_column`, and `active_h_max_minutes` so downstream stages do not infer horizon identity. Prediction protocol audit now verifies Core whitelist, registry strategy/horizon compatibility, target label column, active H_max, purge horizon, OOS prediction artifact identity, and model metadata horizon identity. Tests cover multi-strategy H_max, artifact horizon identity, and horizon audit pass/fail rows. | Keep as permanent regression gate. |
+ | Calibration artifacts | IMPLEMENTED | Raw/calibrated probabilities, aggregate metrics, and calibration breakdowns by session, week, month, symbol, systemic regime, market-shock group, alpha-decay bucket, and trigger-age bucket are written and independently audited. | Keep monitoring minimum row counts in real 380d runs. |
+diff --git a/research/PATCH_LOG.md b/research/PATCH_LOG.md
+index c0fbee9c..a8abae10 100644
+--- a/research/PATCH_LOG.md
++++ b/research/PATCH_LOG.md
+@@ -1,5 +1,21 @@
+ # Patch log
+ 
++## perf: stream 9d labels artifact generation
++
++Status: APPLIED.
++
++Intent:
++- Remove the 9d labels bottleneck caused by materializing all state/future inputs and label rows in memory before writing.
++- Keep labels inside the Core artifact/methodology layer: no strategy thresholds, training, EV, simulation, or live behavior changed.
++- Parse only the labels-owned strict artifact fields: state is used for join/temporal checks, future paths are used for ATR-normalized scenario labels.
++- Preserve canonical `strategy_outcome_labels.csv` as primary and copy identical `anomaly_outcome_labels.csv` only as compatibility alias.
++
++Validation:
++- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\builder.py src\anomaly_science\future\__init__.py src\anomaly_science\labels\builder.py src\anomaly_science\labels\run.py src\anomaly_science\labels\__init__.py tests\test_labels.py`
++- `.venv\Scripts\python.exe -m pytest tests\test_labels.py tests\test_future_paths.py tests\test_artifact_schemas.py -q`
++- First `100,000` streaming label input rows plus label assignment completed in `12.65s` (`~7,903.7 rows/s`).
++- `.venv\Scripts\python.exe main.py run-mvp1-labels --state tmp\state_9d_streaming_perf_h30\strategy_state_1m.csv --future tmp\future_9d_streaming_state_h30_final\strategy_future_paths.csv --out tmp\labels_9d_hotpath_final` completed in about `25m23s`, wrote `7,308,031` `strategy_outcome_labels.csv` rows, and stage audit had `12` PASS / `0` FAIL rows.
++
+ ## perf: index feature matrix as-of hot paths
+ 
+ Status: APPLIED.
+diff --git a/research/RESEARCH_STATE.md b/research/RESEARCH_STATE.md
+index 04a45d90..937137b0 100644
+--- a/research/RESEARCH_STATE.md
++++ b/research/RESEARCH_STATE.md
+@@ -20,14 +20,15 @@ Active rule:
+ - Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
+ - Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days, preserve the final holdout, and keep up to 8 non-holdout research days when available for weekly WFA proof. State windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the intentionally tiny smoke window, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
+ - State and future writers now stream multi-million-row artifacts through strict canonical schemas instead of materializing full row lists before writing. The 9d all-symbol h30 proof wrote `7,308,031` `strategy_future_paths.csv` rows with future-stage audit `11` PASS / `0` FAIL rows. Zero as-of ATR from flat history is represented as explicit missing ATR fields, not fallback and not a crash.
+-- Feature-matrix artifact writing now streams rows through the canonical schema and copies the compatibility alias after validation. A 9d probe wrote `1,486,861` feature rows before manual stop; full 9d feature-matrix calculation remains the next bottleneck to optimize before claiming downstream 9d prediction/EV/simulation proof.
++- Feature-matrix artifact writing now streams rows through the canonical schema and copies the compatibility alias after validation.
+ - Feature-matrix hot paths now use explicit as-of Open Interest indexing and exact prefix-sum rolling moments for volume/quote-volume z-scores. A 9d probe for the first `100,000` rows improved from about `954.64s` total elapsed to about `716.42s`, including unchanged startup state/candle indexing.
+ - Exact rolling quote-volume median caching removed the remaining per-row 1440-candle median scan. The 9d all-symbol h30 feature-matrix proof completed at `tmp\feature_matrix_9d_hotpath_median_final`, writing `7,308,031` `strategy_feature_matrix.csv` rows in about `2h05m` with feature-stage audit `13` PASS / `0` FAIL rows.
++- Outcome labels now stream row-aligned state/future artifacts through the strict labels boundary, parse only labels-owned fields, and write canonical labels incrementally before copying the compatibility alias. The 9d all-symbol h30 labels proof completed at `tmp\labels_9d_hotpath_final`, writing `7,308,031` `strategy_outcome_labels.csv` rows in about `25m23s` with label-stage audit `12` PASS / `0` FAIL rows.
+ - Stage protocol audits and default audit row contracts now name canonical `strategy_*` artifacts as the primary schema/input/output boundary. `anomaly_*` files remain compatibility aliases, not the documented primary artifact names.
+ - Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
+ - Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+ 
+-Current Git head before the active streaming state/future patch: `65078754`.
++Current Git head before the active streaming labels patch: `f01f5f1d`.
+ - Verified with `git rev-parse --short HEAD` in the local repository.
+ - Do not treat old patch-queue notes in previous chats as current state unless they match the checked-out Git head.
+ 
+diff --git a/src/anomaly_science/future/__init__.py b/src/anomaly_science/future/__init__.py
+index 479dd1cc..ff4772b4 100644
+--- a/src/anomaly_science/future/__init__.py
++++ b/src/anomaly_science/future/__init__.py
+@@ -18,11 +18,13 @@ from anomaly_science.future.builder import (
+     future_row_to_artifact,
+     future_rows_to_artifact,
+     iter_anomaly_future_paths_from_csv,
++    iter_anomaly_future_paths_artifact_csv,
+     iter_anomaly_future_paths,
+     iter_anomaly_future_paths_from_source,
+     iter_anomaly_state_1m_csv,
+     iter_candles_1m_csv,
+     iter_strategy_future_paths_from_csv,
++    iter_strategy_future_paths_artifact_csv,
+     iter_strategy_future_paths,
+     iter_strategy_future_paths_from_source,
+     iter_strategy_state_1m_csv,
+@@ -50,9 +52,11 @@ __all__ = [
+     "build_anomaly_future_paths_from_source",
+     "iter_strategy_future_paths",
+     "iter_strategy_future_paths_from_csv",
++    "iter_strategy_future_paths_artifact_csv",
+     "iter_strategy_future_paths_from_source",
+     "iter_anomaly_future_paths",
+     "iter_anomaly_future_paths_from_csv",
++    "iter_anomaly_future_paths_artifact_csv",
+     "iter_anomaly_future_paths_from_source",
+     "iter_candles_1m_csv",
+     "iter_strategy_state_1m_csv",
+diff --git a/src/anomaly_science/future/builder.py b/src/anomaly_science/future/builder.py
+index b1953759..7158e17d 100644
+--- a/src/anomaly_science/future/builder.py
++++ b/src/anomaly_science/future/builder.py
+@@ -158,83 +158,112 @@ def load_strategy_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...
+     rows: list[FuturePathRow] = []
+     for row_index, row_tuple in enumerate(frame.itertuples(index=False)):
+         row = row_tuple._asdict()
+-        try:
+-            rows.append(
+-                FuturePathRow(
+-                    event_id=_required_str(row, "event_id"),
+-                    symbol=_required_str(row, "symbol"),
+-                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+-                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+-                    future_start_time_ms=_required_int(row, "future_start_time_ms"),
+-                    atr_window_minutes=_required_int(row, "atr_window_minutes"),
+-                    core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
+-                    ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
+-                    double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
+-                    double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
+-                    future_return_5m=_optional_float(row, "future_return_5m"),
+-                    future_return_15m=_optional_float(row, "future_return_15m"),
+-                    future_return_30m=_optional_float(row, "future_return_30m"),
+-                    future_return_60m=_optional_float(row, "future_return_60m"),
+-                    future_return_120m=_optional_float(row, "future_return_120m"),
+-                    future_return_180m=_optional_float(row, "future_return_180m"),
+-                    future_max_5m=_optional_float(row, "future_max_5m"),
+-                    future_max_15m=_optional_float(row, "future_max_15m"),
+-                    future_max_30m=_optional_float(row, "future_max_30m"),
+-                    future_max_60m=_optional_float(row, "future_max_60m"),
+-                    future_max_120m=_optional_float(row, "future_max_120m"),
+-                    future_max_180m=_optional_float(row, "future_max_180m"),
+-                    future_min_5m=_optional_float(row, "future_min_5m"),
+-                    future_min_15m=_optional_float(row, "future_min_15m"),
+-                    future_min_30m=_optional_float(row, "future_min_30m"),
+-                    future_min_60m=_optional_float(row, "future_min_60m"),
+-                    future_min_120m=_optional_float(row, "future_min_120m"),
+-                    future_min_180m=_optional_float(row, "future_min_180m"),
+-                    future_return_atr_5m=_optional_float(row, "future_return_atr_5m"),
+-                    future_return_atr_15m=_optional_float(row, "future_return_atr_15m"),
+-                    future_return_atr_30m=_optional_float(row, "future_return_atr_30m"),
+-                    future_return_atr_60m=_optional_float(row, "future_return_atr_60m"),
+-                    future_return_atr_120m=_optional_float(row, "future_return_atr_120m"),
+-                    future_return_atr_180m=_optional_float(row, "future_return_atr_180m"),
+-                    future_max_atr_5m=_optional_float(row, "future_max_atr_5m"),
+-                    future_max_atr_15m=_optional_float(row, "future_max_atr_15m"),
+-                    future_max_atr_30m=_optional_float(row, "future_max_atr_30m"),
+-                    future_max_atr_60m=_optional_float(row, "future_max_atr_60m"),
+-                    future_max_atr_120m=_optional_float(row, "future_max_atr_120m"),
+-                    future_max_atr_180m=_optional_float(row, "future_max_atr_180m"),
+-                    future_min_atr_5m=_optional_float(row, "future_min_atr_5m"),
+-                    future_min_atr_15m=_optional_float(row, "future_min_atr_15m"),
+-                    future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
+-                    future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
+-                    future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
+-                    future_min_atr_180m=_optional_float(row, "future_min_atr_180m"),
+-                    intracandle_double_barrier_hit_5m=_optional_bool(row, "intracandle_double_barrier_hit_5m"),
+-                    intracandle_double_barrier_hit_15m=_optional_bool(row, "intracandle_double_barrier_hit_15m"),
+-                    intracandle_double_barrier_hit_30m=_optional_bool(row, "intracandle_double_barrier_hit_30m"),
+-                    intracandle_double_barrier_hit_60m=_optional_bool(row, "intracandle_double_barrier_hit_60m"),
+-                    intracandle_double_barrier_hit_120m=_optional_bool(row, "intracandle_double_barrier_hit_120m"),
+-                    intracandle_double_barrier_hit_180m=_optional_bool(row, "intracandle_double_barrier_hit_180m"),
+-                    barrier_resolution_5m=_optional_str(row, "barrier_resolution_5m"),
+-                    barrier_resolution_15m=_optional_str(row, "barrier_resolution_15m"),
+-                    barrier_resolution_30m=_optional_str(row, "barrier_resolution_30m"),
+-                    barrier_resolution_60m=_optional_str(row, "barrier_resolution_60m"),
+-                    barrier_resolution_120m=_optional_str(row, "barrier_resolution_120m"),
+-                    barrier_resolution_180m=_optional_str(row, "barrier_resolution_180m"),
+-                    reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
+-                    reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
+-                    broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
+-                    broke_structural_low_60m=_optional_bool(row, "broke_structural_low_60m"),
+-                    time_to_new_high_minutes=_optional_int(row, "time_to_new_high_minutes"),
+-                    time_to_structural_break_minutes=_optional_int(row, "time_to_structural_break_minutes"),
+-                )
+-            )
+-        except (TypeError, ValueError) as exc:
+-            raise AnomalyFutureArtifactError(f"invalid anomaly_future_paths.csv row {row_index}: {exc}") from exc
++        rows.append(_future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name))
+     return tuple(rows)
+ 
+ 
+ load_anomaly_future_paths_csv = load_strategy_future_paths_csv
+ 
+ 
++def iter_strategy_future_paths_artifact_csv(path: str | Path) -> Iterable[FuturePathRow]:
++    """Stream future path rows through the same strict artifact boundary as the tuple loader."""
++    future_path = Path(path)
++    if not future_path.exists():
++        raise AnomalyFutureArtifactError(f"future artifact is missing: {future_path}")
++
++    schema = get_artifact_schema("strategy_future_paths.csv")
++    expected_columns = list(schema.required_columns)
++    with future_path.open(encoding="utf-8-sig", newline="") as file_obj:
++        reader = csv.DictReader(file_obj)
++        actual_columns = list(reader.fieldnames or [])
++        if actual_columns != expected_columns:
++            raise AnomalyFutureArtifactError(
++                f"future artifact columns must match {expected_columns}, got {actual_columns}"
++            )
++        for row_index, row in enumerate(reader):
++            yield _future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name)
++
++
++iter_anomaly_future_paths_artifact_csv = iter_strategy_future_paths_artifact_csv
++
++
++def _future_path_row_from_mapping(
++    *,
++    row: Mapping[str, object],
++    row_index: int,
++    artifact_name: str,
++) -> FuturePathRow:
++    try:
++        return FuturePathRow(
++            event_id=_required_str(row, "event_id"),
++            symbol=_required_str(row, "symbol"),
++            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
++            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
++            future_start_time_ms=_required_int(row, "future_start_time_ms"),
++            atr_window_minutes=_required_int(row, "atr_window_minutes"),
++            core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
++            ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
++            double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
++            double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
++            future_return_5m=_optional_float(row, "future_return_5m"),
++            future_return_15m=_optional_float(row, "future_return_15m"),
++            future_return_30m=_optional_float(row, "future_return_30m"),
++            future_return_60m=_optional_float(row, "future_return_60m"),
++            future_return_120m=_optional_float(row, "future_return_120m"),
++            future_return_180m=_optional_float(row, "future_return_180m"),
++            future_max_5m=_optional_float(row, "future_max_5m"),
++            future_max_15m=_optional_float(row, "future_max_15m"),
++            future_max_30m=_optional_float(row, "future_max_30m"),
++            future_max_60m=_optional_float(row, "future_max_60m"),
++            future_max_120m=_optional_float(row, "future_max_120m"),
++            future_max_180m=_optional_float(row, "future_max_180m"),
++            future_min_5m=_optional_float(row, "future_min_5m"),
++            future_min_15m=_optional_float(row, "future_min_15m"),
++            future_min_30m=_optional_float(row, "future_min_30m"),
++            future_min_60m=_optional_float(row, "future_min_60m"),
++            future_min_120m=_optional_float(row, "future_min_120m"),
++            future_min_180m=_optional_float(row, "future_min_180m"),
++            future_return_atr_5m=_optional_float(row, "future_return_atr_5m"),
++            future_return_atr_15m=_optional_float(row, "future_return_atr_15m"),
++            future_return_atr_30m=_optional_float(row, "future_return_atr_30m"),
++            future_return_atr_60m=_optional_float(row, "future_return_atr_60m"),
++            future_return_atr_120m=_optional_float(row, "future_return_atr_120m"),
++            future_return_atr_180m=_optional_float(row, "future_return_atr_180m"),
++            future_max_atr_5m=_optional_float(row, "future_max_atr_5m"),
++            future_max_atr_15m=_optional_float(row, "future_max_atr_15m"),
++            future_max_atr_30m=_optional_float(row, "future_max_atr_30m"),
++            future_max_atr_60m=_optional_float(row, "future_max_atr_60m"),
++            future_max_atr_120m=_optional_float(row, "future_max_atr_120m"),
++            future_max_atr_180m=_optional_float(row, "future_max_atr_180m"),
++            future_min_atr_5m=_optional_float(row, "future_min_atr_5m"),
++            future_min_atr_15m=_optional_float(row, "future_min_atr_15m"),
++            future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
++            future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
++            future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
++            future_min_atr_180m=_optional_float(row, "future_min_atr_180m"),
++            intracandle_double_barrier_hit_5m=_optional_bool(row, "intracandle_double_barrier_hit_5m"),
++            intracandle_double_barrier_hit_15m=_optional_bool(row, "intracandle_double_barrier_hit_15m"),
++            intracandle_double_barrier_hit_30m=_optional_bool(row, "intracandle_double_barrier_hit_30m"),
++            intracandle_double_barrier_hit_60m=_optional_bool(row, "intracandle_double_barrier_hit_60m"),
++            intracandle_double_barrier_hit_120m=_optional_bool(row, "intracandle_double_barrier_hit_120m"),
++            intracandle_double_barrier_hit_180m=_optional_bool(row, "intracandle_double_barrier_hit_180m"),
++            barrier_resolution_5m=_optional_str(row, "barrier_resolution_5m"),
++            barrier_resolution_15m=_optional_str(row, "barrier_resolution_15m"),
++            barrier_resolution_30m=_optional_str(row, "barrier_resolution_30m"),
++            barrier_resolution_60m=_optional_str(row, "barrier_resolution_60m"),
++            barrier_resolution_120m=_optional_str(row, "barrier_resolution_120m"),
++            barrier_resolution_180m=_optional_str(row, "barrier_resolution_180m"),
++            reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
++            reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
++            broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
++            broke_structural_low_60m=_optional_bool(row, "broke_structural_low_60m"),
++            time_to_new_high_minutes=_optional_int(row, "time_to_new_high_minutes"),
++            time_to_structural_break_minutes=_optional_int(row, "time_to_structural_break_minutes"),
++        )
++    except (TypeError, ValueError) as exc:
++        raise AnomalyFutureArtifactError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
++
++
+ def _read_artifact_csv(path: Path) -> pd.DataFrame:
+     return pd.read_csv(path, low_memory=False)
+ 
+diff --git a/src/anomaly_science/labels/__init__.py b/src/anomaly_science/labels/__init__.py
+index 2fa1fa42..cfa96bc7 100644
+--- a/src/anomaly_science/labels/__init__.py
++++ b/src/anomaly_science/labels/__init__.py
+@@ -7,11 +7,14 @@ from anomaly_science.labels.builder import (
+     build_anomaly_outcome_labels,
+     build_anomaly_outcome_labels_from_inputs,
+     build_strategy_outcome_labels,
++    build_strategy_outcome_label_from_input,
+     build_strategy_outcome_labels_from_inputs,
+     build_outcome_label_inputs,
++    iter_outcome_label_inputs_from_artifacts,
+     load_anomaly_outcome_labels_csv,
+     load_strategy_outcome_labels_csv,
+     load_outcome_label_inputs,
++    outcome_label_row_to_artifact,
+     outcome_label_rows_to_artifact,
+ )
+ from anomaly_science.labels.config import OutcomeLabelConfig
+@@ -25,11 +28,14 @@ __all__ = [
+     "build_anomaly_outcome_labels",
+     "build_anomaly_outcome_labels_from_inputs",
+     "build_strategy_outcome_labels",
++    "build_strategy_outcome_label_from_input",
+     "build_strategy_outcome_labels_from_inputs",
+     "build_outcome_label_inputs",
++    "iter_outcome_label_inputs_from_artifacts",
+     "load_anomaly_outcome_labels_csv",
+     "load_strategy_outcome_labels_csv",
+     "load_outcome_label_inputs",
++    "outcome_label_row_to_artifact",
+     "outcome_label_rows_to_artifact",
+     "run_mvp1_labels",
+ ]
+diff --git a/src/anomaly_science/labels/builder.py b/src/anomaly_science/labels/builder.py
+index 8677211f..49df3734 100644
+--- a/src/anomaly_science/labels/builder.py
++++ b/src/anomaly_science/labels/builder.py
+@@ -1,7 +1,9 @@
+ from __future__ import annotations
+ 
++import csv
+ import math
+ from dataclasses import asdict, dataclass
++from itertools import zip_longest
+ from pathlib import Path
+ from typing import Iterable, Mapping, Sequence
+ 
+@@ -32,10 +34,18 @@ class OutcomeLabelArtifactError(ValueError):
+ 
+ @dataclass(frozen=True, slots=True)
+ class OutcomeLabelInputRow:
+-    state: StrategyState1mRow
++    state: StrategyState1mRow | "_OutcomeLabelJoinRow"
+     future: FuturePathRow
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class _OutcomeLabelJoinRow:
++    event_id: str
++    symbol: str
++    snapshot_time_ms: int
++    feature_cutoff_time_ms: int
++
++
+ def load_outcome_label_inputs(
+     *,
+     state_path: str | Path,
+@@ -48,6 +58,60 @@ def load_outcome_label_inputs(
+     )
+ 
+ 
++def iter_outcome_label_inputs_from_artifacts(
++    *,
++    state_path: str | Path,
++    future_path: str | Path,
++) -> Iterable[OutcomeLabelInputRow]:
++    """Stream row-aligned state/future artifacts through the strict label join boundary."""
++    state_artifact_path = Path(state_path)
++    future_artifact_path = Path(future_path)
++    if not state_artifact_path.exists():
++        raise OutcomeLabelInputError(f"state artifact is missing: {state_artifact_path}")
++    if not future_artifact_path.exists():
++        raise OutcomeLabelInputError(f"future artifact is missing: {future_artifact_path}")
++
++    with state_artifact_path.open(encoding="utf-8-sig", newline="") as state_file:
++        with future_artifact_path.open(encoding="utf-8-sig", newline="") as future_file:
++            state_reader = csv.DictReader(state_file)
++            future_reader = csv.DictReader(future_file)
++            _enforce_artifact_columns(
++                actual_columns=list(state_reader.fieldnames or ()),
++                artifact_name=state_artifact_path.name,
++                schema_name="strategy_state_1m.csv",
++            )
++            _enforce_artifact_columns(
++                actual_columns=list(future_reader.fieldnames or ()),
++                artifact_name=future_artifact_path.name,
++                schema_name="strategy_future_paths.csv",
++            )
++            sentinel = object()
++            for row_index, pair in enumerate(zip_longest(state_reader, future_reader, fillvalue=sentinel)):
++                state_row, future_row = pair
++                if state_row is sentinel:
++                    raise OutcomeLabelInputError(f"future artifact has an orphan row at label join index {row_index}")
++                if future_row is sentinel:
++                    raise OutcomeLabelInputError(f"state artifact is missing a future row at label join index {row_index}")
++                state = _label_join_row_from_state_mapping(
++                    row=state_row,
++                    row_index=row_index,
++                    artifact_name=state_artifact_path.name,
++                )
++                future = _label_future_row_from_mapping(
++                    row=future_row,
++                    row_index=row_index,
++                    artifact_name=future_artifact_path.name,
++                )
++                if _join_key(state) != _join_key(future):
++                    raise OutcomeLabelInputError(
++                        "state/future label join must be row-aligned on "
++                        "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
++                        f"row_index={row_index}, state_key={_join_key(state)}, future_key={_join_key(future)}"
++                    )
++                _enforce_label_temporal_contract(state=state, future=future)
++                yield OutcomeLabelInputRow(state=state, future=future)
++
++
+ def build_outcome_label_inputs(
+     *,
+     state_rows: Sequence[StrategyState1mRow] | Iterable[StrategyState1mRow],
+@@ -99,45 +163,52 @@ def build_strategy_outcome_labels_from_inputs(
+     cfg = config or OutcomeLabelConfig()
+     rows: list[StrategyOutcomeLabelRow] = []
+     for input_row in inputs:
+-        future = input_row.future
+-        scenario_15m = assign_future_nature_scenario(future=future, horizon_minutes=15, config=cfg)
+-        scenario_30m = assign_future_nature_scenario(future=future, horizon_minutes=30, config=cfg)
+-        scenario_60m = assign_future_nature_scenario(future=future, horizon_minutes=60, config=cfg)
+-        scenario_120m = assign_future_nature_scenario(future=future, horizon_minutes=120, config=cfg)
+-        scenario_180m = assign_future_nature_scenario(future=future, horizon_minutes=180, config=cfg)
+-        rows.append(
+-            StrategyOutcomeLabelRow(
+-                label_schema_version=cfg.label_schema_version,
+-                atr_window_minutes=cfg.atr_window_minutes,
+-                core_atr_1440=future.core_atr_1440,
+-                k_continuation=cfg.k_continuation,
+-                k_fade=cfg.k_fade,
+-                k_chop=cfg.k_chop,
+-                event_id=future.event_id,
+-                symbol=future.symbol,
+-                snapshot_time_ms=future.snapshot_time_ms,
+-                feature_cutoff_time_ms=future.feature_cutoff_time_ms,
+-                future_start_time_ms=future.future_start_time_ms,
+-                scenario_15m=scenario_15m,
+-                scenario_30m=scenario_30m,
+-                scenario_60m=scenario_60m,
+-                scenario_120m=scenario_120m,
+-                scenario_180m=scenario_180m,
+-                label_available_15m=_label_available(scenario_15m),
+-                label_available_30m=_label_available(scenario_30m),
+-                label_available_60m=_label_available(scenario_60m),
+-                label_available_120m=_label_available(scenario_120m),
+-                label_available_180m=_label_available(scenario_180m),
+-                label_source=ATR_LABEL_SOURCE,
+-                temporal_contract=TEMPORAL_LABEL_CONTRACT,
+-            )
+-        )
++        rows.append(build_strategy_outcome_label_from_input(input_row=input_row, config=cfg))
+     return tuple(rows)
+ 
+ 
+ build_anomaly_outcome_labels_from_inputs = build_strategy_outcome_labels_from_inputs
+ 
+ 
++def build_strategy_outcome_label_from_input(
++    *,
++    input_row: OutcomeLabelInputRow,
++    config: OutcomeLabelConfig | None = None,
++) -> StrategyOutcomeLabelRow:
++    cfg = config or OutcomeLabelConfig()
++    future = input_row.future
++    scenario_15m = assign_future_nature_scenario(future=future, horizon_minutes=15, config=cfg)
++    scenario_30m = assign_future_nature_scenario(future=future, horizon_minutes=30, config=cfg)
++    scenario_60m = assign_future_nature_scenario(future=future, horizon_minutes=60, config=cfg)
++    scenario_120m = assign_future_nature_scenario(future=future, horizon_minutes=120, config=cfg)
++    scenario_180m = assign_future_nature_scenario(future=future, horizon_minutes=180, config=cfg)
++    return StrategyOutcomeLabelRow(
++        label_schema_version=cfg.label_schema_version,
++        atr_window_minutes=cfg.atr_window_minutes,
++        core_atr_1440=future.core_atr_1440,
++        k_continuation=cfg.k_continuation,
++        k_fade=cfg.k_fade,
++        k_chop=cfg.k_chop,
++        event_id=future.event_id,
++        symbol=future.symbol,
++        snapshot_time_ms=future.snapshot_time_ms,
++        feature_cutoff_time_ms=future.feature_cutoff_time_ms,
++        future_start_time_ms=future.future_start_time_ms,
++        scenario_15m=scenario_15m,
++        scenario_30m=scenario_30m,
++        scenario_60m=scenario_60m,
++        scenario_120m=scenario_120m,
++        scenario_180m=scenario_180m,
++        label_available_15m=_label_available(scenario_15m),
++        label_available_30m=_label_available(scenario_30m),
++        label_available_60m=_label_available(scenario_60m),
++        label_available_120m=_label_available(scenario_120m),
++        label_available_180m=_label_available(scenario_180m),
++        label_source=ATR_LABEL_SOURCE,
++        temporal_contract=TEMPORAL_LABEL_CONTRACT,
++    )
++
++
+ def assign_future_nature_scenario(
+     *,
+     future: FuturePathRow,
+@@ -240,11 +311,15 @@ load_anomaly_outcome_labels_csv = load_strategy_outcome_labels_csv
+ def outcome_label_rows_to_artifact(rows: Sequence[StrategyOutcomeLabelRow]) -> list[dict[str, object]]:
+     result: list[dict[str, object]] = []
+     for row in rows:
+-        payload = _with_core_atr_csv_alias(asdict(row))
+-        result.append({key: _csv_value(value) for key, value in payload.items()})
++        result.append(outcome_label_row_to_artifact(row))
+     return result
+ 
+ 
++def outcome_label_row_to_artifact(row: StrategyOutcomeLabelRow) -> dict[str, object]:
++    payload = _with_core_atr_csv_alias(asdict(row))
++    return {key: _csv_value(value) for key, value in payload.items()}
++
++
+ def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
+     return {"ATR_1d_asof_t" if key == "core_atr_1440" else key: value for key, value in payload.items()}
+ 
+@@ -288,6 +363,79 @@ def _label_available(scenario: str) -> bool:
+     return scenario != MISSING_FUTURE_SCENARIO
+ 
+ 
++def _enforce_artifact_columns(*, actual_columns: list[str], artifact_name: str, schema_name: str) -> None:
++    expected_columns = list(get_artifact_schema(schema_name).required_columns)
++    if actual_columns != expected_columns:
++        raise OutcomeLabelInputError(
++            f"{artifact_name} columns must match {expected_columns}, got {actual_columns}"
++        )
++
++
++def _label_join_row_from_state_mapping(
++    *,
++    row: Mapping[str, object],
++    row_index: int,
++    artifact_name: str,
++) -> _OutcomeLabelJoinRow:
++    try:
++        return _OutcomeLabelJoinRow(
++            event_id=_required_str(row, "event_id"),
++            symbol=_required_str(row, "symbol"),
++            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
++            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
++        )
++    except (TypeError, ValueError) as exc:
++        raise OutcomeLabelInputError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
++
++
++def _label_future_row_from_mapping(
++    *,
++    row: Mapping[str, object],
++    row_index: int,
++    artifact_name: str,
++) -> FuturePathRow:
++    try:
++        return FuturePathRow(
++            event_id=_required_str(row, "event_id"),
++            symbol=_required_str(row, "symbol"),
++            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
++            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
++            future_start_time_ms=_required_int(row, "future_start_time_ms"),
++            atr_window_minutes=_required_int(row, "atr_window_minutes"),
++            core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
++            ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
++            double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
++            double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
++            future_return_atr_15m=_optional_float(row, "future_return_atr_15m"),
++            future_return_atr_30m=_optional_float(row, "future_return_atr_30m"),
++            future_return_atr_60m=_optional_float(row, "future_return_atr_60m"),
++            future_return_atr_120m=_optional_float(row, "future_return_atr_120m"),
++            future_return_atr_180m=_optional_float(row, "future_return_atr_180m"),
++            future_max_atr_15m=_optional_float(row, "future_max_atr_15m"),
++            future_max_atr_30m=_optional_float(row, "future_max_atr_30m"),
++            future_max_atr_60m=_optional_float(row, "future_max_atr_60m"),
++            future_max_atr_120m=_optional_float(row, "future_max_atr_120m"),
++            future_max_atr_180m=_optional_float(row, "future_max_atr_180m"),
++            future_min_atr_15m=_optional_float(row, "future_min_atr_15m"),
++            future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
++            future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
++            future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
++            future_min_atr_180m=_optional_float(row, "future_min_atr_180m"),
++            intracandle_double_barrier_hit_15m=_optional_bool(row, "intracandle_double_barrier_hit_15m"),
++            intracandle_double_barrier_hit_30m=_optional_bool(row, "intracandle_double_barrier_hit_30m"),
++            intracandle_double_barrier_hit_60m=_optional_bool(row, "intracandle_double_barrier_hit_60m"),
++            intracandle_double_barrier_hit_120m=_optional_bool(row, "intracandle_double_barrier_hit_120m"),
++            intracandle_double_barrier_hit_180m=_optional_bool(row, "intracandle_double_barrier_hit_180m"),
++            barrier_resolution_15m=_optional_str(row, "barrier_resolution_15m"),
++            barrier_resolution_30m=_optional_str(row, "barrier_resolution_30m"),
++            barrier_resolution_60m=_optional_str(row, "barrier_resolution_60m"),
++            barrier_resolution_120m=_optional_str(row, "barrier_resolution_120m"),
++            barrier_resolution_180m=_optional_str(row, "barrier_resolution_180m"),
++        )
++    except (TypeError, ValueError) as exc:
++        raise OutcomeLabelInputError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
++
++
+ def _unique_by_join_key(
+     rows: Iterable[StrategyState1mRow] | Iterable[FuturePathRow],
+     *,
+@@ -302,11 +450,11 @@ def _unique_by_join_key(
+     return result
+ 
+ 
+-def _join_key(row: StrategyState1mRow | FuturePathRow) -> tuple[str, str, int, int]:
++def _join_key(row: StrategyState1mRow | FuturePathRow | _OutcomeLabelJoinRow) -> tuple[str, str, int, int]:
+     return (row.event_id, row.symbol, row.snapshot_time_ms, row.feature_cutoff_time_ms)
+ 
+ 
+-def _enforce_label_temporal_contract(*, state: StrategyState1mRow, future: FuturePathRow) -> None:
++def _enforce_label_temporal_contract(*, state: StrategyState1mRow | _OutcomeLabelJoinRow, future: FuturePathRow) -> None:
+     if state.snapshot_time_ms != future.snapshot_time_ms:
+         raise MarketDataContractError("label join requires equal state/future snapshot_time_ms")
+     if state.feature_cutoff_time_ms != future.feature_cutoff_time_ms:
+@@ -321,7 +469,7 @@ def _enforce_label_temporal_contract(*, state: StrategyState1mRow, future: Futur
+ 
+ def _required_str(row: Mapping[str, object], name: str) -> str:
+     value = row[name]
+-    if pd.isna(value):
++    if _is_missing_csv_value(value):
+         raise ValueError(f"{name} is required")
+     result = str(value)
+     if not result:
+@@ -331,14 +479,14 @@ def _required_str(row: Mapping[str, object], name: str) -> str:
+ 
+ def _required_int(row: Mapping[str, object], name: str) -> int:
+     value = row[name]
+-    if pd.isna(value):
++    if _is_missing_csv_value(value):
+         raise ValueError(f"{name} is required")
+     return int(value)
+ 
+ 
+ def _required_float(row: Mapping[str, object], name: str) -> float:
+     value = row[name]
+-    if pd.isna(value):
++    if _is_missing_csv_value(value):
+         raise ValueError(f"{name} is required")
+     result = float(value)
+     if not math.isfinite(result):
+@@ -348,7 +496,7 @@ def _required_float(row: Mapping[str, object], name: str) -> float:
+ 
+ def _optional_float(row: Mapping[str, object], name: str) -> float | None:
+     value = row[name]
+-    if pd.isna(value) or value == "":
++    if _is_missing_csv_value(value):
+         return None
+     result = float(value)
+     if not math.isfinite(result):
+@@ -356,11 +504,34 @@ def _optional_float(row: Mapping[str, object], name: str) -> float | None:
+     return result
+ 
+ 
++def _optional_str(row: Mapping[str, object], name: str) -> str | None:
++    value = row[name]
++    if _is_missing_csv_value(value):
++        return None
++    return str(value)
++
++
++def _optional_bool(row: Mapping[str, object], name: str) -> bool | None:
++    value = row[name]
++    if _is_missing_csv_value(value):
++        return None
++    if isinstance(value, bool):
++        return value
++    if isinstance(value, (int, float)) and value in (0, 1):
++        return bool(value)
++    text = str(value).strip().lower()
++    if text in {"true", "1"}:
++        return True
++    if text in {"false", "0"}:
++        return False
++    raise ValueError(f"{name} must be a boolean when present")
++
++
+ def _required_bool(row: Mapping[str, object], name: str) -> bool:
+     value = row[name]
+     if isinstance(value, bool):
+         return value
+-    if pd.isna(value):
++    if _is_missing_csv_value(value):
+         raise ValueError(f"{name} is required")
+     if isinstance(value, (int, float)) and value in (0, 1):
+         return bool(value)
+@@ -372,5 +543,11 @@ def _required_bool(row: Mapping[str, object], name: str) -> bool:
+     raise ValueError(f"{name} must be a boolean")
+ 
+ 
++def _is_missing_csv_value(value: object) -> bool:
++    if value is None or value == "":
++        return True
++    return isinstance(value, float) and math.isnan(value)
++
++
+ def _csv_value(value: object) -> object:
+     return "" if value is None else value
+diff --git a/src/anomaly_science/labels/run.py b/src/anomaly_science/labels/run.py
+index 17c8d0ed..018d9328 100644
+--- a/src/anomaly_science/labels/run.py
++++ b/src/anomaly_science/labels/run.py
+@@ -1,16 +1,22 @@
+ from __future__ import annotations
+ 
++import csv
++import os
++import shutil
+ from dataclasses import asdict
+ from datetime import datetime, timezone
+ from pathlib import Path
++from typing import Iterable
+ 
+ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+-from anomaly_science.contracts.artifacts import get_artifact_schema
++from anomaly_science.artifacts.writer import ArtifactWriteError
++from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
+ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
++from anomaly_science.contracts.labels import StrategyOutcomeLabelRow
+ from anomaly_science.labels.builder import (
+-    build_strategy_outcome_labels_from_inputs,
+-    load_outcome_label_inputs,
+-    outcome_label_rows_to_artifact,
++    build_strategy_outcome_label_from_input,
++    iter_outcome_label_inputs_from_artifacts,
++    outcome_label_row_to_artifact,
+ )
+ from anomaly_science.labels.config import OutcomeLabelConfig
+ 
+@@ -29,9 +35,18 @@ def run_mvp1_labels(
+     output_path.mkdir(parents=True, exist_ok=True)
+     cfg = config or OutcomeLabelConfig()
+ 
+-    inputs = load_outcome_label_inputs(state_path=state_artifact_path, future_path=future_artifact_path)
+-    label_rows = build_strategy_outcome_labels_from_inputs(inputs=inputs, config=cfg)
+-    protocol_rows = _protocol_rows(input_row_count=len(inputs), label_row_count=len(label_rows))
++    label_written, label_row_count = _write_label_rows_with_aliases(
++        output_path / "strategy_outcome_labels.csv",
++        (
++            build_strategy_outcome_label_from_input(input_row=input_row, config=cfg)
++            for input_row in iter_outcome_label_inputs_from_artifacts(
++                state_path=state_artifact_path,
++                future_path=future_artifact_path,
++            )
++        ),
++        get_artifact_schema("strategy_outcome_labels.csv"),
++    )
++    protocol_rows = _protocol_rows(input_row_count=label_row_count, label_row_count=label_row_count)
+     run_config_rows = _run_config_rows(
+         state_path=state_artifact_path,
+         future_path=future_artifact_path,
+@@ -40,13 +55,7 @@ def run_mvp1_labels(
+     )
+ 
+     written: list[Path] = []
+-    written.extend(
+-        write_csv_artifact_with_aliases(
+-            output_path / "strategy_outcome_labels.csv",
+-            outcome_label_rows_to_artifact(label_rows),
+-            get_artifact_schema("strategy_outcome_labels.csv"),
+-        )
+-    )
++    written.extend(label_written)
+     written.extend(
+         write_csv_artifact_with_aliases(
+             output_path / "strategy_protocol_audit.csv",
+@@ -66,6 +75,50 @@ def run_mvp1_labels(
+     return output_path
+ 
+ 
++def _write_label_rows_with_aliases(
++    path: Path,
++    rows: Iterable[StrategyOutcomeLabelRow],
++    schema: ArtifactSchema,
++) -> tuple[list[Path], int]:
++    if path.name != schema.name:
++        raise ArtifactWriteError(f"path name {path.name!r} does not match schema name {schema.name!r}")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    row_count = _write_label_rows(path=path, rows=rows, schema=schema)
++    written = [path]
++    for alias_name in get_strategy_artifact_companion_names(schema.name):
++        alias_path = path.with_name(alias_name)
++        alias_schema = get_artifact_schema(alias_name)
++        if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
++            raise ArtifactWriteError(f"{schema.name} streaming alias {alias_name} must have identical columns")
++        shutil.copyfile(path, alias_path)
++        written.append(alias_path)
++    return written, row_count
++
++
++def _write_label_rows(*, path: Path, rows: Iterable[StrategyOutcomeLabelRow], schema: ArtifactSchema) -> int:
++    fieldnames = list(schema.required_columns)
++    expected_columns = set(fieldnames)
++    tmp_path = path.with_suffix(path.suffix + ".tmp")
++    row_count = 0
++    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
++        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
++        writer.writeheader()
++        for row in rows:
++            payload = outcome_label_row_to_artifact(row)
++            if set(payload) != expected_columns:
++                missing = [name for name in fieldnames if name not in payload]
++                extra = sorted(set(payload) - expected_columns)
++                raise ArtifactWriteError(
++                    f"strategy_outcome_labels.csv row {row_count} schema mismatch: missing={missing} extra={extra}"
++                )
++            writer.writerow({name: payload[name] for name in fieldnames})
++            row_count += 1
++            if row_count % 100_000 == 0:
++                file_obj.flush()
++    os.replace(tmp_path, path)
++    return row_count
++
++
+ def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[ProtocolAuditRow]:
+     from anomaly_science.audit import build_methodology_v2_audit_rows
+ 
+diff --git a/tests/test_labels.py b/tests/test_labels.py
+index feb83345..6e79d1f2 100644
+--- a/tests/test_labels.py
++++ b/tests/test_labels.py
+@@ -14,9 +14,11 @@ from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT
+ from anomaly_science.contracts.state import AnomalyState1mRow
+ from anomaly_science.future import future_rows_to_artifact
+ from anomaly_science.labels import (
++    OutcomeLabelInputError,
+     OutcomeLabelArtifactError,
+     assign_future_nature_scenario,
+     build_anomaly_outcome_labels,
++    iter_outcome_label_inputs_from_artifacts,
+     load_anomaly_outcome_labels_csv,
+     outcome_label_rows_to_artifact,
+ )
+@@ -366,3 +368,13 @@ def test_run_mvp1_labels_cli_writes_label_artifacts(tmp_path: Path) -> None:
+             "temporal_contract": TEMPORAL_LABEL_CONTRACT,
+         }
+     ]
++
++
++def test_streaming_label_inputs_reject_row_misalignment(tmp_path: Path) -> None:
++    state_path = tmp_path / "anomaly_state_1m.csv"
++    future_path = tmp_path / "anomaly_future_paths.csv"
++    _write_state(state_path, [_state_row(event_id="state_event")])
++    _write_future(future_path, [_future_row(event_id="future_event")])
++
++    with pytest.raises(OutcomeLabelInputError, match="row-aligned"):
++        tuple(iter_outcome_label_inputs_from_artifacts(state_path=state_path, future_path=future_path))

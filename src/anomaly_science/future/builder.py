@@ -158,81 +158,110 @@ def load_strategy_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...
     rows: list[FuturePathRow] = []
     for row_index, row_tuple in enumerate(frame.itertuples(index=False)):
         row = row_tuple._asdict()
-        try:
-            rows.append(
-                FuturePathRow(
-                    event_id=_required_str(row, "event_id"),
-                    symbol=_required_str(row, "symbol"),
-                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
-                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
-                    future_start_time_ms=_required_int(row, "future_start_time_ms"),
-                    atr_window_minutes=_required_int(row, "atr_window_minutes"),
-                    core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
-                    ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
-                    double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
-                    double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
-                    future_return_5m=_optional_float(row, "future_return_5m"),
-                    future_return_15m=_optional_float(row, "future_return_15m"),
-                    future_return_30m=_optional_float(row, "future_return_30m"),
-                    future_return_60m=_optional_float(row, "future_return_60m"),
-                    future_return_120m=_optional_float(row, "future_return_120m"),
-                    future_return_180m=_optional_float(row, "future_return_180m"),
-                    future_max_5m=_optional_float(row, "future_max_5m"),
-                    future_max_15m=_optional_float(row, "future_max_15m"),
-                    future_max_30m=_optional_float(row, "future_max_30m"),
-                    future_max_60m=_optional_float(row, "future_max_60m"),
-                    future_max_120m=_optional_float(row, "future_max_120m"),
-                    future_max_180m=_optional_float(row, "future_max_180m"),
-                    future_min_5m=_optional_float(row, "future_min_5m"),
-                    future_min_15m=_optional_float(row, "future_min_15m"),
-                    future_min_30m=_optional_float(row, "future_min_30m"),
-                    future_min_60m=_optional_float(row, "future_min_60m"),
-                    future_min_120m=_optional_float(row, "future_min_120m"),
-                    future_min_180m=_optional_float(row, "future_min_180m"),
-                    future_return_atr_5m=_optional_float(row, "future_return_atr_5m"),
-                    future_return_atr_15m=_optional_float(row, "future_return_atr_15m"),
-                    future_return_atr_30m=_optional_float(row, "future_return_atr_30m"),
-                    future_return_atr_60m=_optional_float(row, "future_return_atr_60m"),
-                    future_return_atr_120m=_optional_float(row, "future_return_atr_120m"),
-                    future_return_atr_180m=_optional_float(row, "future_return_atr_180m"),
-                    future_max_atr_5m=_optional_float(row, "future_max_atr_5m"),
-                    future_max_atr_15m=_optional_float(row, "future_max_atr_15m"),
-                    future_max_atr_30m=_optional_float(row, "future_max_atr_30m"),
-                    future_max_atr_60m=_optional_float(row, "future_max_atr_60m"),
-                    future_max_atr_120m=_optional_float(row, "future_max_atr_120m"),
-                    future_max_atr_180m=_optional_float(row, "future_max_atr_180m"),
-                    future_min_atr_5m=_optional_float(row, "future_min_atr_5m"),
-                    future_min_atr_15m=_optional_float(row, "future_min_atr_15m"),
-                    future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
-                    future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
-                    future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
-                    future_min_atr_180m=_optional_float(row, "future_min_atr_180m"),
-                    intracandle_double_barrier_hit_5m=_optional_bool(row, "intracandle_double_barrier_hit_5m"),
-                    intracandle_double_barrier_hit_15m=_optional_bool(row, "intracandle_double_barrier_hit_15m"),
-                    intracandle_double_barrier_hit_30m=_optional_bool(row, "intracandle_double_barrier_hit_30m"),
-                    intracandle_double_barrier_hit_60m=_optional_bool(row, "intracandle_double_barrier_hit_60m"),
-                    intracandle_double_barrier_hit_120m=_optional_bool(row, "intracandle_double_barrier_hit_120m"),
-                    intracandle_double_barrier_hit_180m=_optional_bool(row, "intracandle_double_barrier_hit_180m"),
-                    barrier_resolution_5m=_optional_str(row, "barrier_resolution_5m"),
-                    barrier_resolution_15m=_optional_str(row, "barrier_resolution_15m"),
-                    barrier_resolution_30m=_optional_str(row, "barrier_resolution_30m"),
-                    barrier_resolution_60m=_optional_str(row, "barrier_resolution_60m"),
-                    barrier_resolution_120m=_optional_str(row, "barrier_resolution_120m"),
-                    barrier_resolution_180m=_optional_str(row, "barrier_resolution_180m"),
-                    reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
-                    reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
-                    broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
-                    broke_structural_low_60m=_optional_bool(row, "broke_structural_low_60m"),
-                    time_to_new_high_minutes=_optional_int(row, "time_to_new_high_minutes"),
-                    time_to_structural_break_minutes=_optional_int(row, "time_to_structural_break_minutes"),
-                )
-            )
-        except (TypeError, ValueError) as exc:
-            raise AnomalyFutureArtifactError(f"invalid anomaly_future_paths.csv row {row_index}: {exc}") from exc
+        rows.append(_future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name))
     return tuple(rows)
 
 
 load_anomaly_future_paths_csv = load_strategy_future_paths_csv
+
+
+def iter_strategy_future_paths_artifact_csv(path: str | Path) -> Iterable[FuturePathRow]:
+    """Stream future path rows through the same strict artifact boundary as the tuple loader."""
+    future_path = Path(path)
+    if not future_path.exists():
+        raise AnomalyFutureArtifactError(f"future artifact is missing: {future_path}")
+
+    schema = get_artifact_schema("strategy_future_paths.csv")
+    expected_columns = list(schema.required_columns)
+    with future_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_columns:
+            raise AnomalyFutureArtifactError(
+                f"future artifact columns must match {expected_columns}, got {actual_columns}"
+            )
+        for row_index, row in enumerate(reader):
+            yield _future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name)
+
+
+iter_anomaly_future_paths_artifact_csv = iter_strategy_future_paths_artifact_csv
+
+
+def _future_path_row_from_mapping(
+    *,
+    row: Mapping[str, object],
+    row_index: int,
+    artifact_name: str,
+) -> FuturePathRow:
+    try:
+        return FuturePathRow(
+            event_id=_required_str(row, "event_id"),
+            symbol=_required_str(row, "symbol"),
+            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+            future_start_time_ms=_required_int(row, "future_start_time_ms"),
+            atr_window_minutes=_required_int(row, "atr_window_minutes"),
+            core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
+            ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
+            double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
+            double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
+            future_return_5m=_optional_float(row, "future_return_5m"),
+            future_return_15m=_optional_float(row, "future_return_15m"),
+            future_return_30m=_optional_float(row, "future_return_30m"),
+            future_return_60m=_optional_float(row, "future_return_60m"),
+            future_return_120m=_optional_float(row, "future_return_120m"),
+            future_return_180m=_optional_float(row, "future_return_180m"),
+            future_max_5m=_optional_float(row, "future_max_5m"),
+            future_max_15m=_optional_float(row, "future_max_15m"),
+            future_max_30m=_optional_float(row, "future_max_30m"),
+            future_max_60m=_optional_float(row, "future_max_60m"),
+            future_max_120m=_optional_float(row, "future_max_120m"),
+            future_max_180m=_optional_float(row, "future_max_180m"),
+            future_min_5m=_optional_float(row, "future_min_5m"),
+            future_min_15m=_optional_float(row, "future_min_15m"),
+            future_min_30m=_optional_float(row, "future_min_30m"),
+            future_min_60m=_optional_float(row, "future_min_60m"),
+            future_min_120m=_optional_float(row, "future_min_120m"),
+            future_min_180m=_optional_float(row, "future_min_180m"),
+            future_return_atr_5m=_optional_float(row, "future_return_atr_5m"),
+            future_return_atr_15m=_optional_float(row, "future_return_atr_15m"),
+            future_return_atr_30m=_optional_float(row, "future_return_atr_30m"),
+            future_return_atr_60m=_optional_float(row, "future_return_atr_60m"),
+            future_return_atr_120m=_optional_float(row, "future_return_atr_120m"),
+            future_return_atr_180m=_optional_float(row, "future_return_atr_180m"),
+            future_max_atr_5m=_optional_float(row, "future_max_atr_5m"),
+            future_max_atr_15m=_optional_float(row, "future_max_atr_15m"),
+            future_max_atr_30m=_optional_float(row, "future_max_atr_30m"),
+            future_max_atr_60m=_optional_float(row, "future_max_atr_60m"),
+            future_max_atr_120m=_optional_float(row, "future_max_atr_120m"),
+            future_max_atr_180m=_optional_float(row, "future_max_atr_180m"),
+            future_min_atr_5m=_optional_float(row, "future_min_atr_5m"),
+            future_min_atr_15m=_optional_float(row, "future_min_atr_15m"),
+            future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
+            future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
+            future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
+            future_min_atr_180m=_optional_float(row, "future_min_atr_180m"),
+            intracandle_double_barrier_hit_5m=_optional_bool(row, "intracandle_double_barrier_hit_5m"),
+            intracandle_double_barrier_hit_15m=_optional_bool(row, "intracandle_double_barrier_hit_15m"),
+            intracandle_double_barrier_hit_30m=_optional_bool(row, "intracandle_double_barrier_hit_30m"),
+            intracandle_double_barrier_hit_60m=_optional_bool(row, "intracandle_double_barrier_hit_60m"),
+            intracandle_double_barrier_hit_120m=_optional_bool(row, "intracandle_double_barrier_hit_120m"),
+            intracandle_double_barrier_hit_180m=_optional_bool(row, "intracandle_double_barrier_hit_180m"),
+            barrier_resolution_5m=_optional_str(row, "barrier_resolution_5m"),
+            barrier_resolution_15m=_optional_str(row, "barrier_resolution_15m"),
+            barrier_resolution_30m=_optional_str(row, "barrier_resolution_30m"),
+            barrier_resolution_60m=_optional_str(row, "barrier_resolution_60m"),
+            barrier_resolution_120m=_optional_str(row, "barrier_resolution_120m"),
+            barrier_resolution_180m=_optional_str(row, "barrier_resolution_180m"),
+            reclaimed_running_high_30m=_optional_bool(row, "reclaimed_running_high_30m"),
+            reclaimed_running_high_60m=_optional_bool(row, "reclaimed_running_high_60m"),
+            broke_structural_low_30m=_optional_bool(row, "broke_structural_low_30m"),
+            broke_structural_low_60m=_optional_bool(row, "broke_structural_low_60m"),
+            time_to_new_high_minutes=_optional_int(row, "time_to_new_high_minutes"),
+            time_to_structural_break_minutes=_optional_int(row, "time_to_structural_break_minutes"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise AnomalyFutureArtifactError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
 
 
 def _read_artifact_csv(path: Path) -> pd.DataFrame:

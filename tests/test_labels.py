@@ -14,9 +14,11 @@ from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT
 from anomaly_science.contracts.state import AnomalyState1mRow
 from anomaly_science.future import future_rows_to_artifact
 from anomaly_science.labels import (
+    OutcomeLabelInputError,
     OutcomeLabelArtifactError,
     assign_future_nature_scenario,
     build_anomaly_outcome_labels,
+    iter_outcome_label_inputs_from_artifacts,
     load_anomaly_outcome_labels_csv,
     outcome_label_rows_to_artifact,
 )
@@ -366,3 +368,13 @@ def test_run_mvp1_labels_cli_writes_label_artifacts(tmp_path: Path) -> None:
             "temporal_contract": TEMPORAL_LABEL_CONTRACT,
         }
     ]
+
+
+def test_streaming_label_inputs_reject_row_misalignment(tmp_path: Path) -> None:
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    future_path = tmp_path / "anomaly_future_paths.csv"
+    _write_state(state_path, [_state_row(event_id="state_event")])
+    _write_future(future_path, [_future_row(event_id="future_event")])
+
+    with pytest.raises(OutcomeLabelInputError, match="row-aligned"):
+        tuple(iter_outcome_label_inputs_from_artifacts(state_path=state_path, future_path=future_path))

@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import csv
+import os
+import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.artifacts.writer import ArtifactWriteError
+from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.contracts.labels import StrategyOutcomeLabelRow
 from anomaly_science.labels.builder import (
-    build_strategy_outcome_labels_from_inputs,
-    load_outcome_label_inputs,
-    outcome_label_rows_to_artifact,
+    build_strategy_outcome_label_from_input,
+    iter_outcome_label_inputs_from_artifacts,
+    outcome_label_row_to_artifact,
 )
 from anomaly_science.labels.config import OutcomeLabelConfig
 
@@ -29,9 +35,18 @@ def run_mvp1_labels(
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or OutcomeLabelConfig()
 
-    inputs = load_outcome_label_inputs(state_path=state_artifact_path, future_path=future_artifact_path)
-    label_rows = build_strategy_outcome_labels_from_inputs(inputs=inputs, config=cfg)
-    protocol_rows = _protocol_rows(input_row_count=len(inputs), label_row_count=len(label_rows))
+    label_written, label_row_count = _write_label_rows_with_aliases(
+        output_path / "strategy_outcome_labels.csv",
+        (
+            build_strategy_outcome_label_from_input(input_row=input_row, config=cfg)
+            for input_row in iter_outcome_label_inputs_from_artifacts(
+                state_path=state_artifact_path,
+                future_path=future_artifact_path,
+            )
+        ),
+        get_artifact_schema("strategy_outcome_labels.csv"),
+    )
+    protocol_rows = _protocol_rows(input_row_count=label_row_count, label_row_count=label_row_count)
     run_config_rows = _run_config_rows(
         state_path=state_artifact_path,
         future_path=future_artifact_path,
@@ -40,13 +55,7 @@ def run_mvp1_labels(
     )
 
     written: list[Path] = []
-    written.extend(
-        write_csv_artifact_with_aliases(
-            output_path / "strategy_outcome_labels.csv",
-            outcome_label_rows_to_artifact(label_rows),
-            get_artifact_schema("strategy_outcome_labels.csv"),
-        )
-    )
+    written.extend(label_written)
     written.extend(
         write_csv_artifact_with_aliases(
             output_path / "strategy_protocol_audit.csv",
@@ -64,6 +73,50 @@ def run_mvp1_labels(
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)
     write_manifest(output_path / "artifact_manifest.json", manifest)
     return output_path
+
+
+def _write_label_rows_with_aliases(
+    path: Path,
+    rows: Iterable[StrategyOutcomeLabelRow],
+    schema: ArtifactSchema,
+) -> tuple[list[Path], int]:
+    if path.name != schema.name:
+        raise ArtifactWriteError(f"path name {path.name!r} does not match schema name {schema.name!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row_count = _write_label_rows(path=path, rows=rows, schema=schema)
+    written = [path]
+    for alias_name in get_strategy_artifact_companion_names(schema.name):
+        alias_path = path.with_name(alias_name)
+        alias_schema = get_artifact_schema(alias_name)
+        if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
+            raise ArtifactWriteError(f"{schema.name} streaming alias {alias_name} must have identical columns")
+        shutil.copyfile(path, alias_path)
+        written.append(alias_path)
+    return written, row_count
+
+
+def _write_label_rows(*, path: Path, rows: Iterable[StrategyOutcomeLabelRow], schema: ArtifactSchema) -> int:
+    fieldnames = list(schema.required_columns)
+    expected_columns = set(fieldnames)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    row_count = 0
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
+        writer.writeheader()
+        for row in rows:
+            payload = outcome_label_row_to_artifact(row)
+            if set(payload) != expected_columns:
+                missing = [name for name in fieldnames if name not in payload]
+                extra = sorted(set(payload) - expected_columns)
+                raise ArtifactWriteError(
+                    f"strategy_outcome_labels.csv row {row_count} schema mismatch: missing={missing} extra={extra}"
+                )
+            writer.writerow({name: payload[name] for name in fieldnames})
+            row_count += 1
+            if row_count % 100_000 == 0:
+                file_obj.flush()
+    os.replace(tmp_path, path)
+    return row_count
 
 
 def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[ProtocolAuditRow]:
