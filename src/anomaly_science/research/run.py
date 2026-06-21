@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import csv
+import os
 from dataclasses import dataclass, asdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Literal
-
-import pandas as pd
 
 from anomaly_science.atlas import run_mvp1_atlas
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_manifest
@@ -337,9 +337,8 @@ def _write_summary(
     forensic_fail_count: int,
     forensic_warn_count: int,
 ) -> None:
-    candles = pd.read_csv(run_dir / "input" / "candles_1m.csv", usecols=["open_time_ms"])
-    min_time = int(candles["open_time_ms"].min()) if not candles.empty else 0
-    max_time = int(candles["open_time_ms"].max()) if not candles.empty else 0
+    time_bounds = _csv_time_bounds(run_dir / "input" / "candles_1m.csv", time_column="open_time_ms")
+    min_time, max_time = time_bounds if time_bounds is not None else (0, 0)
     lines = [
         "key,value",
         f"strategy_name,{config.strategy_name}",
@@ -448,19 +447,28 @@ def _effective_holdout_days(
 
 
 def _filter_input_csv_by_end_date(path: Path, *, time_column: str, end_date: date) -> None:
-    frame = pd.read_csv(path)
-    if frame.empty:
-        frame.to_csv(path, index=False)
-        return
-    if time_column not in frame.columns:
-        raise ValueError(f"{path} is missing required time column {time_column!r}")
     end_exclusive_ms = int(
         datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc).timestamp() * 1000
     )
-    filtered = frame[frame[time_column].astype("int64") < end_exclusive_ms].copy()
-    if path.name == "candles_1m.csv" and filtered.empty:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    kept_count = 0
+    with path.open(encoding="utf-8-sig", newline="") as source_obj:
+        reader = csv.DictReader(source_obj)
+        fieldnames = list(reader.fieldnames or [])
+        if time_column not in fieldnames:
+            raise ValueError(f"{path} is missing required time column {time_column!r}")
+        with tmp_path.open("w", encoding="utf-8-sig", newline="") as target_obj:
+            writer = csv.DictWriter(target_obj, fieldnames=fieldnames, extrasaction="raise")
+            writer.writeheader()
+            for row in reader:
+                if int(row[time_column]) >= end_exclusive_ms:
+                    continue
+                writer.writerow(row)
+                kept_count += 1
+    if path.name == "candles_1m.csv" and kept_count == 0:
+        tmp_path.unlink(missing_ok=True)
         raise ValueError(f"holdout lock removed all rows from required input artifact: {path}")
-    filtered.to_csv(path, index=False)
+    os.replace(tmp_path, path)
 
 
 def _final_holdout_start_date(*, start_date: date, end_date: date, holdout_days: int) -> date:
@@ -470,11 +478,32 @@ def _final_holdout_start_date(*, start_date: date, end_date: date, holdout_days:
 
 
 def _input_date_range(candles_path: Path) -> tuple[date, date]:
-    candles = pd.read_csv(candles_path, usecols=["open_time_ms"])
-    if candles.empty:
+    time_bounds = _csv_time_bounds(candles_path, time_column="open_time_ms")
+    if time_bounds is None:
         raise ValueError(f"cannot derive research date range from empty candles file: {candles_path}")
-    timestamps = pd.to_datetime(candles["open_time_ms"].astype("int64"), unit="ms", utc=True)
-    return timestamps.min().date(), timestamps.max().date()
+    min_time, max_time = time_bounds
+    return _utc_date_from_ms(min_time), _utc_date_from_ms(max_time)
+
+
+def _csv_time_bounds(path: Path, *, time_column: str) -> tuple[int, int] | None:
+    min_time: int | None = None
+    max_time: int | None = None
+    with path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        fieldnames = list(reader.fieldnames or [])
+        if time_column not in fieldnames:
+            raise ValueError(f"{path} is missing required time column {time_column!r}")
+        for row in reader:
+            value = int(row[time_column])
+            min_time = value if min_time is None else min(min_time, value)
+            max_time = value if max_time is None else max(max_time, value)
+    if min_time is None or max_time is None:
+        return None
+    return min_time, max_time
+
+
+def _utc_date_from_ms(timestamp_ms: int) -> date:
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).date()
 
 
 def _protocol_freeze_id(*, strategy_name: str, start_date: date, end_date: date) -> str:

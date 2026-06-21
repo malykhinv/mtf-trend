@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: stream run-research holdout input filtering
+
+Status: APPLIED.
+
+Intent:
+- Make `run-research` holdout-lock filtering stream input CSV rows instead of loading full exported input artifacts into pandas DataFrames.
+- Make research date-range and summary time-bound scans streaming as well.
+- Keep the same governance contract: default IS mode still removes final holdout rows before downstream stages; frozen holdout remains explicit.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\research\run.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py -q`
+
 ## perf: stream strict CSV artifact writer
 
 Status: APPLIED.
