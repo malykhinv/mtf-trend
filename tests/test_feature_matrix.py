@@ -17,6 +17,7 @@ from anomaly_science.features import (
     feature_matrix_rows_to_artifact,
     run_mvp1_feature_matrix,
 )
+from anomaly_science.features.matrix import _snapshot_sorted_state_csv
 from anomaly_science.state.builder import state_rows_to_artifact
 
 
@@ -519,6 +520,52 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
     assert audit_rows["ATR_1d_asof_t_computed_from_closed_past_candles"]["status"] == AuditStatus.PASS.value
     assert audit_rows["market_shock_id_assigned"]["status"] == AuditStatus.PASS.value
     assert audit_rows["simultaneous_anomalies_count_1m_point_in_time"]["status"] == AuditStatus.PASS.value
+
+
+def test_snapshot_sorted_state_csv_orders_rows_and_cleans_temp_files(tmp_path: Path) -> None:
+    state_path = tmp_path / "strategy_state_1m.csv"
+    first_snapshot = 1_700_000_000_000
+    second_snapshot = first_snapshot + ONE_MINUTE_MS
+    rows = [
+        _state_for_symbol(
+            event_id="b2",
+            symbol="BBBUSDT",
+            snapshot_time_ms=second_snapshot,
+            current_close=102.0,
+        ),
+        _state_for_symbol(
+            event_id="a1",
+            symbol="AAAUSDT",
+            snapshot_time_ms=first_snapshot,
+            current_close=101.0,
+        ),
+        _state_for_symbol(
+            event_id="b1",
+            symbol="BBBUSDT",
+            snapshot_time_ms=first_snapshot,
+            current_close=101.0,
+        ),
+    ]
+    write_csv_artifact(
+        state_path,
+        state_rows_to_artifact(rows),
+        get_artifact_schema("strategy_state_1m.csv"),
+    )
+
+    with _snapshot_sorted_state_csv(source_path=state_path, work_dir=tmp_path) as sorted_path:
+        with sorted_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+            sorted_rows = list(csv.DictReader(file_obj))
+        ordered_keys = [
+            (int(row["snapshot_time_ms"]), row["symbol"], row["event_id"])
+            for row in sorted_rows
+        ]
+
+    assert ordered_keys == [
+        (first_snapshot, "AAAUSDT", "a1"),
+        (first_snapshot, "BBBUSDT", "b1"),
+        (second_snapshot, "BBBUSDT", "b2"),
+    ]
+    assert not list(tmp_path.glob("*.tmp*"))
 
 
 def _candles(*, count: int, with_taker: bool = False, varying_volume: bool = False) -> tuple[Candle1m, ...]:

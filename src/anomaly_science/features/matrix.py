@@ -3,12 +3,14 @@ from __future__ import annotations
 import csv
 import math
 import os
+import sqlite3
 import statistics
+from contextlib import contextmanager
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Iterator, Mapping, Sequence
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
@@ -312,6 +314,7 @@ def iter_price_time_feature_matrix(
     states_by_snapshot: Mapping[int, Sequence[StrategyState1mRow | _StateSnapshotRow]] | None = None,
     config: FeatureMatrixConfig | None = None,
     sort_state_rows: bool = False,
+    state_rows_sorted_by_snapshot: bool = False,
 ) -> Iterable[StrategyFeatureMatrixRow]:
     """Build as-of feature rows from state rows.
 
@@ -356,27 +359,46 @@ def iter_price_time_feature_matrix(
         for state in state_rows:
             built_states_by_snapshot.setdefault(state.snapshot_time_ms, []).append(state)
         states_by_snapshot = built_states_by_snapshot
-    cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
 
     ordered_state_rows = (
-        sorted(state_rows, key=lambda item: (item.symbol, item.snapshot_time_ms, item.event_id))
+        sorted(state_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id))
         if sort_state_rows
         else state_rows
     )
+    cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
+    cached_snapshot_time_ms: int | None = None
+    cached_cross_section: tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures] | None = None
     for state in ordered_state_rows:
         symbol_candles = candles_by_symbol.get(state.symbol, [])
-        if state.snapshot_time_ms not in cross_section_by_snapshot:
-            snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
-            cross_section_by_snapshot[state.snapshot_time_ms] = _cross_section_features_by_symbol(
-                snapshot_time_ms=state.snapshot_time_ms,
-                candles_by_symbol=candles_by_symbol,
-                open_interest_by_symbol=oi_by_symbol,
-                liquidations_by_symbol=liquidations_by_symbol,
-                universe_by_day=universe_by_day,
-                states_at_snapshot=snapshot_states,
-                min_cross_section_symbols=cfg.min_cross_section_symbols,
-            )
-        cross_section_by_symbol, missing_cross_section = cross_section_by_snapshot[state.snapshot_time_ms]
+        if state_rows_sorted_by_snapshot:
+            if cached_snapshot_time_ms != state.snapshot_time_ms:
+                snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
+                cached_cross_section = _cross_section_features_by_symbol(
+                    snapshot_time_ms=state.snapshot_time_ms,
+                    candles_by_symbol=candles_by_symbol,
+                    open_interest_by_symbol=oi_by_symbol,
+                    liquidations_by_symbol=liquidations_by_symbol,
+                    universe_by_day=universe_by_day,
+                    states_at_snapshot=snapshot_states,
+                    min_cross_section_symbols=cfg.min_cross_section_symbols,
+                )
+                cached_snapshot_time_ms = state.snapshot_time_ms
+            if cached_cross_section is None:
+                raise RuntimeError("snapshot-sorted cross-section cache was not initialized")
+            cross_section_by_symbol, missing_cross_section = cached_cross_section
+        else:
+            if state.snapshot_time_ms not in cross_section_by_snapshot:
+                snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
+                cross_section_by_snapshot[state.snapshot_time_ms] = _cross_section_features_by_symbol(
+                    snapshot_time_ms=state.snapshot_time_ms,
+                    candles_by_symbol=candles_by_symbol,
+                    open_interest_by_symbol=oi_by_symbol,
+                    liquidations_by_symbol=liquidations_by_symbol,
+                    universe_by_day=universe_by_day,
+                    states_at_snapshot=snapshot_states,
+                    min_cross_section_symbols=cfg.min_cross_section_symbols,
+                )
+            cross_section_by_symbol, missing_cross_section = cross_section_by_snapshot[state.snapshot_time_ms]
         yield _build_state_feature_row(
             state=state,
             candles=symbol_candles,
@@ -482,6 +504,97 @@ def _state_snapshot_index_from_csv(path: Path) -> tuple[dict[int, tuple[_StateSn
     return {snapshot_time_ms: tuple(rows) for snapshot_time_ms, rows in raw.items()}, row_count
 
 
+@contextmanager
+def _snapshot_sorted_state_csv(source_path: Path, work_dir: Path) -> Iterator[Path]:
+    db_path = work_dir / "strategy_state_1m.snapshot_sort.sqlite.tmp"
+    sorted_path = work_dir / "strategy_state_1m.snapshot_order.csv.tmp"
+    for path in (db_path, sorted_path):
+        _remove_temp_file(path)
+    try:
+        _write_snapshot_sorted_state_csv(source_path=source_path, db_path=db_path, sorted_path=sorted_path)
+        yield sorted_path
+    finally:
+        for path in (sorted_path, db_path, db_path.with_suffix(db_path.suffix + "-journal")):
+            _remove_temp_file(path)
+
+
+def _write_snapshot_sorted_state_csv(*, source_path: Path, db_path: Path, sorted_path: Path) -> None:
+    schema = get_artifact_schema("strategy_state_1m.csv")
+    columns = list(schema.required_columns)
+    quoted_columns = [_quote_sql_identifier(name) for name in columns]
+    table_columns_sql = ", ".join(f"{column} TEXT NOT NULL" for column in quoted_columns)
+    insert_columns_sql = ", ".join(
+        ["snapshot_time_ms_sort", "symbol_sort", "event_id_sort", *quoted_columns]
+    )
+    placeholders = ", ".join("?" for _ in range(3 + len(columns)))
+    select_columns_sql = ", ".join(quoted_columns)
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    sorted_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA journal_mode=OFF")
+        connection.execute("PRAGMA synchronous=OFF")
+        connection.execute("PRAGMA temp_store=FILE")
+        connection.execute(
+            "CREATE TABLE state_rows ("
+            "row_index INTEGER PRIMARY KEY, "
+            "snapshot_time_ms_sort INTEGER NOT NULL, "
+            "symbol_sort TEXT NOT NULL, "
+            "event_id_sort TEXT NOT NULL, "
+            f"{table_columns_sql})"
+        )
+        insert_sql = f"INSERT INTO state_rows ({insert_columns_sql}) VALUES ({placeholders})"
+        with source_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+            reader = csv.DictReader(file_obj)
+            actual_columns = list(reader.fieldnames or [])
+            if actual_columns != columns:
+                raise AnomalyFeatureMatrixArtifactError(
+                    f"state artifact columns must match {columns}, got {actual_columns}"
+                )
+            batch: list[tuple[object, ...]] = []
+            for row_index, row in enumerate(reader):
+                batch.append(
+                    (
+                        int(row["snapshot_time_ms"]),
+                        row["symbol"],
+                        row["event_id"],
+                        *(row[name] if row[name] is not None else "" for name in columns),
+                    )
+                )
+                if len(batch) >= 50_000:
+                    connection.executemany(insert_sql, batch)
+                    batch.clear()
+            if batch:
+                connection.executemany(insert_sql, batch)
+        connection.execute(
+            "CREATE INDEX state_rows_snapshot_order "
+            "ON state_rows (snapshot_time_ms_sort, symbol_sort, event_id_sort, row_index)"
+        )
+        with sorted_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.writer(file_obj)
+            writer.writerow(columns)
+            cursor = connection.execute(
+                f"SELECT {select_columns_sql} FROM state_rows "
+                "ORDER BY snapshot_time_ms_sort, symbol_sort, event_id_sort, row_index"
+            )
+            writer.writerows(cursor)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _quote_sql_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _remove_temp_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
 def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> StrategyFeatureMatrixRow:
     return StrategyFeatureMatrixRow(
         feature_schema_version=_required_str(row, "feature_schema_version"),
@@ -584,20 +697,22 @@ def run_mvp1_feature_matrix(
     universe_frame = source.read_frame("symbol_universe_by_day", required=False)
 
     written: list[Path] = []
-    feature_written, feature_row_count = _write_feature_matrix_rows_with_aliases(
-        output_path / "strategy_feature_matrix.csv",
-        iter_price_time_feature_matrix(
-            candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
-            open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
-            liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
-            symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
-            states_by_snapshot=states_by_snapshot,
-            state_rows=iter_strategy_state_1m_csv(state_artifact_path),
-            config=cfg,
-            sort_state_rows=False,
-        ),
-        get_artifact_schema("strategy_feature_matrix.csv"),
-    )
+    with _snapshot_sorted_state_csv(source_path=state_artifact_path, work_dir=output_path) as snapshot_state_path:
+        feature_written, feature_row_count = _write_feature_matrix_rows_with_aliases(
+            output_path / "strategy_feature_matrix.csv",
+            iter_price_time_feature_matrix(
+                candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
+                open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
+                liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
+                symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
+                states_by_snapshot=states_by_snapshot,
+                state_rows=iter_strategy_state_1m_csv(snapshot_state_path),
+                config=cfg,
+                sort_state_rows=False,
+                state_rows_sorted_by_snapshot=True,
+            ),
+            get_artifact_schema("strategy_feature_matrix.csv"),
+        )
     written.extend(feature_written)
     protocol_rows = _protocol_rows(state_row_count=state_row_count, feature_row_count=feature_row_count)
     run_config_rows = _run_config_rows(

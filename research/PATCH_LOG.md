@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: bound feature-matrix cross-section cache
+
+Status: APPLIED.
+
+Intent:
+- Keep `strategy_state_1m.csv` in symbol order for the future-path streaming stage, but stop feature-matrix from needing an unbounded cross-section cache.
+- Build a temporary snapshot-ordered state stream inside `run-mvp1-feature-matrix`, process one snapshot cross-section at a time, and delete the temporary sqlite/csv files before the stage exits.
+- Preserve strict artifact parsing and Core/strategy separation; this changes stage execution shape, not feature semantics.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src tests`
+- `.venv\Scripts\python.exe -m pytest tests/test_feature_matrix.py`
+
 ## perf: release run-research stage memory
 
 Status: APPLIED.
