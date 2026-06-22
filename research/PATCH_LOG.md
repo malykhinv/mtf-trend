@@ -12,6 +12,8 @@ Intent:
 Validation:
 - `.venv\Scripts\python.exe -m compileall -q src tests`
 - `.venv\Scripts\python.exe -m pytest tests/test_feature_matrix.py`
+- `.venv\Scripts\python.exe -m pytest`
+- `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --days 2` completed with forensic `11` PASS / `8` WARN / `0` FAIL rows; local proof artifacts were deleted after validation.
 
 ## perf: release run-research stage memory
 
