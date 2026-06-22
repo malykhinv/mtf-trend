@@ -13,8 +13,10 @@ from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_sch
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.future import FuturePathRow
 from anomaly_science.future.builder import (
-    future_row_to_artifact,
+    future_row_attribute_name,
+    future_row_to_artifact_for_attributes,
     iter_strategy_future_paths_from_csv,
+    validate_future_row_fieldnames,
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
 
@@ -93,21 +95,24 @@ def _write_future_rows_with_aliases(
 
 def _write_future_rows(*, path: Path, rows: Iterable[FuturePathRow], schema: ArtifactSchema) -> int:
     fieldnames = list(schema.required_columns)
-    expected_columns = set(fieldnames)
+    try:
+        validate_future_row_fieldnames(fieldnames)
+    except ValueError as exc:
+        raise ArtifactWriteError(str(exc)) from exc
+    attribute_names = [future_row_attribute_name(fieldname) for fieldname in fieldnames]
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
         writer.writeheader()
         for row in rows:
-            payload = future_row_to_artifact(row)
-            if set(payload) != expected_columns:
-                missing = [name for name in fieldnames if name not in payload]
-                extra = sorted(set(payload) - expected_columns)
-                raise ArtifactWriteError(
-                    f"strategy_future_paths.csv row {row_count} schema mismatch: missing={missing} extra={extra}"
+            writer.writerow(
+                future_row_to_artifact_for_attributes(
+                    row=row,
+                    fieldnames=fieldnames,
+                    attribute_names=attribute_names,
                 )
-            writer.writerow({name: payload[name] for name in fieldnames})
+            )
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()

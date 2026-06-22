@@ -17,6 +17,18 @@ Validation:
 - `.venv\Scripts\python.exe -m pytest`
 - `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --days 2` completed with forensic `11` PASS / `8` WARN / `0` FAIL rows; local proof artifacts were deleted after validation.
 
+## perf: serialize future rows directly
+
+Status: APPLIED.
+
+Intent:
+- Reduce `run-mvp1-future` runtime on multi-million-row outputs by removing per-row `dataclasses.asdict()` and schema-set checks from `strategy_future_paths.csv` writing.
+- Validate future artifact schema columns once, map CSV columns to `FuturePathRow` slots once, and serialize rows directly during streaming write.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py tests\test_artifact_schemas.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_future_paths.py tests/test_artifact_schemas.py`
+
 ## perf: release run-research stage memory
 
 Status: APPLIED.
