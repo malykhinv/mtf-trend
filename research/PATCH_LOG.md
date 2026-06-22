@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: serialize EV decision rows directly
+
+Status: APPLIED.
+
+Intent:
+- Write large `strategy_decision_timing.csv` artifacts from `ExpectedValueRow` slots directly after one schema-field validation.
+- Avoid building a second full `asdict()` payload list for multi-million-row EV outputs.
+- Preserve hardlink-first `anomaly_decision_timing.csv` alias behavior and EV semantics.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\decision tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_decision_expected_value.py tests/test_trade_simulation.py tests/test_research_run.py -q`
+
 ## perf: reuse simulation inputs inside runner
 
 Status: APPLIED.

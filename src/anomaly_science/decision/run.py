@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+import csv
+import os
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
-from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.contracts.artifacts import get_artifact_schema
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
+from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
+from anomaly_science.contracts.decision import ExpectedValueRow
 from anomaly_science.decision.builder import (
     build_expected_value_metric_rows,
     expected_value_metric_rows_to_artifact,
-    expected_value_rows_to_artifact,
     load_expected_value_inputs,
 )
 from anomaly_science.decision.config import ExpectedValueConfig
@@ -50,13 +54,14 @@ def run_mvp1_expected_value(
     )
 
     written: list[Path] = []
-    written.extend(
-        write_csv_artifact_with_aliases(
-            output_path / "strategy_decision_timing.csv",
-            expected_value_rows_to_artifact(expected_value_rows),
-            get_artifact_schema("strategy_decision_timing.csv"),
-        )
+    decision_written, decision_row_count = _write_decision_timing_rows_with_aliases(
+        output_path / "strategy_decision_timing.csv",
+        expected_value_rows,
+        get_artifact_schema("strategy_decision_timing.csv"),
     )
+    written.extend(decision_written)
+    if decision_row_count != len(expected_value_rows):
+        raise ArtifactWriteError("strategy_decision_timing.csv row count changed during write")
     written.extend(
         write_csv_artifact_with_aliases(
             output_path / "strategy_ev_metrics.csv",
@@ -81,6 +86,53 @@ def run_mvp1_expected_value(
     manifest = build_manifest(run_id=_run_id(), artifact_paths=written, root=output_path)
     write_manifest(output_path / "artifact_manifest.json", manifest)
     return output_path
+
+
+def _write_decision_timing_rows_with_aliases(
+    path: Path,
+    rows: Iterable[ExpectedValueRow],
+    schema: ArtifactSchema,
+) -> tuple[list[Path], int]:
+    if path.name != schema.name:
+        raise ArtifactWriteError(f"path name {path.name!r} does not match schema name {schema.name!r}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row_count = _write_decision_timing_rows(path=path, rows=rows, schema=schema)
+    written = [path]
+    for alias_name in get_strategy_artifact_companion_names(schema.name):
+        alias_path = path.with_name(alias_name)
+        alias_schema = get_artifact_schema(alias_name)
+        if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
+            raise ArtifactWriteError(f"{schema.name} streaming alias {alias_name} must have identical columns")
+        link_or_copy_identical_artifact(path, alias_path)
+        written.append(alias_path)
+    return written, row_count
+
+
+def _write_decision_timing_rows(*, path: Path, rows: Iterable[ExpectedValueRow], schema: ArtifactSchema) -> int:
+    fieldnames = list(schema.required_columns)
+    attribute_names = [_decision_timing_attribute_name(fieldname) for fieldname in fieldnames]
+    row_field_names = {field.name for field in fields(ExpectedValueRow)}
+    missing = [name for name in attribute_names if name not in row_field_names]
+    if missing:
+        raise ArtifactWriteError(f"strategy_decision_timing.csv schema has unknown row fields: {missing}")
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    row_count = 0
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({fieldname: getattr(row, attribute_name) for fieldname, attribute_name in zip(fieldnames, attribute_names, strict=True)})
+            row_count += 1
+            if row_count % 100_000 == 0:
+                file_obj.flush()
+    os.replace(tmp_path, path)
+    return row_count
+
+
+def _decision_timing_attribute_name(fieldname: str) -> str:
+    if fieldname == "ATR_1d_asof_t":
+        return "core_atr_1440"
+    return fieldname
 
 
 def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
