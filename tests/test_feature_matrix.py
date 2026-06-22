@@ -17,7 +17,6 @@ from anomaly_science.features import (
     feature_matrix_rows_to_artifact,
     run_mvp1_feature_matrix,
 )
-from anomaly_science.features.matrix import _snapshot_sorted_state_csv
 from anomaly_science.state.builder import state_rows_to_artifact
 
 
@@ -522,50 +521,63 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
     assert audit_rows["simultaneous_anomalies_count_1m_point_in_time"]["status"] == AuditStatus.PASS.value
 
 
-def test_snapshot_sorted_state_csv_orders_rows_and_cleans_temp_files(tmp_path: Path) -> None:
-    state_path = tmp_path / "strategy_state_1m.csv"
-    first_snapshot = 1_700_000_000_000
-    second_snapshot = first_snapshot + ONE_MINUTE_MS
-    rows = [
+def test_run_mvp1_feature_matrix_preserves_state_row_order_and_cleans_temp_files(tmp_path: Path) -> None:
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    out_dir = tmp_path / "features"
+
+    aaa = list(_candles_for_symbol(symbol="AAAUSDT", count=1443, base_price=100.0, volume_base=20.0))
+    bbb = list(_candles_for_symbol(symbol="BBBUSDT", count=1443, base_price=80.0, volume_base=10.0))
+    _write_candles_csv(input_dir / "candles_1m.csv", [*aaa, *bbb])
+    first_snapshot = aaa[-2].available_time_ms
+    second_snapshot = aaa[-1].available_time_ms
+    state_rows = [
         _state_for_symbol(
             event_id="b2",
             symbol="BBBUSDT",
             snapshot_time_ms=second_snapshot,
-            current_close=102.0,
+            current_close=bbb[-1].close,
         ),
         _state_for_symbol(
             event_id="a1",
             symbol="AAAUSDT",
             snapshot_time_ms=first_snapshot,
-            current_close=101.0,
+            current_close=aaa[-2].close,
         ),
         _state_for_symbol(
             event_id="b1",
             symbol="BBBUSDT",
             snapshot_time_ms=first_snapshot,
-            current_close=101.0,
+            current_close=bbb[-2].close,
         ),
     ]
     write_csv_artifact(
-        state_path,
-        state_rows_to_artifact(rows),
+        state_dir / "strategy_state_1m.csv",
+        state_rows_to_artifact(state_rows),
         get_artifact_schema("strategy_state_1m.csv"),
     )
 
-    with _snapshot_sorted_state_csv(source_path=state_path, work_dir=tmp_path) as sorted_path:
-        with sorted_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
-            sorted_rows = list(csv.DictReader(file_obj))
-        ordered_keys = [
-            (int(row["snapshot_time_ms"]), row["symbol"], row["event_id"])
-            for row in sorted_rows
-        ]
+    run_mvp1_feature_matrix(
+        input_dir=input_dir,
+        state_path=state_dir / "strategy_state_1m.csv",
+        out_dir=out_dir,
+        config=FeatureMatrixConfig(expected_event_lifetime_minutes=30),
+    )
 
+    with (out_dir / "strategy_feature_matrix.csv").open("r", encoding="utf-8-sig", newline="") as file_obj:
+        matrix_rows = list(csv.DictReader(file_obj))
+    ordered_keys = [
+        (int(row["snapshot_time_ms"]), row["symbol"], row["event_id"])
+        for row in matrix_rows
+    ]
     assert ordered_keys == [
+        (second_snapshot, "BBBUSDT", "b2"),
         (first_snapshot, "AAAUSDT", "a1"),
         (first_snapshot, "BBBUSDT", "b1"),
-        (second_snapshot, "BBBUSDT", "b2"),
     ]
-    assert not list(tmp_path.glob("*.tmp*"))
+    assert not list(out_dir.glob("*.tmp*"))
 
 
 def _candles(*, count: int, with_taker: bool = False, varying_volume: bool = False) -> tuple[Candle1m, ...]:

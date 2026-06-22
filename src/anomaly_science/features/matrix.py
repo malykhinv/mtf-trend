@@ -5,12 +5,11 @@ import math
 import os
 import sqlite3
 import statistics
-from contextlib import contextmanager
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
@@ -315,6 +314,7 @@ def iter_price_time_feature_matrix(
     config: FeatureMatrixConfig | None = None,
     sort_state_rows: bool = False,
     state_rows_sorted_by_snapshot: bool = False,
+    cross_section_store_dir: Path | None = None,
 ) -> Iterable[StrategyFeatureMatrixRow]:
     """Build as-of feature rows from state rows.
 
@@ -368,52 +368,78 @@ def iter_price_time_feature_matrix(
     cross_section_by_snapshot: dict[int, tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]] = {}
     cached_snapshot_time_ms: int | None = None
     cached_cross_section: tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures] | None = None
-    for state in ordered_state_rows:
-        symbol_candles = candles_by_symbol.get(state.symbol, [])
-        if state_rows_sorted_by_snapshot:
-            if cached_snapshot_time_ms != state.snapshot_time_ms:
-                snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
-                cached_cross_section = _cross_section_features_by_symbol(
-                    snapshot_time_ms=state.snapshot_time_ms,
-                    candles_by_symbol=candles_by_symbol,
-                    open_interest_by_symbol=oi_by_symbol,
-                    liquidations_by_symbol=liquidations_by_symbol,
-                    universe_by_day=universe_by_day,
-                    states_at_snapshot=snapshot_states,
-                    min_cross_section_symbols=cfg.min_cross_section_symbols,
-                )
-                cached_snapshot_time_ms = state.snapshot_time_ms
-            if cached_cross_section is None:
-                raise RuntimeError("snapshot-sorted cross-section cache was not initialized")
-            cross_section_by_symbol, missing_cross_section = cached_cross_section
-        else:
-            if state.snapshot_time_ms not in cross_section_by_snapshot:
-                snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
-                cross_section_by_snapshot[state.snapshot_time_ms] = _cross_section_features_by_symbol(
-                    snapshot_time_ms=state.snapshot_time_ms,
-                    candles_by_symbol=candles_by_symbol,
-                    open_interest_by_symbol=oi_by_symbol,
-                    liquidations_by_symbol=liquidations_by_symbol,
-                    universe_by_day=universe_by_day,
-                    states_at_snapshot=snapshot_states,
-                    min_cross_section_symbols=cfg.min_cross_section_symbols,
-                )
-            cross_section_by_symbol, missing_cross_section = cross_section_by_snapshot[state.snapshot_time_ms]
-        yield _build_state_feature_row(
-            state=state,
-            candles=symbol_candles,
-            open_interest_rows=None if oi_by_symbol is None else oi_by_symbol.get(state.symbol, []),
-            liquidation_rows=None
-            if liquidations_by_symbol is None
-            else liquidations_by_symbol.get(state.symbol, []),
+    cross_section_store: _CrossSectionFeatureStore | None = None
+    if cross_section_store_dir is not None:
+        cross_section_store = _CrossSectionFeatureStore(cross_section_store_dir / "strategy_feature_matrix.cross_section.sqlite.tmp")
+        _populate_cross_section_feature_store(
+            store=cross_section_store,
+            snapshot_times=sorted(states_by_snapshot),
             candles_by_symbol=candles_by_symbol,
             open_interest_by_symbol=oi_by_symbol,
             liquidations_by_symbol=liquidations_by_symbol,
             universe_by_day=universe_by_day,
-            states_at_snapshot=states_by_snapshot.get(state.snapshot_time_ms, []),
-            cross_section_features=cross_section_by_symbol.get(state.symbol, missing_cross_section),
-            config=cfg,
+            states_by_snapshot=states_by_snapshot,
+            min_cross_section_symbols=cfg.min_cross_section_symbols,
         )
+    try:
+        for state in ordered_state_rows:
+            symbol_candles = candles_by_symbol.get(state.symbol, [])
+            if cross_section_store is not None:
+                cross_section_features = cross_section_store.get(
+                    snapshot_time_ms=state.snapshot_time_ms,
+                    symbol=state.symbol,
+                )
+            elif state_rows_sorted_by_snapshot:
+                if cached_snapshot_time_ms != state.snapshot_time_ms:
+                    snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
+                    cached_cross_section = _cross_section_features_by_symbol(
+                        snapshot_time_ms=state.snapshot_time_ms,
+                        candles_by_symbol=candles_by_symbol,
+                        open_interest_by_symbol=oi_by_symbol,
+                        liquidations_by_symbol=liquidations_by_symbol,
+                        universe_by_day=universe_by_day,
+                        states_at_snapshot=snapshot_states,
+                        min_cross_section_symbols=cfg.min_cross_section_symbols,
+                        target_symbols={row.symbol for row in snapshot_states},
+                    )
+                    cached_snapshot_time_ms = state.snapshot_time_ms
+                if cached_cross_section is None:
+                    raise RuntimeError("snapshot-sorted cross-section cache was not initialized")
+                cross_section_by_symbol, missing_cross_section = cached_cross_section
+                cross_section_features = cross_section_by_symbol.get(state.symbol, missing_cross_section)
+            else:
+                if state.snapshot_time_ms not in cross_section_by_snapshot:
+                    snapshot_states = states_by_snapshot.get(state.snapshot_time_ms, [])
+                    cross_section_by_snapshot[state.snapshot_time_ms] = _cross_section_features_by_symbol(
+                        snapshot_time_ms=state.snapshot_time_ms,
+                        candles_by_symbol=candles_by_symbol,
+                        open_interest_by_symbol=oi_by_symbol,
+                        liquidations_by_symbol=liquidations_by_symbol,
+                        universe_by_day=universe_by_day,
+                        states_at_snapshot=snapshot_states,
+                        min_cross_section_symbols=cfg.min_cross_section_symbols,
+                        target_symbols={row.symbol for row in snapshot_states},
+                    )
+                cross_section_by_symbol, missing_cross_section = cross_section_by_snapshot[state.snapshot_time_ms]
+                cross_section_features = cross_section_by_symbol.get(state.symbol, missing_cross_section)
+            yield _build_state_feature_row(
+                state=state,
+                candles=symbol_candles,
+                open_interest_rows=None if oi_by_symbol is None else oi_by_symbol.get(state.symbol, []),
+                liquidation_rows=None
+                if liquidations_by_symbol is None
+                else liquidations_by_symbol.get(state.symbol, []),
+                candles_by_symbol=candles_by_symbol,
+                open_interest_by_symbol=oi_by_symbol,
+                liquidations_by_symbol=liquidations_by_symbol,
+                universe_by_day=universe_by_day,
+                states_at_snapshot=states_by_snapshot.get(state.snapshot_time_ms, []),
+                cross_section_features=cross_section_features,
+                config=cfg,
+            )
+    finally:
+        if cross_section_store is not None:
+            cross_section_store.close()
 
 
 def build_price_time_feature_matrix_from_source(
@@ -504,84 +530,139 @@ def _state_snapshot_index_from_csv(path: Path) -> tuple[dict[int, tuple[_StateSn
     return {snapshot_time_ms: tuple(rows) for snapshot_time_ms, rows in raw.items()}, row_count
 
 
-@contextmanager
-def _snapshot_sorted_state_csv(source_path: Path, work_dir: Path) -> Iterator[Path]:
-    db_path = work_dir / "strategy_state_1m.snapshot_sort.sqlite.tmp"
-    sorted_path = work_dir / "strategy_state_1m.snapshot_order.csv.tmp"
-    for path in (db_path, sorted_path):
-        _remove_temp_file(path)
-    try:
-        _write_snapshot_sorted_state_csv(source_path=source_path, db_path=db_path, sorted_path=sorted_path)
-        yield sorted_path
-    finally:
-        for path in (sorted_path, db_path, db_path.with_suffix(db_path.suffix + "-journal")):
-            _remove_temp_file(path)
-
-
-def _write_snapshot_sorted_state_csv(*, source_path: Path, db_path: Path, sorted_path: Path) -> None:
-    schema = get_artifact_schema("strategy_state_1m.csv")
-    columns = list(schema.required_columns)
-    quoted_columns = [_quote_sql_identifier(name) for name in columns]
-    table_columns_sql = ", ".join(f"{column} TEXT NOT NULL" for column in quoted_columns)
-    insert_columns_sql = ", ".join(
-        ["snapshot_time_ms_sort", "symbol_sort", "event_id_sort", *quoted_columns]
+class _CrossSectionFeatureStore:
+    _FEATURE_COLUMNS = (
+        "volume_market_percentile",
+        "quote_volume_market_percentile",
+        "return_1m_market_percentile",
+        "return_from_event_market_percentile",
+        "oi_growth_market_percentile",
+        "liq_intensity_market_percentile",
+        "range_expansion_market_percentile",
+        "cross_section_available",
+        "cross_section_symbol_count",
     )
-    placeholders = ", ".join("?" for _ in range(3 + len(columns)))
-    select_columns_sql = ", ".join(quoted_columns)
 
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    sorted_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(db_path)
-    try:
-        connection.execute("PRAGMA journal_mode=OFF")
-        connection.execute("PRAGMA synchronous=OFF")
-        connection.execute("PRAGMA temp_store=FILE")
-        connection.execute(
-            "CREATE TABLE state_rows ("
-            "row_index INTEGER PRIMARY KEY, "
-            "snapshot_time_ms_sort INTEGER NOT NULL, "
-            "symbol_sort TEXT NOT NULL, "
-            "event_id_sort TEXT NOT NULL, "
-            f"{table_columns_sql})"
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        _remove_temp_file(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._connection = sqlite3.connect(path)
+        self._connection.execute("PRAGMA journal_mode=OFF")
+        self._connection.execute("PRAGMA synchronous=OFF")
+        self._connection.execute("PRAGMA temp_store=FILE")
+        self._connection.execute(
+            "CREATE TABLE cross_section_features ("
+            "snapshot_time_ms INTEGER NOT NULL, "
+            "symbol TEXT NOT NULL, "
+            f"{self._feature_columns_sql()}, "
+            "PRIMARY KEY (snapshot_time_ms, symbol))"
         )
-        insert_sql = f"INSERT INTO state_rows ({insert_columns_sql}) VALUES ({placeholders})"
-        with source_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
-            reader = csv.DictReader(file_obj)
-            actual_columns = list(reader.fieldnames or [])
-            if actual_columns != columns:
-                raise AnomalyFeatureMatrixArtifactError(
-                    f"state artifact columns must match {columns}, got {actual_columns}"
-                )
-            batch: list[tuple[object, ...]] = []
-            for row_index, row in enumerate(reader):
-                batch.append(
-                    (
-                        int(row["snapshot_time_ms"]),
-                        row["symbol"],
-                        row["event_id"],
-                        *(row[name] if row[name] is not None else "" for name in columns),
-                    )
-                )
-                if len(batch) >= 50_000:
-                    connection.executemany(insert_sql, batch)
-                    batch.clear()
-            if batch:
-                connection.executemany(insert_sql, batch)
-        connection.execute(
-            "CREATE INDEX state_rows_snapshot_order "
-            "ON state_rows (snapshot_time_ms_sort, symbol_sort, event_id_sort, row_index)"
+        self._connection.execute(
+            "CREATE TABLE missing_cross_section_features ("
+            "snapshot_time_ms INTEGER PRIMARY KEY, "
+            f"{self._feature_columns_sql()})"
         )
-        with sorted_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-            writer = csv.writer(file_obj)
-            writer.writerow(columns)
-            cursor = connection.execute(
-                f"SELECT {select_columns_sql} FROM state_rows "
-                "ORDER BY snapshot_time_ms_sort, symbol_sort, event_id_sort, row_index"
-            )
-            writer.writerows(cursor)
-        connection.commit()
-    finally:
-        connection.close()
+
+    def put_snapshot(
+        self,
+        *,
+        snapshot_time_ms: int,
+        by_symbol: Mapping[str, _CrossSectionFeatures],
+        missing: _CrossSectionFeatures,
+    ) -> None:
+        feature_placeholders = ", ".join("?" for _ in range(2 + len(self._FEATURE_COLUMNS)))
+        missing_placeholders = ", ".join("?" for _ in range(1 + len(self._FEATURE_COLUMNS)))
+        self._connection.execute(
+            f"INSERT INTO missing_cross_section_features VALUES ({missing_placeholders})",
+            (snapshot_time_ms, *self._feature_values(missing)),
+        )
+        self._connection.executemany(
+            f"INSERT INTO cross_section_features VALUES ({feature_placeholders})",
+            (
+                (snapshot_time_ms, symbol, *self._feature_values(features))
+                for symbol, features in by_symbol.items()
+            ),
+        )
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def get(self, *, snapshot_time_ms: int, symbol: str) -> _CrossSectionFeatures:
+        select_columns = ", ".join(_quote_sql_identifier(name) for name in self._FEATURE_COLUMNS)
+        row = self._connection.execute(
+            f"SELECT {select_columns} FROM cross_section_features WHERE snapshot_time_ms = ? AND symbol = ?",
+            (snapshot_time_ms, symbol),
+        ).fetchone()
+        if row is None:
+            row = self._connection.execute(
+                f"SELECT {select_columns} FROM missing_cross_section_features WHERE snapshot_time_ms = ?",
+                (snapshot_time_ms,),
+            ).fetchone()
+        if row is None:
+            return _missing_cross_section_features(symbol_count=0)
+        return self._features_from_values(row)
+
+    def close(self) -> None:
+        self._connection.close()
+        _remove_temp_file(self._path)
+        _remove_temp_file(self._path.with_suffix(self._path.suffix + "-journal"))
+
+    def _feature_columns_sql(self) -> str:
+        return ", ".join(f"{_quote_sql_identifier(name)} REAL" for name in self._FEATURE_COLUMNS)
+
+    def _feature_values(self, features: _CrossSectionFeatures) -> tuple[object, ...]:
+        return (
+            features.volume_market_percentile,
+            features.quote_volume_market_percentile,
+            features.return_1m_market_percentile,
+            features.return_from_event_market_percentile,
+            features.oi_growth_market_percentile,
+            features.liq_intensity_market_percentile,
+            features.range_expansion_market_percentile,
+            1 if features.cross_section_available else 0,
+            features.cross_section_symbol_count,
+        )
+
+    def _features_from_values(self, values: Sequence[object]) -> _CrossSectionFeatures:
+        return _CrossSectionFeatures(
+            volume_market_percentile=None if values[0] is None else float(values[0]),
+            quote_volume_market_percentile=None if values[1] is None else float(values[1]),
+            return_1m_market_percentile=None if values[2] is None else float(values[2]),
+            return_from_event_market_percentile=None if values[3] is None else float(values[3]),
+            oi_growth_market_percentile=None if values[4] is None else float(values[4]),
+            liq_intensity_market_percentile=None if values[5] is None else float(values[5]),
+            range_expansion_market_percentile=None if values[6] is None else float(values[6]),
+            cross_section_available=bool(values[7]),
+            cross_section_symbol_count=int(values[8]),
+        )
+
+
+def _populate_cross_section_feature_store(
+    *,
+    store: _CrossSectionFeatureStore,
+    snapshot_times: Sequence[int],
+    candles_by_symbol: Mapping[str, Sequence[Candle1m]],
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
+    universe_by_day: Mapping[str, set[str]],
+    states_by_snapshot: Mapping[int, Sequence[StrategyState1mRow | _StateSnapshotRow]],
+    min_cross_section_symbols: int,
+) -> None:
+    for snapshot_time_ms in snapshot_times:
+        snapshot_states = states_by_snapshot.get(snapshot_time_ms, ())
+        by_symbol, missing = _cross_section_features_by_symbol(
+            snapshot_time_ms=snapshot_time_ms,
+            candles_by_symbol=candles_by_symbol,
+            open_interest_by_symbol=open_interest_by_symbol,
+            liquidations_by_symbol=liquidations_by_symbol,
+            universe_by_day=universe_by_day,
+            states_at_snapshot=snapshot_states,
+            min_cross_section_symbols=min_cross_section_symbols,
+            target_symbols={row.symbol for row in snapshot_states},
+        )
+        store.put_snapshot(snapshot_time_ms=snapshot_time_ms, by_symbol=by_symbol, missing=missing)
+    store.commit()
 
 
 def _quote_sql_identifier(value: str) -> str:
@@ -697,22 +778,21 @@ def run_mvp1_feature_matrix(
     universe_frame = source.read_frame("symbol_universe_by_day", required=False)
 
     written: list[Path] = []
-    with _snapshot_sorted_state_csv(source_path=state_artifact_path, work_dir=output_path) as snapshot_state_path:
-        feature_written, feature_row_count = _write_feature_matrix_rows_with_aliases(
-            output_path / "strategy_feature_matrix.csv",
-            iter_price_time_feature_matrix(
-                candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
-                open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
-                liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
-                symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
-                states_by_snapshot=states_by_snapshot,
-                state_rows=iter_strategy_state_1m_csv(snapshot_state_path),
-                config=cfg,
-                sort_state_rows=False,
-                state_rows_sorted_by_snapshot=True,
-            ),
-            get_artifact_schema("strategy_feature_matrix.csv"),
-        )
+    feature_written, feature_row_count = _write_feature_matrix_rows_with_aliases(
+        output_path / "strategy_feature_matrix.csv",
+        iter_price_time_feature_matrix(
+            candles_1m=iter_candles_1m_csv(input_path / "candles_1m.csv"),
+            open_interest_5m=None if oi_frame is None else normalize_open_interest_5m(oi_frame),
+            liquidations=None if liquidation_frame is None else normalize_liquidations(liquidation_frame),
+            symbol_universe_by_day=None if universe_frame is None else normalize_symbol_universe_by_day(universe_frame),
+            states_by_snapshot=states_by_snapshot,
+            state_rows=iter_strategy_state_1m_csv(state_artifact_path),
+            config=cfg,
+            sort_state_rows=False,
+            cross_section_store_dir=output_path,
+        ),
+        get_artifact_schema("strategy_feature_matrix.csv"),
+    )
     written.extend(feature_written)
     protocol_rows = _protocol_rows(state_row_count=state_row_count, feature_row_count=feature_row_count)
     run_config_rows = _run_config_rows(
@@ -1692,6 +1772,7 @@ def _cross_section_features_by_symbol(
     universe_by_day: Mapping[str, set[str]],
     states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     min_cross_section_symbols: int,
+    target_symbols: set[str] | None = None,
 ) -> tuple[dict[str, _CrossSectionFeatures], _CrossSectionFeatures]:
     trade_date = utc_ms_to_datetime(snapshot_time_ms).date().isoformat()
     universe_symbols = universe_by_day.get(trade_date, set())
@@ -1749,8 +1830,9 @@ def _cross_section_features_by_symbol(
         states_at_snapshot=states_at_snapshot,
         min_cross_section_symbols=min_cross_section_symbols,
     )
-    target_symbols = set().union(*(set(values) for values in metric_values.values()))
-    target_symbols.update(row.symbol for row in states_at_snapshot)
+    if target_symbols is None:
+        target_symbols = set().union(*(set(values) for values in metric_values.values()))
+        target_symbols.update(row.symbol for row in states_at_snapshot)
     return {
         symbol: _CrossSectionFeatures(
             volume_market_percentile=ranks_by_metric["volume"].get(symbol),

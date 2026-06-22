@@ -5,9 +5,9 @@
 Status: APPLIED.
 
 Intent:
-- Keep `strategy_state_1m.csv` in symbol order for the future-path streaming stage, but stop feature-matrix from needing an unbounded cross-section cache.
-- Build a temporary snapshot-ordered state stream inside `run-mvp1-feature-matrix`, process one snapshot cross-section at a time, and delete the temporary sqlite/csv files before the stage exits.
-- Preserve strict artifact parsing and Core/strategy separation; this changes stage execution shape, not feature semantics.
+- Keep `strategy_state_1m.csv` and final `strategy_feature_matrix.csv` in the same row order for downstream row-aligned atlas/labels/prediction stages.
+- Move cross-section rank materialization out of an unbounded in-memory dict and into a temporary SQLite lookup owned by `run-mvp1-feature-matrix`.
+- Delete the temporary lookup before the feature stage exits and preserve strict artifact parsing plus Core/strategy separation.
 
 Validation:
 - `.venv\Scripts\python.exe -m compileall -q src tests`
