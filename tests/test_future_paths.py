@@ -16,6 +16,8 @@ from anomaly_science.future import (
     AnomalyStateArtifactError,
     FuturePathBuilderConfig,
     build_anomaly_future_paths,
+    future_row_to_artifact,
+    iter_strategy_future_path_csv_value_rows_from_grouped_csv,
     iter_strategy_future_paths_from_grouped_csv,
     load_anomaly_future_paths_csv,
     load_anomaly_state_1m_csv,
@@ -256,6 +258,42 @@ def test_grouped_csv_future_builder_matches_in_memory_builder(tmp_path: Path) ->
     )
 
     assert actual == expected
+
+
+def test_direct_csv_value_future_builder_matches_typed_builder(tmp_path: Path) -> None:
+    candles = [
+        _candle(0, open_price=100.0, high=500.0, low=1.0, close=101.0),
+        _candle(1, open_price=101.0, high=103.0, low=99.0, close=102.0),
+        _candle(2, open_price=102.0, high=102.5, low=101.0, close=102.2),
+        _candle(3, open_price=102.2, high=106.0, low=101.5, close=105.0),
+        _candle(4, open_price=105.0, high=105.5, low=100.0, close=101.0),
+        _candle(5, open_price=101.0, high=103.0, low=98.0, close=99.0),
+        _candle(6, open_price=99.0, high=104.0, low=97.5, close=103.0),
+    ]
+    state = _state_row()
+    candles_path = tmp_path / "candles_1m.csv"
+    state_path = tmp_path / "strategy_state_1m.csv"
+    _write_candles_csv(candles_path, candles)
+    _write_state_rows_csv(state_path, [state])
+    fieldnames = get_artifact_schema("strategy_future_paths.csv").required_columns
+
+    expected_row = future_row_to_artifact(
+        build_anomaly_future_paths(
+            candles_1m=candles,
+            state_rows=[state],
+            config=FuturePathBuilderConfig(atr_window_minutes=1),
+        )[0]
+    )
+    actual_values = next(
+        iter_strategy_future_path_csv_value_rows_from_grouped_csv(
+            candles_path=candles_path,
+            state_path=state_path,
+            fieldnames=fieldnames,
+            config=FuturePathBuilderConfig(atr_window_minutes=1),
+        )
+    )
+
+    assert dict(zip(fieldnames, actual_values, strict=True)) == expected_row
 
 
 def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:

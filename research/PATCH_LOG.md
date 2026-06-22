@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: stream future CSV values directly
+
+Status: APPLIED.
+
+Intent:
+- Add a direct grouped-CSV future generator for `run-mvp1-future` that emits canonical CSV value rows without allocating `FuturePathRow` objects on the multi-million-row CLI path.
+- Keep the existing typed `FuturePathRow` API for in-memory builders, loaders, and tests.
+- Add a regression test proving direct CSV values match typed builder serialization on the same fixture.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py tests\test_research_run.py tests\test_artifact_schemas.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_future_paths.py tests/test_research_run.py tests/test_artifact_schemas.py -q`
+
 ## perf: write large stage rows without per-row dicts
 
 Status: APPLIED.

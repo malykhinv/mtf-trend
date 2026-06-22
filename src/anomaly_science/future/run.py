@@ -11,10 +11,8 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
 from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.contracts.future import FuturePathRow
 from anomaly_science.future.builder import (
-    future_row_attribute_name,
-    iter_strategy_future_paths_from_csv,
+    iter_strategy_future_path_csv_value_rows_from_grouped_csv,
     validate_future_row_fieldnames,
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
@@ -35,14 +33,16 @@ def run_mvp1_future(
     cfg = config or FuturePathBuilderConfig()
 
     written: list[Path] = []
+    future_schema = get_artifact_schema("strategy_future_paths.csv")
     future_written, future_row_count = _write_future_rows_with_aliases(
         output_path / "strategy_future_paths.csv",
-        iter_strategy_future_paths_from_csv(
-            input_dir=input_path,
+        iter_strategy_future_path_csv_value_rows_from_grouped_csv(
+            candles_path=input_path / "candles_1m.csv",
             state_path=state_artifact_path,
+            fieldnames=future_schema.required_columns,
             config=cfg,
         ),
-        get_artifact_schema("strategy_future_paths.csv"),
+        future_schema,
     )
     written.extend(future_written)
     protocol_rows = _protocol_rows(state_row_count=future_row_count, future_row_count=future_row_count)
@@ -74,7 +74,7 @@ def run_mvp1_future(
 
 def _write_future_rows_with_aliases(
     path: Path,
-    rows: Iterable[FuturePathRow],
+    rows: Iterable[list[object]],
     schema: ArtifactSchema,
 ) -> tuple[list[Path], int]:
     if path.name != schema.name:
@@ -92,35 +92,24 @@ def _write_future_rows_with_aliases(
     return written, row_count
 
 
-def _write_future_rows(*, path: Path, rows: Iterable[FuturePathRow], schema: ArtifactSchema) -> int:
+def _write_future_rows(*, path: Path, rows: Iterable[list[object]], schema: ArtifactSchema) -> int:
     fieldnames = list(schema.required_columns)
     try:
         validate_future_row_fieldnames(fieldnames)
     except ValueError as exc:
         raise ArtifactWriteError(str(exc)) from exc
-    attribute_names = [future_row_attribute_name(fieldname) for fieldname in fieldnames]
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
         writer = csv.writer(file_obj)
         writer.writerow(fieldnames)
         for row in rows:
-            writer.writerow(_future_row_values_for_attributes(row=row, attribute_names=attribute_names))
+            writer.writerow(row)
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()
     os.replace(tmp_path, path)
     return row_count
-
-
-def _future_row_values_for_attributes(*, row: FuturePathRow, attribute_names: list[str]) -> list[object]:
-    return [_csv_value(getattr(row, attribute_name)) for attribute_name in attribute_names]
-
-
-def _csv_value(value: object) -> object:
-    if value is None:
-        return ""
-    return value
 
 
 def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[ProtocolAuditRow]:

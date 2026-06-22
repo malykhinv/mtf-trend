@@ -454,6 +454,72 @@ def iter_strategy_future_paths_from_grouped_csv(
         )
 
 
+def iter_strategy_future_path_csv_value_rows_from_grouped_csv(
+    *,
+    candles_path: str | Path,
+    state_path: str | Path,
+    fieldnames: Sequence[str],
+    config: FuturePathBuilderConfig | None = None,
+) -> Iterable[list[object]]:
+    """Stream canonical future-path CSV values without allocating FuturePathRow objects."""
+    validate_future_row_fieldnames(fieldnames)
+    cfg = config or FuturePathBuilderConfig()
+    max_horizon = max(cfg.future_return_horizons_minutes)
+    empty_index = _empty_symbol_future_candle_index()
+    state_groups = _symbol_groups(
+        iter_strategy_state_1m_csv(state_path),
+        symbol_getter=lambda row: row.symbol,
+        source_name="strategy_state_1m.csv",
+    )
+    try:
+        current_state_symbol, current_states = next(state_groups)
+    except StopIteration:
+        return
+
+    for candle_symbol, symbol_candles in _symbol_groups(
+        iter_candles_1m_csv(candles_path),
+        symbol_getter=lambda row: row.symbol,
+        source_name="candles_1m.csv",
+    ):
+        while current_state_symbol < candle_symbol:
+            yield from _iter_state_group_future_csv_value_rows(
+                states=current_states,
+                candle_index=empty_index,
+                max_horizon=max_horizon,
+                config=cfg,
+            )
+            try:
+                current_state_symbol, current_states = next(state_groups)
+            except StopIteration:
+                return
+        if current_state_symbol != candle_symbol:
+            continue
+        yield from _iter_state_group_future_csv_value_rows(
+            states=current_states,
+            candle_index=_build_symbol_future_candle_index(symbol_candles),
+            max_horizon=max_horizon,
+            config=cfg,
+        )
+        try:
+            current_state_symbol, current_states = next(state_groups)
+        except StopIteration:
+            return
+
+    yield from _iter_state_group_future_csv_value_rows(
+        states=current_states,
+        candle_index=empty_index,
+        max_horizon=max_horizon,
+        config=cfg,
+    )
+    for _, remaining_states in state_groups:
+        yield from _iter_state_group_future_csv_value_rows(
+            states=remaining_states,
+            candle_index=empty_index,
+            max_horizon=max_horizon,
+            config=cfg,
+        )
+
+
 def _iter_state_group_future_rows(
     *,
     states: Sequence[StrategyState1mRow],
@@ -463,6 +529,24 @@ def _iter_state_group_future_rows(
 ) -> Iterable[FuturePathRow]:
     for state in states:
         yield _build_state_future_path(
+            state=state,
+            candle_index=candle_index,
+            max_horizon=max_horizon,
+            atr_window_minutes=config.atr_window_minutes,
+            double_barrier_k_continuation=config.double_barrier_k_continuation,
+            double_barrier_k_fade=config.double_barrier_k_fade,
+        )
+
+
+def _iter_state_group_future_csv_value_rows(
+    *,
+    states: Sequence[StrategyState1mRow],
+    candle_index: _SymbolFutureCandleIndex,
+    max_horizon: int,
+    config: FuturePathBuilderConfig,
+) -> Iterable[list[object]]:
+    for state in states:
+        yield _build_state_future_path_csv_values(
             state=state,
             candle_index=candle_index,
             max_horizon=max_horizon,
@@ -646,6 +730,108 @@ def _build_state_future_path(
         time_to_new_high_minutes=metrics.time_to_new_high_minutes,
         time_to_structural_break_minutes=None,
     )
+
+
+def _build_state_future_path_csv_values(
+    *,
+    state: StrategyState1mRow,
+    candle_index: _SymbolFutureCandleIndex,
+    max_horizon: int,
+    atr_window_minutes: int,
+    double_barrier_k_continuation: float,
+    double_barrier_k_fade: float,
+) -> list[object]:
+    if state.feature_cutoff_time_ms > state.snapshot_time_ms:
+        raise MarketDataContractError("state feature_cutoff_time_ms must be <= snapshot_time_ms")
+    if state.current_close <= 0:
+        raise MarketDataContractError("state current_close must be positive")
+
+    future_start_time_ms = state.snapshot_time_ms + ONE_MINUTE_MS
+    max_future_time_ms = state.snapshot_time_ms + max_horizon * ONE_MINUTE_MS
+    future_start_index = bisect_right(candle_index.available_times, state.snapshot_time_ms)
+    future_end_index = bisect_right(candle_index.available_times, max_future_time_ms)
+    atr_result = _compute_atr_when_history_available(
+        state=state,
+        candle_index=candle_index,
+        atr_window_minutes=atr_window_minutes,
+    )
+    atr_value = atr_result.core_atr_1440 if atr_result is not None else None
+    metrics = _future_metrics(
+        state=state,
+        candles=candle_index.candles,
+        start_index=future_start_index,
+        end_index=future_end_index,
+        horizons=(5, 15, 30, 60, 120, 180),
+        atr_value=atr_value,
+        k_continuation=double_barrier_k_continuation,
+        k_fade=double_barrier_k_fade,
+    )
+    return [
+        state.event_id,
+        state.symbol,
+        state.snapshot_time_ms,
+        state.feature_cutoff_time_ms,
+        future_start_time_ms,
+        atr_window_minutes,
+        _csv_value(atr_value),
+        _csv_value(atr_result.atr_1d_pct_asof_t if atr_result is not None else None),
+        _csv_value(double_barrier_k_continuation if atr_value is not None else None),
+        _csv_value(double_barrier_k_fade if atr_value is not None else None),
+        _csv_value(metrics.future_return[0]),
+        _csv_value(metrics.future_return[1]),
+        _csv_value(metrics.future_return[2]),
+        _csv_value(metrics.future_return[3]),
+        _csv_value(metrics.future_return[4]),
+        _csv_value(metrics.future_return[5]),
+        _csv_value(metrics.future_max[0]),
+        _csv_value(metrics.future_max[1]),
+        _csv_value(metrics.future_max[2]),
+        _csv_value(metrics.future_max[3]),
+        _csv_value(metrics.future_max[4]),
+        _csv_value(metrics.future_max[5]),
+        _csv_value(metrics.future_min[0]),
+        _csv_value(metrics.future_min[1]),
+        _csv_value(metrics.future_min[2]),
+        _csv_value(metrics.future_min[3]),
+        _csv_value(metrics.future_min[4]),
+        _csv_value(metrics.future_min[5]),
+        _csv_value(metrics.future_return_atr[0]),
+        _csv_value(metrics.future_return_atr[1]),
+        _csv_value(metrics.future_return_atr[2]),
+        _csv_value(metrics.future_return_atr[3]),
+        _csv_value(metrics.future_return_atr[4]),
+        _csv_value(metrics.future_return_atr[5]),
+        _csv_value(metrics.future_max_atr[0]),
+        _csv_value(metrics.future_max_atr[1]),
+        _csv_value(metrics.future_max_atr[2]),
+        _csv_value(metrics.future_max_atr[3]),
+        _csv_value(metrics.future_max_atr[4]),
+        _csv_value(metrics.future_max_atr[5]),
+        _csv_value(metrics.future_min_atr[0]),
+        _csv_value(metrics.future_min_atr[1]),
+        _csv_value(metrics.future_min_atr[2]),
+        _csv_value(metrics.future_min_atr[3]),
+        _csv_value(metrics.future_min_atr[4]),
+        _csv_value(metrics.future_min_atr[5]),
+        _csv_value(metrics.barrier_hit[0]),
+        _csv_value(metrics.barrier_hit[1]),
+        _csv_value(metrics.barrier_hit[2]),
+        _csv_value(metrics.barrier_hit[3]),
+        _csv_value(metrics.barrier_hit[4]),
+        _csv_value(metrics.barrier_hit[5]),
+        _csv_value(_barrier_resolution(metrics.barrier_hit[0])),
+        _csv_value(_barrier_resolution(metrics.barrier_hit[1])),
+        _csv_value(_barrier_resolution(metrics.barrier_hit[2])),
+        _csv_value(_barrier_resolution(metrics.barrier_hit[3])),
+        _csv_value(_barrier_resolution(metrics.barrier_hit[4])),
+        _csv_value(_barrier_resolution(metrics.barrier_hit[5])),
+        _csv_value(metrics.reclaimed_running_high[2]),
+        _csv_value(metrics.reclaimed_running_high[3]),
+        "",
+        "",
+        _csv_value(metrics.time_to_new_high_minutes),
+        "",
+    ]
 
 
 def _build_symbol_future_candle_index(candles: Sequence[Candle1m]) -> _SymbolFutureCandleIndex:
