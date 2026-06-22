@@ -1,5 +1,20 @@
 # Patch log
 
+## perf: slim future CSV hot path parsing
+
+Status: APPLIED.
+
+Intent:
+- Make the direct grouped-CSV `future` path read `strategy_state_1m.csv` through a typed `_FutureStateProjection` containing only the fields consumed by future-path construction.
+- Keep exact state artifact schema validation, explicit temporal checks, positive price checks, canonical output schemas, and raw future-path semantics unchanged.
+- Remove `pandas.isna` from the direct CSV hot path for future candles and projected state rows.
+- Target the remaining traced 9d `future` bottleneck after range indexing did not show an immediate enough speedup in a stopped diagnostic run.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## perf: index future horizon queries
 
 Status: APPLIED.

@@ -67,6 +67,19 @@ class _FutureMetrics:
     time_to_new_high_minutes: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class _FutureStateProjection:
+    event_id: str
+    symbol: str
+    snapshot_time_ms: int
+    feature_cutoff_time_ms: int
+    running_high_asof_t: float
+    current_close: float
+
+
+_FutureStateLike = StrategyState1mRow | _FutureStateProjection
+
+
 def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ...]:
     """Read anomaly_state_1m.csv through the declared MVP1 artifact schema.
 
@@ -118,6 +131,28 @@ def iter_strategy_state_1m_csv(path: str | Path) -> Iterable[StrategyState1mRow]
 iter_anomaly_state_1m_csv = iter_strategy_state_1m_csv
 
 
+def _iter_future_state_projection_csv(path: str | Path) -> Iterable[_FutureStateProjection]:
+    state_path = Path(path)
+    if not state_path.exists():
+        raise AnomalyStateArtifactError(f"state artifact is missing: {state_path}")
+
+    schema = get_artifact_schema("strategy_state_1m.csv")
+    expected_columns = list(schema.required_columns)
+    with state_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_columns:
+            raise AnomalyStateArtifactError(
+                f"state artifact columns must match {expected_columns}, got {actual_columns}"
+            )
+        for row_index, row in enumerate(reader):
+            yield _future_state_projection_from_mapping(
+                row=row,
+                row_index=row_index,
+                artifact_name=state_path.name,
+            )
+
+
 def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
     """Stream normalized 1m candles from the explicit CSV boundary."""
     candles_path = Path(path)
@@ -134,18 +169,18 @@ def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
         for row_index, row in enumerate(reader):
             try:
                 yield Candle1m(
-                    symbol=_required_str(row, "symbol"),
-                    open_time_ms=_required_int(row, "open_time_ms"),
-                    available_time_ms=_required_int(row, "available_time_ms"),
-                    open=_required_float(row, "open"),
-                    high=_required_float(row, "high"),
-                    low=_required_float(row, "low"),
-                    close=_required_float(row, "close"),
-                    volume=_required_float(row, "volume"),
-                    quote_volume=_required_float(row, "quote_volume"),
-                    number_of_trades=_optional_float(row, "number_of_trades") if has_number_of_trades else None,
+                    symbol=_required_csv_str(row, "symbol"),
+                    open_time_ms=_required_csv_int(row, "open_time_ms"),
+                    available_time_ms=_required_csv_int(row, "available_time_ms"),
+                    open=_required_csv_float(row, "open"),
+                    high=_required_csv_float(row, "high"),
+                    low=_required_csv_float(row, "low"),
+                    close=_required_csv_float(row, "close"),
+                    volume=_required_csv_float(row, "volume"),
+                    quote_volume=_required_csv_float(row, "quote_volume"),
+                    number_of_trades=_optional_csv_float(row, "number_of_trades") if has_number_of_trades else None,
                     taker_buy_quote_volume=(
-                        _optional_float(row, "taker_buy_quote_volume") if has_taker_buy_quote_volume else None
+                        _optional_csv_float(row, "taker_buy_quote_volume") if has_taker_buy_quote_volume else None
                     ),
                 )
             except (TypeError, ValueError) as exc:
@@ -412,7 +447,7 @@ def iter_strategy_future_paths_from_grouped_csv(
     max_horizon = max(cfg.future_return_horizons_minutes)
     empty_index = _empty_symbol_future_candle_index()
     state_groups = _symbol_groups(
-        iter_strategy_state_1m_csv(state_path),
+        _iter_future_state_projection_csv(state_path),
         symbol_getter=lambda row: row.symbol,
         source_name="strategy_state_1m.csv",
     )
@@ -551,7 +586,7 @@ def _iter_state_group_future_rows(
 
 def _iter_state_group_future_csv_value_rows(
     *,
-    states: Sequence[StrategyState1mRow],
+    states: Sequence[_FutureStateLike],
     candle_index: _SymbolFutureCandleIndex,
     max_horizon: int,
     config: FuturePathBuilderConfig,
@@ -745,7 +780,7 @@ def _build_state_future_path(
 
 def _build_state_future_path_csv_values(
     *,
-    state: StrategyState1mRow,
+    state: _FutureStateLike,
     candle_index: _SymbolFutureCandleIndex,
     max_horizon: int,
     atr_window_minutes: int,
@@ -1021,7 +1056,7 @@ def _barrier_node_has_hit(
 
 def _future_metrics(
     *,
-    state: StrategyState1mRow,
+    state: _FutureStateLike,
     candle_index: _SymbolFutureCandleIndex,
     start_index: int = 0,
     end_index: int | None = None,
@@ -1354,6 +1389,36 @@ def _state_row_from_mapping(
         raise AnomalyStateArtifactError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
 
 
+def _future_state_projection_from_mapping(
+    *,
+    row: Mapping[str, object],
+    row_index: int,
+    artifact_name: str,
+) -> _FutureStateProjection:
+    try:
+        state_time_ms = _required_csv_int(row, "state_time_ms")
+        snapshot_time_ms = _required_csv_int(row, "snapshot_time_ms")
+        feature_cutoff_time_ms = _required_csv_int(row, "feature_cutoff_time_ms")
+        if state_time_ms != snapshot_time_ms:
+            raise ValueError("state_time_ms must equal snapshot_time_ms for MVP online 1m state rows")
+        if feature_cutoff_time_ms > snapshot_time_ms:
+            raise ValueError("feature_cutoff_time_ms must be <= snapshot_time_ms")
+        running_high = _required_csv_float(row, "running_high_asof_t")
+        current_close = _required_csv_float(row, "current_close")
+        if running_high <= 0 or current_close <= 0:
+            raise ValueError("running_high_asof_t and current_close must be positive")
+        return _FutureStateProjection(
+            event_id=_required_csv_str(row, "event_id"),
+            symbol=_required_csv_str(row, "symbol"),
+            snapshot_time_ms=snapshot_time_ms,
+            feature_cutoff_time_ms=feature_cutoff_time_ms,
+            running_high_asof_t=running_high,
+            current_close=current_close,
+        )
+    except (TypeError, ValueError) as exc:
+        raise AnomalyStateArtifactError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
+
+
 def _required_str(row: Mapping[str, object], name: str) -> str:
     value = row[name]
     if pd.isna(value):
@@ -1361,6 +1426,40 @@ def _required_str(row: Mapping[str, object], name: str) -> str:
     result = str(value)
     if not result:
         raise ValueError(f"{name} is required")
+    return result
+
+
+def _required_csv_str(row: Mapping[str, str], name: str) -> str:
+    value = row[name]
+    if value == "":
+        raise ValueError(f"{name} is required")
+    return value
+
+
+def _required_csv_int(row: Mapping[str, str], name: str) -> int:
+    value = row[name]
+    if value == "":
+        raise ValueError(f"{name} is required")
+    return int(value)
+
+
+def _required_csv_float(row: Mapping[str, str], name: str) -> float:
+    value = row[name]
+    if value == "":
+        raise ValueError(f"{name} is required")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _optional_csv_float(row: Mapping[str, str], name: str) -> float | None:
+    value = row[name]
+    if value == "":
+        return None
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite when present")
     return result
 
 
