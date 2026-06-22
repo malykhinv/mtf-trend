@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: write future rows without per-row dicts
+
+Status: APPLIED.
+
+Intent:
+- Replace `csv.DictWriter` + per-row future artifact dictionaries with `csv.writer` + direct slot value lists for `strategy_future_paths.csv`.
+- Preserve strict schema validation, canonical column order, hardlink-first aliasing, and all future-path semantics.
+- Reduce the hottest remaining overhead in the 9d traced run where `future` took about `3092s`.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py tests\test_research_run.py tests\test_artifact_schemas.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_future_paths.py tests/test_research_run.py tests/test_artifact_schemas.py -q`
+
 ## perf: reduce future row allocation pressure
 
 Status: APPLIED.

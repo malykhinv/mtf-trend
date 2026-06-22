@@ -14,7 +14,6 @@ from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunCo
 from anomaly_science.contracts.future import FuturePathRow
 from anomaly_science.future.builder import (
     future_row_attribute_name,
-    future_row_to_artifact_for_attributes,
     iter_strategy_future_paths_from_csv,
     validate_future_row_fieldnames,
 )
@@ -103,21 +102,25 @@ def _write_future_rows(*, path: Path, rows: Iterable[FuturePathRow], schema: Art
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
-        writer.writeheader()
+        writer = csv.writer(file_obj)
+        writer.writerow(fieldnames)
         for row in rows:
-            writer.writerow(
-                future_row_to_artifact_for_attributes(
-                    row=row,
-                    fieldnames=fieldnames,
-                    attribute_names=attribute_names,
-                )
-            )
+            writer.writerow(_future_row_values_for_attributes(row=row, attribute_names=attribute_names))
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()
     os.replace(tmp_path, path)
     return row_count
+
+
+def _future_row_values_for_attributes(*, row: FuturePathRow, attribute_names: list[str]) -> list[object]:
+    return [_csv_value(getattr(row, attribute_name)) for attribute_name in attribute_names]
+
+
+def _csv_value(value: object) -> object:
+    if value is None:
+        return ""
+    return value
 
 
 def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[ProtocolAuditRow]:
