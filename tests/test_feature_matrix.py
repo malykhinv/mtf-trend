@@ -535,16 +535,16 @@ def test_run_mvp1_feature_matrix_preserves_state_row_order_and_cleans_temp_files
     second_snapshot = aaa[-1].available_time_ms
     state_rows = [
         _state_for_symbol(
-            event_id="b2",
-            symbol="BBBUSDT",
-            snapshot_time_ms=second_snapshot,
-            current_close=bbb[-1].close,
-        ),
-        _state_for_symbol(
             event_id="a1",
             symbol="AAAUSDT",
             snapshot_time_ms=first_snapshot,
             current_close=aaa[-2].close,
+        ),
+        _state_for_symbol(
+            event_id="b2",
+            symbol="BBBUSDT",
+            snapshot_time_ms=second_snapshot,
+            current_close=bbb[-1].close,
         ),
         _state_for_symbol(
             event_id="b1",
@@ -573,8 +573,8 @@ def test_run_mvp1_feature_matrix_preserves_state_row_order_and_cleans_temp_files
         for row in matrix_rows
     ]
     assert ordered_keys == [
-        (second_snapshot, "BBBUSDT", "b2"),
         (first_snapshot, "AAAUSDT", "a1"),
+        (second_snapshot, "BBBUSDT", "b2"),
         (first_snapshot, "BBBUSDT", "b1"),
     ]
     assert not list(out_dir.glob("*.tmp*"))
