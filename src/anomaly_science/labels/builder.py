@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from itertools import zip_longest
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -316,12 +316,52 @@ def outcome_label_rows_to_artifact(rows: Sequence[StrategyOutcomeLabelRow]) -> l
 
 
 def outcome_label_row_to_artifact(row: StrategyOutcomeLabelRow) -> dict[str, object]:
-    payload = _with_core_atr_csv_alias(asdict(row))
-    return {key: _csv_value(value) for key, value in payload.items()}
+    return outcome_label_row_to_artifact_for_columns(
+        row=row,
+        fieldnames=get_artifact_schema("strategy_outcome_labels.csv").required_columns,
+    )
 
 
-def _with_core_atr_csv_alias(payload: dict[str, object]) -> dict[str, object]:
-    return {"ATR_1d_asof_t" if key == "core_atr_1440" else key: value for key, value in payload.items()}
+def outcome_label_row_to_artifact_for_columns(
+    *,
+    row: StrategyOutcomeLabelRow,
+    fieldnames: Sequence[str],
+) -> dict[str, object]:
+    attribute_names = [outcome_label_row_attribute_name(fieldname) for fieldname in fieldnames]
+    return outcome_label_row_to_artifact_for_attributes(
+        row=row,
+        fieldnames=fieldnames,
+        attribute_names=attribute_names,
+    )
+
+
+def outcome_label_row_to_artifact_for_attributes(
+    *,
+    row: StrategyOutcomeLabelRow,
+    fieldnames: Sequence[str],
+    attribute_names: Sequence[str],
+) -> dict[str, object]:
+    return {
+        fieldname: _csv_value(getattr(row, attribute_name))
+        for fieldname, attribute_name in zip(fieldnames, attribute_names)
+    }
+
+
+def validate_outcome_label_row_fieldnames(fieldnames: Sequence[str]) -> None:
+    row_fields = set(StrategyOutcomeLabelRow.__dataclass_fields__)
+    missing = [
+        fieldname
+        for fieldname in fieldnames
+        if outcome_label_row_attribute_name(fieldname) not in row_fields
+    ]
+    if missing:
+        raise ValueError(f"strategy_outcome_labels.csv schema has unknown row fields: {missing}")
+
+
+def outcome_label_row_attribute_name(fieldname: str) -> str:
+    if fieldname == "ATR_1d_asof_t":
+        return "core_atr_1440"
+    return fieldname
 
 
 def _double_barrier_resolved_stop_first(*, future: FuturePathRow, horizon_minutes: int) -> bool:

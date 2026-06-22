@@ -15,7 +15,9 @@ from anomaly_science.contracts.labels import StrategyOutcomeLabelRow
 from anomaly_science.labels.builder import (
     build_strategy_outcome_label_from_input,
     iter_outcome_label_inputs_from_artifacts,
-    outcome_label_row_to_artifact,
+    outcome_label_row_attribute_name,
+    outcome_label_row_to_artifact_for_attributes,
+    validate_outcome_label_row_fieldnames,
 )
 from anomaly_science.labels.config import OutcomeLabelConfig
 
@@ -96,21 +98,24 @@ def _write_label_rows_with_aliases(
 
 def _write_label_rows(*, path: Path, rows: Iterable[StrategyOutcomeLabelRow], schema: ArtifactSchema) -> int:
     fieldnames = list(schema.required_columns)
-    expected_columns = set(fieldnames)
+    try:
+        validate_outcome_label_row_fieldnames(fieldnames)
+    except ValueError as exc:
+        raise ArtifactWriteError(str(exc)) from exc
+    attribute_names = [outcome_label_row_attribute_name(fieldname) for fieldname in fieldnames]
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
         writer.writeheader()
         for row in rows:
-            payload = outcome_label_row_to_artifact(row)
-            if set(payload) != expected_columns:
-                missing = [name for name in fieldnames if name not in payload]
-                extra = sorted(set(payload) - expected_columns)
-                raise ArtifactWriteError(
-                    f"strategy_outcome_labels.csv row {row_count} schema mismatch: missing={missing} extra={extra}"
+            writer.writerow(
+                outcome_label_row_to_artifact_for_attributes(
+                    row=row,
+                    fieldnames=fieldnames,
+                    attribute_names=attribute_names,
                 )
-            writer.writerow({name: payload[name] for name in fieldnames})
+            )
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()

@@ -5,7 +5,7 @@ import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Sequence
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.artifacts.writer import link_or_copy_identical_artifact
@@ -99,27 +99,51 @@ def _write_state_rows_with_aliases(
 
 def _write_state_rows(*, path: Path, rows: Iterable[StrategyState1mRow], schema: ArtifactSchema) -> int:
     fieldnames = list(schema.required_columns)
-    expected_columns = set(fieldnames)
+    _validate_state_row_fieldnames(fieldnames)
+    attribute_names = [_state_row_attribute_name(fieldname) for fieldname in fieldnames]
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
         writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
         writer.writeheader()
         for row in rows:
-            payload = _state_row_to_artifact(row)
-            if set(payload) != expected_columns:
-                missing = [name for name in fieldnames if name not in payload]
-                extra = sorted(set(payload) - expected_columns)
-                raise ValueError(f"strategy_state_1m.csv row {row_count} schema mismatch: missing={missing} extra={extra}")
-            writer.writerow({name: payload[name] for name in fieldnames})
+            writer.writerow(
+                _state_row_to_artifact_for_attributes(
+                    row=row,
+                    fieldnames=fieldnames,
+                    attribute_names=attribute_names,
+                )
+            )
             row_count += 1
     os.replace(tmp_path, path)
     return row_count
 
 
-def _state_row_to_artifact(row: StrategyState1mRow) -> Mapping[str, object]:
-    payload = asdict(row)
-    return {key: "" if value is None else value for key, value in payload.items()}
+def _state_row_to_artifact_for_attributes(
+    *,
+    row: StrategyState1mRow,
+    fieldnames: Sequence[str],
+    attribute_names: Sequence[str],
+) -> dict[str, object]:
+    return {
+        fieldname: "" if (value := getattr(row, attribute_name)) is None else value
+        for fieldname, attribute_name in zip(fieldnames, attribute_names)
+    }
+
+
+def _validate_state_row_fieldnames(fieldnames: Sequence[str]) -> None:
+    row_fields = set(StrategyState1mRow.__dataclass_fields__)
+    missing = [
+        fieldname
+        for fieldname in fieldnames
+        if _state_row_attribute_name(fieldname) not in row_fields
+    ]
+    if missing:
+        raise ValueError(f"strategy_state_1m.csv schema has unknown row fields: {missing}")
+
+
+def _state_row_attribute_name(fieldname: str) -> str:
+    return fieldname
 
 
 def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_count: int) -> list[ProtocolAuditRow]:
