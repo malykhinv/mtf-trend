@@ -118,15 +118,19 @@ def _write_decision_timing_rows(*, path: Path, rows: Iterable[ExpectedValueRow],
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
-        writer.writeheader()
+        writer = csv.writer(file_obj)
+        writer.writerow(fieldnames)
         for row in rows:
-            writer.writerow({fieldname: getattr(row, attribute_name) for fieldname, attribute_name in zip(fieldnames, attribute_names, strict=True)})
+            writer.writerow(_decision_timing_row_values_for_attributes(row=row, attribute_names=attribute_names))
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()
     os.replace(tmp_path, path)
     return row_count
+
+
+def _decision_timing_row_values_for_attributes(*, row: ExpectedValueRow, attribute_names: list[str]) -> list[object]:
+    return ["" if (value := getattr(row, attribute_name)) is None else value for attribute_name in attribute_names]
 
 
 def _decision_timing_attribute_name(fieldname: str) -> str:

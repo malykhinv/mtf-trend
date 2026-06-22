@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: write large stage rows without per-row dicts
+
+Status: APPLIED.
+
+Intent:
+- Replace `csv.DictWriter` + per-row dictionaries with `csv.writer` + direct slot value lists for state, labels, feature matrix, and EV decision timing writers.
+- Keep strict schema validation before writing, canonical column order, and hardlink-first aliases unchanged.
+- Reduce Python allocation overhead on multi-million-row artifacts across the single-command research pipeline.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\state src\anomaly_science\labels src\anomaly_science\features src\anomaly_science\decision src\anomaly_science\future tests\test_state_builder.py tests\test_labels.py tests\test_feature_matrix.py tests\test_decision_expected_value.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_state_builder.py tests/test_labels.py tests/test_feature_matrix.py tests/test_decision_expected_value.py tests/test_future_paths.py tests/test_research_run.py tests/test_artifact_schemas.py -q`
+
 ## perf: write future rows without per-row dicts
 
 Status: APPLIED.

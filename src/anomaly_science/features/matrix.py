@@ -1174,21 +1174,19 @@ def _write_feature_matrix_rows(
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
-        writer.writeheader()
+        writer = csv.writer(file_obj)
+        writer.writerow(fieldnames)
         for row in rows:
-            writer.writerow(
-                _feature_matrix_row_to_artifact_for_attributes(
-                    row=row,
-                    fieldnames=fieldnames,
-                    attribute_names=attribute_names,
-                )
-            )
+            writer.writerow(_feature_matrix_row_values_for_attributes(row=row, attribute_names=attribute_names))
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()
     os.replace(tmp_path, path)
     return row_count
+
+
+def _feature_matrix_row_values_for_attributes(*, row: StrategyFeatureMatrixRow, attribute_names: Sequence[str]) -> list[object]:
+    return [_csv_value(getattr(row, attribute_name)) for attribute_name in attribute_names]
 
 
 def _build_state_feature_row(

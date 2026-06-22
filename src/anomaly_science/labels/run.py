@@ -16,7 +16,6 @@ from anomaly_science.labels.builder import (
     build_strategy_outcome_label_from_input,
     iter_outcome_label_inputs_from_artifacts,
     outcome_label_row_attribute_name,
-    outcome_label_row_to_artifact_for_attributes,
     validate_outcome_label_row_fieldnames,
 )
 from anomaly_science.labels.config import OutcomeLabelConfig
@@ -106,21 +105,19 @@ def _write_label_rows(*, path: Path, rows: Iterable[StrategyOutcomeLabelRow], sc
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
-        writer.writeheader()
+        writer = csv.writer(file_obj)
+        writer.writerow(fieldnames)
         for row in rows:
-            writer.writerow(
-                outcome_label_row_to_artifact_for_attributes(
-                    row=row,
-                    fieldnames=fieldnames,
-                    attribute_names=attribute_names,
-                )
-            )
+            writer.writerow(_label_row_values_for_attributes(row=row, attribute_names=attribute_names))
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()
     os.replace(tmp_path, path)
     return row_count
+
+
+def _label_row_values_for_attributes(*, row: StrategyOutcomeLabelRow, attribute_names: list[str]) -> list[object]:
+    return ["" if (value := getattr(row, attribute_name)) is None else value for attribute_name in attribute_names]
 
 
 def _protocol_rows(*, input_row_count: int, label_row_count: int) -> list[ProtocolAuditRow]:

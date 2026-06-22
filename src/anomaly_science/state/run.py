@@ -104,19 +104,17 @@ def _write_state_rows(*, path: Path, rows: Iterable[StrategyState1mRow], schema:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.DictWriter(file_obj, fieldnames=fieldnames, extrasaction="raise")
-        writer.writeheader()
+        writer = csv.writer(file_obj)
+        writer.writerow(fieldnames)
         for row in rows:
-            writer.writerow(
-                _state_row_to_artifact_for_attributes(
-                    row=row,
-                    fieldnames=fieldnames,
-                    attribute_names=attribute_names,
-                )
-            )
+            writer.writerow(_state_row_values_for_attributes(row=row, attribute_names=attribute_names))
             row_count += 1
     os.replace(tmp_path, path)
     return row_count
+
+
+def _state_row_values_for_attributes(*, row: StrategyState1mRow, attribute_names: Sequence[str]) -> list[object]:
+    return ["" if (value := getattr(row, attribute_name)) is None else value for attribute_name in attribute_names]
 
 
 def _state_row_to_artifact_for_attributes(
