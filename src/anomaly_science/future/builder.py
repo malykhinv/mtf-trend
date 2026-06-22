@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence, TypeVar
@@ -41,6 +41,17 @@ class _SymbolFutureCandleIndex:
     candles: tuple[Candle1m, ...]
     available_times: tuple[int, ...]
     true_range_prefix_sums: tuple[float, ...]
+    high_sparse: tuple[tuple[float, ...], ...]
+    low_sparse: tuple[tuple[float, ...], ...]
+    barrier_index: _BarrierRangeIndex
+
+
+@dataclass(frozen=True, slots=True)
+class _BarrierRangeIndex:
+    size: int
+    lows_by_node: tuple[tuple[float, ...], ...]
+    highs_by_node: tuple[tuple[float, ...], ...]
+    prefix_highs_by_node: tuple[tuple[float, ...], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -655,7 +666,7 @@ def _build_state_future_path(
     atr_value = atr_result.core_atr_1440 if atr_result is not None else None
     metrics = _future_metrics(
         state=state,
-        candles=candle_index.candles,
+        candle_index=candle_index,
         start_index=future_start_index,
         end_index=future_end_index,
         horizons=(5, 15, 30, 60, 120, 180),
@@ -758,7 +769,7 @@ def _build_state_future_path_csv_values(
     atr_value = atr_result.core_atr_1440 if atr_result is not None else None
     metrics = _future_metrics(
         state=state,
-        candles=candle_index.candles,
+        candle_index=candle_index,
         start_index=future_start_index,
         end_index=future_end_index,
         horizons=(5, 15, 30, 60, 120, 180),
@@ -848,17 +859,170 @@ def _build_symbol_future_candle_index(candles: Sequence[Candle1m]) -> _SymbolFut
         candles=ordered,
         available_times=tuple(candle.available_time_ms for candle in ordered),
         true_range_prefix_sums=tuple(prefix),
+        high_sparse=_build_sparse_table(tuple(candle.high for candle in ordered), op=max),
+        low_sparse=_build_sparse_table(tuple(candle.low for candle in ordered), op=min),
+        barrier_index=_build_barrier_range_index(ordered),
     )
 
 
 def _empty_symbol_future_candle_index() -> _SymbolFutureCandleIndex:
-    return _SymbolFutureCandleIndex(candles=(), available_times=(), true_range_prefix_sums=())
+    return _SymbolFutureCandleIndex(
+        candles=(),
+        available_times=(),
+        true_range_prefix_sums=(),
+        high_sparse=(),
+        low_sparse=(),
+        barrier_index=_BarrierRangeIndex(size=0, lows_by_node=(), highs_by_node=(), prefix_highs_by_node=()),
+    )
+
+
+def _build_sparse_table(values: Sequence[float], *, op: Callable[[float, float], float]) -> tuple[tuple[float, ...], ...]:
+    if not values:
+        return ()
+    levels: list[tuple[float, ...]] = [tuple(values)]
+    span = 2
+    while span <= len(values):
+        previous = levels[-1]
+        half = span // 2
+        levels.append(tuple(op(previous[index], previous[index + half]) for index in range(len(values) - span + 1)))
+        span *= 2
+    return tuple(levels)
+
+
+def _range_sparse_query(
+    levels: tuple[tuple[float, ...], ...],
+    start_index: int,
+    end_index: int,
+    *,
+    op: Callable[[float, float], float],
+) -> float | None:
+    if start_index >= end_index:
+        return None
+    length = end_index - start_index
+    level_index = length.bit_length() - 1
+    span = 1 << level_index
+    level = levels[level_index]
+    return op(level[start_index], level[end_index - span])
+
+
+def _build_barrier_range_index(candles: Sequence[Candle1m]) -> _BarrierRangeIndex:
+    if not candles:
+        return _BarrierRangeIndex(size=0, lows_by_node=(), highs_by_node=(), prefix_highs_by_node=())
+    size = 1
+    while size < len(candles):
+        size *= 2
+    lows_by_node: list[tuple[float, ...]] = [()] * (2 * size)
+    highs_by_node: list[tuple[float, ...]] = [()] * (2 * size)
+    prefix_highs_by_node: list[tuple[float, ...]] = [()] * (2 * size)
+    for index, candle in enumerate(candles):
+        node = size + index
+        lows_by_node[node] = (candle.low,)
+        highs_by_node[node] = (candle.high,)
+        prefix_highs_by_node[node] = (candle.high,)
+    for node in range(size - 1, 0, -1):
+        pairs = sorted(
+            zip(lows_by_node[node * 2], highs_by_node[node * 2], strict=True),
+            key=lambda item: item[0],
+        )
+        pairs.extend(zip(lows_by_node[node * 2 + 1], highs_by_node[node * 2 + 1], strict=True))
+        pairs.sort(key=lambda item: item[0])
+        if not pairs:
+            continue
+        lows = tuple(item[0] for item in pairs)
+        highs = tuple(item[1] for item in pairs)
+        prefix: list[float] = []
+        running = -math.inf
+        for high in highs:
+            running = max(running, high)
+            prefix.append(running)
+        lows_by_node[node] = lows
+        highs_by_node[node] = highs
+        prefix_highs_by_node[node] = tuple(prefix)
+    return _BarrierRangeIndex(
+        size=size,
+        lows_by_node=tuple(lows_by_node),
+        highs_by_node=tuple(highs_by_node),
+        prefix_highs_by_node=tuple(prefix_highs_by_node),
+    )
+
+
+def _range_high(candle_index: _SymbolFutureCandleIndex, start_index: int, end_index: int) -> float | None:
+    return _range_sparse_query(candle_index.high_sparse, start_index, end_index, op=max)
+
+
+def _range_low(candle_index: _SymbolFutureCandleIndex, start_index: int, end_index: int) -> float | None:
+    return _range_sparse_query(candle_index.low_sparse, start_index, end_index, op=min)
+
+
+def _first_high_greater(
+    candle_index: _SymbolFutureCandleIndex,
+    start_index: int,
+    end_index: int,
+    threshold: float,
+) -> int | None:
+    if start_index >= end_index:
+        return None
+    max_high = _range_high(candle_index, start_index, end_index)
+    if max_high is None or max_high <= threshold:
+        return None
+    left = start_index
+    right = end_index
+    while left + 1 < right:
+        middle = (left + right) // 2
+        left_max = _range_high(candle_index, start_index, middle)
+        if left_max is not None and left_max > threshold:
+            right = middle
+        else:
+            left = middle
+    return left if candle_index.candles[left].high > threshold else right
+
+
+def _has_double_barrier_hit(
+    barrier_index: _BarrierRangeIndex,
+    start_index: int,
+    end_index: int,
+    *,
+    upper_barrier: float,
+    lower_barrier: float,
+) -> bool:
+    if barrier_index.size == 0 or start_index >= end_index:
+        return False
+    left = start_index + barrier_index.size
+    right = end_index + barrier_index.size
+    while left < right:
+        if left % 2 == 1:
+            if _barrier_node_has_hit(barrier_index, left, upper_barrier=upper_barrier, lower_barrier=lower_barrier):
+                return True
+            left += 1
+        if right % 2 == 1:
+            right -= 1
+            if _barrier_node_has_hit(barrier_index, right, upper_barrier=upper_barrier, lower_barrier=lower_barrier):
+                return True
+        left //= 2
+        right //= 2
+    return False
+
+
+def _barrier_node_has_hit(
+    barrier_index: _BarrierRangeIndex,
+    node: int,
+    *,
+    upper_barrier: float,
+    lower_barrier: float,
+) -> bool:
+    lows = barrier_index.lows_by_node[node]
+    if not lows:
+        return False
+    eligible_count = bisect_right(lows, lower_barrier)
+    if eligible_count == 0:
+        return False
+    return barrier_index.prefix_highs_by_node[node][eligible_count - 1] >= upper_barrier
 
 
 def _future_metrics(
     *,
     state: StrategyState1mRow,
-    candles: Sequence[Candle1m],
+    candle_index: _SymbolFutureCandleIndex,
     start_index: int = 0,
     end_index: int | None = None,
     horizons: Sequence[int],
@@ -877,48 +1041,45 @@ def _future_metrics(
     barrier_hit: list[bool | None] = [None] * metric_count
     reclaimed_running_high: list[bool | None] = [None] * metric_count
 
-    cursor = 0
-    running_high: float | None = None
-    running_low: float | None = None
-    running_barrier_hit = False
-    running_reclaimed_high = False
     time_to_new_high_minutes: int | None = None
     upper_barrier = state.current_close + k_continuation * atr_value if atr_value is not None else None
     lower_barrier = state.current_close - k_fade * atr_value if atr_value is not None else None
-    limit = len(candles) if end_index is None else end_index
+    limit = len(candle_index.candles) if end_index is None else end_index
+    first_new_high_index = _first_high_greater(candle_index, start_index, limit, state.running_high_asof_t)
+    if first_new_high_index is not None:
+        time_to_new_high_minutes = _minutes_between(
+            state.snapshot_time_ms,
+            candle_index.candles[first_new_high_index].available_time_ms,
+        )
 
     for horizon_index, horizon in enumerate(sorted_horizons):
         horizon_end_ms = state.snapshot_time_ms + horizon * ONE_MINUTE_MS
-        had_window = False
-        cursor = max(cursor, start_index)
-        while cursor < limit and candles[cursor].available_time_ms <= horizon_end_ms:
-            candle = candles[cursor]
-            had_window = True
-            running_high = candle.high if running_high is None else max(running_high, candle.high)
-            running_low = candle.low if running_low is None else min(running_low, candle.low)
-            if candle.available_time_ms == horizon_end_ms and future_return[horizon_index] is None:
-                future_return[horizon_index] = (candle.close / state.current_close) - 1.0
-                if atr_value is not None:
-                    future_return_atr[horizon_index] = (candle.close - state.current_close) / atr_value
-            if atr_value is not None and upper_barrier is not None and lower_barrier is not None:
-                running_barrier_hit = running_barrier_hit or (
-                    candle.high >= upper_barrier and candle.low <= lower_barrier
-                )
-            running_reclaimed_high = running_reclaimed_high or candle.high > state.running_high_asof_t
-            if time_to_new_high_minutes is None and candle.high > state.running_high_asof_t:
-                time_to_new_high_minutes = _minutes_between(state.snapshot_time_ms, candle.available_time_ms)
-            cursor += 1
+        horizon_end_index = bisect_right(candle_index.available_times, horizon_end_ms, lo=start_index, hi=limit)
+        had_window = start_index < horizon_end_index
+        exact_index = bisect_left(candle_index.available_times, horizon_end_ms, lo=start_index, hi=horizon_end_index)
+        if exact_index < horizon_end_index and candle_index.available_times[exact_index] == horizon_end_ms:
+            close = candle_index.candles[exact_index].close
+            future_return[horizon_index] = (close / state.current_close) - 1.0
+            if atr_value is not None:
+                future_return_atr[horizon_index] = (close - state.current_close) / atr_value
 
+        running_high = _range_high(candle_index, start_index, horizon_end_index)
+        running_low = _range_low(candle_index, start_index, horizon_end_index)
         if running_high is not None and running_low is not None:
             future_max[horizon_index] = (running_high / state.current_close) - 1.0
             future_min[horizon_index] = (running_low / state.current_close) - 1.0
+            reclaimed_running_high[horizon_index] = running_high > state.running_high_asof_t
             if atr_value is not None:
                 future_max_atr[horizon_index] = (running_high - state.current_close) / atr_value
                 future_min_atr[horizon_index] = (running_low - state.current_close) / atr_value
-                barrier_hit[horizon_index] = running_barrier_hit
-            reclaimed_running_high[horizon_index] = running_reclaimed_high
-        elif had_window and atr_value is not None:
-            barrier_hit[horizon_index] = running_barrier_hit
+        if had_window and atr_value is not None and upper_barrier is not None and lower_barrier is not None:
+            barrier_hit[horizon_index] = _has_double_barrier_hit(
+                candle_index.barrier_index,
+                start_index,
+                horizon_end_index,
+                upper_barrier=upper_barrier,
+                lower_barrier=lower_barrier,
+            )
 
     return _FutureMetrics(
         future_return=tuple(future_return),

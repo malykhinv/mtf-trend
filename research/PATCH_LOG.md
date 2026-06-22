@@ -1,5 +1,19 @@
 # Patch log
 
+## perf: index future horizon queries
+
+Status: APPLIED.
+
+Intent:
+- Replace per-state scanning of up-to-180 future candles with per-symbol range indexes for future high/low, exact horizon close, first new high, and double-barrier existence checks.
+- Keep raw future-path semantics, strict time contract, ATR handling, and canonical CSV schemas unchanged.
+- Target the active traced bottleneck where 9d `future` still took about `2059s` after direct CSV generation.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_future_paths.py -q`
+- `.venv\Scripts\python.exe -m pytest tests/test_future_paths.py tests/test_labels.py tests/test_atlas.py tests/test_research_run.py tests/test_artifact_schemas.py -q`
+
 ## perf: stream future CSV values directly
 
 Status: APPLIED.
