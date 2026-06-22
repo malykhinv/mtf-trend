@@ -100,6 +100,16 @@ class _CandleSeries:
             return None
         return current
 
+    def previous_and_current(self, snapshot_time_ms: int) -> tuple[Candle1m, Candle1m] | None:
+        current_index = bisect_right(self._available_times, snapshot_time_ms) - 1
+        previous_index = current_index - 1
+        if previous_index < 0:
+            return None
+        current = self._rows[current_index]
+        if current.available_time_ms != snapshot_time_ms:
+            return None
+        return self._rows[previous_index], current
+
     def history_before(self, available_time_ms: int, count: int) -> tuple[Candle1m, ...]:
         end = bisect_left(self._available_times, available_time_ms)
         if end < count:
@@ -208,6 +218,15 @@ class _CandleSeries:
         end = bisect_right(self._available_times, snapshot_time_ms)
         start = bisect_left(self._open_times, event_start_time_ms, 0, end)
         return self._rows[start:end]
+
+    def event_quote_volume_sum(self, *, event_start_time_ms: int, snapshot_time_ms: int) -> float:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        start = bisect_left(self._open_times, event_start_time_ms, 0, end)
+        if start >= end:
+            return 0.0
+        return self._quote_volume_prefix_sums[end - 1] - (
+            self._quote_volume_prefix_sums[start - 1] if start > 0 else 0.0
+        )
 
     def atr_asof(self, *, symbol: str, snapshot_time_ms: int, atr_window_minutes: int):
         history_count = self.asof_count(snapshot_time_ms)
@@ -1436,11 +1455,19 @@ def _price_speed_atr(
     atr_value: float,
     atr_window_minutes: int,
 ) -> float | None:
-    asof_candles = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
-    if len(asof_candles) < 2:
-        return None
-    current = asof_candles[-1]
-    previous = asof_candles[-2]
+    if isinstance(candles, _CandleSeries):
+        previous_current = candles.previous_and_current(snapshot_time_ms)
+        if previous_current is None:
+            return None
+        previous, current = previous_current
+    else:
+        asof_candles = _asof_candles(candles=candles, snapshot_time_ms=snapshot_time_ms)
+        if len(asof_candles) < 2:
+            return None
+        current = asof_candles[-1]
+        previous = asof_candles[-2]
+        if current.available_time_ms != snapshot_time_ms:
+            return None
     if current.available_time_ms != snapshot_time_ms:
         return None
     expected_one_minute_atr = atr_value / max(atr_window_minutes, 1)
@@ -1814,9 +1841,9 @@ def _liquidation_features(
             item.quote_quantity for item in asof_rows if event_start_time_ms <= item.event_time_ms < state.snapshot_time_ms
         )
     if isinstance(candles, _CandleSeries):
-        cumulative_quote_volume = sum(
-            candle.quote_volume
-            for candle in candles.event_window(event_start_time_ms=event_start_time_ms, snapshot_time_ms=state.snapshot_time_ms)
+        cumulative_quote_volume = candles.event_quote_volume_sum(
+            event_start_time_ms=event_start_time_ms,
+            snapshot_time_ms=state.snapshot_time_ms,
         )
     else:
         cumulative_quote_volume = sum(

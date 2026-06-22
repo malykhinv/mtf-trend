@@ -1,5 +1,20 @@
 # Patch log
 
+## perf: avoid feature candle history copies
+
+Status: APPLIED.
+
+Intent:
+- Stop `_price_speed_atr` from copying the full as-of candle history for every indexed feature row.
+- Add direct `_CandleSeries` previous/current lookup and event quote-volume prefix-sum helpers.
+- Use the prefix-sum helper for liquidation cumulative intensity denominator.
+- Preserve point-in-time feature semantics and generic Sequence fallbacks.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\features tests\test_feature_matrix.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## perf: speed indexed feature market context
 
 Status: APPLIED.
