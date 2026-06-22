@@ -8,6 +8,7 @@ Intent:
 - Keep `strategy_state_1m.csv` and final `strategy_feature_matrix.csv` in the same row order for downstream row-aligned atlas/labels/prediction stages.
 - Move cross-section rank materialization out of an unbounded in-memory dict and into a temporary SQLite lookup owned by `run-mvp1-feature-matrix`.
 - Stream CLI feature rows by grouped symbol CSV boundaries, holding only the current symbol candle series plus BTC context instead of the full all-symbol 1m market in Python objects.
+- Serialize feature rows directly from dataclass slots after one schema validation instead of running `dataclasses.asdict()` and set checks for every multi-million-row output row.
 - Delete the temporary lookup before the feature stage exits and preserve strict artifact parsing plus Core/strategy separation.
 
 Validation:
