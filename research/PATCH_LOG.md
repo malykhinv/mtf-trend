@@ -1,5 +1,20 @@
 # Patch log
 
+## perf: lazy future barrier indexes
+
+Status: APPLIED.
+
+Intent:
+- Stop building double-barrier range indexes eagerly for every symbol in `future`.
+- Build the barrier index lazily only after a cheap horizon range precheck proves a same-candle double-barrier hit is possible.
+- Replace generic sparse-table build/query callbacks with specialized max/min sparse helpers for future high/low windows.
+- Preserve raw future-path semantics, strict time contract, ATR handling, pessimistic double-barrier resolution, and canonical CSV schemas.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## perf: slim future CSV hot path parsing
 
 Status: APPLIED.
