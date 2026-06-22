@@ -14,6 +14,7 @@ Validation:
 - `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py`
 - `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py -q`
 - `.venv\Scripts\python.exe -m pytest -q`
+- 9d all-symbol `run-research broad_anomaly_v1_h30 --days 9` diagnostic reached `future` PASS in `1370.058049s`; the run was stopped after `feature_catalog` and deleted after recording timings.
 
 ## perf: slim future CSV hot path parsing
 
