@@ -165,6 +165,45 @@ class _CandleSeries:
             return ()
         return rows
 
+    def window_return(self, *, snapshot_time_ms: int, window_minutes: int) -> float | None:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        start = end - window_minutes
+        if start < 0:
+            return None
+        first = self._rows[start]
+        last = self._rows[end - 1]
+        if last.available_time_ms != snapshot_time_ms or first.open <= 0:
+            return None
+        window_start_ms = snapshot_time_ms - window_minutes * ONE_MINUTE_MS
+        if first.open_time_ms < window_start_ms:
+            return None
+        return last.close / first.open - 1.0
+
+    def one_minute_returns_window(
+        self,
+        *,
+        snapshot_time_ms: int,
+        window_minutes: int,
+    ) -> tuple[tuple[int, ...], tuple[float, ...]]:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        start = end - window_minutes - 1
+        if start < 0:
+            return (), ()
+        if self._rows[end - 1].available_time_ms != snapshot_time_ms:
+            return (), ()
+        times: list[int] = []
+        values: list[float] = []
+        for index in range(start + 1, end):
+            previous = self._rows[index - 1]
+            current = self._rows[index]
+            if previous.close <= 0:
+                continue
+            times.append(current.available_time_ms)
+            values.append(current.close / previous.close - 1.0)
+        if len(values) < window_minutes:
+            return (), ()
+        return tuple(times), tuple(values)
+
     def event_window(self, *, event_start_time_ms: int, snapshot_time_ms: int) -> tuple[Candle1m, ...]:
         end = bisect_right(self._available_times, snapshot_time_ms)
         start = bisect_left(self._open_times, event_start_time_ms, 0, end)
@@ -2453,6 +2492,8 @@ def _symbol_return_minus_btc_return(
 
 
 def _window_return(*, candles: Sequence[Candle1m], snapshot_time_ms: int, window_minutes: int) -> float | None:
+    if isinstance(candles, _CandleSeries):
+        return candles.window_return(snapshot_time_ms=snapshot_time_ms, window_minutes=window_minutes)
     window_candles = _window_candles(candles=candles, snapshot_time_ms=snapshot_time_ms, window_minutes=window_minutes)
     if len(window_candles) < window_minutes:
         return None
@@ -2470,6 +2511,26 @@ def _rolling_return_correlation_with_btc(
     snapshot_time_ms: int,
     window_minutes: int,
 ) -> float | None:
+    if isinstance(symbol_candles, _CandleSeries) and isinstance(btc_candles, _CandleSeries):
+        symbol_times, symbol_values = symbol_candles.one_minute_returns_window(
+            snapshot_time_ms=snapshot_time_ms,
+            window_minutes=window_minutes,
+        )
+        btc_times, btc_values = btc_candles.one_minute_returns_window(
+            snapshot_time_ms=snapshot_time_ms,
+            window_minutes=window_minutes,
+        )
+        if not symbol_values or not btc_values:
+            return None
+        if symbol_times == btc_times:
+            return _correlation(symbol_values, btc_values)
+        return _correlation_for_aligned_times(
+            left_times=symbol_times,
+            left_values=symbol_values,
+            right_times=btc_times,
+            right_values=btc_values,
+            window_minutes=window_minutes,
+        )
     symbol_returns = _one_minute_returns_by_available_time(
         candles=symbol_candles,
         snapshot_time_ms=snapshot_time_ms,
@@ -2486,6 +2547,35 @@ def _rolling_return_correlation_with_btc(
     symbol_values = [symbol_returns[item] for item in common_times[-window_minutes:]]
     btc_values = [btc_returns[item] for item in common_times[-window_minutes:]]
     return _correlation(symbol_values, btc_values)
+
+
+def _correlation_for_aligned_times(
+    *,
+    left_times: Sequence[int],
+    left_values: Sequence[float],
+    right_times: Sequence[int],
+    right_values: Sequence[float],
+    window_minutes: int,
+) -> float | None:
+    left_index = 0
+    right_index = 0
+    aligned_left: list[float] = []
+    aligned_right: list[float] = []
+    while left_index < len(left_times) and right_index < len(right_times):
+        left_time = left_times[left_index]
+        right_time = right_times[right_index]
+        if left_time == right_time:
+            aligned_left.append(left_values[left_index])
+            aligned_right.append(right_values[right_index])
+            left_index += 1
+            right_index += 1
+        elif left_time < right_time:
+            left_index += 1
+        else:
+            right_index += 1
+    if len(aligned_left) < window_minutes:
+        return None
+    return _correlation(aligned_left[-window_minutes:], aligned_right[-window_minutes:])
 
 
 def _one_minute_returns_by_available_time(

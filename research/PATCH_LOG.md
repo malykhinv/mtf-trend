@@ -1,5 +1,19 @@
 # Patch log
 
+## perf: speed indexed feature market context
+
+Status: APPLIED.
+
+Intent:
+- Add indexed `_CandleSeries` helpers for window returns and one-minute return windows.
+- Use those helpers in BTC-relative return and BTC-correlation feature hot paths instead of per-row dict/set/sorted alignment when both series are already indexed.
+- Preserve point-in-time market-context semantics and the existing generic Sequence fallback.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\features tests\test_feature_matrix.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## perf: lazy future barrier indexes
 
 Status: APPLIED.
