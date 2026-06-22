@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: reuse simulation inputs inside runner
+
+Status: APPLIED.
+
+Intent:
+- Stop `run-mvp1-trade-simulation` from reading `candles_1m.csv` twice and decision timing three times.
+- Normalize candles, funding rates, and decision rows once in the runner, then pass the same typed inputs to base simulation and random-entry control builders.
+- Keep simulation semantics, pessimistic fills, costs, controls, and audit rows unchanged.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\simulation tests\test_trade_simulation.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_trade_simulation.py tests/test_research_run.py -q`
+
 ## perf: stream EV and simulation artifact loaders
 
 Status: APPLIED.

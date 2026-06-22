@@ -7,11 +7,12 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.data.source import CsvDirectoryDataSource
+from anomaly_science.data.normalized import normalize_candles_1m, normalize_funding_rates
+from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.decision import load_anomaly_decision_timing_csv
 from anomaly_science.simulation.builder import (
-    build_random_entry_time_control_from_source,
-    build_trade_simulation_from_source,
+    build_random_entry_time_control_rows,
+    build_trade_simulation_rows,
     build_trade_simulation_metric_rows,
     trade_simulation_metric_rows_to_artifact,
     trade_simulation_rows_to_artifact,
@@ -35,15 +36,23 @@ def run_mvp1_trade_simulation(
     funding_rate_present = _funding_rate_stream_present(input_path)
 
     source = CsvDirectoryDataSource(input_path)
+    candles_frame = source.read_frame("candles_1m", required=True)
+    if candles_frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    funding_frame = source.read_frame("funding_rate", required=False)
+    candles_1m = normalize_candles_1m(candles_frame)
+    funding_rates = normalize_funding_rates(funding_frame)
     decision_rows = load_anomaly_decision_timing_csv(decision_artifact_path)
-    simulation_rows = build_trade_simulation_from_source(
-        source=source,
-        decision_timing_path=decision_artifact_path,
+    simulation_rows = build_trade_simulation_rows(
+        candles_1m=candles_1m,
+        funding_rates=funding_rates,
+        decision_rows=decision_rows,
         config=cfg,
     )
-    random_entry_control_rows = build_random_entry_time_control_from_source(
-        source=source,
-        decision_timing_path=decision_artifact_path,
+    random_entry_control_rows = build_random_entry_time_control_rows(
+        candles_1m=candles_1m,
+        funding_rates=funding_rates,
+        decision_rows=decision_rows,
         config=cfg,
     )
     metric_rows = build_trade_simulation_metric_rows(
