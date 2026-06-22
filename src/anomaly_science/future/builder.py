@@ -563,7 +563,6 @@ def _build_state_future_path(
     max_future_time_ms = state.snapshot_time_ms + max_horizon * ONE_MINUTE_MS
     future_start_index = bisect_right(candle_index.available_times, state.snapshot_time_ms)
     future_end_index = bisect_right(candle_index.available_times, max_future_time_ms)
-    future_candles = candle_index.candles[future_start_index:future_end_index]
     atr_result = _compute_atr_when_history_available(
         state=state,
         candle_index=candle_index,
@@ -572,7 +571,9 @@ def _build_state_future_path(
     atr_value = atr_result.core_atr_1440 if atr_result is not None else None
     metrics = _future_metrics(
         state=state,
-        candles=future_candles,
+        candles=candle_index.candles,
+        start_index=future_start_index,
+        end_index=future_end_index,
         horizons=(5, 15, 30, 60, 120, 180),
         atr_value=atr_value,
         k_continuation=double_barrier_k_continuation,
@@ -672,6 +673,8 @@ def _future_metrics(
     *,
     state: StrategyState1mRow,
     candles: Sequence[Candle1m],
+    start_index: int = 0,
+    end_index: int | None = None,
     horizons: Sequence[int],
     atr_value: float | None,
     k_continuation: float,
@@ -695,11 +698,13 @@ def _future_metrics(
     time_to_new_high_minutes: int | None = None
     upper_barrier = state.current_close + k_continuation * atr_value if atr_value is not None else None
     lower_barrier = state.current_close - k_fade * atr_value if atr_value is not None else None
+    limit = len(candles) if end_index is None else end_index
 
     for horizon in sorted_horizons:
         horizon_end_ms = state.snapshot_time_ms + horizon * ONE_MINUTE_MS
         had_window = False
-        while cursor < len(candles) and candles[cursor].available_time_ms <= horizon_end_ms:
+        cursor = max(cursor, start_index)
+        while cursor < limit and candles[cursor].available_time_ms <= horizon_end_ms:
             candle = candles[cursor]
             had_window = True
             running_high = candle.high if running_high is None else max(running_high, candle.high)

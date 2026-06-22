@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: avoid future candle slice allocation
+
+Status: APPLIED.
+
+Intent:
+- Stop `_build_state_future_path` from allocating a per-row tuple slice of up-to-180 future candles.
+- Pass future-window start/end indexes into `_future_metrics` and scan the existing per-symbol candle tuple in place.
+- Preserve future path semantics, ATR handling, barrier logic, and row schemas.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future tests\test_future_paths.py tests\test_research_run.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_future_paths.py tests/test_research_run.py -q`
+
 ## perf: serialize EV decision rows directly
 
 Status: APPLIED.
