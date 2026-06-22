@@ -40,24 +40,38 @@ class _CandleSeries:
         volume_square_prefix: list[float] = []
         quote_volume_prefix: list[float] = []
         quote_volume_square_prefix: list[float] = []
+        delta_quote_prefix: list[float] = []
+        missing_taker_buy_quote_prefix: list[int] = []
+        one_minute_return_times: list[int] = []
+        one_minute_returns: list[float | None] = []
         running_sum = 0.0
         running_volume_sum = 0.0
         running_volume_square_sum = 0.0
         running_quote_volume_sum = 0.0
         running_quote_volume_square_sum = 0.0
+        running_delta_quote_sum = 0.0
+        running_missing_taker_buy_quote = 0
         for index, candle in enumerate(self._rows):
             running_volume_sum += candle.volume
             running_volume_square_sum += candle.volume * candle.volume
             running_quote_volume_sum += candle.quote_volume
             running_quote_volume_square_sum += candle.quote_volume * candle.quote_volume
+            if candle.taker_buy_quote_volume is None:
+                running_missing_taker_buy_quote += 1
+            else:
+                running_delta_quote_sum += 2.0 * candle.taker_buy_quote_volume - candle.quote_volume
             volume_prefix.append(running_volume_sum)
             volume_square_prefix.append(running_volume_square_sum)
             quote_volume_prefix.append(running_quote_volume_sum)
             quote_volume_square_prefix.append(running_quote_volume_square_sum)
+            delta_quote_prefix.append(running_delta_quote_sum)
+            missing_taker_buy_quote_prefix.append(running_missing_taker_buy_quote)
             if index == 0:
                 prefix.append(0.0)
                 continue
             previous_close = self._rows[index - 1].close
+            one_minute_return_times.append(candle.available_time_ms)
+            one_minute_returns.append(None if previous_close <= 0 else candle.close / previous_close - 1.0)
             running_sum += max(
                 candle.high - candle.low,
                 abs(candle.high - previous_close),
@@ -69,7 +83,12 @@ class _CandleSeries:
         self._volume_square_prefix_sums = tuple(volume_square_prefix)
         self._quote_volume_prefix_sums = tuple(quote_volume_prefix)
         self._quote_volume_square_prefix_sums = tuple(quote_volume_square_prefix)
+        self._delta_quote_prefix_sums = tuple(delta_quote_prefix)
+        self._missing_taker_buy_quote_prefix_counts = tuple(missing_taker_buy_quote_prefix)
+        self._one_minute_return_times = tuple(one_minute_return_times)
+        self._one_minute_returns = tuple(one_minute_returns)
         self._rolling_median_cache: dict[tuple[str, int], tuple[float | None, ...]] = {}
+        self._return_correlation_cache: dict[int, _ReturnCorrelationIndex] = {}
 
     def __iter__(self):
         return iter(self._rows)
@@ -214,6 +233,20 @@ class _CandleSeries:
             return (), ()
         return tuple(times), tuple(values)
 
+    def rolling_return_correlation_with(
+        self,
+        *,
+        other: _CandleSeries,
+        snapshot_time_ms: int,
+        window_minutes: int,
+    ) -> float | None:
+        cache_key = id(other)
+        correlation_index = self._return_correlation_cache.get(cache_key)
+        if correlation_index is None:
+            correlation_index = _ReturnCorrelationIndex(left=self, right=other)
+            self._return_correlation_cache[cache_key] = correlation_index
+        return correlation_index.correlation(snapshot_time_ms=snapshot_time_ms, window_minutes=window_minutes)
+
     def event_window(self, *, event_start_time_ms: int, snapshot_time_ms: int) -> tuple[Candle1m, ...]:
         end = bisect_right(self._available_times, snapshot_time_ms)
         start = bisect_left(self._open_times, event_start_time_ms, 0, end)
@@ -227,6 +260,63 @@ class _CandleSeries:
         return self._quote_volume_prefix_sums[end - 1] - (
             self._quote_volume_prefix_sums[start - 1] if start > 0 else 0.0
         )
+
+    def event_cvd_ratio(self, *, event_start_time_ms: int, snapshot_time_ms: int) -> tuple[bool, bool, float | None]:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        start = bisect_left(self._open_times, event_start_time_ms, 0, end)
+        if start >= end:
+            return False, False, None
+        missing_count = self._missing_taker_buy_quote_prefix_counts[end - 1] - (
+            self._missing_taker_buy_quote_prefix_counts[start - 1] if start > 0 else 0
+        )
+        if missing_count > 0:
+            return True, True, None
+        quote_volume = self._quote_volume_prefix_sums[end - 1] - (
+            self._quote_volume_prefix_sums[start - 1] if start > 0 else 0.0
+        )
+        if quote_volume <= 0:
+            return True, False, None
+        delta_quote = self._delta_quote_prefix_sums[end - 1] - (
+            self._delta_quote_prefix_sums[start - 1] if start > 0 else 0.0
+        )
+        return True, False, delta_quote / quote_volume
+
+    def window_cvd_and_price_change_atr(
+        self,
+        *,
+        snapshot_time_ms: int,
+        window_minutes: int,
+        atr_value: float | None,
+    ) -> tuple[float | None, float | None, float | None]:
+        end = bisect_right(self._available_times, snapshot_time_ms)
+        start = end - window_minutes
+        if start < 0:
+            return None, None, None
+        first = self._rows[start]
+        last = self._rows[end - 1]
+        if last.available_time_ms != snapshot_time_ms:
+            return None, None, None
+        window_start_ms = snapshot_time_ms - window_minutes * ONE_MINUTE_MS
+        if first.open_time_ms < window_start_ms:
+            return None, None, None
+        missing_count = self._missing_taker_buy_quote_prefix_counts[end - 1] - (
+            self._missing_taker_buy_quote_prefix_counts[start - 1] if start > 0 else 0
+        )
+        cvd_ratio = None
+        if missing_count == 0:
+            quote_volume = self._quote_volume_prefix_sums[end - 1] - (
+                self._quote_volume_prefix_sums[start - 1] if start > 0 else 0.0
+            )
+            if quote_volume > 0:
+                delta_quote = self._delta_quote_prefix_sums[end - 1] - (
+                    self._delta_quote_prefix_sums[start - 1] if start > 0 else 0.0
+                )
+                cvd_ratio = delta_quote / quote_volume
+        raw_price_change = last.close - first.open
+        price_change_atr = None
+        if atr_value is not None and atr_value > 0:
+            price_change_atr = raw_price_change / atr_value
+        return cvd_ratio, price_change_atr, raw_price_change
 
     def atr_asof(self, *, symbol: str, snapshot_time_ms: int, atr_window_minutes: int):
         history_count = self.asof_count(snapshot_time_ms)
@@ -246,6 +336,75 @@ class _CandleSeries:
         if last_close <= 0 or not math.isfinite(atr) or atr <= 0:
             raise AtrComputationError("computed ATR must be positive and finite")
         return atr, atr / last_close
+
+
+class _ReturnCorrelationIndex:
+    def __init__(self, *, left: _CandleSeries, right: _CandleSeries) -> None:
+        times: list[int] = []
+        left_prefix: list[float] = []
+        right_prefix: list[float] = []
+        left_square_prefix: list[float] = []
+        right_square_prefix: list[float] = []
+        product_prefix: list[float] = []
+        left_sum = 0.0
+        right_sum = 0.0
+        left_square_sum = 0.0
+        right_square_sum = 0.0
+        product_sum = 0.0
+        left_index = 0
+        right_index = 0
+        while left_index < len(left._one_minute_return_times) and right_index < len(right._one_minute_return_times):
+            left_time = left._one_minute_return_times[left_index]
+            right_time = right._one_minute_return_times[right_index]
+            if left_time == right_time:
+                left_value = left._one_minute_returns[left_index]
+                right_value = right._one_minute_returns[right_index]
+                if left_value is not None and right_value is not None:
+                    times.append(left_time)
+                    left_sum += left_value
+                    right_sum += right_value
+                    left_square_sum += left_value * left_value
+                    right_square_sum += right_value * right_value
+                    product_sum += left_value * right_value
+                    left_prefix.append(left_sum)
+                    right_prefix.append(right_sum)
+                    left_square_prefix.append(left_square_sum)
+                    right_square_prefix.append(right_square_sum)
+                    product_prefix.append(product_sum)
+                left_index += 1
+                right_index += 1
+            elif left_time < right_time:
+                left_index += 1
+            else:
+                right_index += 1
+        self._times = tuple(times)
+        self._left_prefix = tuple(left_prefix)
+        self._right_prefix = tuple(right_prefix)
+        self._left_square_prefix = tuple(left_square_prefix)
+        self._right_square_prefix = tuple(right_square_prefix)
+        self._product_prefix = tuple(product_prefix)
+
+    def correlation(self, *, snapshot_time_ms: int, window_minutes: int) -> float | None:
+        end = bisect_right(self._times, snapshot_time_ms)
+        start = end - window_minutes
+        if start < 0 or end <= 0 or self._times[end - 1] != snapshot_time_ms:
+            return None
+        left_sum = self._range_sum(self._left_prefix, start, end)
+        right_sum = self._range_sum(self._right_prefix, start, end)
+        left_square_sum = self._range_sum(self._left_square_prefix, start, end)
+        right_square_sum = self._range_sum(self._right_square_prefix, start, end)
+        product_sum = self._range_sum(self._product_prefix, start, end)
+        left_var = left_square_sum - (left_sum * left_sum) / window_minutes
+        right_var = right_square_sum - (right_sum * right_sum) / window_minutes
+        if left_var <= 0 or right_var <= 0:
+            return None
+        covariance = product_sum - (left_sum * right_sum) / window_minutes
+        corr = covariance / math.sqrt(left_var * right_var)
+        return min(max(corr, -1.0), 1.0)
+
+    @staticmethod
+    def _range_sum(prefix: tuple[float, ...], start: int, end: int) -> float:
+        return prefix[end - 1] - (prefix[start - 1] if start > 0 else 0.0)
 
 
 class _OpenInterestSeries:
@@ -1911,7 +2070,12 @@ def _cvd_features(
         return missing
     event_start_time_ms = _event_start_time_ms(state)
     if isinstance(candles, _CandleSeries):
-        event_candles = candles.event_window(event_start_time_ms=event_start_time_ms, snapshot_time_ms=state.snapshot_time_ms)
+        has_event_candles, missing_event_cvd, cvd_since_event = candles.event_cvd_ratio(
+            event_start_time_ms=event_start_time_ms,
+            snapshot_time_ms=state.snapshot_time_ms,
+        )
+        if not has_event_candles or missing_event_cvd or cvd_since_event is None:
+            return missing
     else:
         event_candles = [
             candle
@@ -1919,25 +2083,34 @@ def _cvd_features(
             if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
         ]
         event_candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
-    if not event_candles or any(candle.taker_buy_quote_volume is None for candle in event_candles):
-        return missing
-    cumulative_quote = sum(candle.quote_volume for candle in event_candles)
-    if cumulative_quote <= 0:
-        return missing
-    cvd_since_event = sum(_candle_delta_quote(candle) for candle in event_candles) / cumulative_quote
+        if not event_candles or any(candle.taker_buy_quote_volume is None for candle in event_candles):
+            return missing
+        cumulative_quote = sum(candle.quote_volume for candle in event_candles)
+        if cumulative_quote <= 0:
+            return missing
+        cvd_since_event = sum(_candle_delta_quote(candle) for candle in event_candles) / cumulative_quote
 
     cvd_change_by_window: dict[int, float | None] = {}
     divergence_by_window: dict[int, float | None] = {}
     price_up_cvd_down = False
     price_down_cvd_up = False
     for window in windows_minutes:
-        window_candles = _window_candles(candles=candles, snapshot_time_ms=state.snapshot_time_ms, window_minutes=window)
-        cvd_change = _window_cvd_ratio(window_candles)
+        if isinstance(candles, _CandleSeries):
+            cvd_change, price_change_atr, raw_price_change = candles.window_cvd_and_price_change_atr(
+                snapshot_time_ms=state.snapshot_time_ms,
+                window_minutes=window,
+                atr_value=atr_value,
+            )
+            has_window = raw_price_change is not None
+        else:
+            window_candles = _window_candles(candles=candles, snapshot_time_ms=state.snapshot_time_ms, window_minutes=window)
+            cvd_change = _window_cvd_ratio(window_candles)
+            price_change_atr = _window_price_change_atr(window_candles=window_candles, atr_value=atr_value)
+            raw_price_change = window_candles[-1].close - window_candles[0].open if window_candles else None
+            has_window = bool(window_candles)
         cvd_change_by_window[window] = cvd_change
-        price_change_atr = _window_price_change_atr(window_candles=window_candles, atr_value=atr_value)
         divergence_by_window[window] = None if cvd_change is None or price_change_atr is None else price_change_atr - cvd_change
-        if window == 5 and cvd_change is not None and window_candles:
-            raw_price_change = window_candles[-1].close - window_candles[0].open
+        if window == 5 and cvd_change is not None and has_window and raw_price_change is not None:
             price_up_cvd_down = raw_price_change > 0 and cvd_change < 0
             price_down_cvd_up = raw_price_change < 0 and cvd_change > 0
 
@@ -2539,23 +2712,9 @@ def _rolling_return_correlation_with_btc(
     window_minutes: int,
 ) -> float | None:
     if isinstance(symbol_candles, _CandleSeries) and isinstance(btc_candles, _CandleSeries):
-        symbol_times, symbol_values = symbol_candles.one_minute_returns_window(
+        return symbol_candles.rolling_return_correlation_with(
+            other=btc_candles,
             snapshot_time_ms=snapshot_time_ms,
-            window_minutes=window_minutes,
-        )
-        btc_times, btc_values = btc_candles.one_minute_returns_window(
-            snapshot_time_ms=snapshot_time_ms,
-            window_minutes=window_minutes,
-        )
-        if not symbol_values or not btc_values:
-            return None
-        if symbol_times == btc_times:
-            return _correlation(symbol_values, btc_values)
-        return _correlation_for_aligned_times(
-            left_times=symbol_times,
-            left_values=symbol_values,
-            right_times=btc_times,
-            right_values=btc_values,
             window_minutes=window_minutes,
         )
     symbol_returns = _one_minute_returns_by_available_time(

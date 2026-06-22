@@ -1,5 +1,21 @@
 # Patch log
 
+## perf: index feature CVD and BTC correlation
+
+Status: APPLIED.
+
+Intent:
+- Add `_CandleSeries` prefix indexes for event/window CVD and one-minute return correlations.
+- Replace per-row event CVD scans, small CVD window slices, and BTC correlation return-list construction with indexed point-in-time queries.
+- Keep generic fallback behavior for non-indexed sequences.
+- Preserve feature semantics: all inputs remain as-of `snapshot_time_ms`.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\features tests\test_feature_matrix.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
+- Synthetic `_build_state_feature_row` profile with BTC context improved from about `8.1s` to `2.9s` for `9059` rows.
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## perf: avoid feature candle history copies
 
 Status: APPLIED.
