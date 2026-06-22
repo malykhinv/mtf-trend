@@ -45,14 +45,14 @@ class _SymbolFutureCandleIndex:
 
 @dataclass(frozen=True, slots=True)
 class _FutureMetrics:
-    future_return: dict[int, float | None]
-    future_max: dict[int, float | None]
-    future_min: dict[int, float | None]
-    future_return_atr: dict[int, float | None]
-    future_max_atr: dict[int, float | None]
-    future_min_atr: dict[int, float | None]
-    barrier_hit: dict[int, bool | None]
-    reclaimed_running_high: dict[int, bool | None]
+    future_return: tuple[float | None, ...]
+    future_max: tuple[float | None, ...]
+    future_min: tuple[float | None, ...]
+    future_return_atr: tuple[float | None, ...]
+    future_max_atr: tuple[float | None, ...]
+    future_min_atr: tuple[float | None, ...]
+    barrier_hit: tuple[bool | None, ...]
+    reclaimed_running_high: tuple[bool | None, ...]
     time_to_new_high_minutes: int | None
 
 
@@ -591,56 +591,56 @@ def _build_state_future_path(
         ATR_1d_pct_asof_t=atr_result.atr_1d_pct_asof_t if atr_result is not None else None,
         double_barrier_k_continuation=double_barrier_k_continuation if atr_value is not None else None,
         double_barrier_k_fade=double_barrier_k_fade if atr_value is not None else None,
-        future_return_5m=metrics.future_return[5],
-        future_return_15m=metrics.future_return[15],
-        future_return_30m=metrics.future_return[30],
-        future_return_60m=metrics.future_return[60],
-        future_return_120m=metrics.future_return[120],
-        future_return_180m=metrics.future_return[180],
-        future_max_5m=metrics.future_max[5],
-        future_max_15m=metrics.future_max[15],
-        future_max_30m=metrics.future_max[30],
-        future_max_60m=metrics.future_max[60],
-        future_max_120m=metrics.future_max[120],
-        future_max_180m=metrics.future_max[180],
-        future_min_5m=metrics.future_min[5],
-        future_min_15m=metrics.future_min[15],
-        future_min_30m=metrics.future_min[30],
-        future_min_60m=metrics.future_min[60],
-        future_min_120m=metrics.future_min[120],
-        future_min_180m=metrics.future_min[180],
-        future_return_atr_5m=metrics.future_return_atr[5],
-        future_return_atr_15m=metrics.future_return_atr[15],
-        future_return_atr_30m=metrics.future_return_atr[30],
-        future_return_atr_60m=metrics.future_return_atr[60],
-        future_return_atr_120m=metrics.future_return_atr[120],
-        future_return_atr_180m=metrics.future_return_atr[180],
-        future_max_atr_5m=metrics.future_max_atr[5],
-        future_max_atr_15m=metrics.future_max_atr[15],
-        future_max_atr_30m=metrics.future_max_atr[30],
-        future_max_atr_60m=metrics.future_max_atr[60],
-        future_max_atr_120m=metrics.future_max_atr[120],
-        future_max_atr_180m=metrics.future_max_atr[180],
-        future_min_atr_5m=metrics.future_min_atr[5],
-        future_min_atr_15m=metrics.future_min_atr[15],
-        future_min_atr_30m=metrics.future_min_atr[30],
-        future_min_atr_60m=metrics.future_min_atr[60],
-        future_min_atr_120m=metrics.future_min_atr[120],
-        future_min_atr_180m=metrics.future_min_atr[180],
-        intracandle_double_barrier_hit_5m=metrics.barrier_hit[5],
-        intracandle_double_barrier_hit_15m=metrics.barrier_hit[15],
-        intracandle_double_barrier_hit_30m=metrics.barrier_hit[30],
-        intracandle_double_barrier_hit_60m=metrics.barrier_hit[60],
-        intracandle_double_barrier_hit_120m=metrics.barrier_hit[120],
-        intracandle_double_barrier_hit_180m=metrics.barrier_hit[180],
-        barrier_resolution_5m=_barrier_resolution(metrics.barrier_hit[5]),
-        barrier_resolution_15m=_barrier_resolution(metrics.barrier_hit[15]),
-        barrier_resolution_30m=_barrier_resolution(metrics.barrier_hit[30]),
-        barrier_resolution_60m=_barrier_resolution(metrics.barrier_hit[60]),
-        barrier_resolution_120m=_barrier_resolution(metrics.barrier_hit[120]),
-        barrier_resolution_180m=_barrier_resolution(metrics.barrier_hit[180]),
-        reclaimed_running_high_30m=metrics.reclaimed_running_high[30],
-        reclaimed_running_high_60m=metrics.reclaimed_running_high[60],
+        future_return_5m=metrics.future_return[0],
+        future_return_15m=metrics.future_return[1],
+        future_return_30m=metrics.future_return[2],
+        future_return_60m=metrics.future_return[3],
+        future_return_120m=metrics.future_return[4],
+        future_return_180m=metrics.future_return[5],
+        future_max_5m=metrics.future_max[0],
+        future_max_15m=metrics.future_max[1],
+        future_max_30m=metrics.future_max[2],
+        future_max_60m=metrics.future_max[3],
+        future_max_120m=metrics.future_max[4],
+        future_max_180m=metrics.future_max[5],
+        future_min_5m=metrics.future_min[0],
+        future_min_15m=metrics.future_min[1],
+        future_min_30m=metrics.future_min[2],
+        future_min_60m=metrics.future_min[3],
+        future_min_120m=metrics.future_min[4],
+        future_min_180m=metrics.future_min[5],
+        future_return_atr_5m=metrics.future_return_atr[0],
+        future_return_atr_15m=metrics.future_return_atr[1],
+        future_return_atr_30m=metrics.future_return_atr[2],
+        future_return_atr_60m=metrics.future_return_atr[3],
+        future_return_atr_120m=metrics.future_return_atr[4],
+        future_return_atr_180m=metrics.future_return_atr[5],
+        future_max_atr_5m=metrics.future_max_atr[0],
+        future_max_atr_15m=metrics.future_max_atr[1],
+        future_max_atr_30m=metrics.future_max_atr[2],
+        future_max_atr_60m=metrics.future_max_atr[3],
+        future_max_atr_120m=metrics.future_max_atr[4],
+        future_max_atr_180m=metrics.future_max_atr[5],
+        future_min_atr_5m=metrics.future_min_atr[0],
+        future_min_atr_15m=metrics.future_min_atr[1],
+        future_min_atr_30m=metrics.future_min_atr[2],
+        future_min_atr_60m=metrics.future_min_atr[3],
+        future_min_atr_120m=metrics.future_min_atr[4],
+        future_min_atr_180m=metrics.future_min_atr[5],
+        intracandle_double_barrier_hit_5m=metrics.barrier_hit[0],
+        intracandle_double_barrier_hit_15m=metrics.barrier_hit[1],
+        intracandle_double_barrier_hit_30m=metrics.barrier_hit[2],
+        intracandle_double_barrier_hit_60m=metrics.barrier_hit[3],
+        intracandle_double_barrier_hit_120m=metrics.barrier_hit[4],
+        intracandle_double_barrier_hit_180m=metrics.barrier_hit[5],
+        barrier_resolution_5m=_barrier_resolution(metrics.barrier_hit[0]),
+        barrier_resolution_15m=_barrier_resolution(metrics.barrier_hit[1]),
+        barrier_resolution_30m=_barrier_resolution(metrics.barrier_hit[2]),
+        barrier_resolution_60m=_barrier_resolution(metrics.barrier_hit[3]),
+        barrier_resolution_120m=_barrier_resolution(metrics.barrier_hit[4]),
+        barrier_resolution_180m=_barrier_resolution(metrics.barrier_hit[5]),
+        reclaimed_running_high_30m=metrics.reclaimed_running_high[2],
+        reclaimed_running_high_60m=metrics.reclaimed_running_high[3],
         broke_structural_low_30m=None,
         broke_structural_low_60m=None,
         time_to_new_high_minutes=metrics.time_to_new_high_minutes,
@@ -681,14 +681,15 @@ def _future_metrics(
     k_fade: float,
 ) -> _FutureMetrics:
     sorted_horizons = tuple(sorted(horizons))
-    future_return: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
-    future_max: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
-    future_min: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
-    future_return_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
-    future_max_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
-    future_min_atr: dict[int, float | None] = {horizon: None for horizon in sorted_horizons}
-    barrier_hit: dict[int, bool | None] = {horizon: None for horizon in sorted_horizons}
-    reclaimed_running_high: dict[int, bool | None] = {horizon: None for horizon in sorted_horizons}
+    metric_count = len(sorted_horizons)
+    future_return: list[float | None] = [None] * metric_count
+    future_max: list[float | None] = [None] * metric_count
+    future_min: list[float | None] = [None] * metric_count
+    future_return_atr: list[float | None] = [None] * metric_count
+    future_max_atr: list[float | None] = [None] * metric_count
+    future_min_atr: list[float | None] = [None] * metric_count
+    barrier_hit: list[bool | None] = [None] * metric_count
+    reclaimed_running_high: list[bool | None] = [None] * metric_count
 
     cursor = 0
     running_high: float | None = None
@@ -700,7 +701,7 @@ def _future_metrics(
     lower_barrier = state.current_close - k_fade * atr_value if atr_value is not None else None
     limit = len(candles) if end_index is None else end_index
 
-    for horizon in sorted_horizons:
+    for horizon_index, horizon in enumerate(sorted_horizons):
         horizon_end_ms = state.snapshot_time_ms + horizon * ONE_MINUTE_MS
         had_window = False
         cursor = max(cursor, start_index)
@@ -709,10 +710,10 @@ def _future_metrics(
             had_window = True
             running_high = candle.high if running_high is None else max(running_high, candle.high)
             running_low = candle.low if running_low is None else min(running_low, candle.low)
-            if candle.available_time_ms == horizon_end_ms and future_return[horizon] is None:
-                future_return[horizon] = (candle.close / state.current_close) - 1.0
+            if candle.available_time_ms == horizon_end_ms and future_return[horizon_index] is None:
+                future_return[horizon_index] = (candle.close / state.current_close) - 1.0
                 if atr_value is not None:
-                    future_return_atr[horizon] = (candle.close - state.current_close) / atr_value
+                    future_return_atr[horizon_index] = (candle.close - state.current_close) / atr_value
             if atr_value is not None and upper_barrier is not None and lower_barrier is not None:
                 running_barrier_hit = running_barrier_hit or (
                     candle.high >= upper_barrier and candle.low <= lower_barrier
@@ -723,25 +724,25 @@ def _future_metrics(
             cursor += 1
 
         if running_high is not None and running_low is not None:
-            future_max[horizon] = (running_high / state.current_close) - 1.0
-            future_min[horizon] = (running_low / state.current_close) - 1.0
+            future_max[horizon_index] = (running_high / state.current_close) - 1.0
+            future_min[horizon_index] = (running_low / state.current_close) - 1.0
             if atr_value is not None:
-                future_max_atr[horizon] = (running_high - state.current_close) / atr_value
-                future_min_atr[horizon] = (running_low - state.current_close) / atr_value
-                barrier_hit[horizon] = running_barrier_hit
-            reclaimed_running_high[horizon] = running_reclaimed_high
+                future_max_atr[horizon_index] = (running_high - state.current_close) / atr_value
+                future_min_atr[horizon_index] = (running_low - state.current_close) / atr_value
+                barrier_hit[horizon_index] = running_barrier_hit
+            reclaimed_running_high[horizon_index] = running_reclaimed_high
         elif had_window and atr_value is not None:
-            barrier_hit[horizon] = running_barrier_hit
+            barrier_hit[horizon_index] = running_barrier_hit
 
     return _FutureMetrics(
-        future_return=future_return,
-        future_max=future_max,
-        future_min=future_min,
-        future_return_atr=future_return_atr,
-        future_max_atr=future_max_atr,
-        future_min_atr=future_min_atr,
-        barrier_hit=barrier_hit,
-        reclaimed_running_high=reclaimed_running_high,
+        future_return=tuple(future_return),
+        future_max=tuple(future_max),
+        future_min=tuple(future_min),
+        future_return_atr=tuple(future_return_atr),
+        future_max_atr=tuple(future_max_atr),
+        future_min_atr=tuple(future_min_atr),
+        barrier_hit=tuple(barrier_hit),
+        reclaimed_running_high=tuple(reclaimed_running_high),
         time_to_new_high_minutes=time_to_new_high_minutes,
     )
 

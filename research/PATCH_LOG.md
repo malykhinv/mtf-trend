@@ -1,12 +1,13 @@
 # Patch log
 
-## perf: avoid future candle slice allocation
+## perf: reduce future row allocation pressure
 
 Status: APPLIED.
 
 Intent:
 - Stop `_build_state_future_path` from allocating a per-row tuple slice of up-to-180 future candles.
 - Pass future-window start/end indexes into `_future_metrics` and scan the existing per-symbol candle tuple in place.
+- Replace per-row horizon metric dictionaries with fixed-position tuple metrics for the canonical 5/15/30/60/120/180m horizon set.
 - Preserve future path semantics, ATR handling, barrier logic, and row schemas.
 
 Validation:
