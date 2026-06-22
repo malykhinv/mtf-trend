@@ -3,9 +3,12 @@ from __future__ import annotations
 import csv
 import gc
 import os
-from dataclasses import dataclass, asdict
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, asdict, field
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 
 from anomaly_science.atlas import run_mvp1_atlas
@@ -63,128 +66,197 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
     run_dir = config.output_root / _run_id(strategy_name=config.strategy_name)
     input_dir = run_dir / "input"
     stages_dir = run_dir / "stages"
+    timings = _StageTimingRecorder(run_dir / "strategy_stage_timings.csv")
 
-    export_cache_to_mvp1_csv(
-        CacheMvp1CsvExportConfig(
-            cache_dir=config.cache_dir,
-            out_dir=input_dir,
-            days=config.days,
+    with timings.stage("cache_export"):
+        export_cache_to_mvp1_csv(
+            CacheMvp1CsvExportConfig(
+                cache_dir=config.cache_dir,
+                out_dir=input_dir,
+                days=config.days,
+            )
         )
-    )
-    _release_stage_memory()
-    full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
-    effective_holdout_days = _effective_holdout_days(
-        full_start_date=full_start_date,
-        full_end_date=full_end_date,
-        requested_holdout_days=config.holdout_days,
-        research_mode=config.research_mode,
-    )
-    protocol_freeze_id = config.protocol_freeze_id or _protocol_freeze_id(
-        strategy_name=config.strategy_name,
-        start_date=full_start_date,
-        end_date=full_end_date,
-    )
-    governance_dir = run_mvp1_holdout_governance(
-        out_dir=stages_dir / "holdout_governance",
-        start_date=full_start_date,
-        end_date=full_end_date,
-        protocol_freeze_id=protocol_freeze_id,
-        holdout_days=effective_holdout_days,
-        research_mode=config.research_mode,
-        holdout_access_artifact="run-research downstream input boundary",
-    )
-    research_start_date, research_end_date = _apply_holdout_lock_to_input(
-        input_dir=input_dir,
-        full_start_date=full_start_date,
-        full_end_date=full_end_date,
-        holdout_days=effective_holdout_days,
-        research_mode=config.research_mode,
-    )
-    _release_stage_memory()
+        _release_stage_memory()
 
-    run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
-    _release_stage_memory()
-    events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events", strategy_name=config.strategy_name)
-    _release_stage_memory()
-    state_dir = run_mvp1_state(
-        input_dir=input_dir,
-        events_path=events_dir / "strategy_events.csv",
-        out_dir=stages_dir / "state",
-        config=_state_config_for_strategy(strategy_name=config.strategy_name),
-    )
-    _release_stage_memory()
-    future_dir = run_mvp1_future(
-        input_dir=input_dir,
-        state_path=state_dir / "strategy_state_1m.csv",
-        out_dir=stages_dir / "future",
-    )
-    _release_stage_memory()
-    run_mvp1_features(out_dir=stages_dir / "features")
-    _release_stage_memory()
-    feature_matrix_dir = run_mvp1_feature_matrix(
-        input_dir=input_dir,
-        state_path=state_dir / "strategy_state_1m.csv",
-        out_dir=stages_dir / "feature_matrix",
-    )
-    _release_stage_memory()
-    run_mvp1_atlas(
-        state_path=state_dir / "strategy_state_1m.csv",
-        future_path=future_dir / "strategy_future_paths.csv",
-        feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
-        out_dir=stages_dir / "atlas",
-    )
-    _release_stage_memory()
-    labels_dir = run_mvp1_labels(
-        state_path=state_dir / "strategy_state_1m.csv",
-        future_path=future_dir / "strategy_future_paths.csv",
-        out_dir=stages_dir / "labels",
-    )
-    _release_stage_memory()
-    prediction_dir = run_mvp1_prediction(
-        state_path=state_dir / "strategy_state_1m.csv",
-        labels_path=labels_dir / "strategy_outcome_labels.csv",
-        feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
-        out_dir=stages_dir / "prediction",
-        config=WalkForwardPredictionConfig(
+    with timings.stage("input_date_range"):
+        full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
+        effective_holdout_days = _effective_holdout_days(
+            full_start_date=full_start_date,
+            full_end_date=full_end_date,
+            requested_holdout_days=config.holdout_days,
+            research_mode=config.research_mode,
+        )
+        protocol_freeze_id = config.protocol_freeze_id or _protocol_freeze_id(
             strategy_name=config.strategy_name,
-            target_horizon_minutes=strategy.metadata.horizon_minutes,
-        ),
-    )
-    _release_stage_memory()
-    run_mvp1_controls(
-        state_path=state_dir / "strategy_state_1m.csv",
-        labels_path=labels_dir / "strategy_outcome_labels.csv",
-        feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
-        out_dir=stages_dir / "controls",
-        config=ControlsConfig(
-            strategy_name=config.strategy_name,
-            target_horizon_minutes=strategy.metadata.horizon_minutes,
-        ),
-    )
-    _release_stage_memory()
-    ev_dir = run_mvp1_expected_value(
-        state_path=state_dir / "strategy_state_1m.csv",
-        labels_path=labels_dir / "strategy_outcome_labels.csv",
-        predictions_path=prediction_dir / "strategy_oos_predictions.csv",
-        out_dir=stages_dir / "expected_value",
-        config=ExpectedValueConfig(
-            strategy_name=config.strategy_name,
-            target_horizon_minutes=strategy.metadata.horizon_minutes,
-        ),
-    )
-    _release_stage_memory()
-    run_mvp1_trade_simulation(
-        input_dir=input_dir,
-        decision_timing_path=ev_dir / "strategy_decision_timing.csv",
-        out_dir=stages_dir / "simulation",
-        config=TradeSimulationConfig(
-            strategy_name=config.strategy_name,
-            target_horizon_minutes=strategy.metadata.horizon_minutes,
-        ),
-    )
-    _release_stage_memory()
-    write_rejection_funnel(run_dir=run_dir, out_dir=stages_dir / "rejection_funnel")
-    _release_stage_memory()
+            start_date=full_start_date,
+            end_date=full_end_date,
+        )
+
+    with timings.stage("holdout_governance"):
+        governance_dir = run_mvp1_holdout_governance(
+            out_dir=stages_dir / "holdout_governance",
+            start_date=full_start_date,
+            end_date=full_end_date,
+            protocol_freeze_id=protocol_freeze_id,
+            holdout_days=effective_holdout_days,
+            research_mode=config.research_mode,
+            holdout_access_artifact="run-research downstream input boundary",
+        )
+
+    with timings.stage("holdout_lock"):
+        research_start_date, research_end_date = _apply_holdout_lock_to_input(
+            input_dir=input_dir,
+            full_start_date=full_start_date,
+            full_end_date=full_end_date,
+            holdout_days=effective_holdout_days,
+            research_mode=config.research_mode,
+        )
+        _release_stage_memory()
+
+    with timings.stage("data_audit"):
+        run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
+        _release_stage_memory()
+
+    with timings.stage("events"):
+        events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events", strategy_name=config.strategy_name)
+        _release_stage_memory()
+
+    with timings.stage("state"):
+        state_dir = run_mvp1_state(
+            input_dir=input_dir,
+            events_path=events_dir / "strategy_events.csv",
+            out_dir=stages_dir / "state",
+            config=_state_config_for_strategy(strategy_name=config.strategy_name),
+        )
+        _release_stage_memory()
+
+    with timings.stage("future"):
+        future_dir = run_mvp1_future(
+            input_dir=input_dir,
+            state_path=state_dir / "strategy_state_1m.csv",
+            out_dir=stages_dir / "future",
+        )
+        _release_stage_memory()
+
+    with timings.stage("feature_catalog"):
+        run_mvp1_features(out_dir=stages_dir / "features")
+        _release_stage_memory()
+
+    with timings.stage("feature_matrix"):
+        feature_matrix_dir = run_mvp1_feature_matrix(
+            input_dir=input_dir,
+            state_path=state_dir / "strategy_state_1m.csv",
+            out_dir=stages_dir / "feature_matrix",
+        )
+        _release_stage_memory()
+
+    with timings.stage("atlas"):
+        run_mvp1_atlas(
+            state_path=state_dir / "strategy_state_1m.csv",
+            future_path=future_dir / "strategy_future_paths.csv",
+            feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
+            out_dir=stages_dir / "atlas",
+        )
+        _release_stage_memory()
+
+    with timings.stage("labels"):
+        labels_dir = run_mvp1_labels(
+            state_path=state_dir / "strategy_state_1m.csv",
+            future_path=future_dir / "strategy_future_paths.csv",
+            out_dir=stages_dir / "labels",
+        )
+        _release_stage_memory()
+
+    with timings.stage("prediction"):
+        prediction_dir = run_mvp1_prediction(
+            state_path=state_dir / "strategy_state_1m.csv",
+            labels_path=labels_dir / "strategy_outcome_labels.csv",
+            feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
+            out_dir=stages_dir / "prediction",
+            config=WalkForwardPredictionConfig(
+                strategy_name=config.strategy_name,
+                target_horizon_minutes=strategy.metadata.horizon_minutes,
+            ),
+        )
+        _release_stage_memory()
+
+    with timings.stage("controls"):
+        run_mvp1_controls(
+            state_path=state_dir / "strategy_state_1m.csv",
+            labels_path=labels_dir / "strategy_outcome_labels.csv",
+            feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
+            out_dir=stages_dir / "controls",
+            config=ControlsConfig(
+                strategy_name=config.strategy_name,
+                target_horizon_minutes=strategy.metadata.horizon_minutes,
+            ),
+        )
+        _release_stage_memory()
+
+    with timings.stage("expected_value"):
+        ev_dir = run_mvp1_expected_value(
+            state_path=state_dir / "strategy_state_1m.csv",
+            labels_path=labels_dir / "strategy_outcome_labels.csv",
+            predictions_path=prediction_dir / "strategy_oos_predictions.csv",
+            out_dir=stages_dir / "expected_value",
+            config=ExpectedValueConfig(
+                strategy_name=config.strategy_name,
+                target_horizon_minutes=strategy.metadata.horizon_minutes,
+            ),
+        )
+        _release_stage_memory()
+
+    with timings.stage("simulation"):
+        run_mvp1_trade_simulation(
+            input_dir=input_dir,
+            decision_timing_path=ev_dir / "strategy_decision_timing.csv",
+            out_dir=stages_dir / "simulation",
+            config=TradeSimulationConfig(
+                strategy_name=config.strategy_name,
+                target_horizon_minutes=strategy.metadata.horizon_minutes,
+            ),
+        )
+        _release_stage_memory()
+
+    with timings.stage("rejection_funnel"):
+        write_rejection_funnel(run_dir=run_dir, out_dir=stages_dir / "rejection_funnel")
+        _release_stage_memory()
+
+    with timings.stage("provisional_manifest"):
+        _write_research_run_manifest(
+            run_dir=run_dir,
+            config=config,
+            start_date=research_start_date,
+            end_date=research_end_date,
+            full_start_date=full_start_date,
+            full_end_date=full_end_date,
+            effective_holdout_days=effective_holdout_days,
+            governance_dir=governance_dir,
+            protocol_freeze_id=protocol_freeze_id,
+            forensic_audit_dir=stages_dir / "forensic_audit",
+            forensic_status="PENDING",
+            forensic_fail_count=-1,
+            forensic_warn_count=-1,
+        )
+
+    with timings.stage("forensic_audit"):
+        forensic_audit_dir, forensic_status, forensic_fail_count, forensic_warn_count, forensic_failed_checks = _write_forensic_audit(run_dir)
+
+    with timings.stage("summary"):
+        _write_summary(
+            run_dir=run_dir,
+            config=config,
+            start_date=research_start_date,
+            end_date=research_end_date,
+            effective_holdout_days=effective_holdout_days,
+            governance_dir=governance_dir,
+            protocol_freeze_id=protocol_freeze_id,
+            forensic_audit_dir=forensic_audit_dir,
+            forensic_status=forensic_status,
+            forensic_fail_count=forensic_fail_count,
+            forensic_warn_count=forensic_warn_count,
+        )
+
     _write_research_run_manifest(
         run_dir=run_dir,
         config=config,
@@ -195,40 +267,12 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         effective_holdout_days=effective_holdout_days,
         governance_dir=governance_dir,
         protocol_freeze_id=protocol_freeze_id,
-        forensic_audit_dir=stages_dir / "forensic_audit",
-        forensic_status="PENDING",
-        forensic_fail_count=-1,
-        forensic_warn_count=-1,
-    )
-    forensic_audit_dir, forensic_status, forensic_fail_count, forensic_warn_count, forensic_failed_checks = _write_forensic_audit(run_dir)
-    _write_summary(
-        run_dir=run_dir,
-        config=config,
-        start_date=research_start_date,
-        end_date=research_end_date,
-        effective_holdout_days=effective_holdout_days,
-        governance_dir=governance_dir,
-        protocol_freeze_id=protocol_freeze_id,
         forensic_audit_dir=forensic_audit_dir,
         forensic_status=forensic_status,
         forensic_fail_count=forensic_fail_count,
         forensic_warn_count=forensic_warn_count,
     )
-    _write_research_run_manifest(
-        run_dir=run_dir,
-        config=config,
-        start_date=research_start_date,
-        end_date=research_end_date,
-        full_start_date=full_start_date,
-        full_end_date=full_end_date,
-        effective_holdout_days=effective_holdout_days,
-        governance_dir=governance_dir,
-        protocol_freeze_id=protocol_freeze_id,
-        forensic_audit_dir=forensic_audit_dir,
-        forensic_status=forensic_status,
-        forensic_fail_count=forensic_fail_count,
-        forensic_warn_count=forensic_warn_count,
-    )
+
     if forensic_fail_count:
         raise RuntimeError(
             f"independent forensic protocol audit failed for {run_dir}: "
@@ -240,6 +284,42 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
 def _release_stage_memory() -> None:
     gc.collect()
 
+
+
+@dataclass(slots=True)
+class _StageTimingRecorder:
+    path: Path
+    _rows: list[dict[str, str]] = field(default_factory=list, init=False)
+
+    @contextmanager
+    def stage(self, stage_name: str) -> Iterator[None]:
+        started_at = datetime.now(timezone.utc)
+        start_counter = perf_counter()
+        status = "PASS"
+        notes = ""
+        try:
+            yield
+        except Exception as exc:
+            status = "FAIL"
+            notes = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            finished_at = datetime.now(timezone.utc)
+            self._rows.append(
+                {
+                    "stage_name": stage_name,
+                    "status": status,
+                    "started_at_utc": started_at.isoformat(),
+                    "finished_at_utc": finished_at.isoformat(),
+                    "duration_seconds": f"{perf_counter() - start_counter:.6f}",
+                    "notes": notes,
+                }
+            )
+            write_csv_artifact_with_aliases(
+                self.path,
+                self._rows,
+                get_artifact_schema("strategy_stage_timings.csv"),
+            )
 
 
 def _write_research_run_manifest(

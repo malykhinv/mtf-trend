@@ -878,6 +878,12 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         required_columns=("key", "value", "source"),
         description="Run configuration and reproducibility metadata.",
     ),
+    "anomaly_stage_timings.csv": ArtifactSchema(
+        name="anomaly_stage_timings.csv",
+        stage="run_research",
+        required_columns=("stage_name", "status", "started_at_utc", "finished_at_utc", "duration_seconds", "notes"),
+        description="Per-stage run-research wall-clock timings written incrementally for bottleneck diagnosis.",
+    ),
     "artifact_manifest.json": ArtifactSchema(
         name="artifact_manifest.json",
         stage="all",
@@ -912,6 +918,7 @@ STRATEGY_ARTIFACT_ALIASES: dict[str, str] = {
     "anomaly_rejection_funnel.csv": "strategy_rejection_funnel.csv",
     "anomaly_protocol_audit.csv": "strategy_protocol_audit.csv",
     "anomaly_run_config.csv": "strategy_run_config.csv",
+    "anomaly_stage_timings.csv": "strategy_stage_timings.csv",
 }
 
 

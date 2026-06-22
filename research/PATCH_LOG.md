@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: trace run-research stage timings
+
+Status: APPLIED.
+
+Intent:
+- Add root `strategy_stage_timings.csv` with `anomaly_stage_timings.csv` as a hardlink-first compatibility alias.
+- Write timing rows incrementally after each `run-research` stage, including FAIL rows before re-raising exceptions.
+- Keep the next long proof diagnosable without changing strategy, methodology, labels, EV, or simulation behavior.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\research src\anomaly_science\contracts tests\test_research_run.py tests\test_artifact_schemas.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_artifact_schemas.py tests/test_research_run.py -q`
+
 ## perf: bound feature-matrix cross-section cache
 
 Status: APPLIED.
