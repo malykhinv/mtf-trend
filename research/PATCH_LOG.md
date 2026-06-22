@@ -36,6 +36,7 @@ Status: APPLIED.
 Intent:
 - Reduce `run-mvp1-state` and `run-mvp1-labels` runtime on multi-million-row outputs by removing per-row `dataclasses.asdict()` and schema-set checks from canonical artifact writers.
 - Validate state/label artifact schema columns once, map CSV columns to dataclass slots once, and serialize rows directly during streaming writes.
+- Stream state rows out of each event builder instead of accumulating a per-event list before yielding rows to the canonical writer.
 
 Validation:
 - `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\state src\anomaly_science\labels tests\test_state_builder.py tests\test_labels.py`

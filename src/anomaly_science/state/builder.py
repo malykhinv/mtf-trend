@@ -311,13 +311,12 @@ def _build_event_rows(
     event: StrategyEvent,
     candles: _SymbolCandleIndex,
     config: OnlineStateBuilderConfig,
-) -> list[StrategyState1mRow]:
+) -> Iterable[StrategyState1mRow]:
     event_start_index = bisect_left(candles.open_times, event.event_start_time_ms)
     detection_index = bisect_left(candles.available_times, event.event_detection_time_ms)
     max_available_time_ms = event.event_detection_time_ms + config.max_state_minutes_after_detection * ONE_MINUTE_MS
     end_index = bisect_right(candles.available_times, max_available_time_ms)
     start_index = max(event_start_index, detection_index)
-    event_rows: list[StrategyState1mRow] = []
     first_candle: Candle1m | None = None
     running_high: Candle1m | None = None
     running_low: Candle1m | None = None
@@ -377,8 +376,7 @@ def _build_event_rows(
         )
         if row.state_time_ms < event.event_detection_time_ms:
             raise MarketDataContractError("state_time_ms must be >= event_detection_time_ms")
-        event_rows.append(row)
-    return event_rows
+        yield row
 
 
 def _latest_confirmed_structural_low_at(
