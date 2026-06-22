@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import csv
+import math
 import random
 from dataclasses import asdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
-
-import pandas as pd
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.decision import ExpectedValueRow
@@ -470,18 +470,19 @@ def _load_simulation_artifact(*, path: str | Path, schema_name: str, row_builder
     artifact_path = Path(path)
     if not artifact_path.exists():
         raise TradeSimulationArtifactError(f"simulation artifact is missing: {artifact_path}")
-    frame = pd.read_csv(artifact_path)
     schema = get_artifact_schema(schema_name)
     expected_columns = list(schema.required_columns)
-    actual_columns = list(frame.columns)
-    if actual_columns != expected_columns:
-        raise TradeSimulationArtifactError(f"{schema_name} columns must match {expected_columns}, got {actual_columns}")
     rows: list[object] = []
-    for row_index, row in frame.iterrows():
-        try:
-            rows.append(row_builder(row))  # type: ignore[operator]
-        except (TypeError, ValueError, MarketDataContractError) as exc:
-            raise TradeSimulationArtifactError(f"invalid {schema_name} row {row_index}: {exc}") from exc
+    with artifact_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_columns:
+            raise TradeSimulationArtifactError(f"{schema_name} columns must match {expected_columns}, got {actual_columns}")
+        for row_index, row in enumerate(reader):
+            try:
+                rows.append(row_builder(row))  # type: ignore[operator]
+            except (TypeError, ValueError, MarketDataContractError) as exc:
+                raise TradeSimulationArtifactError(f"invalid {schema_name} row {row_index}: {exc}") from exc
     return tuple(rows)
 
 
@@ -539,7 +540,7 @@ def _metric_value(value: str | float | int) -> str:
 
 def _required_str(row: Mapping[str, object], name: str) -> str:
     value = row[name]
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     result = str(value)
     if not result:
@@ -549,13 +550,19 @@ def _required_str(row: Mapping[str, object], name: str) -> str:
 
 def _required_int(row: Mapping[str, object], name: str) -> int:
     value = row[name]
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     return int(value)
 
 
 def _required_float(row: Mapping[str, object], name: str) -> float:
     value = row[name]
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     return float(value)
+
+
+def _is_missing(value: object) -> bool:
+    if value is None or value == "":
+        return True
+    return isinstance(value, float) and math.isnan(value)

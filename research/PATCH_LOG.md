@@ -1,5 +1,18 @@
 # Patch log
 
+## perf: stream EV and simulation artifact loaders
+
+Status: APPLIED.
+
+Intent:
+- Replace `pandas.read_csv` + `iterrows()` in EV/simulation artifact loaders with strict `csv.DictReader` streaming.
+- Preserve exact schema-boundary failures and row-index error context while avoiding full-frame materialization for large decision/simulation artifacts.
+- Remove the pandas import from those builder modules; no strategy, EV, or simulation semantics changed.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\decision src\anomaly_science\simulation tests\test_decision_expected_value.py tests\test_trade_simulation.py`
+- `.venv\Scripts\python.exe -m pytest tests/test_decision_expected_value.py tests/test_trade_simulation.py -q`
+
 ## perf: trace run-research stage timings
 
 Status: APPLIED.
