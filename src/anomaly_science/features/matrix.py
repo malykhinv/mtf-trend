@@ -484,6 +484,97 @@ class _LiquidationSeries:
         )
 
 
+class _AtrSpeedFeatures:
+    def __init__(
+        self,
+        *,
+        atr_value: float | None,
+        atr_pct_value: float | None,
+        price_speed_atr: float | None,
+        status: str,
+    ) -> None:
+        self.atr_value = atr_value
+        self.atr_pct_value = atr_pct_value
+        self.price_speed_atr = price_speed_atr
+        self.status = status
+
+
+class _SymbolFeatureIndex:
+    """Exact per-symbol/per-snapshot feature cache for the feature-matrix hot path.
+
+    The index only memoizes features whose inputs are fully determined by
+    (symbol, snapshot_time_ms) and the frozen feature config. Event-specific
+    features continue to be computed from the event state to avoid changing
+    strategy semantics.
+    """
+
+    def __init__(
+        self,
+        *,
+        symbol: str,
+        candles: _CandleSeries,
+        open_interest_rows: Sequence[OpenInterest5m] | _OpenInterestSeries | None,
+        config: FeatureMatrixConfig,
+    ) -> None:
+        self.symbol = symbol
+        self.candles = candles
+        self._open_interest_rows = open_interest_rows
+        self._config = config
+        self._atr_speed_by_snapshot: dict[int, _AtrSpeedFeatures] = {}
+        self._volume_by_snapshot: dict[int, _VolumeFeatures] = {}
+        self._oi_by_snapshot: dict[int, _OiFeatures] = {}
+
+    def atr_speed_features(self, *, snapshot_time_ms: int) -> _AtrSpeedFeatures:
+        cached = self._atr_speed_by_snapshot.get(snapshot_time_ms)
+        if cached is not None:
+            return cached
+        atr_value: float | None = None
+        atr_pct_value: float | None = None
+        price_speed_atr: float | None = None
+        status = "ok"
+        try:
+            atr_value, atr_pct_value = self.candles.atr_asof(
+                symbol=self.symbol,
+                snapshot_time_ms=snapshot_time_ms,
+                atr_window_minutes=self._config.atr_window_minutes,
+            )
+        except AtrComputationError:
+            status = "insufficient_atr_history"
+        if atr_value is not None:
+            price_speed_atr = _price_speed_atr(
+                candles=self.candles,
+                snapshot_time_ms=snapshot_time_ms,
+                atr_value=atr_value,
+                atr_window_minutes=self._config.atr_window_minutes,
+            )
+            if price_speed_atr is None and status == "ok":
+                status = "missing_previous_close_for_speed"
+        result = _AtrSpeedFeatures(
+            atr_value=atr_value,
+            atr_pct_value=atr_pct_value,
+            price_speed_atr=price_speed_atr,
+            status=status,
+        )
+        self._atr_speed_by_snapshot[snapshot_time_ms] = result
+        return result
+
+    def volume_features(self, *, state: StrategyState1mRow) -> _VolumeFeatures:
+        cached = self._volume_by_snapshot.get(state.snapshot_time_ms)
+        if cached is not None:
+            return cached
+        result = _volume_features(candles=self.candles, state=state, config=self._config)
+        self._volume_by_snapshot[state.snapshot_time_ms] = result
+        return result
+
+    def oi_features(self, *, snapshot_time_ms: int) -> _OiFeatures:
+        cached = self._oi_by_snapshot.get(snapshot_time_ms)
+        if cached is not None:
+            return cached
+        result = _oi_features(open_interest_rows=self._open_interest_rows, snapshot_time_ms=snapshot_time_ms)
+        self._oi_by_snapshot[snapshot_time_ms] = result
+        return result
+
+
 class _StateSnapshotRow:
     def __init__(
         self,
@@ -902,6 +993,13 @@ def _iter_feature_matrix_value_rows_from_grouped_csv(
             if current_candle_symbol == state_symbol
             else _CandleSeries(())
         )
+        symbol_open_interest_rows = None if open_interest_by_symbol is None else open_interest_by_symbol.get(state_symbol, [])
+        symbol_feature_index = _SymbolFeatureIndex(
+            symbol=state_symbol,
+            candles=symbol_candles,
+            open_interest_rows=symbol_open_interest_rows,
+            config=config,
+        )
         candles_by_symbol: dict[str, Sequence[Candle1m]] = {state_symbol: symbol_candles}
         if config.btc_symbol != state_symbol:
             candles_by_symbol[config.btc_symbol] = btc_candles
@@ -909,7 +1007,7 @@ def _iter_feature_matrix_value_rows_from_grouped_csv(
             yield _build_state_feature_row_raw_values(
                 state=state,
                 candles=symbol_candles,
-                open_interest_rows=None if open_interest_by_symbol is None else open_interest_by_symbol.get(state.symbol, []),
+                open_interest_rows=symbol_open_interest_rows,
                 liquidation_rows=None
                 if liquidations_by_symbol is None
                 else liquidations_by_symbol.get(state.symbol, []),
@@ -923,6 +1021,7 @@ def _iter_feature_matrix_value_rows_from_grouped_csv(
                     symbol=state.symbol,
                 ),
                 config=config,
+                symbol_feature_index=symbol_feature_index,
             )
 
 
@@ -1719,6 +1818,7 @@ def _build_state_feature_row(
     states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     config: FeatureMatrixConfig,
     cross_section_features: _CrossSectionFeatures | None = None,
+    symbol_feature_index: _SymbolFeatureIndex | None = None,
 ) -> StrategyFeatureMatrixRow:
     return StrategyFeatureMatrixRow(
         *_build_state_feature_row_raw_values(
@@ -1733,6 +1833,7 @@ def _build_state_feature_row(
             states_at_snapshot=states_at_snapshot,
             config=config,
             cross_section_features=cross_section_features,
+            symbol_feature_index=symbol_feature_index,
         )
     )
 
@@ -1750,6 +1851,7 @@ def _build_state_feature_row_raw_values(
     states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
     config: FeatureMatrixConfig,
     cross_section_features: _CrossSectionFeatures | None = None,
+    symbol_feature_index: _SymbolFeatureIndex | None = None,
 ) -> tuple[object, ...]:
     atr_value: float | None = None
     atr_pct_value: float | None = None
@@ -1760,41 +1862,54 @@ def _build_state_feature_row_raw_values(
     price_speed_atr: float | None = None
     status = "ok"
 
-    try:
-        if isinstance(candles, _CandleSeries):
-            atr_value, atr_pct_value = candles.atr_asof(
-                symbol=state.symbol,
+    if symbol_feature_index is not None:
+        atr_speed_features = symbol_feature_index.atr_speed_features(snapshot_time_ms=state.snapshot_time_ms)
+        atr_value = atr_speed_features.atr_value
+        atr_pct_value = atr_speed_features.atr_pct_value
+        price_speed_atr = atr_speed_features.price_speed_atr
+        status = atr_speed_features.status
+    else:
+        try:
+            if isinstance(candles, _CandleSeries):
+                atr_value, atr_pct_value = candles.atr_asof(
+                    symbol=state.symbol,
+                    snapshot_time_ms=state.snapshot_time_ms,
+                    atr_window_minutes=config.atr_window_minutes,
+                )
+            else:
+                atr = compute_atr_1d_asof(
+                    candles_1m=candles,
+                    symbol=state.symbol,
+                    snapshot_time_ms=state.snapshot_time_ms,
+                    atr_window_minutes=config.atr_window_minutes,
+                )
+                atr_value = atr.core_atr_1440
+                atr_pct_value = atr.atr_1d_pct_asof_t
+        except AtrComputationError:
+            status = "insufficient_atr_history"
+
+        if atr_value is not None:
+            price_speed_atr = _price_speed_atr(
+                candles=candles,
                 snapshot_time_ms=state.snapshot_time_ms,
+                atr_value=atr_value,
                 atr_window_minutes=config.atr_window_minutes,
             )
-        else:
-            atr = compute_atr_1d_asof(
-                candles_1m=candles,
-                symbol=state.symbol,
-                snapshot_time_ms=state.snapshot_time_ms,
-                atr_window_minutes=config.atr_window_minutes,
-            )
-            atr_value = atr.core_atr_1440
-            atr_pct_value = atr.atr_1d_pct_asof_t
-    except AtrComputationError:
-        status = "insufficient_atr_history"
+            if price_speed_atr is None and status == "ok":
+                status = "missing_previous_close_for_speed"
 
     if atr_value is not None:
         range_since_start_atr = (state.running_high_asof_t - state.running_low_asof_t) / atr_value
         distance_to_running_high_atr = max(state.running_high_asof_t - state.current_close, 0.0) / atr_value
         distance_to_running_low_atr = max(state.current_close - state.running_low_asof_t, 0.0) / atr_value
         retracement_from_high_atr = distance_to_running_high_atr
-        price_speed_atr = _price_speed_atr(
-            candles=candles,
-            snapshot_time_ms=state.snapshot_time_ms,
-            atr_value=atr_value,
-            atr_window_minutes=config.atr_window_minutes,
-        )
-        if price_speed_atr is None and status == "ok":
-            status = "missing_previous_close_for_speed"
 
-    volume_features = _volume_features(candles=candles, state=state, config=config)
-    oi_features = _oi_features(open_interest_rows=open_interest_rows, snapshot_time_ms=state.snapshot_time_ms)
+    if symbol_feature_index is not None:
+        volume_features = symbol_feature_index.volume_features(state=state)
+        oi_features = symbol_feature_index.oi_features(snapshot_time_ms=state.snapshot_time_ms)
+    else:
+        volume_features = _volume_features(candles=candles, state=state, config=config)
+        oi_features = _oi_features(open_interest_rows=open_interest_rows, snapshot_time_ms=state.snapshot_time_ms)
     liquidation_features = _liquidation_features(
         candles=candles,
         liquidation_rows=liquidation_rows,
@@ -3262,6 +3377,7 @@ def _run_config_rows(
         RunConfigRow(key="min_cross_section_symbols", value=str(config.min_cross_section_symbols), source="runtime"),
         RunConfigRow(key="cross_section_delivery", value="exact_sorted_sidecar_by_symbol", source="runtime"),
         RunConfigRow(key="feature_matrix_row_delivery", value="direct_schema_ordered_values", source="runtime"),
+        RunConfigRow(key="symbol_feature_delivery", value="exact_per_symbol_snapshot_index", source="runtime"),
         RunConfigRow(key="btc_symbol", value=config.btc_symbol, source="runtime"),
         RunConfigRow(
             key="btc_corr_window_minutes",
