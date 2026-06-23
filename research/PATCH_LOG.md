@@ -15,6 +15,7 @@ Validation:
 - `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
 - Synthetic `_build_state_feature_row` profile with BTC context improved from about `8.1s` to `2.9s` for `9059` rows.
 - `.venv\Scripts\python.exe -m pytest -q`
+- 9d all-symbol `run-research broad_anomaly_v1_h30 --days 9` diagnostic still had `feature_matrix` running after more than `1800s` following `feature_catalog`; the run was stopped and deleted. The next bottleneck is likely outside the optimized per-row CVD/BTC context helpers, such as cross-section materialization, CSV parsing, or artifact writing.
 
 ## perf: avoid feature candle history copies
 
