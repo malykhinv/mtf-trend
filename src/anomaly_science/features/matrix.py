@@ -1061,12 +1061,19 @@ def _populate_cross_section_feature_store_from_candles_csv(
         connection.commit()
 
         select_sql = (
-            "SELECT symbol, volume, quote_volume, return_1m, range_expansion "
-            "FROM cross_section_metrics WHERE snapshot_time_ms = ?"
+            "SELECT snapshot_time_ms, symbol, volume, quote_volume, return_1m, range_expansion "
+            "FROM cross_section_metrics ORDER BY snapshot_time_ms, symbol"
         )
+        cursor = iter(connection.execute(select_sql))
+        pending_row = next(cursor, None)
         for snapshot_time_ms in snapshot_times:
             states_at_snapshot = states_by_snapshot.get(snapshot_time_ms, ())
-            rows = connection.execute(select_sql, (snapshot_time_ms,)).fetchall()
+            rows: list[tuple[object, ...]] = []
+            while pending_row is not None and int(pending_row[0]) < snapshot_time_ms:
+                pending_row = next(cursor, None)
+            while pending_row is not None and int(pending_row[0]) == snapshot_time_ms:
+                rows.append(pending_row[1:])
+                pending_row = next(cursor, None)
             symbols_with_current_candle = len(rows)
             missing = _missing_cross_section_features(symbol_count=symbols_with_current_candle)
             if symbols_with_current_candle < min_cross_section_symbols:

@@ -1,5 +1,19 @@
 # Patch log
 
+## perf: stream feature cross-section metrics
+
+Status: APPLIED.
+
+Intent:
+- Replace per-snapshot SQLite `SELECT` calls in feature cross-section materialization with one ordered cursor grouped by `snapshot_time_ms`.
+- Preserve point-in-time cross-section semantics and the same temporary SQLite storage boundary.
+- Target the remaining 9d `feature_matrix` bottleneck that persisted after per-row CVD/BTC helper optimizations.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\features tests\test_feature_matrix.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_feature_matrix.py -q`
+- `.venv\Scripts\python.exe -m pytest -q`
+
 ## perf: index feature CVD and BTC correlation
 
 Status: APPLIED.
