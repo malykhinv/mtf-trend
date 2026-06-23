@@ -17,7 +17,7 @@ from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matri
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
-from anomaly_science.research import ResearchRunConfig, run_research_pipeline
+from anomaly_science.research import ResearchDatasetBuildConfig, ResearchRunConfig, build_research_dataset, run_research_pipeline
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 from anomaly_science.strategy import run_mvp1_strategy_registry
@@ -114,6 +114,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--protocol-freeze-id",
         default="",
         help="Required for --research-mode frozen_holdout. Optional explicit freeze id for IS governance.",
+    )
+
+    dataset = subparsers.add_parser(
+        "build-research-dataset",
+        help="Build a reusable research dataset store from the local market cache without running experiments.",
+    )
+    dataset.add_argument("strategy", help="Registered strategy name, for example broad_anomaly_v1_h30.")
+    dataset.add_argument("--cache-dir", required=True, help="Directory containing enriched market cache parquet files.")
+    dataset.add_argument("--out", required=True, help="Research dataset store directory to create or update.")
+    dataset.add_argument("--days", type=int, default=None, help="Optional lookback days. Omit to use the full available cache period.")
+    dataset.add_argument(
+        "--max-phase",
+        choices=("input", "data_audit", "events", "state", "future", "feature_catalog", "feature_matrix"),
+        default="input",
+        help="Highest reusable phase to build. Default: input.",
+    )
+    dataset.add_argument(
+        "--research-mode",
+        choices=("is", "frozen_holdout"),
+        default="is",
+        help="Dataset phase access mode. Default: is excludes the final holdout from derived phases.",
+    )
+    dataset.add_argument("--holdout-days", type=int, default=60, help="Final locked holdout length in calendar days. Default: 60.")
+    dataset.add_argument(
+        "--protocol-freeze-id",
+        default="",
+        help="Required for --research-mode frozen_holdout. Optional explicit freeze id for IS dataset metadata.",
+    )
+    dataset.add_argument("--expected-days", type=int, default=None, help="Optional validation gate: require the exported global calendar span to be at least this many days.")
+    dataset.add_argument("--fail-on-missing-utc-days", action="store_true", help="Fail if any symbol has missing UTC days inside its exported first/last date span.")
+    dataset.add_argument("--fail-on-missing-1m-rows", action="store_true", help="Fail if any symbol has missing 1m timestamps inside its exported first/last minute span.")
+    dataset.add_argument("--fail-on-missing-open-interest", action="store_true", help="Fail if any exported symbol has no open_interest samples.")
+    dataset.add_argument("--include-delivery-contracts", action="store_true", help="Include fixed-date delivery contract parquet files. Disabled by default.")
+    dataset.add_argument("--progress-every", type=int, default=25, help="Print build progress every N symbols. Use 0 to disable progress output.")
+    dataset.add_argument("--parquet-use-threads", action="store_true", help="Allow parquet reader to use multiple threads. Disabled by default to keep laptop RAM bounded.")
+    dataset.add_argument(
+        "--expected-event-lifetime-minutes",
+        type=int,
+        default=60,
+        help="Frozen denominator for event_age_ratio when building feature_matrix. Default: 60.",
     )
 
     data_audit = subparsers.add_parser(
@@ -391,6 +431,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         print(f"research pipeline written: {output_dir}")
+        return 0
+
+    if args.command == "build-research-dataset":
+        output_dir = build_research_dataset(
+            ResearchDatasetBuildConfig(
+                strategy_name=args.strategy,
+                cache_dir=Path(args.cache_dir),
+                out_dir=Path(args.out),
+                days=args.days,
+                max_phase=args.max_phase,
+                research_mode=args.research_mode,
+                holdout_days=args.holdout_days,
+                protocol_freeze_id=args.protocol_freeze_id,
+                expected_days=args.expected_days,
+                fail_on_missing_utc_days=args.fail_on_missing_utc_days,
+                fail_on_missing_1m_rows=args.fail_on_missing_1m_rows,
+                fail_on_missing_open_interest=args.fail_on_missing_open_interest,
+                include_delivery_contracts=args.include_delivery_contracts,
+                progress_every=args.progress_every,
+                parquet_use_threads=args.parquet_use_threads,
+                expected_event_lifetime_minutes=args.expected_event_lifetime_minutes,
+            )
+        )
+        print(f"research dataset written: {output_dir}")
         return 0
 
     if args.command == "run-mvp1-data-audit":

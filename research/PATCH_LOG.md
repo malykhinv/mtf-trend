@@ -1,5 +1,18 @@
 # Patch log
 
+## architecture: add dataset store phase cache v1
+
+Status: PROPOSED.
+
+Intent:
+- Add an explicit `build-research-dataset` command that materializes reusable research dataset phases behind an explicit `--max-phase` boundary.
+- Start with safe dataset phases only: input, data_audit, events, state, future, feature_catalog, and feature_matrix. Prediction, controls, EV, simulation, and metrics remain experiment outputs.
+- Preserve `run-research` behavior; this patch only creates the reusable dataset-store contract needed before `run-research --dataset`.
+
+Validation:
+- `.venv\Scripts\python.exe -m compileall -q src tests main.py`
+- `.venv\Scripts\python.exe -m pytest tests\test_research_dataset_store.py tests\test_cli_contract.py -q`
+
 ## perf: stream feature cross-section metrics
 
 Status: APPLIED.
