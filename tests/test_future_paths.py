@@ -323,7 +323,7 @@ def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
     assert (out_dir / "strategy_future_paths.csv").is_file()
     assert (out_dir / "strategy_protocol_audit.csv").is_file()
     assert (out_dir / "strategy_run_config.csv").is_file()
-    assert (out_dir / "anomaly_future_paths.csv").is_file()
+    assert not (out_dir / "anomaly_future_paths.csv").exists()
     assert (out_dir / "artifact_manifest.json").is_file()
 
     with (out_dir / "strategy_future_paths.csv").open(encoding="utf-8-sig", newline="") as file_obj:

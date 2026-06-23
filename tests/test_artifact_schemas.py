@@ -215,6 +215,35 @@ def test_csv_writer_can_write_strategy_aliases(tmp_path: Path) -> None:
     assert (tmp_path / "anomaly_events.csv").is_file()
 
 
+def test_csv_writer_skips_heavy_strategy_alias_materialization(tmp_path: Path) -> None:
+    schema = get_artifact_schema("strategy_future_paths.csv")
+    row = {name: "" for name in schema.required_columns}
+    row.update(
+        {
+            "event_id": "evt_1",
+            "strategy_name": "broad_anomaly_v1_h30",
+            "strategy_version": "v1",
+            "strategy_contract_version": "base_strategy_v1",
+            "symbol": "BTCUSDT",
+            "snapshot_time_ms": 1_700_000_000_000,
+            "future_start_time_ms": 1_700_000_060_000,
+            "label_horizon_minutes": 30,
+            "future_return_atr_H": 0.0,
+            "future_max_atr_H": 0.0,
+            "future_min_atr_H": 0.0,
+            "time_to_target_atr": "",
+            "time_to_stop_atr": "",
+            "intracandle_double_barrier_hit": False,
+            "barrier_resolution": "none",
+            "label_schema_version": "test",
+        }
+    )
+
+    written = write_csv_artifact_with_aliases(tmp_path / "strategy_future_paths.csv", [row], schema)
+
+    assert [path.name for path in written] == ["strategy_future_paths.csv"]
+    assert not (tmp_path / "anomaly_future_paths.csv").exists()
+
 def test_csv_writer_uses_hardlink_for_identical_strategy_aliases(tmp_path: Path) -> None:
     probe_source = tmp_path / "probe_source.txt"
     probe_alias = tmp_path / "probe_alias.txt"

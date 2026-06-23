@@ -292,7 +292,7 @@ def test_run_mvp1_state_cli_writes_state_artifacts(tmp_path: Path) -> None:
     assert (out_dir / "strategy_state_1m.csv").is_file()
     assert (out_dir / "strategy_protocol_audit.csv").is_file()
     assert (out_dir / "strategy_run_config.csv").is_file()
-    assert (out_dir / "anomaly_state_1m.csv").is_file()
+    assert not (out_dir / "anomaly_state_1m.csv").exists()
     assert (out_dir / "artifact_manifest.json").is_file()
 
     with (out_dir / "strategy_state_1m.csv").open(encoding="utf-8-sig", newline="") as file_obj:

@@ -8,7 +8,12 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
+from anomaly_science.contracts.artifacts import (
+    ArtifactSchema,
+    get_artifact_schema,
+    get_strategy_artifact_companion_names,
+    should_materialize_strategy_artifact_alias,
+)
 
 
 class ArtifactWriteError(ValueError):
@@ -66,6 +71,8 @@ def write_csv_artifact_with_aliases(
         rows = tuple(rows)
     written = [write_csv_artifact(path, rows, schema)]
     for alias_name, alias_schema in alias_schemas:
+        if not should_materialize_strategy_artifact_alias(schema.name, alias_name):
+            continue
         alias_path = path.with_name(alias_name)
         if tuple(alias_schema.required_columns) == tuple(schema.required_columns):
             link_or_copy_identical_artifact(path, alias_path)

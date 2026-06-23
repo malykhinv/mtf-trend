@@ -504,7 +504,7 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
     assert catalog_path.is_file()
     assert audit_path.is_file()
     assert run_config_path.is_file()
-    assert (out / "anomaly_feature_matrix.csv").is_file()
+    assert not (out / "anomaly_feature_matrix.csv").exists()
     assert manifest_path.is_file()
 
     with matrix_path.open("r", encoding="utf-8-sig", newline="") as file_obj:

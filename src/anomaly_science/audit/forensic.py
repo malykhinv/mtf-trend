@@ -5,7 +5,11 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from anomaly_science.contracts.artifacts import MVP1_ARTIFACT_SCHEMAS, STRATEGY_ARTIFACT_ALIASES
+from anomaly_science.contracts.artifacts import (
+    MVP1_ARTIFACT_SCHEMAS,
+    STRATEGY_ARTIFACT_ALIASES,
+    should_materialize_strategy_artifact_alias,
+)
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow
 from anomaly_science.contracts.execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 
@@ -765,6 +769,8 @@ def _canonical_alias_consistency_row(root: Path) -> ProtocolAuditRow:
     failures: list[str] = []
     checked = 0
     for anomaly_name, strategy_name in sorted(STRATEGY_ARTIFACT_ALIASES.items()):
+        if not should_materialize_strategy_artifact_alias(anomaly_name, strategy_name):
+            continue
         anomaly_by_parent = {path.parent: path for path in root.rglob(anomaly_name)}
         strategy_by_parent = {path.parent: path for path in root.rglob(strategy_name)}
         if not anomaly_by_parent and not strategy_by_parent:

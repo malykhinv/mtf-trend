@@ -922,6 +922,27 @@ STRATEGY_ARTIFACT_ALIASES: dict[str, str] = {
 }
 
 
+HEAVY_STRATEGY_ARTIFACT_ALIASES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("anomaly_state_1m.csv", "strategy_state_1m.csv"),
+        ("anomaly_future_paths.csv", "strategy_future_paths.csv"),
+        ("anomaly_feature_matrix.csv", "strategy_feature_matrix.csv"),
+    }
+)
+
+
+def is_heavy_strategy_artifact_alias_pair(left_name: str, right_name: str) -> bool:
+    """Return true for compatibility aliases that must not be materialized as huge files."""
+    return (left_name, right_name) in HEAVY_STRATEGY_ARTIFACT_ALIASES or (
+        right_name, left_name
+    ) in HEAVY_STRATEGY_ARTIFACT_ALIASES
+
+
+def should_materialize_strategy_artifact_alias(source_name: str, alias_name: str) -> bool:
+    """Keep lightweight CSV aliases, but skip historical/state/feature heavy duplicates."""
+    return not is_heavy_strategy_artifact_alias_pair(source_name, alias_name)
+
+
 for source_name, alias_name in STRATEGY_ARTIFACT_ALIASES.items():
     source_schema = MVP1_ARTIFACT_SCHEMAS[source_name]
     MVP1_ARTIFACT_SCHEMAS[alias_name] = ArtifactSchema(
