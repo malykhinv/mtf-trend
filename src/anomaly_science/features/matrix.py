@@ -27,6 +27,7 @@ from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION, build_defau
 from anomaly_science.features.config import FeatureMatrixConfig
 from anomaly_science.future.atr import AtrComputationError, compute_atr_1d_asof
 from anomaly_science.future.builder import iter_candles_1m_csv, iter_strategy_state_1m_csv, load_strategy_state_1m_csv
+from anomaly_science.progress import ProgressCallback, ProgressUpdate
 
 EPS = 1e-12
 T = TypeVar("T")
@@ -858,6 +859,18 @@ def _feature_matrix_parquet_path(csv_path: Path) -> Path:
 
 def _feature_matrix_parquet_manifest_path(csv_path: Path) -> Path:
     return csv_path.with_name(csv_path.stem + ".parquet_manifest.json")
+
+
+def strategy_feature_matrix_parquet_sidecar_row_count(path: str | Path) -> int | None:
+    feature_path = Path(path)
+    manifest_path = _feature_matrix_parquet_manifest_path(feature_path)
+    if not manifest_path.exists():
+        return None
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    row_count = payload.get("row_count")
+    if not isinstance(row_count, int) or row_count < 0:
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar manifest has invalid row_count")
+    return row_count
 
 
 def _import_pyarrow_for_feature_matrix_sidecar():
@@ -2009,6 +2022,7 @@ def run_mvp1_feature_matrix(
     out_dir: str | Path,
     config: FeatureMatrixConfig | None = None,
     max_input_time_ms: int | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     input_path = Path(input_dir)
     state_artifact_path = Path(state_path)
@@ -2041,6 +2055,16 @@ def run_mvp1_feature_matrix(
     )
     cross_section_sidecar_path = output_path / "strategy_feature_matrix.cross_section_features.csv.tmp"
     cross_section_metrics_path = output_path / "strategy_feature_matrix.cross_section_metrics.csv.tmp"
+    if progress_callback is not None:
+        progress_callback(
+            ProgressUpdate(
+                done=0,
+                total=state_row_count,
+                unit="rows",
+                detail="building cross-section sidecar",
+                force=True,
+            )
+        )
     _write_cross_section_feature_sidecar_from_candles_csv(
         sidecar_path=cross_section_sidecar_path,
         metrics_path=cross_section_metrics_path,
@@ -2053,6 +2077,16 @@ def run_mvp1_feature_matrix(
         min_cross_section_symbols=cfg.min_cross_section_symbols,
         max_input_time_ms=max_input_time_ms,
     )
+    if progress_callback is not None:
+        progress_callback(
+            ProgressUpdate(
+                done=0,
+                total=state_row_count,
+                unit="rows",
+                detail="writing parquet feature matrix",
+                force=True,
+            )
+        )
     cross_section_reader = _CrossSectionFeatureSidecarReader(cross_section_sidecar_path, remove_on_close=True)
     try:
         written: list[Path] = []
@@ -2070,6 +2104,8 @@ def run_mvp1_feature_matrix(
                 max_input_time_ms=max_input_time_ms,
             ),
             get_artifact_schema("strategy_feature_matrix.csv"),
+            expected_row_count=state_row_count,
+            progress_callback=progress_callback,
         )
     finally:
         cross_section_reader.close()
@@ -2125,6 +2161,8 @@ def _write_feature_matrix_value_rows_with_aliases(
     path: Path,
     rows: Iterable[Sequence[object]],
     schema: ArtifactSchema,
+    expected_row_count: int | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[Path], int]:
     sidecar_paths: list[Path] = []
 
@@ -2135,6 +2173,8 @@ def _write_feature_matrix_value_rows_with_aliases(
             schema=schema,
             write_parquet_sidecar=True,
             csv_delivery="schema_header_only",
+            expected_row_count=expected_row_count,
+            progress_callback=progress_callback,
         )
         sidecar_paths.extend(written_sidecars)
         return row_count
@@ -2198,6 +2238,8 @@ def _write_feature_matrix_value_rows(
     schema: ArtifactSchema,
     write_parquet_sidecar: bool = False,
     csv_delivery: str = "full",
+    expected_row_count: int | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[int, list[Path]]:
     fieldnames = list(schema.required_columns)
     _validate_direct_feature_matrix_fieldnames(fieldnames)
@@ -2217,6 +2259,16 @@ def _write_feature_matrix_value_rows(
         if write_parquet_sidecar
         else None
     )
+    if progress_callback is not None:
+        progress_callback(
+            ProgressUpdate(
+                done=0,
+                total=expected_row_count,
+                unit="rows",
+                detail="writing feature matrix",
+                force=True,
+            )
+        )
     try:
         with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
             writer = csv.writer(file_obj)
@@ -2234,6 +2286,15 @@ def _write_feature_matrix_value_rows(
                     row_count += 1
                     if row_count % 100_000 == 0:
                         file_obj.flush()
+                        if progress_callback is not None:
+                            progress_callback(
+                                ProgressUpdate(
+                                    done=row_count,
+                                    total=expected_row_count,
+                                    unit="rows",
+                                    detail="writing feature matrix",
+                                )
+                            )
             else:
                 for row_values in rows:
                     if len(row_values) != expected_value_count:
@@ -2245,10 +2306,29 @@ def _write_feature_matrix_value_rows(
                         raise ArtifactWriteError("missing Parquet sidecar writer for schema_header_only delivery")
                     sidecar_writer.append(row_values)
                     row_count += 1
+                    if progress_callback is not None and row_count % 100_000 == 0:
+                        progress_callback(
+                            ProgressUpdate(
+                                done=row_count,
+                                total=expected_row_count,
+                                unit="rows",
+                                detail="writing feature matrix",
+                            )
+                        )
         os.replace(tmp_path, path)
         sidecar_paths: list[Path] = []
         if sidecar_writer is not None:
             sidecar_paths.extend(sidecar_writer.close())
+        if progress_callback is not None:
+            progress_callback(
+                ProgressUpdate(
+                    done=row_count,
+                    total=expected_row_count,
+                    unit="rows",
+                    detail="feature matrix written",
+                    force=True,
+                )
+            )
         return row_count, sidecar_paths
     except Exception:
         if sidecar_writer is not None:

@@ -24,7 +24,9 @@ from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.features.matrix import (
     iter_strategy_feature_matrix_frame_chunks_prefer_parquet,
     load_strategy_feature_matrix_csv,
+    strategy_feature_matrix_parquet_sidecar_row_count,
 )
+from anomaly_science.progress import ProgressCallback, ProgressUpdate
 from anomaly_science.future.builder import (
     AnomalyFutureArtifactError,
     AnomalyStateArtifactError,
@@ -65,6 +67,7 @@ def build_atlas_artifacts_from_csv_paths(
     future_path: str | Path,
     feature_matrix_path: str | Path,
     config: AtlasConfig | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> AtlasArtifacts:
     """Build atlas artifacts from strict CSV boundaries using bounded-memory chunks."""
     cfg = config or AtlasConfig()
@@ -73,6 +76,7 @@ def build_atlas_artifacts_from_csv_paths(
         future_path=Path(future_path),
         feature_matrix_path=Path(feature_matrix_path),
         config=cfg,
+        progress_callback=progress_callback,
     )
 
 
@@ -82,6 +86,7 @@ def _build_atlas_artifacts_from_csv_chunks(
     future_path: Path,
     feature_matrix_path: Path,
     config: AtlasConfig,
+    progress_callback: ProgressCallback | None = None,
 ) -> AtlasArtifacts:
     chunk_size = 250_000
     context_columns = _atlas_context_columns()
@@ -100,11 +105,23 @@ def _build_atlas_artifacts_from_csv_chunks(
         usecols=_atlas_future_usecols(config.outcome_horizon_minutes_list),
         chunksize=chunk_size,
     )
-    feature_reader = _read_strict_artifact_frame_chunks(
+    feature_reader = iter_strategy_feature_matrix_frame_chunks_prefer_parquet(
         path=feature_matrix_path,
         usecols=_atlas_feature_usecols(),
         chunksize=chunk_size,
     )
+    expected_row_count = strategy_feature_matrix_parquet_sidecar_row_count(feature_matrix_path)
+    processed_rows = 0
+    if progress_callback is not None:
+        progress_callback(
+            ProgressUpdate(
+                done=0,
+                total=expected_row_count,
+                unit="rows",
+                detail="joining atlas chunks",
+                force=True,
+            )
+        )
     for chunk_index, (state_frame, future_frame, feature_frame) in enumerate(
         zip(state_reader, future_reader, feature_reader, strict=True)
     ):
@@ -115,6 +132,16 @@ def _build_atlas_artifacts_from_csv_chunks(
             chunk_index=chunk_index,
         )
         _enforce_atlas_frame_temporal_contract(joined)
+        processed_rows += len(joined)
+        if progress_callback is not None:
+            progress_callback(
+                ProgressUpdate(
+                    done=processed_rows,
+                    total=expected_row_count,
+                    unit="rows",
+                    detail=f"chunk={chunk_index + 1}",
+                )
+            )
         _add_atlas_context_columns(joined)
         for horizon in config.outcome_horizon_minutes_list:
             horizon_frame = joined.copy(deep=False)
@@ -137,6 +164,16 @@ def _build_atlas_artifacts_from_csv_chunks(
                 market_groups=market_groups,
             )
 
+    if progress_callback is not None:
+        progress_callback(
+            ProgressUpdate(
+                done=processed_rows,
+                total=expected_row_count,
+                unit="rows",
+                detail="atlas chunks accumulated",
+                force=True,
+            )
+        )
     return AtlasArtifacts(
         nature_atlas_rows=_nature_rows_from_accumulators(nature_groups=nature_groups, config=config),
         context_split_rows=_context_rows_from_accumulators(context_groups=context_groups, config=config),

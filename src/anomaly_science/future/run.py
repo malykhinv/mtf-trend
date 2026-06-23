@@ -16,6 +16,7 @@ from anomaly_science.future.builder import (
     validate_future_row_fieldnames,
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
+from anomaly_science.progress import ProgressCallback, ProgressUpdate
 
 
 def run_mvp1_future(
@@ -25,6 +26,7 @@ def run_mvp1_future(
     out_dir: str | Path,
     config: FuturePathBuilderConfig | None = None,
     max_input_time_ms: int | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     """Run MVP1 raw future path builder and write protocol artifacts."""
     input_path = Path(input_dir)
@@ -34,6 +36,7 @@ def run_mvp1_future(
     cfg = config or FuturePathBuilderConfig()
 
     written: list[Path] = []
+    expected_row_count = _count_csv_data_rows(state_artifact_path)
     future_schema = get_artifact_schema("strategy_future_paths.csv")
     future_written, future_row_count = _write_future_rows_with_aliases(
         output_path / "strategy_future_paths.csv",
@@ -45,6 +48,8 @@ def run_mvp1_future(
             max_input_time_ms=max_input_time_ms,
         ),
         future_schema,
+        expected_row_count=expected_row_count,
+        progress_callback=progress_callback,
     )
     written.extend(future_written)
     protocol_rows = _protocol_rows(state_row_count=future_row_count, future_row_count=future_row_count)
@@ -79,11 +84,19 @@ def _write_future_rows_with_aliases(
     path: Path,
     rows: Iterable[list[object]],
     schema: ArtifactSchema,
+    expected_row_count: int | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[Path], int]:
     if path.name != schema.name:
         raise ArtifactWriteError(f"path name {path.name!r} does not match schema name {schema.name!r}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    row_count = _write_future_rows(path=path, rows=rows, schema=schema)
+    row_count = _write_future_rows(
+        path=path,
+        rows=rows,
+        schema=schema,
+        expected_row_count=expected_row_count,
+        progress_callback=progress_callback,
+    )
     written = [path]
     for alias_name in get_strategy_artifact_companion_names(schema.name):
         alias_path = path.with_name(alias_name)
@@ -95,7 +108,14 @@ def _write_future_rows_with_aliases(
     return written, row_count
 
 
-def _write_future_rows(*, path: Path, rows: Iterable[list[object]], schema: ArtifactSchema) -> int:
+def _write_future_rows(
+    *,
+    path: Path,
+    rows: Iterable[list[object]],
+    schema: ArtifactSchema,
+    expected_row_count: int | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> int:
     fieldnames = list(schema.required_columns)
     try:
         validate_future_row_fieldnames(fieldnames)
@@ -103,6 +123,16 @@ def _write_future_rows(*, path: Path, rows: Iterable[list[object]], schema: Arti
         raise ArtifactWriteError(str(exc)) from exc
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
+    if progress_callback is not None:
+        progress_callback(
+            ProgressUpdate(
+                done=0,
+                total=expected_row_count,
+                unit="rows",
+                detail="writing future rows",
+                force=True,
+            )
+        )
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
         writer = csv.writer(file_obj)
         writer.writerow(fieldnames)
@@ -111,8 +141,37 @@ def _write_future_rows(*, path: Path, rows: Iterable[list[object]], schema: Arti
             row_count += 1
             if row_count % 100_000 == 0:
                 file_obj.flush()
+                if progress_callback is not None:
+                    progress_callback(
+                        ProgressUpdate(
+                            done=row_count,
+                            total=expected_row_count,
+                            unit="rows",
+                            detail="writing future rows",
+                        )
+                    )
     os.replace(tmp_path, path)
+    if progress_callback is not None:
+        progress_callback(
+            ProgressUpdate(
+                done=row_count,
+                total=expected_row_count,
+                unit="rows",
+                detail="future rows written",
+                force=True,
+            )
+        )
     return row_count
+
+
+def _count_csv_data_rows(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    line_count = 0
+    with path.open("rb") as file_obj:
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+            line_count += chunk.count(b"\n")
+    return max(line_count - 1, 0)
 
 
 def _protocol_rows(*, state_row_count: int, future_row_count: int) -> list[ProtocolAuditRow]:

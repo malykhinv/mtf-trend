@@ -13,6 +13,7 @@ from anomaly_science.atlas.builder import (
     response_surface_rows_to_artifact,
 )
 from anomaly_science.atlas.config import AtlasConfig
+from anomaly_science.progress import ProgressCallback
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 
@@ -24,6 +25,7 @@ def run_mvp1_atlas(
     out_dir: str | Path,
     feature_matrix_path: str | Path,
     config: AtlasConfig | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     """Run MVP1 anomaly nature atlas and write descriptive discovery artifacts."""
     state_artifact_path = Path(state_path)
@@ -38,6 +40,7 @@ def run_mvp1_atlas(
         future_path=future_artifact_path,
         feature_matrix_path=feature_artifact_path,
         config=cfg,
+        progress_callback=progress_callback,
     )
     protocol_rows = _protocol_rows(
         input_row_count=sum(row.row_count for row in artifacts.market_shock_group_rows if row.outcome_horizon_minutes == cfg.outcome_horizon_minutes_list[0]),

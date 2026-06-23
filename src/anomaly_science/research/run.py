@@ -31,6 +31,7 @@ from anomaly_science.features import run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
+from anomaly_science.progress import HumanProgressReporter, ProgressCallback
 from anomaly_science.rejection import write_rejection_funnel
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
@@ -172,6 +173,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             out_dir=stages_dir / "state",
             config=_state_config_for_strategy(strategy_name=config.strategy_name),
             max_input_time_ms=input_view.max_input_time_ms,
+            progress_callback=timings.progress_callback("state", unit="rows"),
         )
         _release_stage_memory()
 
@@ -181,6 +183,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             state_path=state_dir / "strategy_state_1m.csv",
             out_dir=stages_dir / "future",
             max_input_time_ms=input_view.max_input_time_ms,
+            progress_callback=timings.progress_callback("future", unit="rows"),
         )
         _release_stage_memory()
 
@@ -194,6 +197,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             state_path=state_dir / "strategy_state_1m.csv",
             out_dir=stages_dir / "feature_matrix",
             max_input_time_ms=input_view.max_input_time_ms,
+            progress_callback=timings.progress_callback("feature_matrix", unit="rows"),
         )
         _release_stage_memory()
 
@@ -203,6 +207,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             future_path=future_dir / "strategy_future_paths.csv",
             feature_matrix_path=feature_matrix_dir / "strategy_feature_matrix.csv",
             out_dir=stages_dir / "atlas",
+            progress_callback=timings.progress_callback("atlas", unit="rows"),
         )
         _release_stage_memory()
 
@@ -399,6 +404,31 @@ class _StageTimingRecorder:
                 duration_seconds=duration_seconds,
                 notes=notes,
             )
+
+    def progress_callback(
+        self,
+        stage_name: str,
+        *,
+        total: int | None = None,
+        unit: str = "items",
+        min_interval_seconds: float = 30.0,
+    ) -> ProgressCallback:
+        reporter = HumanProgressReporter(
+            stage_name=stage_name,
+            total=total,
+            unit=unit,
+            min_interval_seconds=min_interval_seconds,
+            sink=self._write_progress_log,
+        )
+        return reporter.update
+
+    def _write_progress_log(self, message: str) -> None:
+        print(message, file=sys.stderr, flush=True)
+        if self.log_path is None:
+            return
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
 
     def _write_live_log(
         self,

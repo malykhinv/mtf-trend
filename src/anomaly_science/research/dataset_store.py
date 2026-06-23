@@ -18,6 +18,7 @@ from anomaly_science.state import run_mvp1_state
 from anomaly_science.state.config import OnlineStateBuilderConfig
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
 from anomaly_science.strategy.registry import get_strategy
+from anomaly_science.progress import make_stderr_progress_callback
 
 RESEARCH_DATASET_FORMAT_VERSION = "research_dataset_store_v1"
 RESEARCH_DATASET_PHASE_CONTRACT_VERSION = "phase_cache_v1"
@@ -242,6 +243,7 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
             out_dir=stages_dir / "state",
             config=OnlineStateBuilderConfig(max_state_minutes_after_detection=active_strategy_h_max_minutes((config.strategy_name,))),
             max_input_time_ms=input_view.max_input_time_ms,
+            progress_callback=make_stderr_progress_callback(stage_name="dataset state", unit="rows"),
         )
         phases.append(
             _phase_payload(
@@ -264,6 +266,7 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
             state_path=state_dir / "strategy_state_1m.csv",
             out_dir=stages_dir / "future",
             max_input_time_ms=input_view.max_input_time_ms,
+            progress_callback=make_stderr_progress_callback(stage_name="dataset future", unit="rows"),
         )
         phases.append(
             _phase_payload(
@@ -299,6 +302,7 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
             out_dir=stages_dir / "feature_matrix",
             config=FeatureMatrixConfig(expected_event_lifetime_minutes=config.expected_event_lifetime_minutes),
             max_input_time_ms=input_view.max_input_time_ms,
+            progress_callback=make_stderr_progress_callback(stage_name="dataset feature_matrix", unit="rows"),
         )
         phases.append(
             _phase_payload(

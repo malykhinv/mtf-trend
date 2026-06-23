@@ -17,6 +17,7 @@ from anomaly_science.state.builder import (
     load_strategy_events_csv,
 )
 from anomaly_science.state.config import OnlineStateBuilderConfig
+from anomaly_science.progress import ProgressCallback, ProgressUpdate
 
 
 def run_mvp1_state(
@@ -26,6 +27,7 @@ def run_mvp1_state(
     out_dir: str | Path,
     config: OnlineStateBuilderConfig | None = None,
     max_input_time_ms: int | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     """Run MVP1 online 1m state builder and write protocol artifacts."""
     input_path = Path(input_dir)
@@ -45,6 +47,7 @@ def run_mvp1_state(
             max_open_time_ms=max_input_time_ms,
         ),
         get_artifact_schema("strategy_state_1m.csv"),
+        progress_callback=progress_callback,
     )
     written.extend(state_written)
     excluded_event_count = sum(1 for event in events if event.technical_noise_shock or event.excluded_by_data_quality_gate)
@@ -84,11 +87,12 @@ def _write_state_rows_with_aliases(
     path: Path,
     rows: Iterable[StrategyState1mRow],
     schema: ArtifactSchema,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[Path], int]:
     if path.name != schema.name:
         raise ValueError(f"path name {path.name!r} does not match schema name {schema.name!r}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    row_count = _write_state_rows(path=path, rows=rows, schema=schema)
+    row_count = _write_state_rows(path=path, rows=rows, schema=schema, progress_callback=progress_callback)
     written = [path]
     for alias_name in get_strategy_artifact_companion_names(schema.name):
         alias_path = path.with_name(alias_name)
@@ -100,19 +104,31 @@ def _write_state_rows_with_aliases(
     return written, row_count
 
 
-def _write_state_rows(*, path: Path, rows: Iterable[StrategyState1mRow], schema: ArtifactSchema) -> int:
+def _write_state_rows(
+    *,
+    path: Path,
+    rows: Iterable[StrategyState1mRow],
+    schema: ArtifactSchema,
+    progress_callback: ProgressCallback | None = None,
+) -> int:
     fieldnames = list(schema.required_columns)
     _validate_state_row_fieldnames(fieldnames)
     attribute_names = [_state_row_attribute_name(fieldname) for fieldname in fieldnames]
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
+    if progress_callback is not None:
+        progress_callback(ProgressUpdate(done=0, unit="rows", detail="writing state rows", force=True))
     with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
         writer = csv.writer(file_obj)
         writer.writerow(fieldnames)
         for row in rows:
             writer.writerow(_state_row_values_for_attributes(row=row, attribute_names=attribute_names))
             row_count += 1
+            if progress_callback is not None and row_count % 100_000 == 0:
+                progress_callback(ProgressUpdate(done=row_count, unit="rows", detail="writing state rows"))
     os.replace(tmp_path, path)
+    if progress_callback is not None:
+        progress_callback(ProgressUpdate(done=row_count, unit="rows", detail="state rows written", force=True))
     return row_count
 
 
