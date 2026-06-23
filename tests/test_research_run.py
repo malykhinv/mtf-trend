@@ -156,8 +156,6 @@ def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
             "broad_anomaly_v1_h30",
             "--days",
             "30",
-            "--prepared-input-dir",
-            "tmp/mvp1_input_380d",
             "--research-mode",
             "frozen_holdout",
             "--protocol-freeze-id",
@@ -168,7 +166,7 @@ def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
     assert args.command == "run-research"
     assert args.strategy == "broad_anomaly_v1_h30"
     assert args.days == 30
-    assert args.prepared_input_dir == "tmp/mvp1_input_380d"
+    assert not hasattr(args, "prepared_input_dir")
     assert args.research_mode == "frozen_holdout"
     assert args.holdout_days == 60
 

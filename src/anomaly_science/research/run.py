@@ -61,6 +61,11 @@ class ResearchRunConfig:
             raise ValueError("days must be positive when provided")
         if self.research_mode not in {"is", "frozen_holdout"}:
             raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
+        if self.prepared_input_dir is not None and self.research_mode != "frozen_holdout":
+            raise ValueError(
+                "prepared_input_dir is only supported in frozen_holdout mode; "
+                "IS mode must let run-research own the input view and final holdout boundary"
+            )
         if self.holdout_days <= 0:
             raise ValueError("holdout_days must be positive")
         if self.research_mode == "frozen_holdout" and not self.protocol_freeze_id:

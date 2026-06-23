@@ -49,7 +49,6 @@ def run_mvp1_trade_simulation(
         funding_rates=funding_rates,
         decision_rows=decision_rows,
         config=cfg,
-        max_input_time_ms=max_input_time_ms,
     )
     random_entry_control_rows = build_random_entry_time_control_rows(
         candles_1m=candles_1m,
