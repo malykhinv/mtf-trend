@@ -21,7 +21,10 @@ from anomaly_science.contracts.features import StrategyFeatureMatrixRow
 from anomaly_science.contracts.future import BARRIER_RESOLUTION_STOP_LOSS_FIRST, FuturePathRow
 from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.state import StrategyState1mRow
-from anomaly_science.features.matrix import load_strategy_feature_matrix_csv
+from anomaly_science.features.matrix import (
+    iter_strategy_feature_matrix_frame_chunks_prefer_parquet,
+    load_strategy_feature_matrix_csv,
+)
 from anomaly_science.future.builder import (
     AnomalyFutureArtifactError,
     AnomalyStateArtifactError,

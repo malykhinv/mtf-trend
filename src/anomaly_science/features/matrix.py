@@ -1039,6 +1039,136 @@ def _load_feature_matrix_parquet_sidecar(
     return tuple(rows)
 
 
+def iter_strategy_feature_matrix_frame_chunks_prefer_parquet(
+    *,
+    csv_path: str | Path,
+    usecols: Sequence[str],
+    chunksize: int,
+):
+    """Yield strict feature-matrix pandas chunks, preferring the validated Parquet sidecar.
+
+    The Parquet sidecar is used only when both the sidecar file and its manifest are
+    present. A partially written or invalid sidecar is an explicit error rather than
+    a silent CSV fallback. If no sidecar exists, callers keep the historical strict
+    CSV path.
+    """
+    import pandas as pd
+
+    path = Path(csv_path)
+    manifest_path = _feature_matrix_parquet_manifest_path(path)
+    sidecar_path = _feature_matrix_parquet_path(path)
+    manifest_exists = manifest_path.is_file()
+    sidecar_exists = sidecar_path.is_file()
+    if manifest_exists != sidecar_exists:
+        missing = sidecar_path if manifest_exists else manifest_path
+        raise AnomalyFeatureMatrixArtifactError(f"incomplete strategy_feature_matrix.parquet sidecar, missing {missing}")
+    if not manifest_exists:
+        schema = get_artifact_schema(path.name)
+        actual_columns = list(pd.read_csv(path, nrows=0).columns)
+        expected_columns = list(schema.required_columns)
+        if actual_columns != expected_columns:
+            raise AnomalyFeatureMatrixArtifactError(
+                f"{path.name} columns must match {expected_columns}, got {actual_columns}"
+            )
+        return pd.read_csv(path, usecols=list(usecols), low_memory=False, chunksize=chunksize)
+
+    return _iter_strategy_feature_matrix_parquet_sidecar_frame_chunks(
+        csv_path=path,
+        manifest_path=manifest_path,
+        usecols=usecols,
+        chunksize=chunksize,
+    )
+
+
+def _iter_strategy_feature_matrix_parquet_sidecar_frame_chunks(
+    *,
+    csv_path: Path,
+    manifest_path: Path,
+    usecols: Sequence[str],
+    chunksize: int,
+):
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    _validate_feature_matrix_parquet_manifest_for_chunked_read(
+        payload=payload,
+        csv_path=csv_path,
+        manifest_path=manifest_path,
+        usecols=usecols,
+    )
+    _pa, pq = _import_pyarrow_for_feature_matrix_sidecar()
+    parquet_path = manifest_path.parent / str(payload["parquet_path"])
+    parquet_file = pq.ParquetFile(parquet_path)
+    for batch in parquet_file.iter_batches(batch_size=chunksize, columns=list(usecols)):
+        yield batch.to_pandas()
+
+
+def _validate_feature_matrix_parquet_manifest_for_chunked_read(
+    *,
+    payload: Mapping[str, object],
+    csv_path: Path,
+    manifest_path: Path,
+    usecols: Sequence[str],
+) -> None:
+    import pandas as pd
+
+    if payload.get("sidecar_version") != FEATURE_MATRIX_PARQUET_SIDECAR_VERSION:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"unsupported strategy_feature_matrix.parquet sidecar version in {manifest_path}"
+        )
+    if payload.get("artifact_name") != "strategy_feature_matrix.csv":
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar is bound to the wrong artifact")
+    if payload.get("csv_path") != csv_path.name:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"feature matrix parquet sidecar is bound to {payload.get('csv_path')!r}, not {csv_path.name!r}"
+        )
+    schema = get_artifact_schema(csv_path.name)
+    if not csv_path.is_file():
+        raise AnomalyFeatureMatrixArtifactError(f"feature matrix CSV artifact is missing: {csv_path}")
+    actual_csv_columns = list(pd.read_csv(csv_path, nrows=0).columns)
+    expected_columns = list(schema.required_columns)
+    if actual_csv_columns != expected_columns:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"{csv_path.name} columns must match {expected_columns}, got {actual_csv_columns}"
+        )
+    required_columns = payload.get("required_columns") or ()
+    if tuple(required_columns) != tuple(expected_columns):
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar schema does not match CSV schema")
+    requested_columns = tuple(usecols)
+    missing_columns = [column for column in requested_columns if column not in required_columns]
+    if missing_columns:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"feature matrix parquet sidecar is missing requested columns: {missing_columns}"
+        )
+    parquet_name = payload.get("parquet_path")
+    if not isinstance(parquet_name, str) or not parquet_name:
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar manifest has no parquet_path")
+    parquet_path = manifest_path.parent / parquet_name
+    if not parquet_path.is_file():
+        raise AnomalyFeatureMatrixArtifactError(f"feature matrix parquet sidecar is missing: {parquet_path}")
+    expected_size = payload.get("parquet_size_bytes")
+    if not isinstance(expected_size, int) or expected_size < 0:
+        raise AnomalyFeatureMatrixArtifactError("strategy_feature_matrix.parquet sidecar manifest has invalid size")
+    actual_size = parquet_path.stat().st_size
+    if actual_size != expected_size:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"strategy_feature_matrix.parquet size mismatch: manifest={expected_size} actual={actual_size}"
+        )
+    row_count = payload.get("row_count")
+    if not isinstance(row_count, int) or row_count < 0:
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar manifest has invalid row_count")
+    _pa, pq = _import_pyarrow_for_feature_matrix_sidecar()
+    parquet_file = pq.ParquetFile(parquet_path)
+    parquet_columns = list(parquet_file.schema_arrow.names)
+    if parquet_columns != expected_columns:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"strategy_feature_matrix.parquet columns must match {expected_columns}, got {parquet_columns}"
+        )
+    actual_rows = int(parquet_file.metadata.num_rows)
+    if actual_rows != row_count:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"strategy_feature_matrix.parquet row count mismatch: manifest={row_count} actual={actual_rows}"
+        )
+
+
 def _validate_feature_matrix_parquet_manifest(
     *,
     payload: Mapping[str, object],
