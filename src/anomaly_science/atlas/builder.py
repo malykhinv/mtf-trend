@@ -106,7 +106,7 @@ def _build_atlas_artifacts_from_csv_chunks(
         chunksize=chunk_size,
     )
     feature_reader = iter_strategy_feature_matrix_frame_chunks_prefer_parquet(
-        path=feature_matrix_path,
+        csv_path=feature_matrix_path,
         usecols=_atlas_feature_usecols(),
         chunksize=chunk_size,
     )
