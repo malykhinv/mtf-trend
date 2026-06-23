@@ -15,6 +15,7 @@ from anomaly_science.features import (
     alpha_decay_bucket,
     build_price_time_feature_matrix,
     feature_matrix_rows_to_artifact,
+    load_strategy_feature_matrix_csv,
     run_mvp1_feature_matrix,
 )
 from anomaly_science.state.builder import state_rows_to_artifact
@@ -509,9 +510,16 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
 
     with matrix_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
         matrix_rows = list(csv.DictReader(file_obj))
-    assert len(matrix_rows) == 1
-    assert matrix_rows[0]["alpha_decay_bucket"] == "3-5m"
-    assert float(matrix_rows[0]["event_age_ratio"]) == state.minutes_since_detection / 30
+    assert matrix_rows == []
+    sidecar_manifest_path = out / "strategy_feature_matrix.parquet_manifest.json"
+    assert (out / "strategy_feature_matrix.parquet").is_file()
+    assert sidecar_manifest_path.is_file()
+    assert '"csv_delivery": "schema_header_only"' in sidecar_manifest_path.read_text(encoding="utf-8")
+
+    loaded_rows = load_strategy_feature_matrix_csv(matrix_path)
+    assert len(loaded_rows) == 1
+    assert loaded_rows[0].alpha_decay_bucket == "3-5m"
+    assert loaded_rows[0].event_age_ratio == state.minutes_since_detection / 30
 
     with audit_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
         audit_rows = {row["check_name"]: row for row in csv.DictReader(file_obj)}
@@ -566,10 +574,9 @@ def test_run_mvp1_feature_matrix_preserves_state_row_order_and_cleans_temp_files
         config=FeatureMatrixConfig(expected_event_lifetime_minutes=30),
     )
 
-    with (out_dir / "strategy_feature_matrix.csv").open("r", encoding="utf-8-sig", newline="") as file_obj:
-        matrix_rows = list(csv.DictReader(file_obj))
+    matrix_rows = load_strategy_feature_matrix_csv(out_dir / "strategy_feature_matrix.csv")
     ordered_keys = [
-        (int(row["snapshot_time_ms"]), row["symbol"], row["event_id"])
+        (row.snapshot_time_ms, row.symbol, row.event_id)
         for row in matrix_rows
     ]
     assert ordered_keys == [

@@ -909,12 +909,20 @@ def _parquet_sidecar_value(value: object) -> object:
 
 
 class _FeatureMatrixParquetSidecarWriter:
-    def __init__(self, *, csv_path: Path, fieldnames: Sequence[str], row_count: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        csv_path: Path,
+        fieldnames: Sequence[str],
+        row_count: int | None = None,
+        csv_delivery: str = "full",
+    ) -> None:
         self.csv_path = csv_path
         self.parquet_path = _feature_matrix_parquet_path(csv_path)
         self.manifest_path = _feature_matrix_parquet_manifest_path(csv_path)
         self.tmp_parquet_path = self.parquet_path.with_suffix(self.parquet_path.suffix + ".tmp")
         self.fieldnames = tuple(fieldnames)
+        self.csv_delivery = csv_delivery
         self._row_count_hint = row_count
         self._row_count = 0
         self._pa, self._pq = _import_pyarrow_for_feature_matrix_sidecar()
@@ -970,6 +978,7 @@ class _FeatureMatrixParquetSidecarWriter:
             parquet_path=self.parquet_path,
             fieldnames=self.fieldnames,
             row_count=self._row_count,
+            csv_delivery=self.csv_delivery,
         )
         self._closed = True
         return self.parquet_path, self.manifest_path
@@ -982,6 +991,7 @@ def _write_feature_matrix_parquet_manifest(
     parquet_path: Path,
     fieldnames: Sequence[str],
     row_count: int,
+    csv_delivery: str = "full",
 ) -> Path:
     payload = {
         "sidecar_version": FEATURE_MATRIX_PARQUET_SIDECAR_VERSION,
@@ -989,11 +999,13 @@ def _write_feature_matrix_parquet_manifest(
         "csv_path": csv_path.name,
         "csv_size_bytes": csv_path.stat().st_size,
         "csv_sha256": sha256_file(csv_path),
+        "csv_delivery": csv_delivery,
         "parquet_path": parquet_path.name,
         "parquet_size_bytes": parquet_path.stat().st_size,
         "parquet_sha256": sha256_file(parquet_path),
         "required_columns": list(fieldnames),
         "row_count": row_count,
+        "parquet_delivery": "canonical_feature_matrix",
         "delivery": "strict_typed_parquet_sidecar",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -2122,6 +2134,7 @@ def _write_feature_matrix_value_rows_with_aliases(
             rows=rows,
             schema=schema,
             write_parquet_sidecar=True,
+            csv_delivery="schema_header_only",
         )
         sidecar_paths.extend(written_sidecars)
         return row_count
@@ -2184,14 +2197,23 @@ def _write_feature_matrix_value_rows(
     rows: Iterable[Sequence[object]],
     schema: ArtifactSchema,
     write_parquet_sidecar: bool = False,
+    csv_delivery: str = "full",
 ) -> tuple[int, list[Path]]:
     fieldnames = list(schema.required_columns)
     _validate_direct_feature_matrix_fieldnames(fieldnames)
     expected_value_count = len(fieldnames)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
+    if csv_delivery not in {"full", "schema_header_only"}:
+        raise ArtifactWriteError(f"unknown strategy_feature_matrix.csv delivery mode: {csv_delivery!r}")
+    if csv_delivery == "schema_header_only" and not write_parquet_sidecar:
+        raise ArtifactWriteError("schema_header_only feature-matrix CSV delivery requires the Parquet sidecar")
     sidecar_writer = (
-        _FeatureMatrixParquetSidecarWriter(csv_path=path, fieldnames=fieldnames)
+        _FeatureMatrixParquetSidecarWriter(
+            csv_path=path,
+            fieldnames=fieldnames,
+            csv_delivery=csv_delivery,
+        )
         if write_parquet_sidecar
         else None
     )
@@ -2199,18 +2221,30 @@ def _write_feature_matrix_value_rows(
         with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
             writer = csv.writer(file_obj)
             writer.writerow(fieldnames)
-            for row_values in rows:
-                if len(row_values) != expected_value_count:
-                    raise ArtifactWriteError(
-                        f"strategy_feature_matrix.csv direct row has {len(row_values)} values, "
-                        f"expected {expected_value_count}"
-                    )
-                writer.writerow([_csv_value(value) for value in row_values])
-                if sidecar_writer is not None:
+            if csv_delivery == "full":
+                for row_values in rows:
+                    if len(row_values) != expected_value_count:
+                        raise ArtifactWriteError(
+                            f"strategy_feature_matrix.csv direct row has {len(row_values)} values, "
+                            f"expected {expected_value_count}"
+                        )
+                    writer.writerow([_csv_value(value) for value in row_values])
+                    if sidecar_writer is not None:
+                        sidecar_writer.append(row_values)
+                    row_count += 1
+                    if row_count % 100_000 == 0:
+                        file_obj.flush()
+            else:
+                for row_values in rows:
+                    if len(row_values) != expected_value_count:
+                        raise ArtifactWriteError(
+                            f"strategy_feature_matrix.csv direct row has {len(row_values)} values, "
+                            f"expected {expected_value_count}"
+                        )
+                    if sidecar_writer is None:
+                        raise ArtifactWriteError("missing Parquet sidecar writer for schema_header_only delivery")
                     sidecar_writer.append(row_values)
-                row_count += 1
-                if row_count % 100_000 == 0:
-                    file_obj.flush()
+                    row_count += 1
         os.replace(tmp_path, path)
         sidecar_paths: list[Path] = []
         if sidecar_writer is not None:
@@ -2224,6 +2258,8 @@ def _write_feature_matrix_value_rows(
                 pass
             _remove_temp_file(sidecar_writer.tmp_parquet_path)
         _remove_temp_file(tmp_path)
+        if csv_delivery == "schema_header_only":
+            _remove_temp_file(path)
         raise
 
 
