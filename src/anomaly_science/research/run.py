@@ -65,11 +65,14 @@ class ResearchRunConfig:
             raise ValueError("holdout_days must be positive")
         if self.research_mode == "frozen_holdout" and not self.protocol_freeze_id:
             raise ValueError("protocol_freeze_id is required for frozen_holdout mode")
-        if self.prepared_input_dir is not None and self.research_mode != "frozen_holdout":
-            raise ValueError(
-                "prepared_input_dir reuse is only supported in frozen_holdout mode until holdout_lock becomes "
-                "a non-mutating research view"
-            )
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchInputView:
+    start_date: date
+    end_date: date
+    max_input_time_ms: int | None
+    mode: Literal["full_input", "is_excludes_final_holdout"]
 
 
 def run_research_pipeline(config: ResearchRunConfig) -> Path:
@@ -124,22 +127,33 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             holdout_access_artifact="run-research downstream input boundary",
         )
 
-    with timings.stage("holdout_lock"):
-        research_start_date, research_end_date = _apply_holdout_lock_to_input(
-            input_dir=input_dir,
+    with timings.stage("research_input_view"):
+        input_view = _resolve_research_input_view(
             full_start_date=full_start_date,
             full_end_date=full_end_date,
             holdout_days=effective_holdout_days,
             research_mode=config.research_mode,
         )
+        research_start_date = input_view.start_date
+        research_end_date = input_view.end_date
+        _write_research_input_view(run_dir=run_dir, input_view=input_view, input_dir=input_dir)
         _release_stage_memory()
 
     with timings.stage("data_audit"):
-        run_mvp1_data_audit(input_dir=input_dir, out_dir=stages_dir / "data_audit")
+        run_mvp1_data_audit(
+            input_dir=input_dir,
+            out_dir=stages_dir / "data_audit",
+            max_input_time_ms=input_view.max_input_time_ms,
+        )
         _release_stage_memory()
 
     with timings.stage("events"):
-        events_dir = run_mvp1_events(input_dir=input_dir, out_dir=stages_dir / "events", strategy_name=config.strategy_name)
+        events_dir = run_mvp1_events(
+            input_dir=input_dir,
+            out_dir=stages_dir / "events",
+            strategy_name=config.strategy_name,
+            max_input_time_ms=input_view.max_input_time_ms,
+        )
         _release_stage_memory()
 
     with timings.stage("state"):
@@ -148,6 +162,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             events_path=events_dir / "strategy_events.csv",
             out_dir=stages_dir / "state",
             config=_state_config_for_strategy(strategy_name=config.strategy_name),
+            max_input_time_ms=input_view.max_input_time_ms,
         )
         _release_stage_memory()
 
@@ -156,6 +171,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             input_dir=input_dir,
             state_path=state_dir / "strategy_state_1m.csv",
             out_dir=stages_dir / "future",
+            max_input_time_ms=input_view.max_input_time_ms,
         )
         _release_stage_memory()
 
@@ -168,6 +184,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             input_dir=input_dir,
             state_path=state_dir / "strategy_state_1m.csv",
             out_dir=stages_dir / "feature_matrix",
+            max_input_time_ms=input_view.max_input_time_ms,
         )
         _release_stage_memory()
 
@@ -236,6 +253,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
                 strategy_name=config.strategy_name,
                 target_horizon_minutes=strategy.metadata.horizon_minutes,
             ),
+            max_input_time_ms=input_view.max_input_time_ms,
         )
         _release_stage_memory()
 
@@ -255,6 +273,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             effective_holdout_days=effective_holdout_days,
             governance_dir=governance_dir,
             protocol_freeze_id=protocol_freeze_id,
+            input_view=input_view,
             forensic_audit_dir=stages_dir / "forensic_audit",
             forensic_status="PENDING",
             forensic_fail_count=-1,
@@ -274,6 +293,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             effective_holdout_days=effective_holdout_days,
             governance_dir=governance_dir,
             protocol_freeze_id=protocol_freeze_id,
+            input_view=input_view,
             forensic_audit_dir=forensic_audit_dir,
             forensic_status=forensic_status,
             forensic_fail_count=forensic_fail_count,
@@ -291,6 +311,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         effective_holdout_days=effective_holdout_days,
         governance_dir=governance_dir,
         protocol_freeze_id=protocol_freeze_id,
+        input_view=input_view,
         forensic_audit_dir=forensic_audit_dir,
         forensic_status=forensic_status,
         forensic_fail_count=forensic_fail_count,
@@ -373,6 +394,7 @@ def _write_research_run_manifest(
     effective_holdout_days: int,
     governance_dir: Path,
     protocol_freeze_id: str,
+    input_view: ResearchInputView,
     forensic_audit_dir: Path,
     forensic_status: str,
     forensic_fail_count: int,
@@ -389,6 +411,8 @@ def _write_research_run_manifest(
         "protocol_freeze_id": protocol_freeze_id,
         "target_horizon_minutes": strategy.metadata.horizon_minutes,
         "active_h_max_minutes": active_h_max,
+        "input_view_mode": input_view.mode,
+        "input_view_max_input_time_ms": input_view.max_input_time_ms,
     }
     rows: list[RunConfigRow] = []
     rows.extend(strategy_metadata_run_config_rows(strategy))
@@ -405,6 +429,12 @@ def _write_research_run_manifest(
             RunConfigRow(
                 key="input_boundary_mode",
                 value="reused_prepared_input" if config.prepared_input_dir is not None else "fresh_cache_export",
+                source="run_research",
+            ),
+            RunConfigRow(key="input_view_mode", value=input_view.mode, source="run_research"),
+            RunConfigRow(
+                key="input_view_max_input_time_ms",
+                value="" if input_view.max_input_time_ms is None else str(input_view.max_input_time_ms),
                 source="run_research",
             ),
             RunConfigRow(key="days", value="" if config.days is None else str(config.days), source="run_research"),
@@ -484,6 +514,7 @@ def _write_summary(
     effective_holdout_days: int,
     governance_dir: Path,
     protocol_freeze_id: str,
+    input_view: ResearchInputView,
     forensic_audit_dir: Path,
     forensic_status: str,
     forensic_fail_count: int,
@@ -500,6 +531,8 @@ def _write_summary(
         f"input_dir,{input_dir}",
         f"prepared_input_dir,{'' if config.prepared_input_dir is None else config.prepared_input_dir}",
         f"input_boundary_mode,{'reused_prepared_input' if config.prepared_input_dir is not None else 'fresh_cache_export'}",
+        f"input_view_mode,{input_view.mode}",
+        f"input_view_max_input_time_ms,{'' if input_view.max_input_time_ms is None else input_view.max_input_time_ms}",
         f"input_min_open_time_ms,{min_time}",
         f"input_max_open_time_ms,{max_time}",
         f"research_start_date,{start_date.isoformat()}",
@@ -540,21 +573,25 @@ def _state_config_for_strategy(*, strategy_name: str) -> OnlineStateBuilderConfi
     return OnlineStateBuilderConfig(max_state_minutes_after_detection=active_strategy_h_max_minutes((strategy_name,)))
 
 
-def _apply_holdout_lock_to_input(
+def _resolve_research_input_view(
     *,
-    input_dir: Path,
     full_start_date: date,
     full_end_date: date,
     holdout_days: int,
     research_mode: str,
-) -> tuple[date, date]:
+) -> ResearchInputView:
     final_holdout_start = _final_holdout_start_date(
         start_date=full_start_date,
         end_date=full_end_date,
         holdout_days=holdout_days,
     )
     if research_mode == "frozen_holdout":
-        return full_start_date, full_end_date
+        return ResearchInputView(
+            start_date=full_start_date,
+            end_date=full_end_date,
+            max_input_time_ms=None,
+            mode="full_input",
+        )
     if research_mode != "is":
         raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
 
@@ -566,11 +603,32 @@ def _apply_holdout_lock_to_input(
             f"full_end_date={full_end_date.isoformat()} holdout_days={holdout_days}. "
             "Use frozen_holdout mode with an explicit protocol_freeze_id to run on this period."
         )
-    _filter_input_csv_by_end_date(input_dir / "candles_1m.csv", time_column="open_time_ms", end_date=research_end_date)
-    _filter_input_csv_by_end_date(input_dir / "candles_5m.csv", time_column="open_time_ms", end_date=research_end_date)
-    _filter_input_csv_by_end_date(input_dir / "open_interest_5m.csv", time_column="timestamp_ms", end_date=research_end_date)
-    return _input_date_range(input_dir / "candles_1m.csv")
+    return ResearchInputView(
+        start_date=full_start_date,
+        end_date=research_end_date,
+        max_input_time_ms=_end_exclusive_ms(research_end_date),
+        mode="is_excludes_final_holdout",
+    )
 
+
+def _write_research_input_view(*, run_dir: Path, input_view: ResearchInputView, input_dir: Path) -> None:
+    payload = {
+        "boundary": "mvp1_normalized_csv",
+        "mode": input_view.mode,
+        "input_dir": str(input_dir),
+        "research_start_date": input_view.start_date.isoformat(),
+        "research_end_date": input_view.end_date.isoformat(),
+        "max_input_time_ms": input_view.max_input_time_ms,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    path = run_dir / "research_input_view.json"
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def _end_exclusive_ms(end_date: date) -> int:
+    return int(datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc).timestamp() * 1000)
 
 def _effective_holdout_days(
     *,
@@ -600,30 +658,6 @@ def _effective_holdout_days(
         return max(1, total_days - MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA)
     return requested_holdout_days
 
-
-def _filter_input_csv_by_end_date(path: Path, *, time_column: str, end_date: date) -> None:
-    end_exclusive_ms = int(
-        datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone.utc).timestamp() * 1000
-    )
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    kept_count = 0
-    with path.open(encoding="utf-8-sig", newline="") as source_obj:
-        reader = csv.DictReader(source_obj)
-        fieldnames = list(reader.fieldnames or [])
-        if time_column not in fieldnames:
-            raise ValueError(f"{path} is missing required time column {time_column!r}")
-        with tmp_path.open("w", encoding="utf-8-sig", newline="") as target_obj:
-            writer = csv.DictWriter(target_obj, fieldnames=fieldnames, extrasaction="raise")
-            writer.writeheader()
-            for row in reader:
-                if int(row[time_column]) >= end_exclusive_ms:
-                    continue
-                writer.writerow(row)
-                kept_count += 1
-    if path.name == "candles_1m.csv" and kept_count == 0:
-        tmp_path.unlink(missing_ok=True)
-        raise ValueError(f"holdout lock removed all rows from required input artifact: {path}")
-    os.replace(tmp_path, path)
 
 
 def _final_holdout_start_date(*, start_date: date, end_date: date, holdout_days: int) -> date:

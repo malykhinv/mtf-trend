@@ -39,6 +39,7 @@ def run_mvp1_events(
     out_dir: str | Path,
     config: BroadAnomalyDetectorConfig | None = None,
     strategy_name: str = "broad_anomaly_v1_h30",
+    max_input_time_ms: int | None = None,
 ) -> Path:
     """Run the MVP1 strategy event detector and write protocol artifacts."""
     input_path = Path(input_dir)
@@ -51,7 +52,7 @@ def run_mvp1_events(
         else get_strategy(strategy_name)
     )
 
-    frames, read_errors = _read_source_frames(input_path)
+    frames, read_errors = _read_source_frames(input_path, max_input_time_ms=max_input_time_ms)
     data_quality = run_data_quality(frames, read_errors=read_errors)
     data_quality_mask = build_candles_1m_data_quality_mask(frames.get("candles_1m"))
     data_quality = [*data_quality, data_quality_mask_audit_row(data_quality_mask)]
@@ -104,7 +105,7 @@ def run_mvp1_events(
         required_stream_reject_count=required_stream_reject_count,
         required_data_streams=format_required_data_streams(strategy.required_data_streams),
     )
-    run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, strategy=strategy)
+    run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, strategy=strategy, max_input_time_ms=max_input_time_ms)
 
     written: list[Path] = []
     data_quality_rows = rows_to_artifact(data_quality)
@@ -141,8 +142,8 @@ def run_mvp1_events(
     return output_path
 
 
-def _read_source_frames(input_path: Path) -> tuple[dict[str, pd.DataFrame | None], list[str]]:
-    source = CsvDirectoryDataSource(input_path)
+def _read_source_frames(input_path: Path, *, max_input_time_ms: int | None = None) -> tuple[dict[str, pd.DataFrame | None], list[str]]:
+    source = CsvDirectoryDataSource(input_path, max_time_ms=max_input_time_ms)
     frames: dict[str, pd.DataFrame | None] = {}
     errors: list[str] = []
     for dataset_name in REQUIRED_DATASETS:
@@ -373,12 +374,13 @@ def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, o
         result.append(payload)
     return result
 
-def _run_config_rows(*, input_path: Path, output_path: Path, strategy) -> list[RunConfigRow]:
+def _run_config_rows(*, input_path: Path, output_path: Path, strategy, max_input_time_ms: int | None = None) -> list[RunConfigRow]:
     config = strategy.config
     rows = [
         RunConfigRow(key="command", value="run-mvp1-events", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
+        RunConfigRow(key="max_input_time_ms", value="" if max_input_time_ms is None else str(max_input_time_ms), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         *runtime_reproducibility_rows(
             data_paths=(input_path,),

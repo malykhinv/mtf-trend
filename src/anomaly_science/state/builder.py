@@ -78,7 +78,7 @@ def load_strategy_events_csv(path: str | Path) -> tuple[StrategyEvent, ...]:
 load_anomaly_events_csv = load_strategy_events_csv
 
 
-def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
+def iter_candles_1m_csv(path: str | Path, *, max_open_time_ms: int | None = None) -> Iterable[Candle1m]:
     """Stream normalized 1m candles from the state-stage CSV boundary."""
     candles_path = Path(path)
     if not candles_path.exists():
@@ -93,9 +93,12 @@ def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
         has_taker_buy_quote_volume = "taker_buy_quote_volume" in actual_columns
         for row_index, row in enumerate(reader):
             try:
+                open_time_ms = _required_int(row, "open_time_ms")
+                if max_open_time_ms is not None and open_time_ms >= max_open_time_ms:
+                    continue
                 yield Candle1m(
                     symbol=_required_str(row, "symbol"),
-                    open_time_ms=_required_int(row, "open_time_ms"),
+                    open_time_ms=open_time_ms,
                     available_time_ms=_required_int(row, "available_time_ms"),
                     open=_required_float(row, "open"),
                     high=_required_float(row, "high"),
@@ -189,6 +192,7 @@ def iter_online_strategy_state_1m_from_grouped_csv(
     candles_path: str | Path,
     events: Sequence[StrategyEvent] | Iterable[StrategyEvent],
     config: OnlineStateBuilderConfig | None = None,
+    max_open_time_ms: int | None = None,
 ) -> Iterable[StrategyState1mRow]:
     """Stream state rows while holding only one symbol's candles in memory.
 
@@ -204,7 +208,7 @@ def iter_online_strategy_state_1m_from_grouped_csv(
     current_symbol: str | None = None
     current_candles: list[Candle1m] = []
     completed_symbols: set[str] = set()
-    for candle in iter_candles_1m_csv(candles_path):
+    for candle in iter_candles_1m_csv(candles_path, max_open_time_ms=max_open_time_ms):
         if current_symbol is None:
             current_symbol = candle.symbol
         if candle.symbol != current_symbol:

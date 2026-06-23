@@ -19,13 +19,13 @@ REQUIRED_DATASETS = ("candles_1m", "candles_5m")
 OPTIONAL_DATASETS = ("open_interest_5m", "liquidations")
 
 
-def run_mvp1_data_audit(*, input_dir: str | Path, out_dir: str | Path) -> Path:
+def run_mvp1_data_audit(*, input_dir: str | Path, out_dir: str | Path, max_input_time_ms: int | None = None) -> Path:
     """Run the MVP1 data-boundary audit without detector/trading logic."""
     input_path = Path(input_dir)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    frames, read_errors = _read_source_frames(input_path)
+    frames, read_errors = _read_source_frames(input_path, max_input_time_ms=max_input_time_ms)
     data_quality = run_data_quality(frames, read_errors=read_errors)
     universe_rows = build_symbol_universe_by_day(
         candles_1m=frames.get("candles_1m"),
@@ -34,7 +34,7 @@ def run_mvp1_data_audit(*, input_dir: str | Path, out_dir: str | Path) -> Path:
         liquidations=frames.get("liquidations"),
     )
     protocol_rows = _protocol_rows(data_quality=data_quality, universe_rows=universe_rows)
-    run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path)
+    run_config_rows = _run_config_rows(input_path=input_path, output_path=output_path, max_input_time_ms=max_input_time_ms)
 
     written: list[Path] = []
     written.extend(write_csv_artifact_with_aliases(
@@ -62,8 +62,8 @@ def run_mvp1_data_audit(*, input_dir: str | Path, out_dir: str | Path) -> Path:
     return output_path
 
 
-def _read_source_frames(input_path: Path) -> tuple[dict[str, pd.DataFrame | None], list[str]]:
-    source = CsvDirectoryDataSource(input_path)
+def _read_source_frames(input_path: Path, *, max_input_time_ms: int | None = None) -> tuple[dict[str, pd.DataFrame | None], list[str]]:
+    source = CsvDirectoryDataSource(input_path, max_time_ms=max_input_time_ms)
     frames: dict[str, pd.DataFrame | None] = {}
     errors: list[str] = []
 
@@ -143,11 +143,12 @@ def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, o
     return result
 
 
-def _run_config_rows(*, input_path: Path, output_path: Path) -> list[RunConfigRow]:
+def _run_config_rows(*, input_path: Path, output_path: Path, max_input_time_ms: int | None = None) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-data-audit", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
+        RunConfigRow(key="max_input_time_ms", value="" if max_input_time_ms is None else str(max_input_time_ms), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         *runtime_reproducibility_rows(
             data_paths=(input_path,),

@@ -165,6 +165,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_data_quality_mask_enforcement_row(found))
     rows.append(_point_in_time_universe_row(found))
     rows.append(_temporal_contract_row(found))
+    rows.append(_research_input_view_boundary_row(root, found))
     rows.append(_model_metadata_purge_row(found))
     rows.append(_prediction_oos_cutoff_row(found))
     rows.append(_prediction_model_horizon_identity_row(found))
@@ -287,6 +288,111 @@ def _root_run_manifest_completeness_row(root: Path) -> ProtocolAuditRow:
         artifact="strategy_run_config.csv",
     )
 
+
+
+def _research_input_view_boundary_row(root: Path, found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    run_config_path = root / "strategy_run_config.csv"
+    if not run_config_path.exists():
+        return _row(
+            "forensic_research_input_view_boundary",
+            AuditStatus.FAIL,
+            "missing root strategy_run_config.csv; cannot verify non-mutating research input view boundary",
+            artifact="strategy_run_config.csv",
+        )
+    config = {row.get("key", ""): row.get("value", "") for row in _read_csv_rows(run_config_path)}
+    research_mode = config.get("research_mode", "")
+    max_time_raw = config.get("input_view_max_input_time_ms", "")
+    if research_mode == "frozen_holdout" and max_time_raw == "":
+        return _row(
+            "forensic_research_input_view_boundary",
+            AuditStatus.PASS,
+            "frozen_holdout uses full immutable input; no research input cutoff is expected",
+            artifact="research_input_view.json;strategy_run_config.csv",
+        )
+    if research_mode != "is":
+        return _row(
+            "forensic_research_input_view_boundary",
+            AuditStatus.WARN,
+            f"research_mode={research_mode!r} has no research input view boundary rule",
+            artifact="strategy_run_config.csv",
+        )
+    max_time_ms = _to_int(max_time_raw)
+    if max_time_ms is None:
+        return _row(
+            "forensic_research_input_view_boundary",
+            AuditStatus.FAIL,
+            "IS mode requires non-empty integer input_view_max_input_time_ms",
+            artifact="strategy_run_config.csv",
+        )
+
+    checked = 0
+    violations: list[str] = []
+    one_minute_publication_grace_ms = 60_000
+    boundary_columns_by_artifact = {
+        "strategy_events.csv": (
+            ("event_start_time_ms", max_time_ms),
+            ("seed_time_ms", max_time_ms),
+            ("event_detection_time_ms", max_time_ms + one_minute_publication_grace_ms),
+        ),
+        "strategy_state_1m.csv": (
+            ("state_time_ms", max_time_ms + one_minute_publication_grace_ms),
+            ("snapshot_time_ms", max_time_ms + one_minute_publication_grace_ms),
+            ("feature_cutoff_time_ms", max_time_ms + one_minute_publication_grace_ms),
+        ),
+        "strategy_feature_matrix.csv": (
+            ("snapshot_time_ms", max_time_ms + one_minute_publication_grace_ms),
+            ("feature_cutoff_time_ms", max_time_ms + one_minute_publication_grace_ms),
+        ),
+        "strategy_future_paths.csv": (("snapshot_time_ms", max_time_ms + one_minute_publication_grace_ms),),
+        "strategy_outcome_labels.csv": (("snapshot_time_ms", max_time_ms + one_minute_publication_grace_ms),),
+        "strategy_oos_predictions.csv": (("snapshot_time_ms", max_time_ms + one_minute_publication_grace_ms),),
+        "strategy_decision_timing.csv": (("snapshot_time_ms", max_time_ms + one_minute_publication_grace_ms),),
+        "strategy_expected_utility.csv": (("snapshot_time_ms", max_time_ms + one_minute_publication_grace_ms),),
+        "strategy_trade_simulation.csv": (("entry_signal_time_ms", max_time_ms + one_minute_publication_grace_ms),),
+    }
+    for artifact_name, column_limits in boundary_columns_by_artifact.items():
+        for path in found.get(artifact_name, ()):
+            header = _read_csv_header(path)
+            present_column_limits = [(column, limit) for column, limit in column_limits if column in header]
+            if not present_column_limits:
+                continue
+            for row_index, row in enumerate(_read_csv_rows(path), start=2):
+                for column, limit in present_column_limits:
+                    value = _to_int(row.get(column))
+                    if value is None:
+                        continue
+                    checked += 1
+                    if value >= limit:
+                        violations.append(f"{path}:{row_index} {column}={value} >= {limit}")
+                        if len(violations) >= 10:
+                            break
+                if len(violations) >= 10:
+                    break
+            if len(violations) >= 10:
+                break
+        if len(violations) >= 10:
+            break
+
+    if violations:
+        return _row(
+            "forensic_research_input_view_boundary",
+            AuditStatus.FAIL,
+            "downstream artifact rows crossed the IS research input boundary: " + "; ".join(violations),
+            artifact="research_input_view.json;strategy_run_config.csv",
+        )
+    if checked == 0:
+        return _row(
+            "forensic_research_input_view_boundary",
+            AuditStatus.WARN,
+            "IS research input view boundary was configured, but no timestamped downstream rows were available to verify",
+            artifact="research_input_view.json;strategy_run_config.csv",
+        )
+    return _row(
+        "forensic_research_input_view_boundary",
+        AuditStatus.PASS,
+        f"verified {checked} timestamp value(s) stayed before input_view_max_input_time_ms={max_time_ms}",
+        artifact="research_input_view.json;strategy_run_config.csv",
+    )
 
 def _data_quality_mask_enforcement_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     paths = found.get("strategy_data_quality.csv", ())

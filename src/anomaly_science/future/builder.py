@@ -153,7 +153,7 @@ def _iter_future_state_projection_csv(path: str | Path) -> Iterable[_FutureState
             )
 
 
-def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
+def iter_candles_1m_csv(path: str | Path, *, max_open_time_ms: int | None = None) -> Iterable[Candle1m]:
     """Stream normalized 1m candles from the explicit CSV boundary."""
     candles_path = Path(path)
     if not candles_path.exists():
@@ -168,9 +168,12 @@ def iter_candles_1m_csv(path: str | Path) -> Iterable[Candle1m]:
         has_taker_buy_quote_volume = "taker_buy_quote_volume" in actual_columns
         for row_index, row in enumerate(reader):
             try:
+                open_time_ms = _required_csv_int(row, "open_time_ms")
+                if max_open_time_ms is not None and open_time_ms >= max_open_time_ms:
+                    continue
                 yield Candle1m(
                     symbol=_required_csv_str(row, "symbol"),
-                    open_time_ms=_required_csv_int(row, "open_time_ms"),
+                    open_time_ms=open_time_ms,
                     available_time_ms=_required_csv_int(row, "available_time_ms"),
                     open=_required_csv_float(row, "open"),
                     high=_required_csv_float(row, "high"),
@@ -424,12 +427,14 @@ def iter_strategy_future_paths_from_csv(
     input_dir: str | Path,
     state_path: str | Path,
     config: FuturePathBuilderConfig | None = None,
+    max_input_time_ms: int | None = None,
 ) -> Iterable[FuturePathRow]:
     input_path = Path(input_dir)
     return iter_strategy_future_paths_from_grouped_csv(
         candles_path=input_path / "candles_1m.csv",
         state_path=state_path,
         config=config,
+        max_input_time_ms=max_input_time_ms,
     )
 
 
@@ -441,6 +446,7 @@ def iter_strategy_future_paths_from_grouped_csv(
     candles_path: str | Path,
     state_path: str | Path,
     config: FuturePathBuilderConfig | None = None,
+    max_input_time_ms: int | None = None,
 ) -> Iterable[FuturePathRow]:
     """Stream future rows while holding one symbol's candles and states in memory."""
     cfg = config or FuturePathBuilderConfig()
@@ -457,7 +463,7 @@ def iter_strategy_future_paths_from_grouped_csv(
         return
 
     for candle_symbol, symbol_candles in _symbol_groups(
-        iter_candles_1m_csv(candles_path),
+        iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms),
         symbol_getter=lambda row: row.symbol,
         source_name="candles_1m.csv",
     ):
@@ -506,6 +512,7 @@ def iter_strategy_future_path_csv_value_rows_from_grouped_csv(
     state_path: str | Path,
     fieldnames: Sequence[str],
     config: FuturePathBuilderConfig | None = None,
+    max_input_time_ms: int | None = None,
 ) -> Iterable[list[object]]:
     """Stream canonical future-path CSV values without allocating FuturePathRow objects."""
     validate_future_row_fieldnames(fieldnames)
@@ -523,7 +530,7 @@ def iter_strategy_future_path_csv_value_rows_from_grouped_csv(
         return
 
     for candle_symbol, symbol_candles in _symbol_groups(
-        iter_candles_1m_csv(candles_path),
+        iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms),
         symbol_getter=lambda row: row.symbol,
         source_name="candles_1m.csv",
     ):

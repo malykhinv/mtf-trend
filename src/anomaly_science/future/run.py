@@ -24,6 +24,7 @@ def run_mvp1_future(
     state_path: str | Path,
     out_dir: str | Path,
     config: FuturePathBuilderConfig | None = None,
+    max_input_time_ms: int | None = None,
 ) -> Path:
     """Run MVP1 raw future path builder and write protocol artifacts."""
     input_path = Path(input_dir)
@@ -41,6 +42,7 @@ def run_mvp1_future(
             state_path=state_artifact_path,
             fieldnames=future_schema.required_columns,
             config=cfg,
+            max_input_time_ms=max_input_time_ms,
         ),
         future_schema,
     )
@@ -51,6 +53,7 @@ def run_mvp1_future(
         state_path=state_artifact_path,
         output_path=output_path,
         config=cfg,
+        max_input_time_ms=max_input_time_ms,
     )
 
     written.extend(
@@ -198,12 +201,14 @@ def _run_config_rows(
     state_path: Path,
     output_path: Path,
     config: FuturePathBuilderConfig,
+    max_input_time_ms: int | None = None,
 ) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-future", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
+        RunConfigRow(key="max_input_time_ms", value="" if max_input_time_ms is None else str(max_input_time_ms), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         *runtime_reproducibility_rows(
             data_paths=(input_path, state_path),

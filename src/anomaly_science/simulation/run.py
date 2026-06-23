@@ -27,6 +27,7 @@ def run_mvp1_trade_simulation(
     decision_timing_path: str | Path,
     out_dir: str | Path,
     config: TradeSimulationConfig | None = None,
+    max_input_time_ms: int | None = None,
 ) -> Path:
     input_path = Path(input_dir)
     decision_artifact_path = Path(decision_timing_path)
@@ -35,7 +36,7 @@ def run_mvp1_trade_simulation(
     cfg = config or TradeSimulationConfig()
     funding_rate_present = _funding_rate_stream_present(input_path)
 
-    source = CsvDirectoryDataSource(input_path)
+    source = CsvDirectoryDataSource(input_path, max_time_ms=max_input_time_ms)
     candles_frame = source.read_frame("candles_1m", required=True)
     if candles_frame is None:
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
@@ -48,6 +49,7 @@ def run_mvp1_trade_simulation(
         funding_rates=funding_rates,
         decision_rows=decision_rows,
         config=cfg,
+        max_input_time_ms=max_input_time_ms,
     )
     random_entry_control_rows = build_random_entry_time_control_rows(
         candles_1m=candles_1m,
@@ -216,12 +218,14 @@ def _run_config_rows(
     decision_timing_path: Path,
     output_path: Path,
     config: TradeSimulationConfig,
+    max_input_time_ms: int | None = None,
 ) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-trade-simulation", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="decision_timing_path", value=str(decision_timing_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
+        RunConfigRow(key="max_input_time_ms", value="" if max_input_time_ms is None else str(max_input_time_ms), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         *runtime_reproducibility_rows(
             data_paths=(input_path, decision_timing_path),

@@ -6,7 +6,7 @@ import pandas as pd
 
 from anomaly_science.cli import build_parser
 from anomaly_science.research import ResearchRunConfig, run_research_pipeline
-from anomaly_science.research.run import _effective_holdout_days, _state_config_for_strategy
+from anomaly_science.research.run import _effective_holdout_days, _resolve_research_input_view, _state_config_for_strategy
 
 
 def _write_cache(path: Path, *, day_count: int = 1) -> None:
@@ -218,8 +218,8 @@ def test_run_research_config_requires_freeze_id_for_frozen_holdout(tmp_path: Pat
         raise AssertionError("frozen_holdout mode must require protocol_freeze_id")
 
 
-def test_is_mode_holdout_lock_filters_downstream_input(tmp_path: Path) -> None:
-    from anomaly_science.research.run import _apply_holdout_lock_to_input
+def test_is_mode_research_input_view_does_not_mutate_prepared_input(tmp_path: Path) -> None:
+    from anomaly_science.data.source import CsvDirectoryDataSource
 
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -252,18 +252,23 @@ def test_is_mode_holdout_lock_filters_downstream_input(tmp_path: Path) -> None:
         }
     ).to_csv(input_dir / "open_interest_5m.csv", index=False)
 
-    start_date, end_date = _apply_holdout_lock_to_input(
-        input_dir=input_dir,
+    input_view = _resolve_research_input_view(
         full_start_date=pd.to_datetime(first_day, unit="ms", utc=True).date(),
         full_end_date=pd.to_datetime(second_day, unit="ms", utc=True).date(),
         holdout_days=1,
         research_mode="is",
     )
 
-    assert start_date.isoformat() == "2024-01-01"
-    assert end_date.isoformat() == "2024-01-01"
-    filtered = pd.read_csv(input_dir / "candles_1m.csv")
+    assert input_view.start_date.isoformat() == "2024-01-01"
+    assert input_view.end_date.isoformat() == "2024-01-01"
+    assert input_view.max_input_time_ms == second_day
+    source = CsvDirectoryDataSource(input_dir, max_time_ms=input_view.max_input_time_ms)
+    filtered = source.read_frame("candles_1m", required=True)
+    assert filtered is not None
     assert filtered["open_time_ms"].tolist() == [first_day]
+
+    unmutated = pd.read_csv(input_dir / "candles_1m.csv")
+    assert unmutated["open_time_ms"].tolist() == [first_day, second_day]
 
 
 def test_run_research_reuses_prepared_input_without_cache_export(monkeypatch, tmp_path: Path) -> None:

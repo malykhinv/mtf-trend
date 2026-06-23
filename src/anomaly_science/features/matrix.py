@@ -816,8 +816,12 @@ def _symbol_groups(
         yield current_symbol, current_rows
 
 
-def _load_symbol_candle_series(candles_path: Path, symbol: str) -> _CandleSeries:
-    rows = [candle for candle in iter_candles_1m_csv(candles_path) if candle.symbol == symbol]
+def _load_symbol_candle_series(candles_path: Path, symbol: str, *, max_input_time_ms: int | None = None) -> _CandleSeries:
+    rows = [
+        candle
+        for candle in iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms)
+        if candle.symbol == symbol
+    ]
     return _CandleSeries(rows)
 
 
@@ -831,10 +835,11 @@ def _iter_feature_matrix_rows_from_grouped_csv(
     universe_by_day: Mapping[str, set[str]],
     cross_section_store: _CrossSectionFeatureStore,
     config: FeatureMatrixConfig,
+    max_input_time_ms: int | None = None,
 ) -> Iterable[StrategyFeatureMatrixRow]:
-    btc_candles = _load_symbol_candle_series(candles_path, config.btc_symbol)
+    btc_candles = _load_symbol_candle_series(candles_path, config.btc_symbol, max_input_time_ms=max_input_time_ms)
     candle_groups = _symbol_groups(
-        iter_candles_1m_csv(candles_path),
+        iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms),
         symbol_getter=lambda row: row.symbol,
         source_name="candles_1m.csv",
     )
@@ -1007,6 +1012,7 @@ def _populate_cross_section_feature_store_from_candles_csv(
     universe_by_day: Mapping[str, set[str]],
     states_by_snapshot: Mapping[int, Sequence[StrategyState1mRow | _StateSnapshotRow]],
     min_cross_section_symbols: int,
+    max_input_time_ms: int | None = None,
 ) -> None:
     _remove_temp_file(metrics_path)
     snapshot_time_set = set(snapshot_times)
@@ -1032,7 +1038,7 @@ def _populate_cross_section_feature_store_from_candles_csv(
         )
         batch: list[tuple[object, ...]] = []
         previous_close_by_symbol: dict[str, float] = {}
-        for candle in iter_candles_1m_csv(candles_path):
+        for candle in iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms):
             previous_close = previous_close_by_symbol.get(candle.symbol)
             previous_close_by_symbol[candle.symbol] = candle.close
             if candle.available_time_ms not in snapshot_time_set:
@@ -1270,6 +1276,7 @@ def run_mvp1_feature_matrix(
     state_path: str | Path,
     out_dir: str | Path,
     config: FeatureMatrixConfig | None = None,
+    max_input_time_ms: int | None = None,
 ) -> Path:
     input_path = Path(input_dir)
     state_artifact_path = Path(state_path)
@@ -1277,7 +1284,7 @@ def run_mvp1_feature_matrix(
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or FeatureMatrixConfig()
 
-    source = CsvDirectoryDataSource(input_path)
+    source = CsvDirectoryDataSource(input_path, max_time_ms=max_input_time_ms)
     states_by_snapshot, state_row_count = _state_snapshot_index_from_csv(state_artifact_path)
     oi_frame = source.read_frame("open_interest_5m", required=False)
     liquidation_frame = source.read_frame("liquidations", required=False)
@@ -1326,6 +1333,7 @@ def run_mvp1_feature_matrix(
                 universe_by_day=universe_by_day,
                 cross_section_store=cross_section_store,
                 config=cfg,
+                max_input_time_ms=max_input_time_ms,
             ),
             get_artifact_schema("strategy_feature_matrix.csv"),
         )
@@ -1338,6 +1346,7 @@ def run_mvp1_feature_matrix(
         state_path=state_artifact_path,
         output_path=output_path,
         config=cfg,
+        max_input_time_ms=max_input_time_ms,
     )
 
     written.extend(
@@ -2907,12 +2916,14 @@ def _run_config_rows(
     state_path: Path,
     output_path: Path,
     config: FeatureMatrixConfig,
+    max_input_time_ms: int | None = None,
 ) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-feature-matrix", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="state_path", value=str(state_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
+        RunConfigRow(key="max_input_time_ms", value="" if max_input_time_ms is None else str(max_input_time_ms), source="cli"),
         *runtime_reproducibility_rows(
             data_paths=(input_path, state_path),
             config=config,

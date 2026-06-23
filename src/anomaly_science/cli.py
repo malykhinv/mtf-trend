@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Reuse an existing immutable MVP1 CSV input directory after strict manifest/hash validation. "
-            "Currently supported only with --research-mode frozen_holdout because IS holdout_lock still mutates input."
+            "IS mode uses a non-mutating research input view instead of rewriting prepared input."
         ),
     )
     research.add_argument(

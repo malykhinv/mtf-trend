@@ -25,6 +25,7 @@ def run_mvp1_state(
     events_path: str | Path,
     out_dir: str | Path,
     config: OnlineStateBuilderConfig | None = None,
+    max_input_time_ms: int | None = None,
 ) -> Path:
     """Run MVP1 online 1m state builder and write protocol artifacts."""
     input_path = Path(input_dir)
@@ -41,6 +42,7 @@ def run_mvp1_state(
             candles_path=input_path / "candles_1m.csv",
             events=events,
             config=cfg,
+            max_open_time_ms=max_input_time_ms,
         ),
         get_artifact_schema("strategy_state_1m.csv"),
     )
@@ -56,6 +58,7 @@ def run_mvp1_state(
         events_path=events_artifact_path,
         output_path=output_path,
         config=cfg,
+        max_input_time_ms=max_input_time_ms,
     )
 
     written.extend(
@@ -215,12 +218,14 @@ def _run_config_rows(
     events_path: Path,
     output_path: Path,
     config: OnlineStateBuilderConfig,
+    max_input_time_ms: int | None = None,
 ) -> list[RunConfigRow]:
     return [
         RunConfigRow(key="command", value="run-mvp1-state", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
         RunConfigRow(key="events_path", value=str(events_path), source="cli"),
         RunConfigRow(key="output_dir", value=str(output_path), source="cli"),
+        RunConfigRow(key="max_input_time_ms", value="" if max_input_time_ms is None else str(max_input_time_ms), source="cli"),
         RunConfigRow(key="data_source", value="csv_directory_v1", source="runtime"),
         *runtime_reproducibility_rows(
             data_paths=(input_path, events_path),
