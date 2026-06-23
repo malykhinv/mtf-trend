@@ -4,6 +4,7 @@ import csv
 import gc
 import json
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, asdict, field
@@ -85,7 +86,10 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
     run_dir = config.output_root / _run_id(strategy_name=config.strategy_name)
     input_dir = config.prepared_input_dir or (run_dir / "input")
     stages_dir = run_dir / "stages"
-    timings = _StageTimingRecorder(run_dir / "strategy_stage_timings.csv")
+    timings = _StageTimingRecorder(
+        run_dir / "strategy_stage_timings.csv",
+        log_path=run_dir / "research_run.log",
+    )
 
     if config.prepared_input_dir is None:
         with timings.stage("cache_export"):
@@ -354,11 +358,13 @@ def _write_reused_input_pointer(*, run_dir: Path, input_dir: Path) -> None:
 @dataclass(slots=True)
 class _StageTimingRecorder:
     path: Path
+    log_path: Path | None = None
     _rows: list[dict[str, str]] = field(default_factory=list, init=False)
 
     @contextmanager
     def stage(self, stage_name: str) -> Iterator[None]:
         started_at = datetime.now(timezone.utc)
+        self._write_live_log(stage_name=stage_name, status="START", occurred_at=started_at)
         start_counter = perf_counter()
         status = "PASS"
         notes = ""
@@ -370,13 +376,14 @@ class _StageTimingRecorder:
             raise
         finally:
             finished_at = datetime.now(timezone.utc)
+            duration_seconds = perf_counter() - start_counter
             self._rows.append(
                 {
                     "stage_name": stage_name,
                     "status": status,
                     "started_at_utc": started_at.isoformat(),
                     "finished_at_utc": finished_at.isoformat(),
-                    "duration_seconds": f"{perf_counter() - start_counter:.6f}",
+                    "duration_seconds": f"{duration_seconds:.6f}",
                     "notes": notes,
                 }
             )
@@ -385,6 +392,32 @@ class _StageTimingRecorder:
                 self._rows,
                 get_artifact_schema("strategy_stage_timings.csv"),
             )
+            self._write_live_log(
+                stage_name=stage_name,
+                status=status,
+                occurred_at=finished_at,
+                duration_seconds=duration_seconds,
+                notes=notes,
+            )
+
+    def _write_live_log(
+        self,
+        *,
+        stage_name: str,
+        status: str,
+        occurred_at: datetime,
+        duration_seconds: float | None = None,
+        notes: str = "",
+    ) -> None:
+        duration_part = "" if duration_seconds is None else f" duration={duration_seconds:.2f}s"
+        notes_part = "" if not notes else f" notes={notes}"
+        message = f"run-research stage {status} {stage_name} at={occurred_at.isoformat()}{duration_part}{notes_part}"
+        print(message, file=sys.stderr, flush=True)
+        if self.log_path is None:
+            return
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.log_path.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
 
 
 def _write_research_run_manifest(

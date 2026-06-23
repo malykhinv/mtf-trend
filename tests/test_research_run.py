@@ -65,7 +65,12 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert (run_dir / "anomaly_run_config.csv").is_file()
     assert (run_dir / "strategy_stage_timings.csv").is_file()
     assert (run_dir / "anomaly_stage_timings.csv").is_file()
+    assert (run_dir / "research_run.log").is_file()
     assert (run_dir / "artifact_manifest.json").is_file()
+
+    live_log = (run_dir / "research_run.log").read_text(encoding="utf-8")
+    assert "run-research stage START cache_export" in live_log
+    assert "run-research stage PASS summary" in live_log
 
     ledger = pd.read_csv(run_dir / "stages" / "holdout_governance" / "research_ledger.csv")
     assert ledger.loc[0, "protocol_freeze_id"] == "smoke-freeze"
