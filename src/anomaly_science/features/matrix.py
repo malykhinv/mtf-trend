@@ -731,6 +731,17 @@ def _validate_feature_matrix_fieldnames(fieldnames: Sequence[str]) -> None:
         raise ArtifactWriteError(f"strategy_feature_matrix.csv schema has unknown row fields: {missing}")
 
 
+def _validate_direct_feature_matrix_fieldnames(fieldnames: Sequence[str]) -> None:
+    _validate_feature_matrix_fieldnames(fieldnames)
+    schema_attribute_order = tuple(_feature_matrix_row_attribute_name(fieldname) for fieldname in fieldnames)
+    dataclass_attribute_order = tuple(StrategyFeatureMatrixRow.__dataclass_fields__)
+    if schema_attribute_order != dataclass_attribute_order:
+        raise ArtifactWriteError(
+            "strategy_feature_matrix.csv direct writer requires schema order to match "
+            "StrategyFeatureMatrixRow dataclass order"
+        )
+
+
 def _feature_matrix_row_attribute_name(fieldname: str) -> str:
     if fieldname == "ATR_1d_asof_t":
         return "core_atr_1440"
@@ -838,6 +849,32 @@ def _iter_feature_matrix_rows_from_grouped_csv(
     config: FeatureMatrixConfig,
     max_input_time_ms: int | None = None,
 ) -> Iterable[StrategyFeatureMatrixRow]:
+    for raw_values in _iter_feature_matrix_value_rows_from_grouped_csv(
+        candles_path=candles_path,
+        state_path=state_path,
+        states_by_snapshot=states_by_snapshot,
+        open_interest_by_symbol=open_interest_by_symbol,
+        liquidations_by_symbol=liquidations_by_symbol,
+        universe_by_day=universe_by_day,
+        cross_section_reader=cross_section_reader,
+        config=config,
+        max_input_time_ms=max_input_time_ms,
+    ):
+        yield StrategyFeatureMatrixRow(*raw_values)
+
+
+def _iter_feature_matrix_value_rows_from_grouped_csv(
+    *,
+    candles_path: Path,
+    state_path: Path,
+    states_by_snapshot: Mapping[int, Sequence[StrategyState1mRow | _StateSnapshotRow]],
+    open_interest_by_symbol: Mapping[str, _OpenInterestSeries] | None,
+    liquidations_by_symbol: Mapping[str, _LiquidationSeries] | None,
+    universe_by_day: Mapping[str, set[str]],
+    cross_section_reader: _CrossSectionFeatureSidecarReader,
+    config: FeatureMatrixConfig,
+    max_input_time_ms: int | None = None,
+) -> Iterable[tuple[object, ...]]:
     btc_candles = _load_symbol_candle_series(candles_path, config.btc_symbol, max_input_time_ms=max_input_time_ms)
     candle_groups = _symbol_groups(
         iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms),
@@ -869,7 +906,7 @@ def _iter_feature_matrix_rows_from_grouped_csv(
         if config.btc_symbol != state_symbol:
             candles_by_symbol[config.btc_symbol] = btc_candles
         for state in states:
-            yield _build_state_feature_row(
+            yield _build_state_feature_row_raw_values(
                 state=state,
                 candles=symbol_candles,
                 open_interest_rows=None if open_interest_by_symbol is None else open_interest_by_symbol.get(state.symbol, []),
@@ -1516,9 +1553,9 @@ def run_mvp1_feature_matrix(
     cross_section_reader = _CrossSectionFeatureSidecarReader(cross_section_sidecar_path, remove_on_close=True)
     try:
         written: list[Path] = []
-        feature_written, feature_row_count = _write_feature_matrix_rows_with_aliases(
+        feature_written, feature_row_count = _write_feature_matrix_value_rows_with_aliases(
             output_path / "strategy_feature_matrix.csv",
-            _iter_feature_matrix_rows_from_grouped_csv(
+            _iter_feature_matrix_value_rows_from_grouped_csv(
                 candles_path=input_path / "candles_1m.csv",
                 state_path=state_artifact_path,
                 states_by_snapshot=states_by_snapshot,
@@ -1574,10 +1611,35 @@ def _write_feature_matrix_rows_with_aliases(
     rows: Iterable[StrategyFeatureMatrixRow],
     schema: ArtifactSchema,
 ) -> tuple[list[Path], int]:
+    return _write_feature_matrix_artifact_with_aliases(
+        path=path,
+        row_count_writer=lambda canonical_path: _write_feature_matrix_rows(path=canonical_path, rows=rows, schema=schema),
+        schema=schema,
+    )
+
+
+def _write_feature_matrix_value_rows_with_aliases(
+    path: Path,
+    rows: Iterable[Sequence[object]],
+    schema: ArtifactSchema,
+) -> tuple[list[Path], int]:
+    return _write_feature_matrix_artifact_with_aliases(
+        path=path,
+        row_count_writer=lambda canonical_path: _write_feature_matrix_value_rows(path=canonical_path, rows=rows, schema=schema),
+        schema=schema,
+    )
+
+
+def _write_feature_matrix_artifact_with_aliases(
+    *,
+    path: Path,
+    row_count_writer: Callable[[Path], int],
+    schema: ArtifactSchema,
+) -> tuple[list[Path], int]:
     if path.name != schema.name:
         raise ArtifactWriteError(f"path name {path.name!r} does not match schema name {schema.name!r}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    row_count = _write_feature_matrix_rows(path=path, rows=rows, schema=schema)
+    row_count = row_count_writer(path)
     written = [path]
     for alias_name in get_strategy_artifact_companion_names(schema.name):
         alias_path = path.with_name(alias_name)
@@ -1612,6 +1674,34 @@ def _write_feature_matrix_rows(
     return row_count
 
 
+def _write_feature_matrix_value_rows(
+    *,
+    path: Path,
+    rows: Iterable[Sequence[object]],
+    schema: ArtifactSchema,
+) -> int:
+    fieldnames = list(schema.required_columns)
+    _validate_direct_feature_matrix_fieldnames(fieldnames)
+    expected_value_count = len(fieldnames)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    row_count = 0
+    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.writer(file_obj)
+        writer.writerow(fieldnames)
+        for row_values in rows:
+            if len(row_values) != expected_value_count:
+                raise ArtifactWriteError(
+                    f"strategy_feature_matrix.csv direct row has {len(row_values)} values, "
+                    f"expected {expected_value_count}"
+                )
+            writer.writerow([_csv_value(value) for value in row_values])
+            row_count += 1
+            if row_count % 100_000 == 0:
+                file_obj.flush()
+    os.replace(tmp_path, path)
+    return row_count
+
+
 def _feature_matrix_row_values_for_attributes(*, row: StrategyFeatureMatrixRow, attribute_names: Sequence[str]) -> list[object]:
     return [_csv_value(getattr(row, attribute_name)) for attribute_name in attribute_names]
 
@@ -1630,6 +1720,37 @@ def _build_state_feature_row(
     config: FeatureMatrixConfig,
     cross_section_features: _CrossSectionFeatures | None = None,
 ) -> StrategyFeatureMatrixRow:
+    return StrategyFeatureMatrixRow(
+        *_build_state_feature_row_raw_values(
+            state=state,
+            candles=candles,
+            open_interest_rows=open_interest_rows,
+            liquidation_rows=liquidation_rows,
+            candles_by_symbol=candles_by_symbol,
+            open_interest_by_symbol=open_interest_by_symbol,
+            liquidations_by_symbol=liquidations_by_symbol,
+            universe_by_day=universe_by_day,
+            states_at_snapshot=states_at_snapshot,
+            config=config,
+            cross_section_features=cross_section_features,
+        )
+    )
+
+
+def _build_state_feature_row_raw_values(
+    *,
+    state: StrategyState1mRow,
+    candles: Sequence[Candle1m],
+    open_interest_rows: Sequence[OpenInterest5m] | _OpenInterestSeries | None,
+    liquidation_rows: Sequence[LiquidationEvent] | _LiquidationSeries | None,
+    candles_by_symbol: Mapping[str, Sequence[Candle1m]],
+    open_interest_by_symbol: Mapping[str, Sequence[OpenInterest5m] | _OpenInterestSeries] | None,
+    liquidations_by_symbol: Mapping[str, Sequence[LiquidationEvent] | _LiquidationSeries] | None,
+    universe_by_day: Mapping[str, set[str]],
+    states_at_snapshot: Sequence[StrategyState1mRow | _StateSnapshotRow],
+    config: FeatureMatrixConfig,
+    cross_section_features: _CrossSectionFeatures | None = None,
+) -> tuple[object, ...]:
     atr_value: float | None = None
     atr_pct_value: float | None = None
     range_since_start_atr: float | None = None
@@ -1720,84 +1841,84 @@ def _build_state_feature_row(
     clock_maturity = state.time_since_running_high_minutes / max(time_to_running_high, 1)
     event_age_ratio = state.minutes_since_detection / max(config.expected_event_lifetime_minutes, 1)
 
-    return StrategyFeatureMatrixRow(
-        feature_schema_version=FEATURE_SCHEMA_VERSION,
-        feature_matrix_version=config.feature_matrix_version,
-        event_id=state.event_id,
-        symbol=state.symbol,
-        snapshot_time_ms=state.snapshot_time_ms,
-        feature_cutoff_time_ms=state.feature_cutoff_time_ms,
-        minutes_since_trigger=state.minutes_since_detection,
-        core_atr_1440=atr_value,
-        ATR_1d_pct_asof_t=atr_pct_value,
-        current_return_from_start=state.current_return_from_start,
-        range_since_start_atr=range_since_start_atr,
-        distance_to_running_high_atr=distance_to_running_high_atr,
-        distance_to_running_low_atr=distance_to_running_low_atr,
-        retracement_from_high_atr=retracement_from_high_atr,
-        price_speed_atr=price_speed_atr,
-        clock_maturity=clock_maturity,
-        event_age_ratio=event_age_ratio,
-        alpha_decay_bucket=alpha_decay_bucket(state.minutes_since_detection),
-        feature_source_status=status,
-        quote_volume_1m_to_24h_median=volume_features.quote_volume_1m_to_24h_median,
-        volume_zscore=volume_features.volume_zscore,
-        quote_volume_zscore=volume_features.quote_volume_zscore,
-        closed_5m_oi_asof_t=oi_features.closed_5m_oi_asof_t,
-        oi_change_5m=oi_features.oi_change_5m,
-        oi_change_10m=oi_features.oi_change_10m,
-        oi_change_5m_pct_of_oi=oi_features.oi_change_5m_pct_of_oi,
-        oi_change_10m_pct_of_oi=oi_features.oi_change_10m_pct_of_oi,
-        missing_oi_flag=oi_features.missing_oi_flag,
-        short_liq_intensity=liquidation_features.short_liq_intensity,
-        long_liq_intensity=liquidation_features.long_liq_intensity,
-        liquidation_imbalance=liquidation_features.liquidation_imbalance,
-        cumulative_liq_intensity_since_event_start=liquidation_features.cumulative_liq_intensity_since_event_start,
-        missing_liquidation_flag=liquidation_features.missing_liquidation_flag,
-        cvd_quote_since_event_start=cvd_features.cvd_quote_since_event_start,
-        cvd_change_3m=cvd_features.cvd_change_by_window.get(3),
-        cvd_change_5m=cvd_features.cvd_change_by_window.get(5),
-        cvd_change_10m=cvd_features.cvd_change_by_window.get(10),
-        cvd_price_divergence_3m=cvd_features.cvd_price_divergence_by_window.get(3),
-        cvd_price_divergence_5m=cvd_features.cvd_price_divergence_by_window.get(5),
-        cvd_price_divergence_10m=cvd_features.cvd_price_divergence_by_window.get(10),
-        price_up_cvd_down_flag=cvd_features.price_up_cvd_down_flag,
-        price_down_cvd_up_flag=cvd_features.price_down_cvd_up_flag,
-        cvd_failed_to_confirm_high_flag=cvd_features.cvd_failed_to_confirm_high_flag,
-        volume_market_percentile=cross_section_features.volume_market_percentile,
-        quote_volume_market_percentile=cross_section_features.quote_volume_market_percentile,
-        return_1m_market_percentile=cross_section_features.return_1m_market_percentile,
-        return_from_event_market_percentile=cross_section_features.return_from_event_market_percentile,
-        oi_growth_market_percentile=cross_section_features.oi_growth_market_percentile,
-        liq_intensity_market_percentile=cross_section_features.liq_intensity_market_percentile,
-        range_expansion_market_percentile=cross_section_features.range_expansion_market_percentile,
-        cross_section_available=cross_section_features.cross_section_available,
-        cross_section_symbol_count=cross_section_features.cross_section_symbol_count,
-        corr_with_btc_15m=market_context_features.corr_with_btc_by_window.get(15),
-        corr_with_btc_30m=market_context_features.corr_with_btc_by_window.get(30),
-        corr_with_btc_60m=market_context_features.corr_with_btc_by_window.get(60),
-        symbol_return_minus_btc_return_5m=market_context_features.symbol_return_minus_btc_by_window.get(5),
-        symbol_return_minus_btc_return_15m=market_context_features.symbol_return_minus_btc_by_window.get(15),
-        idiosyncratic_momentum_score=market_context_features.idiosyncratic_momentum_score,
-        simultaneous_anomalies_count_1m=market_context_features.simultaneous_anomalies_count_1m,
-        simultaneous_anomalies_share_1m=market_context_features.simultaneous_anomalies_share_1m,
-        systemic_cluster_regime=market_context_features.systemic_cluster_regime,
-        market_shock_id=market_context_features.market_shock_id,
-        initial_pump_height_core_atr_1440=geometry_features.initial_pump_height_core_atr_1440,
-        post_pump_consolidation_minutes=geometry_features.post_pump_consolidation_minutes,
-        consolidation_width_ratio=geometry_features.consolidation_width_ratio,
-        shelf_low_asof_t=geometry_features.shelf_low_asof_t,
-        shelf_high_asof_t=geometry_features.shelf_high_asof_t,
-        current_low_minus_shelf_low_core_atr_1440=geometry_features.current_low_minus_shelf_low_core_atr_1440,
-        current_close_minus_shelf_low_core_atr_1440=geometry_features.current_close_minus_shelf_low_core_atr_1440,
-        current_high_minus_shelf_high_core_atr_1440=geometry_features.current_high_minus_shelf_high_core_atr_1440,
-        minutes_spent_below_shelf=geometry_features.minutes_spent_below_shelf,
-        minutes_since_reclaim=geometry_features.minutes_since_reclaim,
-        volume_on_sweep_percentile=geometry_features.volume_on_sweep_percentile,
-        trade_count_on_sweep_percentile=geometry_features.trade_count_on_sweep_percentile,
-        cvd_change_during_sweep=geometry_features.cvd_change_during_sweep,
-        oi_change_during_sweep=geometry_features.oi_change_during_sweep,
-        liq_intensity_during_sweep=geometry_features.liq_intensity_during_sweep,
+    return (
+        FEATURE_SCHEMA_VERSION,
+        config.feature_matrix_version,
+        state.event_id,
+        state.symbol,
+        state.snapshot_time_ms,
+        state.feature_cutoff_time_ms,
+        state.minutes_since_detection,
+        atr_value,
+        atr_pct_value,
+        state.current_return_from_start,
+        range_since_start_atr,
+        distance_to_running_high_atr,
+        distance_to_running_low_atr,
+        retracement_from_high_atr,
+        price_speed_atr,
+        clock_maturity,
+        event_age_ratio,
+        alpha_decay_bucket(state.minutes_since_detection),
+        status,
+        volume_features.quote_volume_1m_to_24h_median,
+        volume_features.volume_zscore,
+        volume_features.quote_volume_zscore,
+        oi_features.closed_5m_oi_asof_t,
+        oi_features.oi_change_5m,
+        oi_features.oi_change_10m,
+        oi_features.oi_change_5m_pct_of_oi,
+        oi_features.oi_change_10m_pct_of_oi,
+        oi_features.missing_oi_flag,
+        liquidation_features.short_liq_intensity,
+        liquidation_features.long_liq_intensity,
+        liquidation_features.liquidation_imbalance,
+        liquidation_features.cumulative_liq_intensity_since_event_start,
+        liquidation_features.missing_liquidation_flag,
+        cvd_features.cvd_quote_since_event_start,
+        cvd_features.cvd_change_by_window.get(3),
+        cvd_features.cvd_change_by_window.get(5),
+        cvd_features.cvd_change_by_window.get(10),
+        cvd_features.cvd_price_divergence_by_window.get(3),
+        cvd_features.cvd_price_divergence_by_window.get(5),
+        cvd_features.cvd_price_divergence_by_window.get(10),
+        cvd_features.price_up_cvd_down_flag,
+        cvd_features.price_down_cvd_up_flag,
+        cvd_features.cvd_failed_to_confirm_high_flag,
+        cross_section_features.volume_market_percentile,
+        cross_section_features.quote_volume_market_percentile,
+        cross_section_features.return_1m_market_percentile,
+        cross_section_features.return_from_event_market_percentile,
+        cross_section_features.oi_growth_market_percentile,
+        cross_section_features.liq_intensity_market_percentile,
+        cross_section_features.range_expansion_market_percentile,
+        cross_section_features.cross_section_available,
+        cross_section_features.cross_section_symbol_count,
+        market_context_features.corr_with_btc_by_window.get(15),
+        market_context_features.corr_with_btc_by_window.get(30),
+        market_context_features.corr_with_btc_by_window.get(60),
+        market_context_features.symbol_return_minus_btc_by_window.get(5),
+        market_context_features.symbol_return_minus_btc_by_window.get(15),
+        market_context_features.idiosyncratic_momentum_score,
+        market_context_features.simultaneous_anomalies_count_1m,
+        market_context_features.simultaneous_anomalies_share_1m,
+        market_context_features.systemic_cluster_regime,
+        market_context_features.market_shock_id,
+        geometry_features.initial_pump_height_core_atr_1440,
+        geometry_features.post_pump_consolidation_minutes,
+        geometry_features.consolidation_width_ratio,
+        geometry_features.shelf_low_asof_t,
+        geometry_features.shelf_high_asof_t,
+        geometry_features.current_low_minus_shelf_low_core_atr_1440,
+        geometry_features.current_close_minus_shelf_low_core_atr_1440,
+        geometry_features.current_high_minus_shelf_high_core_atr_1440,
+        geometry_features.minutes_spent_below_shelf,
+        geometry_features.minutes_since_reclaim,
+        geometry_features.volume_on_sweep_percentile,
+        geometry_features.trade_count_on_sweep_percentile,
+        geometry_features.cvd_change_during_sweep,
+        geometry_features.oi_change_during_sweep,
+        geometry_features.liq_intensity_during_sweep,
     )
 
 
@@ -3140,6 +3261,7 @@ def _run_config_rows(
         RunConfigRow(key="cvd_windows_minutes", value=",".join(str(item) for item in config.cvd_windows_minutes), source="runtime"),
         RunConfigRow(key="min_cross_section_symbols", value=str(config.min_cross_section_symbols), source="runtime"),
         RunConfigRow(key="cross_section_delivery", value="exact_sorted_sidecar_by_symbol", source="runtime"),
+        RunConfigRow(key="feature_matrix_row_delivery", value="direct_schema_ordered_values", source="runtime"),
         RunConfigRow(key="btc_symbol", value=config.btc_symbol, source="runtime"),
         RunConfigRow(
             key="btc_corr_window_minutes",
