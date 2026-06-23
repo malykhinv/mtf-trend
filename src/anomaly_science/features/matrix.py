@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import heapq
+import json
 import math
 import os
 import statistics
@@ -9,9 +10,10 @@ from bisect import bisect_left, bisect_right
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Sequence, TypeVar
+from typing import Callable, Iterable, Mapping, Sequence, TypeVar, get_args, get_origin, get_type_hints
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts.manifest import sha256_file
 from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
 from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
@@ -846,6 +848,258 @@ class AnomalyFeatureMatrixArtifactError(ValueError):
 StrategyFeatureMatrixArtifactError = AnomalyFeatureMatrixArtifactError
 
 
+FEATURE_MATRIX_PARQUET_SIDECAR_VERSION = "strategy_feature_matrix_parquet_sidecar_v1"
+FEATURE_MATRIX_PARQUET_BATCH_SIZE = 100_000
+
+
+def _feature_matrix_parquet_path(csv_path: Path) -> Path:
+    return csv_path.with_suffix(".parquet")
+
+
+def _feature_matrix_parquet_manifest_path(csv_path: Path) -> Path:
+    return csv_path.with_name(csv_path.stem + ".parquet_manifest.json")
+
+
+def _import_pyarrow_for_feature_matrix_sidecar():
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only in incomplete envs
+        raise AnomalyFeatureMatrixArtifactError(
+            "pyarrow is required for strict strategy_feature_matrix.parquet sidecars; "
+            "install project dependencies instead of silently falling back to CSV"
+        ) from exc
+    return pa, pq
+
+
+def _feature_matrix_arrow_schema(fieldnames: Sequence[str]):
+    pa, _pq = _import_pyarrow_for_feature_matrix_sidecar()
+    type_hints = get_type_hints(StrategyFeatureMatrixRow)
+    fields = []
+    for fieldname in fieldnames:
+        attribute_name = _feature_matrix_row_attribute_name(fieldname)
+        if attribute_name not in type_hints:
+            raise ArtifactWriteError(f"strategy_feature_matrix.parquet schema has unknown field {fieldname!r}")
+        fields.append(pa.field(fieldname, _arrow_type_for_python_type(type_hints[attribute_name], pa)))
+    return pa.schema(fields)
+
+
+def _arrow_type_for_python_type(type_hint: object, pa):
+    origin = get_origin(type_hint)
+    args = tuple(item for item in get_args(type_hint) if item is not type(None))
+    if origin is not None and args:
+        return _arrow_type_for_python_type(args[0], pa)
+    if type_hint is str:
+        return pa.string()
+    if type_hint is int:
+        return pa.int64()
+    if type_hint is float:
+        return pa.float64()
+    if type_hint is bool:
+        return pa.bool_()
+    raise ArtifactWriteError(f"unsupported strategy_feature_matrix.parquet field type {type_hint!r}")
+
+
+def _parquet_sidecar_value(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+class _FeatureMatrixParquetSidecarWriter:
+    def __init__(self, *, csv_path: Path, fieldnames: Sequence[str], row_count: int | None = None) -> None:
+        self.csv_path = csv_path
+        self.parquet_path = _feature_matrix_parquet_path(csv_path)
+        self.manifest_path = _feature_matrix_parquet_manifest_path(csv_path)
+        self.tmp_parquet_path = self.parquet_path.with_suffix(self.parquet_path.suffix + ".tmp")
+        self.fieldnames = tuple(fieldnames)
+        self._row_count_hint = row_count
+        self._row_count = 0
+        self._pa, self._pq = _import_pyarrow_for_feature_matrix_sidecar()
+        self._schema = _feature_matrix_arrow_schema(self.fieldnames)
+        self._writer = self._pq.ParquetWriter(self.tmp_parquet_path, self._schema, compression="zstd")
+        self._columns: dict[str, list[object]] = {fieldname: [] for fieldname in self.fieldnames}
+        self._closed = False
+
+    @property
+    def row_count(self) -> int:
+        return self._row_count
+
+    def append(self, row_values: Sequence[object]) -> None:
+        if self._closed:
+            raise ArtifactWriteError("strategy_feature_matrix.parquet sidecar writer is already closed")
+        if len(row_values) != len(self.fieldnames):
+            raise ArtifactWriteError(
+                f"strategy_feature_matrix.parquet sidecar row has {len(row_values)} values, "
+                f"expected {len(self.fieldnames)}"
+            )
+        for fieldname, value in zip(self.fieldnames, row_values):
+            self._columns[fieldname].append(_parquet_sidecar_value(value))
+        self._row_count += 1
+        if self._row_count % FEATURE_MATRIX_PARQUET_BATCH_SIZE == 0:
+            self.flush()
+
+    def flush(self) -> None:
+        batch_size = len(next(iter(self._columns.values()))) if self._columns else 0
+        if batch_size == 0:
+            return
+        arrays = [
+            self._pa.array(self._columns[fieldname], type=self._schema.field(fieldname).type)
+            for fieldname in self.fieldnames
+        ]
+        table = self._pa.Table.from_arrays(arrays, schema=self._schema)
+        self._writer.write_table(table)
+        self._columns = {fieldname: [] for fieldname in self.fieldnames}
+
+    def close(self) -> tuple[Path, Path]:
+        if self._closed:
+            return self.parquet_path, self.manifest_path
+        self.flush()
+        self._writer.close()
+        os.replace(self.tmp_parquet_path, self.parquet_path)
+        if self._row_count_hint is not None and self._row_count != self._row_count_hint:
+            raise ArtifactWriteError(
+                f"strategy_feature_matrix.parquet sidecar row count {self._row_count} "
+                f"does not match CSV row count {self._row_count_hint}"
+            )
+        _write_feature_matrix_parquet_manifest(
+            manifest_path=self.manifest_path,
+            csv_path=self.csv_path,
+            parquet_path=self.parquet_path,
+            fieldnames=self.fieldnames,
+            row_count=self._row_count,
+        )
+        self._closed = True
+        return self.parquet_path, self.manifest_path
+
+
+def _write_feature_matrix_parquet_manifest(
+    *,
+    manifest_path: Path,
+    csv_path: Path,
+    parquet_path: Path,
+    fieldnames: Sequence[str],
+    row_count: int,
+) -> Path:
+    payload = {
+        "sidecar_version": FEATURE_MATRIX_PARQUET_SIDECAR_VERSION,
+        "artifact_name": "strategy_feature_matrix.csv",
+        "csv_path": csv_path.name,
+        "csv_size_bytes": csv_path.stat().st_size,
+        "csv_sha256": sha256_file(csv_path),
+        "parquet_path": parquet_path.name,
+        "parquet_size_bytes": parquet_path.stat().st_size,
+        "parquet_sha256": sha256_file(parquet_path),
+        "required_columns": list(fieldnames),
+        "row_count": row_count,
+        "delivery": "strict_typed_parquet_sidecar",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_path, manifest_path)
+    return manifest_path
+
+
+def _load_feature_matrix_parquet_sidecar(
+    *,
+    csv_path: Path,
+    manifest_path: Path,
+    expected_columns: Sequence[str],
+) -> tuple[StrategyFeatureMatrixRow, ...]:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    _validate_feature_matrix_parquet_manifest(
+        payload=payload,
+        csv_path=csv_path,
+        manifest_path=manifest_path,
+        expected_columns=expected_columns,
+    )
+    _pa, pq = _import_pyarrow_for_feature_matrix_sidecar()
+    parquet_path = manifest_path.parent / str(payload["parquet_path"])
+    table = pq.read_table(parquet_path, columns=list(expected_columns))
+    if table.column_names != list(expected_columns):
+        raise AnomalyFeatureMatrixArtifactError(
+            f"strategy_feature_matrix.parquet columns must match {list(expected_columns)}, got {table.column_names}"
+        )
+    rows: list[StrategyFeatureMatrixRow] = []
+    for row_index, row in enumerate(table.to_pylist()):
+        try:
+            rows.append(_feature_matrix_row_from_csv(row))
+        except (TypeError, ValueError, MarketDataContractError) as exc:
+            raise AnomalyFeatureMatrixArtifactError(
+                f"invalid strategy_feature_matrix.parquet row {row_index}: {exc}"
+            ) from exc
+    expected_row_count = int(payload["row_count"])
+    if len(rows) != expected_row_count:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"strategy_feature_matrix.parquet row count mismatch: manifest={expected_row_count} actual={len(rows)}"
+        )
+    return tuple(rows)
+
+
+def _validate_feature_matrix_parquet_manifest(
+    *,
+    payload: Mapping[str, object],
+    csv_path: Path,
+    manifest_path: Path,
+    expected_columns: Sequence[str],
+) -> None:
+    if payload.get("sidecar_version") != FEATURE_MATRIX_PARQUET_SIDECAR_VERSION:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"unsupported strategy_feature_matrix.parquet sidecar version in {manifest_path}"
+        )
+    if payload.get("artifact_name") != "strategy_feature_matrix.csv":
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar is bound to the wrong artifact")
+    if payload.get("csv_path") != csv_path.name:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"feature matrix parquet sidecar is bound to {payload.get('csv_path')!r}, not {csv_path.name!r}"
+        )
+    if tuple(payload.get("required_columns") or ()) != tuple(expected_columns):
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar schema does not match CSV schema")
+    parquet_name = payload.get("parquet_path")
+    if not isinstance(parquet_name, str) or not parquet_name:
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar manifest has no parquet_path")
+    parquet_path = manifest_path.parent / parquet_name
+    if not csv_path.is_file():
+        raise AnomalyFeatureMatrixArtifactError(f"feature matrix CSV artifact is missing: {csv_path}")
+    if not parquet_path.is_file():
+        raise AnomalyFeatureMatrixArtifactError(f"feature matrix parquet sidecar is missing: {parquet_path}")
+    _assert_bound_file(
+        path=csv_path,
+        expected_size=payload.get("csv_size_bytes"),
+        expected_sha256=payload.get("csv_sha256"),
+        label="strategy_feature_matrix.csv",
+    )
+    _assert_bound_file(
+        path=parquet_path,
+        expected_size=payload.get("parquet_size_bytes"),
+        expected_sha256=payload.get("parquet_sha256"),
+        label="strategy_feature_matrix.parquet",
+    )
+    row_count = payload.get("row_count")
+    if not isinstance(row_count, int) or row_count < 0:
+        raise AnomalyFeatureMatrixArtifactError("feature matrix parquet sidecar manifest has invalid row_count")
+
+
+def _assert_bound_file(*, path: Path, expected_size: object, expected_sha256: object, label: str) -> None:
+    if not isinstance(expected_size, int) or expected_size < 0:
+        raise AnomalyFeatureMatrixArtifactError(f"{label} sidecar manifest has invalid size")
+    if not isinstance(expected_sha256, str) or not expected_sha256:
+        raise AnomalyFeatureMatrixArtifactError(f"{label} sidecar manifest has invalid sha256")
+    actual_size = path.stat().st_size
+    if actual_size != expected_size:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"{label} size mismatch: manifest={expected_size} actual={actual_size}"
+        )
+    actual_sha256 = sha256_file(path)
+    if actual_sha256 != expected_sha256:
+        raise AnomalyFeatureMatrixArtifactError(
+            f"{label} sha256 mismatch: manifest={expected_sha256} actual={actual_sha256}"
+        )
+
+
 def load_strategy_feature_matrix_csv(path: str | Path) -> tuple[StrategyFeatureMatrixRow, ...]:
     """Read anomaly_feature_matrix.csv through the strict artifact schema."""
     feature_path = Path(path)
@@ -854,6 +1108,14 @@ def load_strategy_feature_matrix_csv(path: str | Path) -> tuple[StrategyFeatureM
 
     schema = get_artifact_schema("anomaly_feature_matrix.csv")
     expected_columns = list(schema.required_columns)
+    sidecar_manifest_path = _feature_matrix_parquet_manifest_path(feature_path)
+    if sidecar_manifest_path.exists():
+        return _load_feature_matrix_parquet_sidecar(
+            csv_path=feature_path,
+            manifest_path=sidecar_manifest_path,
+            expected_columns=expected_columns,
+        )
+
     with feature_path.open(encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         actual_columns = list(reader.fieldnames or [])
@@ -1722,11 +1984,24 @@ def _write_feature_matrix_value_rows_with_aliases(
     rows: Iterable[Sequence[object]],
     schema: ArtifactSchema,
 ) -> tuple[list[Path], int]:
-    return _write_feature_matrix_artifact_with_aliases(
+    sidecar_paths: list[Path] = []
+
+    def _write_canonical_with_sidecar(canonical_path: Path) -> int:
+        row_count, written_sidecars = _write_feature_matrix_value_rows(
+            path=canonical_path,
+            rows=rows,
+            schema=schema,
+            write_parquet_sidecar=True,
+        )
+        sidecar_paths.extend(written_sidecars)
+        return row_count
+
+    written, row_count = _write_feature_matrix_artifact_with_aliases(
         path=path,
-        row_count_writer=lambda canonical_path: _write_feature_matrix_value_rows(path=canonical_path, rows=rows, schema=schema),
+        row_count_writer=_write_canonical_with_sidecar,
         schema=schema,
     )
+    return [*written, *sidecar_paths], row_count
 
 
 def _write_feature_matrix_artifact_with_aliases(
@@ -1778,27 +2053,48 @@ def _write_feature_matrix_value_rows(
     path: Path,
     rows: Iterable[Sequence[object]],
     schema: ArtifactSchema,
-) -> int:
+    write_parquet_sidecar: bool = False,
+) -> tuple[int, list[Path]]:
     fieldnames = list(schema.required_columns)
     _validate_direct_feature_matrix_fieldnames(fieldnames)
     expected_value_count = len(fieldnames)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
-    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.writer(file_obj)
-        writer.writerow(fieldnames)
-        for row_values in rows:
-            if len(row_values) != expected_value_count:
-                raise ArtifactWriteError(
-                    f"strategy_feature_matrix.csv direct row has {len(row_values)} values, "
-                    f"expected {expected_value_count}"
-                )
-            writer.writerow([_csv_value(value) for value in row_values])
-            row_count += 1
-            if row_count % 100_000 == 0:
-                file_obj.flush()
-    os.replace(tmp_path, path)
-    return row_count
+    sidecar_writer = (
+        _FeatureMatrixParquetSidecarWriter(csv_path=path, fieldnames=fieldnames)
+        if write_parquet_sidecar
+        else None
+    )
+    try:
+        with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.writer(file_obj)
+            writer.writerow(fieldnames)
+            for row_values in rows:
+                if len(row_values) != expected_value_count:
+                    raise ArtifactWriteError(
+                        f"strategy_feature_matrix.csv direct row has {len(row_values)} values, "
+                        f"expected {expected_value_count}"
+                    )
+                writer.writerow([_csv_value(value) for value in row_values])
+                if sidecar_writer is not None:
+                    sidecar_writer.append(row_values)
+                row_count += 1
+                if row_count % 100_000 == 0:
+                    file_obj.flush()
+        os.replace(tmp_path, path)
+        sidecar_paths: list[Path] = []
+        if sidecar_writer is not None:
+            sidecar_paths.extend(sidecar_writer.close())
+        return row_count, sidecar_paths
+    except Exception:
+        if sidecar_writer is not None:
+            try:
+                sidecar_writer._writer.close()
+            except Exception:
+                pass
+            _remove_temp_file(sidecar_writer.tmp_parquet_path)
+        _remove_temp_file(tmp_path)
+        raise
 
 
 def _feature_matrix_row_values_for_attributes(*, row: StrategyFeatureMatrixRow, attribute_names: Sequence[str]) -> list[object]:
@@ -3288,6 +3584,12 @@ def _protocol_rows(*, state_row_count: int, feature_row_count: int) -> list[Prot
             artifact="strategy_feature_matrix.csv",
         ),
         ProtocolAuditRow(
+            check_name="feature_matrix_columnar_sidecar_manifest_bound",
+            status=AuditStatus.PASS,
+            message="strategy_feature_matrix.parquet is written in the same direct row pass and bound to strategy_feature_matrix.csv by size, sha256, row count, and schema manifest; invalid sidecars fail strict load instead of falling back silently",
+            artifact="strategy_feature_matrix.parquet",
+        ),
+        ProtocolAuditRow(
             check_name="legacy_import_boundary",
             status=AuditStatus.PASS,
             message="mvp1 feature matrix uses anomaly_science modules only; legacy_quarantine is reference-only",
@@ -3377,6 +3679,7 @@ def _run_config_rows(
         RunConfigRow(key="min_cross_section_symbols", value=str(config.min_cross_section_symbols), source="runtime"),
         RunConfigRow(key="cross_section_delivery", value="exact_sorted_sidecar_by_symbol", source="runtime"),
         RunConfigRow(key="feature_matrix_row_delivery", value="direct_schema_ordered_values", source="runtime"),
+        RunConfigRow(key="feature_matrix_columnar_sidecar", value="strict_typed_parquet_manifest_bound", source="runtime"),
         RunConfigRow(key="symbol_feature_delivery", value="exact_per_symbol_snapshot_index", source="runtime"),
         RunConfigRow(key="btc_symbol", value=config.btc_symbol, source="runtime"),
         RunConfigRow(
