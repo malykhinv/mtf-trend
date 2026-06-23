@@ -99,6 +99,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional cache directory override. Default: Binance Vision enriched 1m cache.",
     )
     research.add_argument(
+        "--prepared-input-dir",
+        default="",
+        help=(
+            "Reuse an existing immutable MVP1 CSV input directory after strict manifest/hash validation. "
+            "Currently supported only with --research-mode frozen_holdout because IS holdout_lock still mutates input."
+        ),
+    )
+    research.add_argument(
         "--research-mode",
         choices=("is", "frozen_holdout"),
         default="is",
@@ -385,6 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 strategy_name=args.strategy,
                 cache_dir=cache_dir,
                 days=args.days,
+                prepared_input_dir=Path(args.prepared_input_dir) if args.prepared_input_dir else None,
                 research_mode=args.research_mode,
                 holdout_days=args.holdout_days,
                 protocol_freeze_id=args.protocol_freeze_id,

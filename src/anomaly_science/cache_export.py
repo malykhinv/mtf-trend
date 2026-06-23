@@ -128,6 +128,115 @@ def export_cache_to_mvp1_csv(config: CacheMvp1CsvExportConfig) -> Path:
     return config.out_dir
 
 
+def validate_reusable_mvp1_csv_input(
+    input_dir: Path,
+    *,
+    expected_cache_dir: Path,
+    expected_days: int | None,
+    expected_symbols: tuple[str, ...] = (),
+    include_delivery_contracts: bool = False,
+) -> Path:
+    """Validate an immutable MVP1 CSV boundary before run-research reuses it.
+
+    This is intentionally strict about row-defining export settings and artifact
+    hashes. It never repairs, rewrites, or silently falls back to a fresh export.
+    """
+
+    manifest_path = input_dir / "cache_export_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"prepared MVP1 input is missing manifest: {manifest_path}")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"prepared MVP1 input manifest is invalid JSON: {manifest_path}: {exc}") from exc
+
+    _require_manifest_value(payload, "source", "binance_vision_cache", manifest_path=manifest_path)
+    _require_manifest_value(payload, "boundary", "mvp1_normalized_csv", manifest_path=manifest_path)
+    _require_manifest_path(payload, "cache_dir", expected_cache_dir, manifest_path=manifest_path)
+    _require_manifest_value(payload, "requested_days", expected_days, manifest_path=manifest_path)
+    _require_manifest_value(payload, "requested_symbols", list(expected_symbols), manifest_path=manifest_path)
+    _require_manifest_value(
+        payload,
+        "include_delivery_contracts",
+        include_delivery_contracts,
+        manifest_path=manifest_path,
+    )
+
+    validation = payload.get("validation")
+    if not isinstance(validation, dict) or validation.get("validation_passed") is not True:
+        raise ValueError(f"prepared MVP1 input manifest validation did not pass: {manifest_path}")
+
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, list):
+        raise ValueError(f"prepared MVP1 input manifest has no artifact proof list: {manifest_path}")
+    artifact_names = set()
+    for item in artifacts:
+        if not isinstance(item, dict):
+            raise ValueError(f"prepared MVP1 input manifest contains a malformed artifact entry: {manifest_path}")
+        name = item.get("name")
+        relative_path = item.get("path")
+        expected_sha256 = item.get("sha256")
+        expected_size = item.get("size_bytes")
+        if not all(isinstance(value, str) and value for value in (name, relative_path, expected_sha256)):
+            raise ValueError(f"prepared MVP1 input manifest contains incomplete artifact proof: {manifest_path}")
+        if not isinstance(expected_size, int) or expected_size < 0:
+            raise ValueError(f"prepared MVP1 input manifest has invalid artifact size for {name}: {manifest_path}")
+        input_root = input_dir.resolve()
+        artifact_path = (input_dir / relative_path).resolve()
+        if artifact_path != input_root and input_root not in artifact_path.parents:
+            raise ValueError(
+                f"prepared MVP1 input manifest artifact path escapes input_dir: {relative_path!r} in {manifest_path}"
+            )
+        if not artifact_path.is_file():
+            raise FileNotFoundError(f"prepared MVP1 input artifact is missing: {artifact_path}")
+        actual_size = artifact_path.stat().st_size
+        if actual_size != expected_size:
+            raise ValueError(
+                f"prepared MVP1 input artifact size mismatch for {artifact_path}: "
+                f"manifest={expected_size} actual={actual_size}"
+            )
+        actual_sha256 = _sha256_file(artifact_path)
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"prepared MVP1 input artifact sha256 mismatch for {artifact_path}: "
+                f"manifest={expected_sha256} actual={actual_sha256}"
+            )
+        artifact_names.add(str(name))
+
+    required_artifacts = {
+        "candles_1m.csv",
+        "candles_5m.csv",
+        "open_interest_5m.csv",
+        "cache_export_coverage.csv",
+    }
+    missing_required = sorted(required_artifacts - artifact_names)
+    if missing_required:
+        raise ValueError(
+            f"prepared MVP1 input manifest is missing required artifact proofs: {missing_required} in {manifest_path}"
+        )
+    return input_dir
+
+
+def _require_manifest_value(payload: dict[str, Any], key: str, expected: object, *, manifest_path: Path) -> None:
+    actual = payload.get(key)
+    if actual != expected:
+        raise ValueError(
+            f"prepared MVP1 input manifest field {key!r} mismatch in {manifest_path}: "
+            f"expected={expected!r} actual={actual!r}"
+        )
+
+
+def _require_manifest_path(payload: dict[str, Any], key: str, expected: Path, *, manifest_path: Path) -> None:
+    actual = payload.get(key)
+    if not isinstance(actual, str) or not actual:
+        raise ValueError(f"prepared MVP1 input manifest field {key!r} is missing in {manifest_path}")
+    actual_path = Path(actual)
+    if actual_path.resolve() != expected.resolve():
+        raise ValueError(
+            f"prepared MVP1 input manifest field {key!r} mismatch in {manifest_path}: "
+            f"expected={expected} actual={actual_path}"
+        )
+
 def _remove_stale_export_artifacts(*paths: Path) -> None:
     for path in paths:
         if path.exists():

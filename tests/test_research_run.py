@@ -150,12 +150,26 @@ def test_run_research_is_mode_auto_scales_holdout_for_short_windows(tmp_path: Pa
 
 
 def test_run_research_cli_accepts_strategy_and_optional_days() -> None:
-    args = build_parser().parse_args(["run-research", "broad_anomaly_v1_h30", "--days", "30"])
+    args = build_parser().parse_args(
+        [
+            "run-research",
+            "broad_anomaly_v1_h30",
+            "--days",
+            "30",
+            "--prepared-input-dir",
+            "tmp/mvp1_input_380d",
+            "--research-mode",
+            "frozen_holdout",
+            "--protocol-freeze-id",
+            "freeze-id",
+        ]
+    )
 
     assert args.command == "run-research"
     assert args.strategy == "broad_anomaly_v1_h30"
     assert args.days == 30
-    assert args.research_mode == "is"
+    assert args.prepared_input_dir == "tmp/mvp1_input_380d"
+    assert args.research_mode == "frozen_holdout"
     assert args.holdout_days == 60
 
 
@@ -250,3 +264,60 @@ def test_is_mode_holdout_lock_filters_downstream_input(tmp_path: Path) -> None:
     assert end_date.isoformat() == "2024-01-01"
     filtered = pd.read_csv(input_dir / "candles_1m.csv")
     assert filtered["open_time_ms"].tolist() == [first_day]
+
+
+def test_run_research_reuses_prepared_input_without_cache_export(monkeypatch, tmp_path: Path) -> None:
+    from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
+    import anomaly_science.research.run as research_run
+
+    cache_dir = tmp_path / "cache"
+    prepared_input_dir = tmp_path / "prepared_input"
+    _write_cache(cache_dir)
+    export_cache_to_mvp1_csv(CacheMvp1CsvExportConfig(cache_dir=cache_dir, out_dir=prepared_input_dir, days=1))
+
+    def fail_export(*args, **kwargs):
+        raise AssertionError("run-research must not export cache when prepared_input_dir is provided")
+
+    monkeypatch.setattr(research_run, "export_cache_to_mvp1_csv", fail_export)
+
+    run_dir = run_research_pipeline(
+        ResearchRunConfig(
+            strategy_name="broad_anomaly_v1_h30",
+            cache_dir=cache_dir,
+            days=1,
+            output_root=tmp_path / "runs",
+            prepared_input_dir=prepared_input_dir,
+            research_mode="frozen_holdout",
+            protocol_freeze_id="reuse-smoke-freeze",
+        )
+    )
+
+    assert (run_dir / "prepared_input_reuse.json").is_file()
+    summary = pd.read_csv(run_dir / "research_run_summary.csv")
+    summary_by_key = dict(zip(summary["key"], summary["value"].astype(str), strict=True))
+    assert summary_by_key["input_boundary_mode"] == "reused_prepared_input"
+    assert summary_by_key["prepared_input_dir"] == str(prepared_input_dir)
+    assert (prepared_input_dir / "candles_1m.csv").is_file()
+
+    run_config = pd.read_csv(run_dir / "strategy_run_config.csv")
+    run_config_by_key = dict(zip(run_config["key"], run_config["value"].astype(str), strict=True))
+    assert run_config_by_key["input_boundary_mode"] == "reused_prepared_input"
+    assert run_config_by_key["input_dir"] == str(prepared_input_dir)
+
+    timings = pd.read_csv(run_dir / "strategy_stage_timings.csv")
+    assert "input_reuse_validation" in set(timings["stage_name"])
+    assert "cache_export" not in set(timings["stage_name"])
+
+
+def test_run_research_prepared_input_reuse_is_blocked_for_mutating_is_mode(tmp_path: Path) -> None:
+    try:
+        ResearchRunConfig(
+            strategy_name="broad_anomaly_v1_h30",
+            cache_dir=tmp_path / "cache",
+            prepared_input_dir=tmp_path / "prepared_input",
+            research_mode="is",
+        )
+    except ValueError as exc:
+        assert "only supported in frozen_holdout" in str(exc)
+    else:
+        raise AssertionError("prepared_input_dir must not be accepted for mutating IS mode")

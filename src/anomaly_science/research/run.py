@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import gc
+import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,7 +17,11 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.artifacts.writer import write_csv_artifact_with_aliases
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, RunConfigRow
-from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
+from anomaly_science.cache_export import (
+    CacheMvp1CsvExportConfig,
+    export_cache_to_mvp1_csv,
+    validate_reusable_mvp1_csv_input,
+)
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.decision import ExpectedValueConfig, run_mvp1_expected_value
@@ -44,6 +49,7 @@ class ResearchRunConfig:
     cache_dir: Path
     days: int | None = None
     output_root: Path = DEFAULT_RESEARCH_OUTPUT_ROOT
+    prepared_input_dir: Path | None = None
     research_mode: Literal["is", "frozen_holdout"] = "is"
     holdout_days: int = 60
     protocol_freeze_id: str = ""
@@ -59,24 +65,39 @@ class ResearchRunConfig:
             raise ValueError("holdout_days must be positive")
         if self.research_mode == "frozen_holdout" and not self.protocol_freeze_id:
             raise ValueError("protocol_freeze_id is required for frozen_holdout mode")
+        if self.prepared_input_dir is not None and self.research_mode != "frozen_holdout":
+            raise ValueError(
+                "prepared_input_dir reuse is only supported in frozen_holdout mode until holdout_lock becomes "
+                "a non-mutating research view"
+            )
 
 
 def run_research_pipeline(config: ResearchRunConfig) -> Path:
     strategy = get_strategy(config.strategy_name)
     run_dir = config.output_root / _run_id(strategy_name=config.strategy_name)
-    input_dir = run_dir / "input"
+    input_dir = config.prepared_input_dir or (run_dir / "input")
     stages_dir = run_dir / "stages"
     timings = _StageTimingRecorder(run_dir / "strategy_stage_timings.csv")
 
-    with timings.stage("cache_export"):
-        export_cache_to_mvp1_csv(
-            CacheMvp1CsvExportConfig(
-                cache_dir=config.cache_dir,
-                out_dir=input_dir,
-                days=config.days,
+    if config.prepared_input_dir is None:
+        with timings.stage("cache_export"):
+            export_cache_to_mvp1_csv(
+                CacheMvp1CsvExportConfig(
+                    cache_dir=config.cache_dir,
+                    out_dir=input_dir,
+                    days=config.days,
+                )
             )
-        )
-        _release_stage_memory()
+            _release_stage_memory()
+    else:
+        with timings.stage("input_reuse_validation"):
+            validate_reusable_mvp1_csv_input(
+                input_dir=input_dir,
+                expected_cache_dir=config.cache_dir,
+                expected_days=config.days,
+            )
+            _write_reused_input_pointer(run_dir=run_dir, input_dir=input_dir)
+            _release_stage_memory()
 
     with timings.stage("input_date_range"):
         full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
@@ -226,6 +247,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         _write_research_run_manifest(
             run_dir=run_dir,
             config=config,
+            input_dir=input_dir,
             start_date=research_start_date,
             end_date=research_end_date,
             full_start_date=full_start_date,
@@ -246,6 +268,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         _write_summary(
             run_dir=run_dir,
             config=config,
+            input_dir=input_dir,
             start_date=research_start_date,
             end_date=research_end_date,
             effective_holdout_days=effective_holdout_days,
@@ -260,6 +283,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
     _write_research_run_manifest(
         run_dir=run_dir,
         config=config,
+        input_dir=input_dir,
         start_date=research_start_date,
         end_date=research_end_date,
         full_start_date=full_start_date,
@@ -284,6 +308,21 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
 def _release_stage_memory() -> None:
     gc.collect()
 
+
+def _write_reused_input_pointer(*, run_dir: Path, input_dir: Path) -> None:
+    pointer_path = run_dir / "prepared_input_reuse.json"
+    pointer_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path = input_dir / "cache_export_manifest.json"
+    payload = {
+        "boundary": "mvp1_normalized_csv",
+        "mode": "reused_prepared_input",
+        "input_dir": str(input_dir),
+        "cache_export_manifest_path": str(manifest_path),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp_path = pointer_path.with_suffix(pointer_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp_path, pointer_path)
 
 
 @dataclass(slots=True)
@@ -326,6 +365,7 @@ def _write_research_run_manifest(
     *,
     run_dir: Path,
     config: ResearchRunConfig,
+    input_dir: Path,
     start_date: date,
     end_date: date,
     full_start_date: date,
@@ -356,6 +396,17 @@ def _write_research_run_manifest(
         [
             RunConfigRow(key="run_dir", value=str(run_dir), source="run_research"),
             RunConfigRow(key="cache_dir", value=str(config.cache_dir), source="run_research"),
+            RunConfigRow(key="input_dir", value=str(input_dir), source="run_research"),
+            RunConfigRow(
+                key="prepared_input_dir",
+                value="" if config.prepared_input_dir is None else str(config.prepared_input_dir),
+                source="run_research",
+            ),
+            RunConfigRow(
+                key="input_boundary_mode",
+                value="reused_prepared_input" if config.prepared_input_dir is not None else "fresh_cache_export",
+                source="run_research",
+            ),
             RunConfigRow(key="days", value="" if config.days is None else str(config.days), source="run_research"),
             RunConfigRow(key="research_start_date", value=start_date.isoformat(), source="run_research"),
             RunConfigRow(key="research_end_date", value=end_date.isoformat(), source="run_research"),
@@ -379,7 +430,7 @@ def _write_research_run_manifest(
     )
     rows.extend(
         runtime_reproducibility_rows(
-            data_paths=(run_dir / "input",),
+            data_paths=(input_dir,),
             config=asdict(config),
             extra_config=extra_config,
         )
@@ -427,6 +478,7 @@ def _write_summary(
     *,
     run_dir: Path,
     config: ResearchRunConfig,
+    input_dir: Path,
     start_date: date,
     end_date: date,
     effective_holdout_days: int,
@@ -437,7 +489,7 @@ def _write_summary(
     forensic_fail_count: int,
     forensic_warn_count: int,
 ) -> None:
-    time_bounds = _csv_time_bounds(run_dir / "input" / "candles_1m.csv", time_column="open_time_ms")
+    time_bounds = _csv_time_bounds(input_dir / "candles_1m.csv", time_column="open_time_ms")
     min_time, max_time = time_bounds if time_bounds is not None else (0, 0)
     lines = [
         "key,value",
@@ -445,6 +497,9 @@ def _write_summary(
         f"days,{'' if config.days is None else config.days}",
         f"cache_dir,{config.cache_dir}",
         f"run_dir,{run_dir}",
+        f"input_dir,{input_dir}",
+        f"prepared_input_dir,{'' if config.prepared_input_dir is None else config.prepared_input_dir}",
+        f"input_boundary_mode,{'reused_prepared_input' if config.prepared_input_dir is not None else 'fresh_cache_export'}",
         f"input_min_open_time_ms,{min_time}",
         f"input_max_open_time_ms,{max_time}",
         f"research_start_date,{start_date.isoformat()}",
