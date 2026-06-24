@@ -30,6 +30,11 @@ from anomaly_science.future.builder import (
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
 from anomaly_science.progress import ProgressCallback, ProgressUpdate
+from anomaly_science.state.parquet_sidecar import (
+    StateParquetSidecarError,
+    state_1m_parquet_manifest_row_count,
+    state_1m_parquet_sidecar_exists,
+)
 
 
 FUTURE_PATHS_PARQUET_BATCH_SIZE = 100_000
@@ -53,7 +58,7 @@ def run_mvp1_future(
     cfg = config or FuturePathBuilderConfig()
 
     written: list[Path] = []
-    expected_row_count = _count_csv_data_rows(state_artifact_path)
+    expected_row_count = _count_state_rows(state_artifact_path)
     future_schema = get_artifact_schema("strategy_future_paths.csv")
     future_written, future_row_count = _write_future_rows_with_aliases(
         output_path / "strategy_future_paths.csv",
@@ -69,7 +74,7 @@ def run_mvp1_future(
         progress_callback=progress_callback,
     )
     written.extend(future_written)
-    protocol_rows = _protocol_rows(state_row_count=future_row_count, future_row_count=future_row_count)
+    protocol_rows = _protocol_rows(state_row_count=expected_row_count, future_row_count=future_row_count)
     run_config_rows = _run_config_rows(
         input_path=input_path,
         state_path=state_artifact_path,
@@ -391,6 +396,19 @@ def _remove_path(path: Path) -> None:
         path.unlink()
 
 
+
+
+def _count_state_rows(path: Path) -> int:
+    schema = get_artifact_schema("strategy_state_1m.csv")
+    try:
+        if state_1m_parquet_sidecar_exists(path):
+            return state_1m_parquet_manifest_row_count(
+                csv_path=path,
+                expected_columns=schema.required_columns,
+            )
+    except StateParquetSidecarError as exc:
+        raise ArtifactWriteError(str(exc)) from exc
+    return _count_csv_data_rows(path)
 
 def _count_csv_data_rows(path: Path) -> int:
     if not path.is_file():

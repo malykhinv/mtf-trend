@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
+import shutil
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
-from anomaly_science.artifacts.writer import link_or_copy_identical_artifact
-from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
+from anomaly_science.artifacts.manifest import sha256_file
+from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
+from anomaly_science.contracts.artifacts import (
+    ArtifactSchema,
+    get_artifact_schema,
+    get_strategy_artifact_companion_names,
+    should_materialize_strategy_artifact_alias,
+)
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.state.builder import (
@@ -17,7 +25,17 @@ from anomaly_science.state.builder import (
     load_strategy_events_csv,
 )
 from anomaly_science.state.config import OnlineStateBuilderConfig
+from anomaly_science.state.parquet_sidecar import (
+    STATE_1M_PARQUET_ORDER_COLUMN,
+    STATE_1M_PARQUET_SIDECAR_VERSION,
+    state_1m_parquet_manifest_path,
+    state_1m_parquet_sidecar_dir,
+)
 from anomaly_science.progress import ProgressCallback, ProgressUpdate
+
+
+STATE_1M_PARQUET_BATCH_SIZE = 100_000
+STATE_1M_CSV_DELIVERY = "schema_header_only"
 
 
 def run_mvp1_state(
@@ -94,7 +112,15 @@ def _write_state_rows_with_aliases(
     path.parent.mkdir(parents=True, exist_ok=True)
     row_count = _write_state_rows(path=path, rows=rows, schema=schema, progress_callback=progress_callback)
     written = [path]
+    sidecar_manifest = state_1m_parquet_manifest_path(path)
+    if sidecar_manifest.is_file():
+        written.append(sidecar_manifest)
+    sidecar_dir = state_1m_parquet_sidecar_dir(path)
+    if sidecar_dir.is_dir():
+        written.extend(sorted(sidecar_dir.rglob("*.parquet")))
     for alias_name in get_strategy_artifact_companion_names(schema.name):
+        if not should_materialize_strategy_artifact_alias(schema.name, alias_name):
+            continue
         alias_path = path.with_name(alias_name)
         alias_schema = get_artifact_schema(alias_name)
         if tuple(alias_schema.required_columns) != tuple(schema.required_columns):
@@ -116,21 +142,216 @@ def _write_state_rows(
     attribute_names = [_state_row_attribute_name(fieldname) for fieldname in fieldnames]
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     row_count = 0
+    sidecar_writer = _State1mPartitionedParquetSidecarWriter(
+        csv_path=path,
+        fieldnames=fieldnames,
+        csv_delivery=STATE_1M_CSV_DELIVERY,
+    )
     if progress_callback is not None:
-        progress_callback(ProgressUpdate(done=0, unit="rows", detail="writing state rows", force=True))
-    with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.writer(file_obj)
-        writer.writerow(fieldnames)
-        for row in rows:
-            writer.writerow(_state_row_values_for_attributes(row=row, attribute_names=attribute_names))
-            row_count += 1
-            if progress_callback is not None and row_count % 100_000 == 0:
-                progress_callback(ProgressUpdate(done=row_count, unit="rows", detail="writing state rows"))
-    os.replace(tmp_path, path)
+        progress_callback(ProgressUpdate(done=0, unit="rows", detail="writing state rows to partitioned parquet", force=True))
+    try:
+        with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.writer(file_obj)
+            writer.writerow(fieldnames)
+            for row in rows:
+                values = _state_row_values_for_attributes(row=row, attribute_names=attribute_names)
+                sidecar_writer.append(values)
+                row_count += 1
+                if progress_callback is not None and row_count % 100_000 == 0:
+                    progress_callback(ProgressUpdate(done=row_count, unit="rows", detail="writing state rows to partitioned parquet"))
+        os.replace(tmp_path, path)
+        sidecar_writer.close(expected_row_count=row_count)
+    except Exception:
+        sidecar_writer.abort()
+        _remove_path(tmp_path)
+        _remove_path(path)
+        raise
     if progress_callback is not None:
-        progress_callback(ProgressUpdate(done=row_count, unit="rows", detail="state rows written", force=True))
+        progress_callback(ProgressUpdate(done=row_count, unit="rows", detail="state rows written to partitioned parquet", force=True))
     return row_count
 
+
+
+class _State1mPartitionedParquetSidecarWriter:
+    def __init__(
+        self,
+        *,
+        csv_path: Path,
+        fieldnames: Sequence[str],
+        csv_delivery: str,
+    ) -> None:
+        self.csv_path = csv_path
+        self.fieldnames = tuple(fieldnames)
+        self.csv_delivery = csv_delivery
+        self.sidecar_dir = state_1m_parquet_sidecar_dir(csv_path)
+        self.tmp_sidecar_dir = csv_path.with_name(self.sidecar_dir.name + ".tmp")
+        self.manifest_path = state_1m_parquet_manifest_path(csv_path)
+        self._pa, self._pq = _import_pyarrow_for_state_sidecar()
+        self._schema = _state_1m_arrow_schema(self.fieldnames)
+        self._columns: dict[str, list[object]] = {
+            STATE_1M_PARQUET_ORDER_COLUMN: [],
+            **{fieldname: [] for fieldname in self.fieldnames},
+        }
+        self._row_count = 0
+        self._part_index = 0
+        self._part_paths: list[Path] = []
+        self._closed = False
+        _remove_path(self.tmp_sidecar_dir)
+        self.tmp_sidecar_dir.mkdir(parents=True, exist_ok=False)
+
+    def append(self, row_values: Sequence[object]) -> None:
+        if self._closed:
+            raise ArtifactWriteError("strategy_state_1m.parquet sidecar writer is already closed")
+        if len(row_values) != len(self.fieldnames):
+            raise ArtifactWriteError(
+                f"strategy_state_1m.parquet row has {len(row_values)} values, expected {len(self.fieldnames)}"
+            )
+        self._columns[STATE_1M_PARQUET_ORDER_COLUMN].append(self._row_count)
+        for fieldname, value in zip(self.fieldnames, row_values, strict=True):
+            self._columns[fieldname].append(_state_parquet_value(value))
+        self._row_count += 1
+        if self._row_count % STATE_1M_PARQUET_BATCH_SIZE == 0:
+            self.flush()
+
+    def flush(self) -> None:
+        batch_size = len(self._columns[STATE_1M_PARQUET_ORDER_COLUMN])
+        if batch_size == 0:
+            return
+        arrays = [
+            self._pa.array(self._columns[name], type=self._schema.field(name).type)
+            for name in (STATE_1M_PARQUET_ORDER_COLUMN, *self.fieldnames)
+        ]
+        table = self._pa.Table.from_arrays(arrays, schema=self._schema)
+        snapshot_col_index = table.schema.get_field_index("snapshot_time_ms")
+        snapshot_values = table.column(snapshot_col_index).to_pylist()
+        rows_by_date: dict[str, list[int]] = {}
+        for row_index, snapshot_time_ms in enumerate(snapshot_values):
+            if snapshot_time_ms is None:
+                raise ArtifactWriteError("strategy_state_1m.parquet snapshot_time_ms must not be null")
+            rows_by_date.setdefault(_utc_date_from_ms(int(snapshot_time_ms)), []).append(row_index)
+        for snapshot_date, row_indices in sorted(rows_by_date.items()):
+            partition_dir = self.tmp_sidecar_dir / f"date={snapshot_date}"
+            partition_dir.mkdir(parents=True, exist_ok=True)
+            part_path = partition_dir / f"part-{self._part_index:06d}.parquet"
+            self._part_index += 1
+            part_table = table.take(self._pa.array(row_indices, type=self._pa.int64()))
+            self._pq.write_table(part_table, part_path, compression="zstd")
+            self._part_paths.append(part_path)
+        self._columns = {
+            STATE_1M_PARQUET_ORDER_COLUMN: [],
+            **{fieldname: [] for fieldname in self.fieldnames},
+        }
+
+    def close(self, *, expected_row_count: int) -> tuple[Path, Path]:
+        if self._closed:
+            return self.sidecar_dir, self.manifest_path
+        self.flush()
+        if self._row_count != expected_row_count:
+            raise ArtifactWriteError(
+                f"strategy_state_1m.parquet row count {self._row_count} does not match expected {expected_row_count}"
+            )
+        _remove_path(self.sidecar_dir)
+        os.replace(self.tmp_sidecar_dir, self.sidecar_dir)
+        final_part_paths = [
+            self.sidecar_dir / part_path.relative_to(self.tmp_sidecar_dir)
+            for part_path in self._part_paths
+        ]
+        _write_state_1m_parquet_manifest(
+            manifest_path=self.manifest_path,
+            csv_path=self.csv_path,
+            sidecar_dir=self.sidecar_dir,
+            part_paths=final_part_paths,
+            fieldnames=self.fieldnames,
+            row_count=self._row_count,
+            csv_delivery=self.csv_delivery,
+        )
+        self._closed = True
+        return self.sidecar_dir, self.manifest_path
+
+    def abort(self) -> None:
+        _remove_path(self.tmp_sidecar_dir)
+
+
+def _write_state_1m_parquet_manifest(
+    *,
+    manifest_path: Path,
+    csv_path: Path,
+    sidecar_dir: Path,
+    part_paths: Sequence[Path],
+    fieldnames: Sequence[str],
+    row_count: int,
+    csv_delivery: str,
+) -> Path:
+    payload = {
+        "sidecar_version": STATE_1M_PARQUET_SIDECAR_VERSION,
+        "artifact_name": csv_path.name,
+        "csv_path": csv_path.name,
+        "csv_size_bytes": csv_path.stat().st_size,
+        "csv_sha256": sha256_file(csv_path),
+        "csv_delivery": csv_delivery,
+        "parquet_path": sidecar_dir.name,
+        "parquet_delivery": "canonical_partitioned_state_1m",
+        "partitioning": "snapshot_date_utc",
+        "order_column": STATE_1M_PARQUET_ORDER_COLUMN,
+        "required_columns": list(fieldnames),
+        "row_count": row_count,
+        "part_count": len(part_paths),
+        "part_paths": [str(path.relative_to(csv_path.parent)) for path in sorted(part_paths)],
+        "delivery": "strict_typed_partitioned_parquet_sidecar",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_path, manifest_path)
+    return manifest_path
+
+
+def _state_1m_arrow_schema(fieldnames: Sequence[str]):
+    pa, _pq = _import_pyarrow_for_state_sidecar()
+    return pa.schema(
+        [pa.field(STATE_1M_PARQUET_ORDER_COLUMN, pa.int64(), nullable=False)]
+        + [pa.field(fieldname, _state_arrow_type(fieldname, pa), nullable=True) for fieldname in fieldnames]
+    )
+
+
+def _state_arrow_type(fieldname: str, pa):
+    if fieldname in {"event_id", "symbol"}:
+        return pa.string()
+    if fieldname == "event_alive":
+        return pa.bool_()
+    if fieldname.endswith("_ms") or fieldname in {
+        "minutes_since_event_start",
+        "minutes_since_detection",
+        "time_since_running_high_minutes",
+    }:
+        return pa.int64()
+    return pa.float64()
+
+
+def _state_parquet_value(value: object) -> object:
+    return None if value == "" else value
+
+
+def _utc_date_from_ms(timestamp_ms: int) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).date().isoformat()
+
+
+def _import_pyarrow_for_state_sidecar():
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+        raise ArtifactWriteError(
+            "pyarrow is required to write strategy_state_1m.parquet; install project dependencies"
+        ) from exc
+    return pa, pq
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
 
 def _state_row_values_for_attributes(*, row: StrategyState1mRow, attribute_names: Sequence[str]) -> list[object]:
     return ["" if (value := getattr(row, attribute_name)) is None else value for attribute_name in attribute_names]
@@ -193,8 +414,14 @@ def _protocol_rows(*, event_count: int, state_row_count: int, excluded_event_cou
         ProtocolAuditRow(
             check_name="state_rows_written",
             status=AuditStatus.PASS,
-            message=f"strategy_state_1m.csv written with {state_row_count} rows",
-            artifact="strategy_state_1m.csv",
+            message=f"strategy_state_1m.parquet partitioned sidecar written with {state_row_count} rows; strategy_state_1m.csv is schema header only",
+            artifact="strategy_state_1m.parquet_manifest.json",
+        ),
+        ProtocolAuditRow(
+            check_name="state_parquet_first_delivery",
+            status=AuditStatus.PASS,
+            message="canonical online state data is stored in typed partitioned Parquet; CSV delivery is schema_header_only",
+            artifact="strategy_state_1m.parquet",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -250,6 +477,8 @@ def _run_config_rows(
         ),
         RunConfigRow(key="stage", value="mvp1_state", source="runtime"),
         RunConfigRow(key="state_builder_version", value=config.state_builder_version, source="runtime"),
+        RunConfigRow(key="state_1m_csv_delivery", value=STATE_1M_CSV_DELIVERY, source="runtime"),
+        RunConfigRow(key="state_1m_parquet_delivery", value="canonical_partitioned_state_1m", source="runtime"),
         RunConfigRow(
             key="max_state_minutes_after_detection",
             value=str(config.max_state_minutes_after_detection),

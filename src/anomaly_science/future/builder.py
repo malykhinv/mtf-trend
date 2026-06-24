@@ -18,6 +18,11 @@ from anomaly_science.contracts.future import (
 )
 from anomaly_science.contracts.market import Candle1m, MarketDataContractError, ONE_MINUTE_MS
 from anomaly_science.contracts.state import StrategyState1mRow
+from anomaly_science.state.parquet_sidecar import (
+    StateParquetSidecarError,
+    iter_state_1m_parquet_sidecar_mappings,
+    state_1m_parquet_sidecar_exists,
+)
 from anomaly_science.data.normalized import normalize_candles_1m
 from anomaly_science.data.source import CANDLE_REQUIRED_COLUMNS, CsvDataSourceError, MarketDataSource
 from anomaly_science.future.atr import AtrAsOfResult, AtrComputationError
@@ -82,19 +87,30 @@ _FutureStateLike = StrategyState1mRow | _FutureStateProjection
 
 
 def load_strategy_state_1m_csv(path: str | Path) -> tuple[StrategyState1mRow, ...]:
-    """Read anomaly_state_1m.csv through the declared MVP1 artifact schema.
+    """Read strategy_state_1m through the strict CSV header or partitioned Parquet sidecar.
 
-    The boundary is intentionally strict: the file must have exactly the schema
-    columns. Nullable structural fields stay empty until a causal swing level
-    is confirmed; they must not be proxied from running highs/lows.
+    The CSV artifact may be a schema-only delivery when the canonical heavy
+    state rows live in strategy_state_1m.parquet. Missing or partial sidecars
+    fail explicitly; there is no silent fallback to an empty CSV body.
     """
     state_path = Path(path)
     if not state_path.exists():
         raise AnomalyStateArtifactError(f"state artifact is missing: {state_path}")
 
-    frame = _read_artifact_csv(state_path)
-    schema = get_artifact_schema("anomaly_state_1m.csv")
+    schema = get_artifact_schema("strategy_state_1m.csv")
     expected_columns = list(schema.required_columns)
+    try:
+        if state_1m_parquet_sidecar_exists(state_path):
+            rows: list[StrategyState1mRow] = []
+            for row_index, row in enumerate(
+                iter_state_1m_parquet_sidecar_mappings(csv_path=state_path, expected_columns=expected_columns)
+            ):
+                rows.append(_state_row_from_mapping(row=row, row_index=row_index, artifact_name=state_path.name))
+            return tuple(rows)
+    except StateParquetSidecarError as exc:
+        raise AnomalyStateArtifactError(str(exc)) from exc
+
+    frame = _read_artifact_csv(state_path)
     actual_columns = list(frame.columns)
     if actual_columns != expected_columns:
         raise AnomalyStateArtifactError(
@@ -118,6 +134,16 @@ def iter_strategy_state_1m_csv(path: str | Path) -> Iterable[StrategyState1mRow]
 
     schema = get_artifact_schema("strategy_state_1m.csv")
     expected_columns = list(schema.required_columns)
+    try:
+        if state_1m_parquet_sidecar_exists(state_path):
+            for row_index, row in enumerate(
+                iter_state_1m_parquet_sidecar_mappings(csv_path=state_path, expected_columns=expected_columns)
+            ):
+                yield _state_row_from_mapping(row=row, row_index=row_index, artifact_name=state_path.name)
+            return
+    except StateParquetSidecarError as exc:
+        raise AnomalyStateArtifactError(str(exc)) from exc
+
     with state_path.open(encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         actual_columns = list(reader.fieldnames or [])
@@ -139,6 +165,32 @@ def _iter_future_state_projection_csv(path: str | Path) -> Iterable[_FutureState
 
     schema = get_artifact_schema("strategy_state_1m.csv")
     expected_columns = list(schema.required_columns)
+    try:
+        if state_1m_parquet_sidecar_exists(state_path):
+            projection_columns = [
+                "event_id",
+                "symbol",
+                "snapshot_time_ms",
+                "feature_cutoff_time_ms",
+                "running_high_asof_t",
+                "current_close",
+            ]
+            for row_index, row in enumerate(
+                iter_state_1m_parquet_sidecar_mappings(
+                    csv_path=state_path,
+                    expected_columns=expected_columns,
+                    columns=projection_columns,
+                )
+            ):
+                yield _future_state_projection_from_mapping(
+                    row=row,
+                    row_index=row_index,
+                    artifact_name=state_path.name,
+                )
+            return
+    except StateParquetSidecarError as exc:
+        raise AnomalyStateArtifactError(str(exc)) from exc
+
     with state_path.open(encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         actual_columns = list(reader.fieldnames or [])

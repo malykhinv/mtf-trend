@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 from dataclasses import replace
@@ -12,6 +13,7 @@ from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.events import AnomalyEvent
 from anomaly_science.contracts.market import Candle1m
 from anomaly_science.data.source import CsvDataSourceError
+from anomaly_science.future import load_strategy_state_1m_csv
 from anomaly_science.state import (
     AnomalyEventsArtifactError,
     OnlineStateBuilderConfig,
@@ -266,6 +268,7 @@ def test_grouped_csv_state_builder_rejects_repeated_symbol_groups(tmp_path: Path
 
 
 def test_run_mvp1_state_cli_writes_state_artifacts(tmp_path: Path) -> None:
+    pytest.importorskip("pyarrow")
     events_path = tmp_path / "anomaly_events.csv"
     out_dir = tmp_path / "state"
     _write_events_csv(events_path)
@@ -298,10 +301,23 @@ def test_run_mvp1_state_cli_writes_state_artifacts(tmp_path: Path) -> None:
     with (out_dir / "strategy_state_1m.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         rows = list(reader)
-    assert len(rows) == 2
-    assert rows[0]["state_time_ms"] == "1704067260000"
-    assert rows[0]["running_high_asof_t"] == "101.0"
-    assert rows[1]["running_high_asof_t"] == "102.0"
+    assert rows == []
+
+    sidecar_dir = out_dir / "strategy_state_1m.parquet"
+    sidecar_manifest = out_dir / "strategy_state_1m.parquet_manifest.json"
+    assert sidecar_dir.is_dir()
+    assert sidecar_manifest.is_file()
+    manifest = json.loads(sidecar_manifest.read_text(encoding="utf-8"))
+    assert manifest["csv_delivery"] == "schema_header_only"
+    assert manifest["parquet_delivery"] == "canonical_partitioned_state_1m"
+    assert manifest["row_count"] == 2
+    assert manifest["part_paths"]
+
+    loaded = load_strategy_state_1m_csv(out_dir / "strategy_state_1m.csv")
+    assert len(loaded) == 2
+    assert loaded[0].state_time_ms == 1704067260000
+    assert loaded[0].running_high_asof_t == 101.0
+    assert loaded[1].running_high_asof_t == 102.0
 
     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}

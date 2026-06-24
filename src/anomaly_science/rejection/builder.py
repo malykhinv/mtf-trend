@@ -10,6 +10,11 @@ from anomaly_science.artifacts.writer import write_csv_artifact_with_aliases
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.rejection import REJECTION_FUNNEL_VERSION, RejectionFunnelRow
 from anomaly_science.future.builder import future_paths_parquet_manifest_path
+from anomaly_science.state.parquet_sidecar import (
+    StateParquetSidecarError,
+    iter_state_1m_parquet_sidecar_mappings,
+    state_1m_parquet_sidecar_exists,
+)
 
 
 _STATUS_INCLUDED = "INCLUDED"
@@ -789,6 +794,21 @@ def _run_config(path: Path) -> dict[str, str]:
 def _state_summary(path: Path) -> _StateSummary:
     row_count = 0
     event_ids: set[str] = set()
+    schema = get_artifact_schema("strategy_state_1m.csv")
+    try:
+        if state_1m_parquet_sidecar_exists(path):
+            for row in iter_state_1m_parquet_sidecar_mappings(
+                csv_path=path,
+                expected_columns=schema.required_columns,
+                columns=("event_id",),
+            ):
+                row_count += 1
+                event_id = row.get("event_id", _EMPTY)
+                if event_id:
+                    event_ids.add(str(event_id))
+            return _StateSummary(row_count=row_count, event_ids=frozenset(event_ids))
+    except StateParquetSidecarError as exc:
+        raise RejectionFunnelError(str(exc)) from exc
     for row in _iter_csv(path):
         row_count += 1
         event_id = row.get("event_id", _EMPTY)

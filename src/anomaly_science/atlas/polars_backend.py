@@ -48,6 +48,11 @@ from anomaly_science.future.builder import (
     future_paths_parquet_manifest_path,
     future_paths_parquet_sidecar_dir,
 )
+from anomaly_science.state.parquet_sidecar import (
+    STATE_1M_PARQUET_ORDER_COLUMN,
+    state_1m_parquet_manifest_path,
+    state_1m_parquet_sidecar_dir,
+)
 from anomaly_science.progress import ProgressCallback, ProgressUpdate
 
 _JOIN_COLUMNS = ("event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms")
@@ -79,8 +84,8 @@ def build_atlas_artifacts_polars_from_csv_paths(
     """
     cfg = config or AtlasConfig()
     _emit_progress(progress_callback, done=0, total=6, detail="loading strict atlas inputs")
-    state_frame = _read_strict_polars_csv_frame(
-        path=Path(state_path),
+    state_frame = _read_state_1m_polars_frame(
+        csv_path=Path(state_path),
         usecols=_atlas_state_usecols(),
     )
     future_frame = _read_future_paths_polars_frame(
@@ -141,6 +146,39 @@ def _read_strict_polars_csv_frame(*, path: Path, usecols: Sequence[str]):
     return pl.read_csv(path, columns=list(usecols))
 
 
+
+
+def _read_state_1m_polars_frame(*, csv_path: Path, usecols: Sequence[str]):
+    _validate_strict_csv_header(path=csv_path)
+    sidecar_dir = state_1m_parquet_sidecar_dir(csv_path)
+    manifest_path = state_1m_parquet_manifest_path(csv_path)
+    manifest_exists = manifest_path.is_file()
+    sidecar_exists = sidecar_dir.is_dir()
+    if manifest_exists != sidecar_exists:
+        missing = sidecar_dir if manifest_exists else manifest_path
+        raise AtlasInputError(f"incomplete strategy_state_1m.parquet sidecar, missing {missing}")
+    if not manifest_exists:
+        pl = _import_polars_for_atlas_backend()
+        return pl.read_csv(csv_path, columns=list(usecols))
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if payload.get("parquet_path") != sidecar_dir.name:
+        raise AtlasInputError(f"{manifest_path.name} parquet_path must point to {sidecar_dir.name}")
+    declared_columns = payload.get("required_columns")
+    if list(declared_columns or []) != list(get_artifact_schema(csv_path.name).required_columns):
+        raise AtlasInputError(f"{manifest_path.name} required_columns do not match {csv_path.name} schema")
+    part_paths = payload.get("part_paths")
+    if not isinstance(part_paths, list) or not all(isinstance(item, str) and item for item in part_paths):
+        raise AtlasInputError(f"{manifest_path.name} part_paths must be a string list")
+    pl = _import_polars_for_atlas_backend()
+    columns = [STATE_1M_PARQUET_ORDER_COLUMN, *usecols]
+    frames = [
+        pl.read_parquet(csv_path.parent / str(part_path), columns=columns)
+        for part_path in part_paths
+    ]
+    if not frames:
+        return pl.DataFrame({name: [] for name in usecols})
+    return pl.concat(frames, how="vertical").sort(STATE_1M_PARQUET_ORDER_COLUMN).drop(STATE_1M_PARQUET_ORDER_COLUMN)
 
 def _read_future_paths_polars_frame(*, csv_path: Path, usecols: Sequence[str]):
     _validate_strict_csv_header(path=csv_path)
