@@ -1298,6 +1298,51 @@ def load_strategy_feature_matrix_csv(path: str | Path) -> tuple[StrategyFeatureM
 load_anomaly_feature_matrix_csv = load_strategy_feature_matrix_csv
 
 
+
+def iter_strategy_feature_matrix_csv(
+    path: str | Path,
+    *,
+    chunksize: int = 100_000,
+) -> Iterable[StrategyFeatureMatrixRow]:
+    """Stream strategy_feature_matrix rows through the strict artifact boundary.
+
+    The canonical heavy feature matrix may live in the Parquet sidecar while the
+    CSV artifact is only a schema stub. This iterator validates the same
+    schema/manifest contract as the tuple loader but yields rows in bounded
+    pandas chunks so prediction/control stages do not materialize an additional
+    full feature-matrix table before joining inputs.
+    """
+    feature_path = Path(path)
+    if not feature_path.exists():
+        raise AnomalyFeatureMatrixArtifactError(f"feature matrix artifact is missing: {feature_path}")
+    if chunksize <= 0:
+        raise AnomalyFeatureMatrixArtifactError("feature matrix chunksize must be positive")
+
+    schema = get_artifact_schema("anomaly_feature_matrix.csv")
+    expected_columns = list(schema.required_columns)
+    row_offset = 0
+    for frame in iter_strategy_feature_matrix_frame_chunks_prefer_parquet(
+        path=feature_path,
+        usecols=expected_columns,
+        chunksize=chunksize,
+    ):
+        actual_columns = list(frame.columns)
+        if actual_columns != expected_columns:
+            raise AnomalyFeatureMatrixArtifactError(
+                f"feature matrix artifact columns must match {expected_columns}, got {actual_columns}"
+            )
+        for row_index, row in enumerate(frame.to_dict("records"), start=row_offset):
+            try:
+                yield _feature_matrix_row_from_csv(row)
+            except (TypeError, ValueError, MarketDataContractError) as exc:
+                raise AnomalyFeatureMatrixArtifactError(
+                    f"invalid anomaly_feature_matrix.csv row {row_index}: {exc}"
+                ) from exc
+        row_offset += len(frame)
+
+
+iter_anomaly_feature_matrix_csv = iter_strategy_feature_matrix_csv
+
 def _state_snapshot_index_from_csv(path: Path) -> tuple[dict[int, tuple[_StateSnapshotRow, ...]], int]:
     raw: dict[int, list[_StateSnapshotRow]] = {}
     row_count = 0

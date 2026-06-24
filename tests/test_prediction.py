@@ -23,8 +23,10 @@ from anomaly_science.prediction import (
     build_prediction_inputs,
     build_prediction_metric_rows,
     build_walk_forward_predictions,
+    iter_prediction_inputs_from_artifacts,
     load_anomaly_calibration_breakdown_csv,
     load_anomaly_oos_predictions_csv,
+    load_prediction_inputs,
     oos_prediction_rows_to_artifact,
     validate_model_feature_catalog_membership,
 )
@@ -207,6 +209,53 @@ def _write_labels(path: Path, rows: list[AnomalyOutcomeLabelRow]) -> None:
 
 def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:
     write_csv_artifact(path, feature_matrix_rows_to_artifact(rows), get_artifact_schema("anomaly_feature_matrix.csv"))
+
+
+def test_load_prediction_inputs_uses_row_aligned_artifact_join(tmp_path: Path) -> None:
+    first = _state_row(event_id="z_first", day_offset=0, minute_of_day=10)
+    second = _state_row(event_id="a_second", day_offset=0, minute_of_day=11)
+    states = [first, second]
+    labels = [_label_row(state=state, scenario_30m="long_continuation") for state in states]
+    features = [_feature_row(state=state) for state in states]
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    labels_path = tmp_path / "anomaly_outcome_labels.csv"
+    feature_path = tmp_path / "anomaly_feature_matrix.csv"
+    _write_state(state_path, states)
+    _write_labels(labels_path, labels)
+    _write_features(feature_path, features)
+
+    inputs = load_prediction_inputs(
+        state_path=state_path,
+        labels_path=labels_path,
+        feature_matrix_path=feature_path,
+    )
+
+    assert [row.state.event_id for row in inputs] == ["z_first", "a_second"]
+
+
+def test_iter_prediction_inputs_rejects_non_row_aligned_artifacts(tmp_path: Path) -> None:
+    first = _state_row(event_id="first", day_offset=0, minute_of_day=10)
+    second = _state_row(event_id="second", day_offset=0, minute_of_day=11)
+    states = [first, second]
+    labels = [_label_row(state=second, scenario_30m="long_continuation"), _label_row(state=first, scenario_30m="short_fade")]
+    features = [_feature_row(state=state) for state in states]
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    labels_path = tmp_path / "anomaly_outcome_labels.csv"
+    feature_path = tmp_path / "anomaly_feature_matrix.csv"
+    _write_state(state_path, states)
+    _write_labels(labels_path, labels)
+    _write_features(feature_path, features)
+
+    with pytest.raises(PredictionInputError, match="row-aligned"):
+        tuple(
+            iter_prediction_inputs_from_artifacts(
+                state_path=state_path,
+                labels_path=labels_path,
+                feature_matrix_path=feature_path,
+                feature_chunksize=1,
+            )
+        )
+
 
 
 def test_walk_forward_prediction_uses_one_frozen_model_per_iso_week() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
+from itertools import zip_longest
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -29,9 +30,9 @@ from anomaly_science.contracts.prediction import (
 )
 from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.features.catalog import build_default_feature_catalog
-from anomaly_science.features.matrix import load_strategy_feature_matrix_csv
-from anomaly_science.future import load_strategy_state_1m_csv
-from anomaly_science.labels import load_strategy_outcome_labels_csv
+from anomaly_science.features.matrix import iter_strategy_feature_matrix_csv, load_strategy_feature_matrix_csv
+from anomaly_science.future import iter_strategy_state_1m_csv, load_strategy_state_1m_csv
+from anomaly_science.labels import iter_strategy_outcome_labels_csv, load_strategy_outcome_labels_csv
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
 from anomaly_science.strategy.registry import get_strategy
 
@@ -130,12 +131,66 @@ def load_prediction_inputs(
     labels_path: str | Path,
     feature_matrix_path: str | Path,
 ) -> tuple[PredictionInputRow, ...]:
-    """Load prediction inputs through strict state, label, and feature schema boundaries."""
-    return build_prediction_inputs(
-        state_rows=load_strategy_state_1m_csv(state_path),
-        label_rows=load_strategy_outcome_labels_csv(labels_path),
-        feature_rows=load_strategy_feature_matrix_csv(feature_matrix_path),
+    """Load prediction inputs through strict state, label, and feature schema boundaries.
+
+    Artifact-backed runs use the row-aligned streaming join below. That keeps
+    state and feature Parquet sidecars on their bounded iterator paths and avoids
+    the old pattern of materializing three complete artifacts plus join-index
+    dictionaries before prediction/control evaluation starts.
+    """
+    return tuple(
+        iter_prediction_inputs_from_artifacts(
+            state_path=state_path,
+            labels_path=labels_path,
+            feature_matrix_path=feature_matrix_path,
+        )
     )
+
+
+def iter_prediction_inputs_from_artifacts(
+    *,
+    state_path: str | Path,
+    labels_path: str | Path,
+    feature_matrix_path: str | Path,
+    feature_chunksize: int = 100_000,
+) -> Iterable[PredictionInputRow]:
+    """Stream row-aligned prediction inputs from strict artifacts.
+
+    The research pipeline writes state, labels, and feature matrix from the same
+    online state order. For artifact paths we enforce that order directly instead
+    of building full in-memory lookup dictionaries. If a user supplies mismatched
+    hand-made artifacts, the first offending row fails with the exact join key.
+    """
+    if feature_chunksize <= 0:
+        raise PredictionInputError("feature_chunksize must be positive")
+
+    state_iter = iter_strategy_state_1m_csv(state_path)
+    label_iter = iter_strategy_outcome_labels_csv(labels_path)
+    feature_iter = iter_strategy_feature_matrix_csv(feature_matrix_path, chunksize=feature_chunksize)
+    sentinel = object()
+    for row_index, items in enumerate(zip_longest(state_iter, label_iter, feature_iter, fillvalue=sentinel)):
+        state, label, feature = items
+        if state is sentinel:
+            raise PredictionInputError(f"state artifact ended before labels/features at prediction join row {row_index}")
+        if label is sentinel:
+            raise PredictionInputError(f"label artifact ended before state/features at prediction join row {row_index}")
+        if feature is sentinel:
+            raise PredictionInputError(f"feature artifact ended before state/labels at prediction join row {row_index}")
+        assert isinstance(state, StrategyState1mRow)
+        assert isinstance(label, StrategyOutcomeLabelRow)
+        assert isinstance(feature, StrategyFeatureMatrixRow)
+        state_key = _join_key(state)
+        label_key = _join_key(label)
+        feature_key = _join_key(feature)
+        if state_key != label_key or state_key != feature_key:
+            raise PredictionInputError(
+                "state/label/feature prediction artifact join must be row-aligned on "
+                "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
+                f"row_index={row_index}, state_key={state_key}, label_key={label_key}, feature_key={feature_key}"
+            )
+        _enforce_prediction_input_temporal_contract(state=state, label=label, feature=feature)
+        yield PredictionInputRow(state=state, label=label, features=feature)
+
 
 
 def build_prediction_inputs(

@@ -7,7 +7,6 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-import pandas as pd
 
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.future import FuturePathRow
@@ -257,55 +256,66 @@ def assign_future_nature_scenario(
 
 def load_strategy_outcome_labels_csv(path: str | Path) -> tuple[StrategyOutcomeLabelRow, ...]:
     """Read anomaly_outcome_labels.csv through the declared strict artifact schema."""
+    return tuple(iter_strategy_outcome_labels_csv(path))
+
+
+def iter_strategy_outcome_labels_csv(path: str | Path) -> Iterable[StrategyOutcomeLabelRow]:
+    """Stream outcome-label rows through the declared strict artifact schema."""
     labels_path = Path(path)
     if not labels_path.exists():
         raise OutcomeLabelArtifactError(f"outcome labels artifact is missing: {labels_path}")
 
-    frame = pd.read_csv(labels_path)
     schema = get_artifact_schema("anomaly_outcome_labels.csv")
     expected_columns = list(schema.required_columns)
-    actual_columns = list(frame.columns)
-    if actual_columns != expected_columns:
-        raise OutcomeLabelArtifactError(
-            f"outcome labels artifact columns must match {expected_columns}, got {actual_columns}"
-        )
-
-    rows: list[StrategyOutcomeLabelRow] = []
-    for row_index, row in frame.iterrows():
-        try:
-            rows.append(
-                StrategyOutcomeLabelRow(
-                    label_schema_version=_required_str(row, "label_schema_version"),
-                    atr_window_minutes=_required_int(row, "atr_window_minutes"),
-                    core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
-                    k_continuation=_required_float(row, "k_continuation"),
-                    k_fade=_required_float(row, "k_fade"),
-                    k_chop=_required_float(row, "k_chop"),
-                    event_id=_required_str(row, "event_id"),
-                    symbol=_required_str(row, "symbol"),
-                    snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
-                    feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
-                    future_start_time_ms=_required_int(row, "future_start_time_ms"),
-                    scenario_15m=_required_str(row, "scenario_15m"),
-                    scenario_30m=_required_str(row, "scenario_30m"),
-                    scenario_60m=_required_str(row, "scenario_60m"),
-                    scenario_120m=_required_str(row, "scenario_120m"),
-                    scenario_180m=_required_str(row, "scenario_180m"),
-                    label_available_15m=_required_bool(row, "label_available_15m"),
-                    label_available_30m=_required_bool(row, "label_available_30m"),
-                    label_available_60m=_required_bool(row, "label_available_60m"),
-                    label_available_120m=_required_bool(row, "label_available_120m"),
-                    label_available_180m=_required_bool(row, "label_available_180m"),
-                    label_source=_required_str(row, "label_source"),
-                    temporal_contract=_required_str(row, "temporal_contract"),
-                )
+    with labels_path.open(encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        actual_columns = list(reader.fieldnames or [])
+        if actual_columns != expected_columns:
+            raise OutcomeLabelArtifactError(
+                f"outcome labels artifact columns must match {expected_columns}, got {actual_columns}"
             )
-        except (TypeError, ValueError) as exc:
-            raise OutcomeLabelArtifactError(f"invalid anomaly_outcome_labels.csv row {row_index}: {exc}") from exc
-    return tuple(rows)
+        for row_index, row in enumerate(reader):
+            yield _outcome_label_row_from_mapping(row=row, row_index=row_index, artifact_name=labels_path.name)
+
+
+def _outcome_label_row_from_mapping(
+    *,
+    row: Mapping[str, object],
+    row_index: int,
+    artifact_name: str,
+) -> StrategyOutcomeLabelRow:
+    try:
+        return StrategyOutcomeLabelRow(
+            label_schema_version=_required_str(row, "label_schema_version"),
+            atr_window_minutes=_required_int(row, "atr_window_minutes"),
+            core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
+            k_continuation=_required_float(row, "k_continuation"),
+            k_fade=_required_float(row, "k_fade"),
+            k_chop=_required_float(row, "k_chop"),
+            event_id=_required_str(row, "event_id"),
+            symbol=_required_str(row, "symbol"),
+            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
+            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
+            future_start_time_ms=_required_int(row, "future_start_time_ms"),
+            scenario_15m=_required_str(row, "scenario_15m"),
+            scenario_30m=_required_str(row, "scenario_30m"),
+            scenario_60m=_required_str(row, "scenario_60m"),
+            scenario_120m=_required_str(row, "scenario_120m"),
+            scenario_180m=_required_str(row, "scenario_180m"),
+            label_available_15m=_required_bool(row, "label_available_15m"),
+            label_available_30m=_required_bool(row, "label_available_30m"),
+            label_available_60m=_required_bool(row, "label_available_60m"),
+            label_available_120m=_required_bool(row, "label_available_120m"),
+            label_available_180m=_required_bool(row, "label_available_180m"),
+            label_source=_required_str(row, "label_source"),
+            temporal_contract=_required_str(row, "temporal_contract"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise OutcomeLabelArtifactError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
 
 
 load_anomaly_outcome_labels_csv = load_strategy_outcome_labels_csv
+iter_anomaly_outcome_labels_csv = iter_strategy_outcome_labels_csv
 
 
 def outcome_label_rows_to_artifact(rows: Sequence[StrategyOutcomeLabelRow]) -> list[dict[str, object]]:
