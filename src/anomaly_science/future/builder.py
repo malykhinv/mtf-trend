@@ -170,6 +170,7 @@ def _iter_future_state_projection_csv(path: str | Path) -> Iterable[_FutureState
             projection_columns = [
                 "event_id",
                 "symbol",
+                "state_time_ms",
                 "snapshot_time_ms",
                 "feature_cutoff_time_ms",
                 "running_high_asof_t",
@@ -697,8 +698,11 @@ def iter_strategy_future_path_csv_value_rows_from_grouped_csv(
     cfg = config or FuturePathBuilderConfig()
     max_horizon = max(cfg.future_return_horizons_minutes)
     empty_index = _empty_symbol_future_candle_index()
+    # The future builder only needs six state fields; read the lightweight
+    # projection (six sidecar columns, no full StrategyState1mRow validation)
+    # instead of materializing every state column per row.
     state_groups = _symbol_groups(
-        iter_strategy_state_1m_csv(state_path),
+        _iter_future_state_projection_csv(state_path),
         symbol_getter=lambda row: row.symbol,
         source_name="strategy_state_1m.csv",
     )
