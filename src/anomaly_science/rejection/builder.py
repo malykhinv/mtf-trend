@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -8,6 +9,7 @@ from typing import Mapping, Sequence
 from anomaly_science.artifacts.writer import write_csv_artifact_with_aliases
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.rejection import REJECTION_FUNNEL_VERSION, RejectionFunnelRow
+from anomaly_science.future.builder import future_paths_parquet_manifest_path
 
 
 _STATUS_INCLUDED = "INCLUDED"
@@ -65,7 +67,7 @@ def build_rejection_funnel_rows(run_dir: str | Path) -> tuple[RejectionFunnelRow
 
     event_rows = _read_csv(events_path)
     state_summary = _state_summary(state_path)
-    future_count = _csv_row_count(future_path)
+    future_count = _future_path_row_count(future_path)
     label_summary = _label_summary(labels_path, target_horizon_minutes=context.target_horizon_minutes)
     prediction_count = _csv_row_count(predictions_path)
     decision_summary = _decision_summary(decision_path)
@@ -827,6 +829,17 @@ def _decision_summary(path: Path) -> _DecisionSummary:
         actionable_count=actionable_count,
         non_actionable_count=non_actionable_count,
     )
+
+
+def _future_path_row_count(path: Path) -> int:
+    manifest_path = future_paths_parquet_manifest_path(path)
+    if manifest_path.is_file():
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        try:
+            return int(payload["row_count"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RejectionFunnelError(f"invalid future-path sidecar row_count in {manifest_path}") from exc
+    return _csv_row_count(path)
 
 
 def _csv_row_count(path: Path) -> int:

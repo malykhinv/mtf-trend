@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 from dataclasses import asdict
@@ -297,6 +298,7 @@ def test_direct_csv_value_future_builder_matches_typed_builder(tmp_path: Path) -
 
 
 def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
+    pytest.importorskip("pyarrow")
     state_path = tmp_path / "anomaly_state_1m.csv"
     out_dir = tmp_path / "future"
     _write_state_csv(state_path)
@@ -329,10 +331,23 @@ def test_run_mvp1_future_cli_writes_future_artifacts(tmp_path: Path) -> None:
     with (out_dir / "strategy_future_paths.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         rows = list(reader)
-    assert len(rows) == 1
-    assert rows[0]["event_id"] == "evt_fixture"
-    assert int(rows[0]["future_start_time_ms"]) > int(rows[0]["snapshot_time_ms"])
-    assert rows[0]["broke_structural_low_30m"] == ""
+    assert rows == []
+
+    sidecar_dir = out_dir / "strategy_future_paths.parquet"
+    sidecar_manifest = out_dir / "strategy_future_paths.parquet_manifest.json"
+    assert sidecar_dir.is_dir()
+    assert sidecar_manifest.is_file()
+    manifest = json.loads(sidecar_manifest.read_text(encoding="utf-8"))
+    assert manifest["csv_delivery"] == "schema_header_only"
+    assert manifest["parquet_delivery"] == "canonical_partitioned_future_paths"
+    assert manifest["row_count"] == 1
+    assert manifest["part_paths"]
+
+    loaded = load_anomaly_future_paths_csv(out_dir / "strategy_future_paths.csv")
+    assert len(loaded) == 1
+    assert loaded[0].event_id == "evt_fixture"
+    assert loaded[0].future_start_time_ms > loaded[0].snapshot_time_ms
+    assert loaded[0].broke_structural_low_30m is None
 
     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
@@ -418,3 +433,21 @@ def test_future_path_artifact_roundtrip_accepts_atr_normalized_schema(tmp_path: 
     assert "ATR_1d_asof_t" in header
     assert "future_max_atr_120m" in header
     assert "future_max_atr_180m" in header
+
+
+def test_future_parquet_sidecar_manifest_is_strict(tmp_path: Path) -> None:
+    pytest.importorskip("pyarrow")
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    out_dir = tmp_path / "future"
+    _write_state_csv(state_path)
+
+    from anomaly_science.future import run_mvp1_future
+
+    run_mvp1_future(input_dir=FIXTURE_DIR, state_path=state_path, out_dir=out_dir)
+    manifest_path = out_dir / "strategy_future_paths.parquet_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["csv_sha256"] = "broken"
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(Exception, match="csv_sha256"):
+        load_anomaly_future_paths_csv(out_dir / "strategy_future_paths.csv")

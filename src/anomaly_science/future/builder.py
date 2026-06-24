@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
@@ -190,22 +191,128 @@ def iter_candles_1m_csv(path: str | Path, *, max_open_time_ms: int | None = None
                 raise CsvDataSourceError(f"invalid candles_1m.csv row {row_index}: {exc}") from exc
 
 
+
+FUTURE_PATHS_PARQUET_SIDECAR_VERSION = "future_paths_partitioned_parquet_v1"
+FUTURE_PATHS_PARQUET_ORDER_COLUMN = "__row_index"
+
+
+def future_paths_parquet_sidecar_dir(csv_path: str | Path) -> Path:
+    """Return the canonical partitioned Parquet sidecar directory for future paths."""
+    return Path(csv_path).with_suffix(".parquet")
+
+
+def future_paths_parquet_manifest_path(csv_path: str | Path) -> Path:
+    """Return the strict manifest path for the partitioned future-path sidecar."""
+    path = Path(csv_path)
+    return path.with_name(path.stem + ".parquet_manifest.json")
+
+
+def _future_paths_parquet_sidecar_exists(csv_path: Path) -> bool:
+    manifest_path = future_paths_parquet_manifest_path(csv_path)
+    sidecar_dir = future_paths_parquet_sidecar_dir(csv_path)
+    manifest_exists = manifest_path.is_file()
+    sidecar_exists = sidecar_dir.is_dir()
+    if manifest_exists != sidecar_exists:
+        missing = sidecar_dir if manifest_exists else manifest_path
+        raise AnomalyFutureArtifactError(f"incomplete strategy_future_paths.parquet sidecar, missing {missing}")
+    return manifest_exists
+
+
+def _read_future_paths_parquet_sidecar_table(*, csv_path: Path, expected_columns: Sequence[str]):
+    payload = _load_and_validate_future_paths_parquet_manifest(
+        csv_path=csv_path,
+        expected_columns=expected_columns,
+    )
+    try:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.parquet as pq
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+        raise AnomalyFutureArtifactError(
+            "pyarrow is required to read strategy_future_paths.parquet; install project dependencies"
+        ) from exc
+
+    part_paths = [csv_path.parent / str(item) for item in payload["part_paths"]]
+    if not part_paths:
+        return pa.Table.from_pydict({name: [] for name in expected_columns})
+    missing_parts = [path for path in part_paths if not path.is_file()]
+    if missing_parts:
+        raise AnomalyFutureArtifactError(f"strategy_future_paths.parquet manifest points to missing part: {missing_parts[0]}")
+    columns = [FUTURE_PATHS_PARQUET_ORDER_COLUMN, *expected_columns]
+    tables = [pq.read_table(path, columns=columns) for path in part_paths]
+    table = pa.concat_tables(tables, promote_options="default") if len(tables) > 1 else tables[0]
+    if table.num_rows != int(payload["row_count"]):
+        raise AnomalyFutureArtifactError(
+            f"strategy_future_paths.parquet row count mismatch: manifest={payload['row_count']} actual={table.num_rows}"
+        )
+    if table.num_rows:
+        sort_indices = pc.sort_indices(table, sort_keys=[(FUTURE_PATHS_PARQUET_ORDER_COLUMN, "ascending")])
+        table = table.take(sort_indices)
+    return table.drop([FUTURE_PATHS_PARQUET_ORDER_COLUMN])
+
+
+def _load_and_validate_future_paths_parquet_manifest(*, csv_path: Path, expected_columns: Sequence[str]) -> dict[str, object]:
+    manifest_path = future_paths_parquet_manifest_path(csv_path)
+    sidecar_dir = future_paths_parquet_sidecar_dir(csv_path)
+    if not csv_path.is_file():
+        raise AnomalyFutureArtifactError(f"future CSV schema stub is missing: {csv_path}")
+    if not manifest_path.is_file() or not sidecar_dir.is_dir():
+        raise AnomalyFutureArtifactError(f"strategy_future_paths.parquet sidecar is missing for {csv_path}")
+    try:
+        from anomaly_science.artifacts.manifest import sha256_file
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise AnomalyFutureArtifactError("artifact hashing helper is unavailable") from exc
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if payload.get("sidecar_version") != FUTURE_PATHS_PARQUET_SIDECAR_VERSION:
+        raise AnomalyFutureArtifactError(
+            f"{manifest_path.name} sidecar_version must be {FUTURE_PATHS_PARQUET_SIDECAR_VERSION!r}"
+        )
+    if payload.get("artifact_name") != csv_path.name:
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} artifact_name must be {csv_path.name!r}")
+    if payload.get("parquet_path") != sidecar_dir.name:
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} parquet_path must be {sidecar_dir.name!r}")
+    if payload.get("csv_path") != csv_path.name:
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} csv_path must be {csv_path.name!r}")
+    if int(payload.get("csv_size_bytes", -1)) != csv_path.stat().st_size:
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} csv_size_bytes does not match {csv_path.name}")
+    if payload.get("csv_sha256") != sha256_file(csv_path):
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} csv_sha256 does not match {csv_path.name}")
+    required_columns = payload.get("required_columns")
+    if list(required_columns or []) != list(expected_columns):
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} required_columns do not match {csv_path.name} schema")
+    part_paths = payload.get("part_paths")
+    if not isinstance(part_paths, list) or not all(isinstance(item, str) and item for item in part_paths):
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} part_paths must be a string list")
+    if payload.get("order_column") != FUTURE_PATHS_PARQUET_ORDER_COLUMN:
+        raise AnomalyFutureArtifactError(f"{manifest_path.name} order_column must be {FUTURE_PATHS_PARQUET_ORDER_COLUMN!r}")
+    return payload
+
 def load_strategy_future_paths_csv(path: str | Path) -> tuple[FuturePathRow, ...]:
-    """Read anomaly_future_paths.csv through the declared MVP1 artifact schema."""
+    """Read strategy_future_paths through the strict CSV header or partitioned Parquet sidecar."""
     future_path = Path(path)
     if not future_path.exists():
         raise AnomalyFutureArtifactError(f"future artifact is missing: {future_path}")
 
-    frame = _read_artifact_csv(future_path)
-    schema = get_artifact_schema("anomaly_future_paths.csv")
+    schema = get_artifact_schema("strategy_future_paths.csv")
     expected_columns = list(schema.required_columns)
+    if _future_paths_parquet_sidecar_exists(future_path):
+        table = _read_future_paths_parquet_sidecar_table(
+            csv_path=future_path,
+            expected_columns=expected_columns,
+        )
+        rows: list[FuturePathRow] = []
+        for row_index, row in enumerate(table.to_pylist()):
+            rows.append(_future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name))
+        return tuple(rows)
+
+    frame = _read_artifact_csv(future_path)
     actual_columns = list(frame.columns)
     if actual_columns != expected_columns:
         raise AnomalyFutureArtifactError(
             f"future artifact columns must match {expected_columns}, got {actual_columns}"
         )
 
-    rows: list[FuturePathRow] = []
+    rows = []
     for row_index, row_tuple in enumerate(frame.itertuples(index=False)):
         row = row_tuple._asdict()
         rows.append(_future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name))
@@ -216,13 +323,27 @@ load_anomaly_future_paths_csv = load_strategy_future_paths_csv
 
 
 def iter_strategy_future_paths_artifact_csv(path: str | Path) -> Iterable[FuturePathRow]:
-    """Stream future path rows through the same strict artifact boundary as the tuple loader."""
+    """Stream future path rows through the strict artifact boundary.
+
+    When the canonical partitioned Parquet sidecar is present, the CSV is treated
+    as a schema stub and data rows are read from Parquet. Missing or partial
+    sidecars fail explicitly; there is no silent fallback to a stale CSV body.
+    """
     future_path = Path(path)
     if not future_path.exists():
         raise AnomalyFutureArtifactError(f"future artifact is missing: {future_path}")
 
     schema = get_artifact_schema("strategy_future_paths.csv")
     expected_columns = list(schema.required_columns)
+    if _future_paths_parquet_sidecar_exists(future_path):
+        table = _read_future_paths_parquet_sidecar_table(
+            csv_path=future_path,
+            expected_columns=expected_columns,
+        )
+        for row_index, row in enumerate(table.to_pylist()):
+            yield _future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name)
+        return
+
     with future_path.open(encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
         actual_columns = list(reader.fieldnames or [])
