@@ -31,7 +31,7 @@ from anomaly_science.features import run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
-from anomaly_science.progress import HumanProgressReporter, ProgressCallback
+from anomaly_science.progress import HumanProgressReporter, ProgressCallback, ProgressUpdate
 from anomaly_science.rejection import write_rejection_funnel
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
@@ -365,6 +365,8 @@ class _StageTimingRecorder:
     path: Path
     log_path: Path | None = None
     _rows: list[dict[str, str]] = field(default_factory=list, init=False)
+    _resource_rows: list[dict[str, str]] = field(default_factory=list, init=False)
+    _progress_by_stage: dict[str, tuple[int, int | None, str]] = field(default_factory=dict, init=False)
 
     @contextmanager
     def stage(self, stage_name: str) -> Iterator[None]:
@@ -397,6 +399,14 @@ class _StageTimingRecorder:
                 self._rows,
                 get_artifact_schema("strategy_stage_timings.csv"),
             )
+            self._record_stage_resource_usage(
+                stage_name=stage_name,
+                status=status,
+                started_at=started_at,
+                finished_at=finished_at,
+                duration_seconds=duration_seconds,
+                notes=notes,
+            )
             self._write_live_log(
                 stage_name=stage_name,
                 status=status,
@@ -420,7 +430,49 @@ class _StageTimingRecorder:
             min_interval_seconds=min_interval_seconds,
             sink=self._write_progress_log,
         )
-        return reporter.update
+
+        def _recording_update(update: ProgressUpdate) -> None:
+            resolved_total = update.total if update.total is not None else total
+            resolved_unit = update.unit or unit
+            self._progress_by_stage[stage_name] = (max(0, int(update.done)), resolved_total, resolved_unit)
+            reporter.update(update)
+
+        return _recording_update
+
+    def _record_stage_resource_usage(
+        self,
+        *,
+        stage_name: str,
+        status: str,
+        started_at: datetime,
+        finished_at: datetime,
+        duration_seconds: float,
+        notes: str,
+    ) -> None:
+        progress_done, progress_total, progress_unit = self._progress_by_stage.get(stage_name, (0, None, ""))
+        run_dir_size_bytes, file_count, largest_files = _summarize_directory(self.path.parent)
+        self._resource_rows.append(
+            {
+                "stage_name": stage_name,
+                "status": status,
+                "started_at_utc": started_at.isoformat(),
+                "finished_at_utc": finished_at.isoformat(),
+                "duration_seconds": f"{duration_seconds:.6f}",
+                "progress_done": str(progress_done),
+                "progress_total": "" if progress_total is None else str(progress_total),
+                "progress_unit": progress_unit,
+                "process_rss_mb": _format_optional_mb(_process_rss_bytes()),
+                "run_dir_size_mb": _format_mb(run_dir_size_bytes),
+                "run_dir_file_count": str(file_count),
+                "largest_files": largest_files,
+                "notes": notes,
+            }
+        )
+        write_csv_artifact_with_aliases(
+            self.path.with_name("strategy_resource_usage.csv"),
+            self._resource_rows,
+            get_artifact_schema("strategy_resource_usage.csv"),
+        )
 
     def _write_progress_log(self, message: str) -> None:
         print(message, file=sys.stderr, flush=True)
@@ -449,6 +501,92 @@ class _StageTimingRecorder:
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(message + "\n")
 
+
+
+def _summarize_directory(root: Path, *, largest_limit: int = 5) -> tuple[int, int, str]:
+    if not root.exists():
+        return 0, 0, ""
+    total_bytes = 0
+    file_count = 0
+    largest: list[tuple[int, str]] = []
+    for path in root.rglob("*"):
+        try:
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+        except OSError:
+            continue
+        total_bytes += size
+        file_count += 1
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        largest.append((size, rel))
+    largest.sort(reverse=True, key=lambda item: item[0])
+    largest_text = ";".join(f"{rel}:{_format_mb(size)}MB" for size, rel in largest[:largest_limit])
+    return total_bytes, file_count, largest_text
+
+
+def _format_mb(size_bytes: int | float) -> str:
+    return f"{float(size_bytes) / 1_048_576:.3f}"
+
+
+def _format_optional_mb(size_bytes: int | None) -> str:
+    return "" if size_bytes is None else _format_mb(size_bytes)
+
+
+def _process_rss_bytes() -> int | None:
+    if os.name == "nt":
+        return _process_rss_bytes_windows()
+    try:
+        import resource
+    except ImportError:
+        return None
+    try:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+    except (OSError, ValueError):
+        return None
+    rss = int(usage.ru_maxrss)
+    if rss <= 0:
+        return None
+    # Linux reports KiB, macOS reports bytes.
+    if sys.platform == "darwin":
+        return rss
+    return rss * 1024
+
+
+def _process_rss_bytes_windows() -> int | None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return None
+
+    class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    counters = PROCESS_MEMORY_COUNTERS()
+    counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+    try:
+        handle = ctypes.windll.kernel32.GetCurrentProcess()
+        ok = ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
+    except (AttributeError, OSError):
+        return None
+    if not ok:
+        return None
+    return int(counters.WorkingSetSize)
 
 def _write_research_run_manifest(
     *,

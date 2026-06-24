@@ -65,6 +65,8 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert (run_dir / "anomaly_run_config.csv").is_file()
     assert (run_dir / "strategy_stage_timings.csv").is_file()
     assert (run_dir / "anomaly_stage_timings.csv").is_file()
+    assert (run_dir / "strategy_resource_usage.csv").is_file()
+    assert (run_dir / "anomaly_resource_usage.csv").is_file()
     assert (run_dir / "research_run.log").is_file()
     assert (run_dir / "artifact_manifest.json").is_file()
 
@@ -115,6 +117,14 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     )
     assert set(timings["status"]) == {"PASS"}
     assert (timings["duration_seconds"] >= 0).all()
+
+    resources = pd.read_csv(run_dir / "strategy_resource_usage.csv")
+    assert set(resources["stage_name"]).issuperset({"cache_export", "state", "feature_matrix", "summary"})
+    assert set(resources["status"]) == {"PASS"}
+    assert (resources["duration_seconds"] >= 0).all()
+    assert (resources["run_dir_size_mb"] >= 0).all()
+    assert (resources["run_dir_file_count"] > 0).all()
+    assert "strategy_resource_usage.csv" in resources.iloc[-1]["largest_files"] or resources.iloc[-1]["largest_files"]
 
     coverage = pd.read_csv(run_dir / "input" / "cache_export_coverage.csv")
     assert coverage.loc[0, "symbol"] == "AAAUSDT"
