@@ -942,6 +942,9 @@ class _FeatureMatrixParquetSidecarWriter:
         self._schema = _feature_matrix_arrow_schema(self.fieldnames)
         self._writer = self._pq.ParquetWriter(self.tmp_parquet_path, self._schema, compression="zstd")
         self._columns: dict[str, list[object]] = {fieldname: [] for fieldname in self.fieldnames}
+        # Ordered list of the same column lists; appending through this avoids a
+        # per-cell dict lookup on the hot path (fields x rows).
+        self._column_lists: list[list[object]] = [self._columns[fieldname] for fieldname in self.fieldnames]
         self._closed = False
 
     @property
@@ -956,8 +959,8 @@ class _FeatureMatrixParquetSidecarWriter:
                 f"strategy_feature_matrix.parquet sidecar row has {len(row_values)} values, "
                 f"expected {len(self.fieldnames)}"
             )
-        for fieldname, value in zip(self.fieldnames, row_values):
-            self._columns[fieldname].append(_parquet_sidecar_value(value))
+        for column, value in zip(self._column_lists, row_values):
+            column.append(_parquet_sidecar_value(value))
         self._row_count += 1
         if self._row_count % FEATURE_MATRIX_PARQUET_BATCH_SIZE == 0:
             self.flush()
@@ -973,6 +976,7 @@ class _FeatureMatrixParquetSidecarWriter:
         table = self._pa.Table.from_arrays(arrays, schema=self._schema)
         self._writer.write_table(table)
         self._columns = {fieldname: [] for fieldname in self.fieldnames}
+        self._column_lists = [self._columns[fieldname] for fieldname in self.fieldnames]
 
     def close(self) -> tuple[Path, Path]:
         if self._closed:

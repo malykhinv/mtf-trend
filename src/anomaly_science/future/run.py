@@ -229,6 +229,7 @@ class _FuturePathsPartitionedParquetSidecarWriter:
             FUTURE_PATHS_PARQUET_ORDER_COLUMN: [],
             **{fieldname: [] for fieldname in self.fieldnames},
         }
+        self._value_column_lists: list[list[object]] = [self._columns[fieldname] for fieldname in self.fieldnames]
         self._row_count = 0
         self._part_index = 0
         self._part_paths: list[Path] = []
@@ -244,8 +245,8 @@ class _FuturePathsPartitionedParquetSidecarWriter:
                 f"strategy_future_paths.parquet row has {len(row_values)} values, expected {len(self.fieldnames)}"
             )
         self._columns[FUTURE_PATHS_PARQUET_ORDER_COLUMN].append(self._row_count)
-        for fieldname, value in zip(self.fieldnames, row_values, strict=True):
-            self._columns[fieldname].append(_future_parquet_value(value))
+        for column, value in zip(self._value_column_lists, row_values, strict=True):
+            column.append(_future_parquet_value(value))
         self._row_count += 1
         if self._row_count % FUTURE_PATHS_PARQUET_BATCH_SIZE == 0:
             self.flush()
@@ -278,6 +279,7 @@ class _FuturePathsPartitionedParquetSidecarWriter:
             FUTURE_PATHS_PARQUET_ORDER_COLUMN: [],
             **{fieldname: [] for fieldname in self.fieldnames},
         }
+        self._value_column_lists = [self._columns[fieldname] for fieldname in self.fieldnames]
 
     def close(self, *, expected_row_count: int) -> tuple[Path, Path]:
         if self._closed:
