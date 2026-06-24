@@ -27,6 +27,7 @@ from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION, build_defau
 from anomaly_science.features.config import FeatureMatrixConfig
 from anomaly_science.future.atr import AtrComputationError, compute_atr_1d_asof
 from anomaly_science.future.builder import iter_candles_1m_csv, iter_strategy_state_1m_csv, load_strategy_state_1m_csv
+from anomaly_science.state.parquet_sidecar import iter_state_1m_parquet_sidecar_mappings, state_1m_parquet_sidecar_exists
 from anomaly_science.progress import ProgressCallback, ProgressUpdate
 
 EPS = 1e-12
@@ -1348,19 +1349,50 @@ def iter_strategy_feature_matrix_csv(
 iter_anomaly_feature_matrix_csv = iter_strategy_feature_matrix_csv
 
 def _state_snapshot_index_from_csv(path: Path) -> tuple[dict[int, tuple[_StateSnapshotRow, ...]], int]:
+    # The cross-section index needs only four state fields, so read a projection
+    # of those sidecar columns instead of materializing every full state row; the
+    # main feature pass still reads full validated state rows.
     raw: dict[int, list[_StateSnapshotRow]] = {}
     row_count = 0
-    for row in iter_strategy_state_1m_csv(path):
+    for row in _iter_state_snapshot_projection(Path(path)):
         row_count += 1
-        raw.setdefault(row.snapshot_time_ms, []).append(
+        raw.setdefault(row["snapshot_time_ms"], []).append(
             _StateSnapshotRow(
-                symbol=row.symbol,
-                event_id=row.event_id,
-                current_return_from_start=row.current_return_from_start,
-                event_alive=row.event_alive,
+                symbol=row["symbol"],
+                event_id=row["event_id"],
+                current_return_from_start=row["current_return_from_start"],
+                event_alive=row["event_alive"],
             )
         )
     return {snapshot_time_ms: tuple(rows) for snapshot_time_ms, rows in raw.items()}, row_count
+
+
+_STATE_SNAPSHOT_PROJECTION_COLUMNS = (
+    "snapshot_time_ms",
+    "symbol",
+    "event_id",
+    "current_return_from_start",
+    "event_alive",
+)
+
+
+def _iter_state_snapshot_projection(state_path: Path) -> Iterable[Mapping[str, object]]:
+    expected_columns = list(get_artifact_schema("strategy_state_1m.csv").required_columns)
+    if state_1m_parquet_sidecar_exists(state_path):
+        yield from iter_state_1m_parquet_sidecar_mappings(
+            csv_path=state_path,
+            expected_columns=expected_columns,
+            columns=list(_STATE_SNAPSHOT_PROJECTION_COLUMNS),
+        )
+        return
+    for state in iter_strategy_state_1m_csv(state_path):
+        yield {
+            "snapshot_time_ms": state.snapshot_time_ms,
+            "symbol": state.symbol,
+            "event_id": state.event_id,
+            "current_return_from_start": state.current_return_from_start,
+            "event_alive": state.event_alive,
+        }
 
 
 def _symbol_groups(
