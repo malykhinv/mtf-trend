@@ -116,6 +116,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Required for --research-mode frozen_holdout. Optional explicit freeze id for IS governance.",
     )
+    research.add_argument(
+        "--dataset-store",
+        default="",
+        help=(
+            "Optional prebuilt research dataset store (from build-research-dataset --max-phase feature_matrix). "
+            "When given, run-research reuses its deterministic heavy phases instead of rebuilding them, "
+            "so weekly walk-forward retraining only pays the heavy build once."
+        ),
+    )
 
     dataset = subparsers.add_parser(
         "build-research-dataset",
@@ -429,6 +438,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 research_mode=args.research_mode,
                 holdout_days=args.holdout_days,
                 protocol_freeze_id=args.protocol_freeze_id,
+                dataset_store_dir=Path(args.dataset_store) if args.dataset_store else None,
             )
         )
         print(f"research pipeline written: {output_dir}")

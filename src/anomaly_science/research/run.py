@@ -4,6 +4,7 @@ import csv
 import gc
 import json
 import os
+import shutil
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -55,6 +56,7 @@ class ResearchRunConfig:
     research_mode: Literal["is", "frozen_holdout"] = "is"
     holdout_days: int = 60
     protocol_freeze_id: str = ""
+    dataset_store_dir: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.strategy_name:
@@ -68,6 +70,8 @@ class ResearchRunConfig:
                 "prepared_input_dir is only supported in frozen_holdout mode; "
                 "IS mode must let run-research own the input view and final holdout boundary"
             )
+        if self.prepared_input_dir is not None and self.dataset_store_dir is not None:
+            raise ValueError("prepared_input_dir and dataset_store_dir are mutually exclusive")
         if self.holdout_days <= 0:
             raise ValueError("holdout_days must be positive")
         if self.research_mode == "frozen_holdout" and not self.protocol_freeze_id:
@@ -92,7 +96,14 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         log_path=run_dir / "research_run.log",
     )
 
-    if config.prepared_input_dir is None:
+    reused_max_input_time_ms: int | None = None
+    if config.dataset_store_dir is not None:
+        with timings.stage("dataset_store_reuse"):
+            input_dir, reused_max_input_time_ms = _link_dataset_store_into_run(
+                config=config, run_dir=run_dir, stages_dir=stages_dir
+            )
+            _release_stage_memory()
+    elif config.prepared_input_dir is None:
         with timings.stage("cache_export"):
             export_cache_to_mvp1_csv(
                 CacheMvp1CsvExportConfig(
@@ -146,60 +157,72 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         )
         research_start_date = input_view.start_date
         research_end_date = input_view.end_date
+        if config.dataset_store_dir is not None and input_view.max_input_time_ms != reused_max_input_time_ms:
+            raise RuntimeError(
+                "reused dataset store input boundary does not match this run's research input view: "
+                f"store max_input_time_ms={reused_max_input_time_ms} "
+                f"run max_input_time_ms={input_view.max_input_time_ms}; "
+                "rebuild the dataset store for these days/research-mode/holdout settings"
+            )
         _write_research_input_view(run_dir=run_dir, input_view=input_view, input_dir=input_dir)
         _release_stage_memory()
 
-    with timings.stage("data_audit"):
-        run_mvp1_data_audit(
-            input_dir=input_dir,
-            out_dir=stages_dir / "data_audit",
-            max_input_time_ms=input_view.max_input_time_ms,
-        )
-        _release_stage_memory()
+    events_dir = stages_dir / "events"
+    state_dir = stages_dir / "state"
+    future_dir = stages_dir / "future"
+    feature_matrix_dir = stages_dir / "feature_matrix"
+    if config.dataset_store_dir is None:
+        with timings.stage("data_audit"):
+            run_mvp1_data_audit(
+                input_dir=input_dir,
+                out_dir=stages_dir / "data_audit",
+                max_input_time_ms=input_view.max_input_time_ms,
+            )
+            _release_stage_memory()
 
-    with timings.stage("events"):
-        events_dir = run_mvp1_events(
-            input_dir=input_dir,
-            out_dir=stages_dir / "events",
-            strategy_name=config.strategy_name,
-            max_input_time_ms=input_view.max_input_time_ms,
-        )
-        _release_stage_memory()
+        with timings.stage("events"):
+            events_dir = run_mvp1_events(
+                input_dir=input_dir,
+                out_dir=stages_dir / "events",
+                strategy_name=config.strategy_name,
+                max_input_time_ms=input_view.max_input_time_ms,
+            )
+            _release_stage_memory()
 
-    with timings.stage("state"):
-        state_dir = run_mvp1_state(
-            input_dir=input_dir,
-            events_path=events_dir / "strategy_events.csv",
-            out_dir=stages_dir / "state",
-            config=_state_config_for_strategy(strategy_name=config.strategy_name),
-            max_input_time_ms=input_view.max_input_time_ms,
-            progress_callback=timings.progress_callback("state", unit="rows"),
-        )
-        _release_stage_memory()
+        with timings.stage("state"):
+            state_dir = run_mvp1_state(
+                input_dir=input_dir,
+                events_path=events_dir / "strategy_events.csv",
+                out_dir=stages_dir / "state",
+                config=_state_config_for_strategy(strategy_name=config.strategy_name),
+                max_input_time_ms=input_view.max_input_time_ms,
+                progress_callback=timings.progress_callback("state", unit="rows"),
+            )
+            _release_stage_memory()
 
-    with timings.stage("future"):
-        future_dir = run_mvp1_future(
-            input_dir=input_dir,
-            state_path=state_dir / "strategy_state_1m.csv",
-            out_dir=stages_dir / "future",
-            max_input_time_ms=input_view.max_input_time_ms,
-            progress_callback=timings.progress_callback("future", unit="rows"),
-        )
-        _release_stage_memory()
+        with timings.stage("future"):
+            future_dir = run_mvp1_future(
+                input_dir=input_dir,
+                state_path=state_dir / "strategy_state_1m.csv",
+                out_dir=stages_dir / "future",
+                max_input_time_ms=input_view.max_input_time_ms,
+                progress_callback=timings.progress_callback("future", unit="rows"),
+            )
+            _release_stage_memory()
 
-    with timings.stage("feature_catalog"):
-        run_mvp1_features(out_dir=stages_dir / "features")
-        _release_stage_memory()
+        with timings.stage("feature_catalog"):
+            run_mvp1_features(out_dir=stages_dir / "features")
+            _release_stage_memory()
 
-    with timings.stage("feature_matrix"):
-        feature_matrix_dir = run_mvp1_feature_matrix(
-            input_dir=input_dir,
-            state_path=state_dir / "strategy_state_1m.csv",
-            out_dir=stages_dir / "feature_matrix",
-            max_input_time_ms=input_view.max_input_time_ms,
-            progress_callback=timings.progress_callback("feature_matrix", unit="rows"),
-        )
-        _release_stage_memory()
+        with timings.stage("feature_matrix"):
+            feature_matrix_dir = run_mvp1_feature_matrix(
+                input_dir=input_dir,
+                state_path=state_dir / "strategy_state_1m.csv",
+                out_dir=stages_dir / "feature_matrix",
+                max_input_time_ms=input_view.max_input_time_ms,
+                progress_callback=timings.progress_callback("feature_matrix", unit="rows"),
+            )
+            _release_stage_memory()
 
     with timings.stage("atlas"):
         run_mvp1_atlas(
@@ -342,6 +365,85 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
 
 def _release_stage_memory() -> None:
     gc.collect()
+
+
+def _input_boundary_mode(config: ResearchRunConfig) -> str:
+    if config.dataset_store_dir is not None:
+        return "reused_dataset_store"
+    if config.prepared_input_dir is not None:
+        return "reused_prepared_input"
+    return "fresh_cache_export"
+
+
+def _link_dataset_store_into_run(
+    *,
+    config: ResearchRunConfig,
+    run_dir: Path,
+    stages_dir: Path,
+) -> tuple[Path, int | None]:
+    """Hardlink a prebuilt research dataset store into this run directory.
+
+    The deterministic heavy phases (input + data_audit/events/state/future/
+    feature_matrix) are pure functions of cache snapshot, strategy and window, so
+    a weekly walk-forward only needs to build them once. Hardlinking them into the
+    run directory keeps every downstream stage, the rejection funnel and the
+    independent forensic audit reading a single run tree with no data copy.
+    """
+    from anomaly_science.research.dataset_store import validate_research_dataset_store
+
+    store_dir = Path(config.dataset_store_dir)  # type: ignore[arg-type]
+    manifest = validate_research_dataset_store(store_dir)
+    _require_dataset_store_match(config=config, manifest=manifest)
+
+    input_dir = run_dir / "input"
+    _hardlink_tree(store_dir / manifest.input_dir, input_dir)
+    for phase_dir_name in ("data_audit", "events", "state", "future", "features", "feature_matrix"):
+        source_phase_dir = store_dir / manifest.stages_dir / phase_dir_name
+        if not source_phase_dir.is_dir():
+            raise FileNotFoundError(
+                f"research dataset store is missing required phase directory: {source_phase_dir}"
+            )
+        _hardlink_tree(source_phase_dir, stages_dir / phase_dir_name)
+    return input_dir, manifest.max_input_time_ms
+
+
+def _require_dataset_store_match(*, config: ResearchRunConfig, manifest) -> None:
+    if manifest.max_phase != "feature_matrix":
+        raise ValueError(
+            "research dataset store must be built through the feature_matrix phase for run-research reuse; "
+            f"found max_phase={manifest.max_phase!r}"
+        )
+    mismatches: list[str] = []
+    if manifest.strategy_name != config.strategy_name:
+        mismatches.append(f"strategy_name store={manifest.strategy_name!r} run={config.strategy_name!r}")
+    if Path(manifest.cache_dir).resolve() != config.cache_dir.resolve():
+        mismatches.append(f"cache_dir store={manifest.cache_dir!r} run={str(config.cache_dir)!r}")
+    if manifest.requested_days != config.days:
+        mismatches.append(f"days store={manifest.requested_days!r} run={config.days!r}")
+    if manifest.research_mode != config.research_mode:
+        mismatches.append(f"research_mode store={manifest.research_mode!r} run={config.research_mode!r}")
+    if mismatches:
+        raise ValueError("research dataset store does not match this run: " + "; ".join(mismatches))
+
+
+def _hardlink_tree(source_dir: Path, dest_dir: Path) -> None:
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"research dataset store source directory is missing: {source_dir}")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for source_path in sorted(source_dir.rglob("*")):
+        relative = source_path.relative_to(source_dir)
+        target = dest_dir / relative
+        if source_path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.unlink()
+        try:
+            os.link(source_path, target)
+        except OSError:
+            # Cross-volume stores cannot be hardlinked; copy the identical bytes.
+            shutil.copyfile(source_path, target)
 
 
 def _write_reused_input_pointer(*, run_dir: Path, input_dir: Path) -> None:
@@ -634,7 +736,7 @@ def _write_research_run_manifest(
             ),
             RunConfigRow(
                 key="input_boundary_mode",
-                value="reused_prepared_input" if config.prepared_input_dir is not None else "fresh_cache_export",
+                value=_input_boundary_mode(config),
                 source="run_research",
             ),
             RunConfigRow(key="input_view_mode", value=input_view.mode, source="run_research"),
@@ -736,7 +838,7 @@ def _write_summary(
         f"run_dir,{run_dir}",
         f"input_dir,{input_dir}",
         f"prepared_input_dir,{'' if config.prepared_input_dir is None else config.prepared_input_dir}",
-        f"input_boundary_mode,{'reused_prepared_input' if config.prepared_input_dir is not None else 'fresh_cache_export'}",
+        f"input_boundary_mode,{_input_boundary_mode(config)}",
         f"input_view_mode,{input_view.mode}",
         f"input_view_max_input_time_ms,{'' if input_view.max_input_time_ms is None else input_view.max_input_time_ms}",
         f"input_min_open_time_ms,{min_time}",

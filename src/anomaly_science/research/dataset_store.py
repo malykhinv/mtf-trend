@@ -5,7 +5,7 @@ import gc
 import json
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,6 +15,7 @@ from anomaly_science.events.run import run_mvp1_events
 from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.state import run_mvp1_state
+from anomaly_science.research.run import _effective_holdout_days, _resolve_research_input_view
 from anomaly_science.state.config import OnlineStateBuilderConfig
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
 from anomaly_science.strategy.registry import get_strategy
@@ -168,13 +169,16 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
     )
     cache_manifest = _read_json(input_dir / "cache_export_manifest.json")
     full_start_date, full_end_date = _input_date_range(input_dir / "candles_1m.csv")
+    # Use the canonical run-research holdout/input-view contract so a store built
+    # here exposes the identical IS window run-research expects (and the documented
+    # weekly-WFA auto-scale), instead of a second, divergent boundary definition.
     effective_holdout_days = _effective_holdout_days(
         full_start_date=full_start_date,
         full_end_date=full_end_date,
         requested_holdout_days=config.holdout_days,
         research_mode=config.research_mode,
     )
-    input_view = _resolve_dataset_input_view(
+    input_view = _resolve_research_input_view(
         full_start_date=full_start_date,
         full_end_date=full_end_date,
         holdout_days=effective_holdout_days,
@@ -434,55 +438,8 @@ def _input_date_range(candles_path: Path) -> tuple[date, date]:
     return _date_from_ms(min_ms), _date_from_ms(max_ms)
 
 
-def _effective_holdout_days(
-    *,
-    full_start_date: date,
-    full_end_date: date,
-    requested_holdout_days: int,
-    research_mode: str,
-) -> int:
-    if research_mode == "frozen_holdout":
-        return requested_holdout_days
-    total_days = (full_end_date - full_start_date).days + 1
-    if total_days <= 1:
-        raise ValueError("IS research mode needs at least two calendar days")
-    return max(1, min(requested_holdout_days, total_days - 1))
-
-
-@dataclass(frozen=True, slots=True)
-class _DatasetInputView:
-    start_date: date
-    end_date: date
-    max_input_time_ms: int | None
-
-
-def _resolve_dataset_input_view(
-    *,
-    full_start_date: date,
-    full_end_date: date,
-    holdout_days: int,
-    research_mode: str,
-) -> _DatasetInputView:
-    if research_mode == "frozen_holdout":
-        return _DatasetInputView(full_start_date, full_end_date, None)
-    if research_mode != "is":
-        raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
-    research_end_date = full_end_date - timedelta(days=holdout_days)
-    if research_end_date < full_start_date:
-        raise ValueError(
-            "IS research mode has no non-holdout rows: "
-            f"full_start_date={full_start_date.isoformat()} "
-            f"full_end_date={full_end_date.isoformat()} holdout_days={holdout_days}."
-        )
-    return _DatasetInputView(full_start_date, research_end_date, _end_exclusive_ms(research_end_date))
-
-
 def _protocol_freeze_id(*, strategy_name: str, start_date: date, end_date: date) -> str:
     return f"{strategy_name}:{start_date.isoformat()}:{end_date.isoformat()}:dataset-store-v1"
-
-
-def _end_exclusive_ms(day: date) -> int:
-    return int(datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000) - 1
 
 
 def _date_from_ms(timestamp_ms: int) -> date:
