@@ -19,7 +19,6 @@ from anomaly_science.atlas.builder import (
     _consolidation_width_ratio_value_bin,
     _cvd_divergence_frame_bin,
     _detection_maturity_value_bin,
-    _enforce_atlas_frame_temporal_contract,
     _high_position_atr_value_bin,
     _initial_pump_height_value_bin,
     _liquidation_regime_frame_bin,
@@ -34,7 +33,6 @@ from anomaly_science.atlas.builder import (
     _speed_regime_value_bin,
     _sweep_flow_frame_bin,
     _utc_session_bin,
-    _build_atlas_artifacts_from_frame,
 )
 from anomaly_science.atlas.config import AtlasConfig
 from anomaly_science.contracts.artifacts import get_artifact_schema
@@ -45,6 +43,7 @@ from anomaly_science.contracts.atlas import (
     AtlasResponseSurfaceRow,
 )
 from anomaly_science.contracts.future import BARRIER_RESOLUTION_STOP_LOSS_FIRST
+from anomaly_science.progress import ProgressCallback, ProgressUpdate
 
 _JOIN_COLUMNS = ("event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms")
 
@@ -66,16 +65,15 @@ def build_atlas_artifacts_polars_from_csv_paths(
     future_path: str | Path,
     feature_matrix_path: str | Path,
     config: AtlasConfig | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> AtlasArtifacts:
     """Build atlas artifacts through an explicit Polars input backend.
 
-    This is the first migration seam for replacing the legacy pandas/Python
-    accumulator pipeline. It keeps the existing Atlas math/output path for now,
-    but moves strict input reads, row-alignment checks, and feature Parquet-sidecar
-    selection behind a Polars boundary that can be expanded slice-by-slice.
-    The normal run-research path is intentionally not switched here.
+    This is the default Atlas backend. It fails explicitly if Polars is not
+    available instead of falling back to the legacy pandas/Python accumulator path.
     """
     cfg = config or AtlasConfig()
+    _emit_progress(progress_callback, done=0, total=6, detail="loading strict atlas inputs")
     state_frame = _read_strict_polars_csv_frame(
         path=Path(state_path),
         usecols=_atlas_state_usecols(),
@@ -88,6 +86,7 @@ def build_atlas_artifacts_polars_from_csv_paths(
         csv_path=Path(feature_matrix_path),
         usecols=_atlas_feature_usecols(),
     )
+    _emit_progress(progress_callback, done=1, total=6, detail=f"loaded inputs rows={state_frame.height}")
     joined = _join_row_aligned_polars_frames(
         state_frame=state_frame,
         future_frame=future_frame,
@@ -95,10 +94,15 @@ def build_atlas_artifacts_polars_from_csv_paths(
     )
     _enforce_atlas_polars_temporal_contract(joined)
     joined = _add_atlas_context_columns_polars(joined)
+    _emit_progress(progress_callback, done=2, total=6, detail=f"joined rows={joined.height}")
     nature_rows = _build_polars_nature_atlas_rows(joined=joined, config=cfg)
+    _emit_progress(progress_callback, done=3, total=6, detail=f"nature_rows={len(nature_rows)}")
     context_rows = _build_polars_context_split_rows(joined=joined, config=cfg)
+    _emit_progress(progress_callback, done=4, total=6, detail=f"context_rows={len(context_rows)}")
     response_rows = _build_polars_response_surface_rows(joined=joined, config=cfg)
+    _emit_progress(progress_callback, done=5, total=6, detail=f"response_rows={len(response_rows)}")
     market_rows = _build_polars_market_shock_group_rows(joined=joined, config=cfg)
+    _emit_progress(progress_callback, done=6, total=6, detail=f"market_rows={len(market_rows)}")
 
     return AtlasArtifacts(
         nature_atlas_rows=tuple(nature_rows),
@@ -107,6 +111,24 @@ def build_atlas_artifacts_polars_from_csv_paths(
         market_shock_group_rows=tuple(market_rows),
     )
 
+def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    *,
+    done: int,
+    total: int,
+    detail: str,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(
+        ProgressUpdate(
+            done=done,
+            total=total,
+            unit="steps",
+            detail=detail,
+            force=True,
+        )
+    )
 
 def _read_strict_polars_csv_frame(*, path: Path, usecols: Sequence[str]):
     _validate_strict_csv_header(path=path)

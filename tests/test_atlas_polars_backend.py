@@ -266,3 +266,54 @@ def test_polars_atlas_backend_builds_nature_and_response_rows_without_legacy_acc
     assert artifacts.market_shock_group_rows
     assert {row.context_name for row in artifacts.context_split_rows} >= {"price_shape_atr", "feature_matrix"}
     assert {row.market_shock_id for row in artifacts.market_shock_group_rows} == {"idiosyncratic:AAA/USDT:USDT"}
+
+
+def test_run_mvp1_atlas_uses_polars_backend_without_legacy_fallback(monkeypatch, tmp_path: Path) -> None:
+    pytest.importorskip("polars")
+    import anomaly_science.atlas.builder as legacy_builder
+    from anomaly_science.atlas.run import run_mvp1_atlas
+
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    future_path = tmp_path / "anomaly_future_paths.csv"
+    feature_path = tmp_path / "anomaly_feature_matrix.csv"
+    out_dir = tmp_path / "atlas"
+    _write_rows(
+        state_path,
+        schema_name="anomaly_state_1m.csv",
+        rows=[_state_payload(event_id="evt_atlas_1", offset_minutes=2)],
+    )
+    _write_rows(
+        future_path,
+        schema_name="anomaly_future_paths.csv",
+        rows=[
+            _future_payload(
+                event_id="evt_atlas_1",
+                offset_minutes=2,
+                future_return=1.2,
+                future_max=1.4,
+                future_min=-0.1,
+                reclaimed=True,
+            )
+        ],
+    )
+    _write_rows(
+        feature_path,
+        schema_name="anomaly_feature_matrix.csv",
+        rows=[_feature_payload(event_id="evt_atlas_1", offset_minutes=2, systemic_cluster_regime="idiosyncratic")],
+    )
+
+    def fail_legacy(*args, **kwargs):
+        raise AssertionError("run_mvp1_atlas must not fall back to the legacy pandas atlas backend")
+
+    monkeypatch.setattr(legacy_builder, "build_atlas_artifacts_from_csv_paths", fail_legacy)
+
+    output_dir = run_mvp1_atlas(
+        state_path=state_path,
+        future_path=future_path,
+        feature_matrix_path=feature_path,
+        out_dir=out_dir,
+    )
+
+    assert output_dir == out_dir
+    assert (out_dir / "strategy_nature_atlas.csv").is_file()
+    assert (out_dir / "strategy_response_surfaces.csv").is_file()

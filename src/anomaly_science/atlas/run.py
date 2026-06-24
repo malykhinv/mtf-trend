@@ -6,13 +6,13 @@ from pathlib import Path
 
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.atlas.builder import (
-    build_atlas_artifacts_from_csv_paths,
     context_split_rows_to_artifact,
     market_shock_group_rows_to_artifact,
     nature_rows_to_artifact,
     response_surface_rows_to_artifact,
 )
 from anomaly_science.atlas.config import AtlasConfig
+from anomaly_science.atlas.polars_backend import build_atlas_artifacts_polars_from_csv_paths
 from anomaly_science.progress import ProgressCallback
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
@@ -35,7 +35,7 @@ def run_mvp1_atlas(
     output_path.mkdir(parents=True, exist_ok=True)
     cfg = config or AtlasConfig()
 
-    artifacts = build_atlas_artifacts_from_csv_paths(
+    artifacts = build_atlas_artifacts_polars_from_csv_paths(
         state_path=state_artifact_path,
         future_path=future_artifact_path,
         feature_matrix_path=feature_artifact_path,
