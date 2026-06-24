@@ -4,7 +4,7 @@ import csv
 import os
 import shutil
 from collections.abc import Iterable
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -24,7 +24,10 @@ def _as_mapping(row: Mapping[str, Any] | object) -> Mapping[str, Any]:
     if isinstance(row, Mapping):
         return row
     if is_dataclass(row):
-        return asdict(row)
+        # Artifact rows are flat (scalar fields plus immutable containers), so a
+        # shallow field read produces the same CSV cells as dataclasses.asdict
+        # without its recursive per-field deepcopy, which dominates row writing.
+        return {field.name: getattr(row, field.name) for field in fields(row)}
     raise TypeError(f"artifact rows must be mappings or dataclasses, got {type(row).__name__}")
 
 

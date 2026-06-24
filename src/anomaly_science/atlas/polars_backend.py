@@ -390,9 +390,12 @@ def _build_polars_nature_atlas_rows(*, joined, config: AtlasConfig) -> tuple[Atl
 def _with_polars_horizon_columns(frame, *, horizon: int, config: AtlasConfig):
     pl = _import_polars_for_atlas_backend()
     suffix = f"{horizon}m"
-    future_return_atr = pl.col(f"future_return_atr_{suffix}")
-    future_max_atr = pl.col(f"future_max_atr_{suffix}")
-    future_min_atr = pl.col(f"future_min_atr_{suffix}")
+    # When a future horizon is entirely null (e.g. short windows with no resolved
+    # paths), Parquet/CSV yield a Null-dtype column on which `.abs()` is invalid.
+    # Cast to Float64 so null stays null but numeric ops (abs/compare) are defined.
+    future_return_atr = pl.col(f"future_return_atr_{suffix}").cast(pl.Float64)
+    future_max_atr = pl.col(f"future_max_atr_{suffix}").cast(pl.Float64)
+    future_min_atr = pl.col(f"future_min_atr_{suffix}").cast(pl.Float64)
     stop_first = pl.col(f"barrier_resolution_{suffix}") == BARRIER_RESOLUTION_STOP_LOSS_FIRST
     missing = future_return_atr.is_null() | future_max_atr.is_null() | future_min_atr.is_null()
     upside = future_max_atr >= config.outcome_continuation_threshold_atr

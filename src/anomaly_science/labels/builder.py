@@ -19,7 +19,12 @@ from anomaly_science.contracts.labels import (
 )
 from anomaly_science.contracts.market import MarketDataContractError
 from anomaly_science.contracts.state import StrategyState1mRow
-from anomaly_science.future import load_strategy_future_paths_csv, load_strategy_state_1m_csv
+from anomaly_science.future import (
+    iter_strategy_future_paths_artifact_csv,
+    iter_strategy_state_1m_csv,
+    load_strategy_future_paths_csv,
+    load_strategy_state_1m_csv,
+)
 from anomaly_science.labels.config import OutcomeLabelConfig
 
 
@@ -70,45 +75,26 @@ def iter_outcome_label_inputs_from_artifacts(
     if not future_artifact_path.exists():
         raise OutcomeLabelInputError(f"future artifact is missing: {future_artifact_path}")
 
-    with state_artifact_path.open(encoding="utf-8-sig", newline="") as state_file:
-        with future_artifact_path.open(encoding="utf-8-sig", newline="") as future_file:
-            state_reader = csv.DictReader(state_file)
-            future_reader = csv.DictReader(future_file)
-            _enforce_artifact_columns(
-                actual_columns=list(state_reader.fieldnames or ()),
-                artifact_name=state_artifact_path.name,
-                schema_name="strategy_state_1m.csv",
+    # Canonical state/future data lives in the partitioned Parquet sidecars; the
+    # CSV files are schema stubs. These typed iterators prefer the sidecar and
+    # preserve the writer row order, so the row-aligned label join is exact.
+    state_iter = iter_strategy_state_1m_csv(state_artifact_path)
+    future_iter = iter_strategy_future_paths_artifact_csv(future_artifact_path)
+    sentinel = object()
+    for row_index, pair in enumerate(zip_longest(state_iter, future_iter, fillvalue=sentinel)):
+        state, future = pair
+        if state is sentinel:
+            raise OutcomeLabelInputError(f"future artifact has an orphan row at label join index {row_index}")
+        if future is sentinel:
+            raise OutcomeLabelInputError(f"state artifact is missing a future row at label join index {row_index}")
+        if _join_key(state) != _join_key(future):
+            raise OutcomeLabelInputError(
+                "state/future label join must be row-aligned on "
+                "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
+                f"row_index={row_index}, state_key={_join_key(state)}, future_key={_join_key(future)}"
             )
-            _enforce_artifact_columns(
-                actual_columns=list(future_reader.fieldnames or ()),
-                artifact_name=future_artifact_path.name,
-                schema_name="strategy_future_paths.csv",
-            )
-            sentinel = object()
-            for row_index, pair in enumerate(zip_longest(state_reader, future_reader, fillvalue=sentinel)):
-                state_row, future_row = pair
-                if state_row is sentinel:
-                    raise OutcomeLabelInputError(f"future artifact has an orphan row at label join index {row_index}")
-                if future_row is sentinel:
-                    raise OutcomeLabelInputError(f"state artifact is missing a future row at label join index {row_index}")
-                state = _label_join_row_from_state_mapping(
-                    row=state_row,
-                    row_index=row_index,
-                    artifact_name=state_artifact_path.name,
-                )
-                future = _label_future_row_from_mapping(
-                    row=future_row,
-                    row_index=row_index,
-                    artifact_name=future_artifact_path.name,
-                )
-                if _join_key(state) != _join_key(future):
-                    raise OutcomeLabelInputError(
-                        "state/future label join must be row-aligned on "
-                        "event_id,symbol,snapshot_time_ms,feature_cutoff_time_ms; "
-                        f"row_index={row_index}, state_key={_join_key(state)}, future_key={_join_key(future)}"
-                    )
-                _enforce_label_temporal_contract(state=state, future=future)
-                yield OutcomeLabelInputRow(state=state, future=future)
+        _enforce_label_temporal_contract(state=state, future=future)
+        yield OutcomeLabelInputRow(state=state, future=future)
 
 
 def build_outcome_label_inputs(
@@ -413,79 +399,6 @@ def _label_available(scenario: str) -> bool:
     return scenario != MISSING_FUTURE_SCENARIO
 
 
-def _enforce_artifact_columns(*, actual_columns: list[str], artifact_name: str, schema_name: str) -> None:
-    expected_columns = list(get_artifact_schema(schema_name).required_columns)
-    if actual_columns != expected_columns:
-        raise OutcomeLabelInputError(
-            f"{artifact_name} columns must match {expected_columns}, got {actual_columns}"
-        )
-
-
-def _label_join_row_from_state_mapping(
-    *,
-    row: Mapping[str, object],
-    row_index: int,
-    artifact_name: str,
-) -> _OutcomeLabelJoinRow:
-    try:
-        return _OutcomeLabelJoinRow(
-            event_id=_required_str(row, "event_id"),
-            symbol=_required_str(row, "symbol"),
-            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
-            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
-        )
-    except (TypeError, ValueError) as exc:
-        raise OutcomeLabelInputError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
-
-
-def _label_future_row_from_mapping(
-    *,
-    row: Mapping[str, object],
-    row_index: int,
-    artifact_name: str,
-) -> FuturePathRow:
-    try:
-        return FuturePathRow(
-            event_id=_required_str(row, "event_id"),
-            symbol=_required_str(row, "symbol"),
-            snapshot_time_ms=_required_int(row, "snapshot_time_ms"),
-            feature_cutoff_time_ms=_required_int(row, "feature_cutoff_time_ms"),
-            future_start_time_ms=_required_int(row, "future_start_time_ms"),
-            atr_window_minutes=_required_int(row, "atr_window_minutes"),
-            core_atr_1440=_optional_float(row, "ATR_1d_asof_t"),
-            ATR_1d_pct_asof_t=_optional_float(row, "ATR_1d_pct_asof_t"),
-            double_barrier_k_continuation=_optional_float(row, "double_barrier_k_continuation"),
-            double_barrier_k_fade=_optional_float(row, "double_barrier_k_fade"),
-            future_return_atr_15m=_optional_float(row, "future_return_atr_15m"),
-            future_return_atr_30m=_optional_float(row, "future_return_atr_30m"),
-            future_return_atr_60m=_optional_float(row, "future_return_atr_60m"),
-            future_return_atr_120m=_optional_float(row, "future_return_atr_120m"),
-            future_return_atr_180m=_optional_float(row, "future_return_atr_180m"),
-            future_max_atr_15m=_optional_float(row, "future_max_atr_15m"),
-            future_max_atr_30m=_optional_float(row, "future_max_atr_30m"),
-            future_max_atr_60m=_optional_float(row, "future_max_atr_60m"),
-            future_max_atr_120m=_optional_float(row, "future_max_atr_120m"),
-            future_max_atr_180m=_optional_float(row, "future_max_atr_180m"),
-            future_min_atr_15m=_optional_float(row, "future_min_atr_15m"),
-            future_min_atr_30m=_optional_float(row, "future_min_atr_30m"),
-            future_min_atr_60m=_optional_float(row, "future_min_atr_60m"),
-            future_min_atr_120m=_optional_float(row, "future_min_atr_120m"),
-            future_min_atr_180m=_optional_float(row, "future_min_atr_180m"),
-            intracandle_double_barrier_hit_15m=_optional_bool(row, "intracandle_double_barrier_hit_15m"),
-            intracandle_double_barrier_hit_30m=_optional_bool(row, "intracandle_double_barrier_hit_30m"),
-            intracandle_double_barrier_hit_60m=_optional_bool(row, "intracandle_double_barrier_hit_60m"),
-            intracandle_double_barrier_hit_120m=_optional_bool(row, "intracandle_double_barrier_hit_120m"),
-            intracandle_double_barrier_hit_180m=_optional_bool(row, "intracandle_double_barrier_hit_180m"),
-            barrier_resolution_15m=_optional_str(row, "barrier_resolution_15m"),
-            barrier_resolution_30m=_optional_str(row, "barrier_resolution_30m"),
-            barrier_resolution_60m=_optional_str(row, "barrier_resolution_60m"),
-            barrier_resolution_120m=_optional_str(row, "barrier_resolution_120m"),
-            barrier_resolution_180m=_optional_str(row, "barrier_resolution_180m"),
-        )
-    except (TypeError, ValueError) as exc:
-        raise OutcomeLabelInputError(f"invalid {artifact_name} row {row_index}: {exc}") from exc
-
-
 def _unique_by_join_key(
     rows: Iterable[StrategyState1mRow] | Iterable[FuturePathRow],
     *,
@@ -552,29 +465,6 @@ def _optional_float(row: Mapping[str, object], name: str) -> float | None:
     if not math.isfinite(result):
         raise ValueError(f"{name} must be finite when present")
     return result
-
-
-def _optional_str(row: Mapping[str, object], name: str) -> str | None:
-    value = row[name]
-    if _is_missing_csv_value(value):
-        return None
-    return str(value)
-
-
-def _optional_bool(row: Mapping[str, object], name: str) -> bool | None:
-    value = row[name]
-    if _is_missing_csv_value(value):
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
-    text = str(value).strip().lower()
-    if text in {"true", "1"}:
-        return True
-    if text in {"false", "0"}:
-        return False
-    raise ValueError(f"{name} must be a boolean when present")
 
 
 def _required_bool(row: Mapping[str, object], name: str) -> bool:

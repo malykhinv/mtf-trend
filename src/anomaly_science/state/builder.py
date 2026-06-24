@@ -7,8 +7,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-import pandas as pd
-
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import Candle1m, MarketDataContractError, ONE_MINUTE_MS
@@ -501,7 +499,7 @@ def _minutes_between(start_ms: int, end_ms: int) -> int:
 
 def _required_str(row: Mapping[str, object], name: str) -> str:
     value = row[name]
-    if pd.isna(value):
+    if value is None or value == "":
         raise ValueError(f"{name} is required")
     result = str(value)
     if not result:
@@ -511,14 +509,14 @@ def _required_str(row: Mapping[str, object], name: str) -> str:
 
 def _required_int(row: Mapping[str, object], name: str) -> int:
     value = row[name]
-    if pd.isna(value):
+    if value is None or value == "":
         raise ValueError(f"{name} is required")
     return int(value)
 
 
 def _required_float(row: Mapping[str, object], name: str) -> float:
     value = row[name]
-    if pd.isna(value):
+    if value is None or value == "":
         raise ValueError(f"{name} is required")
     result = float(value)
     if not math.isfinite(result):
@@ -538,7 +536,7 @@ def _required_components(row: Mapping[str, object], name: str) -> tuple[str, ...
 
 def _optional_float(row: Mapping[str, object], name: str) -> float | None:
     value = row[name]
-    if pd.isna(value) or value == "":
+    if value is None or value == "":
         return None
     result = float(value)
     if not math.isfinite(result):
@@ -548,7 +546,7 @@ def _optional_float(row: Mapping[str, object], name: str) -> float | None:
 
 def _optional_bool(row: Mapping[str, object], name: str, *, default: bool) -> bool:
     value = row[name]
-    if pd.isna(value) or value == "":
+    if value is None or value == "":
         return default
     if isinstance(value, bool):
         return value

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from statistics import median
 from typing import Iterable, Sequence
@@ -2111,10 +2111,10 @@ def _unique_count(values: Iterable[str]) -> int:
 
 
 def _row_to_csv_payload(row: object) -> dict[str, object]:
+    # Atlas rows are flat dataclasses; a shallow field read avoids the recursive
+    # per-field deepcopy of dataclasses.asdict, which dominated atlas writing.
     result: dict[str, object] = {}
-    for key, value in asdict(row).items():
-        if value is None:
-            result[key] = ""
-        else:
-            result[key] = value
+    for field_def in fields(row):
+        value = getattr(row, field_def.name)
+        result[field_def.name] = "" if value is None else value
     return result

@@ -18,7 +18,7 @@ from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_id
 from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.features import StrategyFeatureMatrixRow
-from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
+from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, MarketDataContractError, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
 from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.contracts.time import utc_ms_to_datetime
 from anomaly_science.data.normalized import normalize_candles_1m, normalize_liquidations, normalize_open_interest_5m, normalize_symbol_universe_by_day
@@ -4055,7 +4055,10 @@ def _required_bool(row: Mapping[str, object], name: str) -> bool:
 
 
 def _is_missing(value: object) -> bool:
-    return value is None or value == ""
+    # The Parquet sidecar stores absent optional values as null; pandas reads
+    # those back as float NaN. Treat NaN as missing so the canonical Parquet read
+    # path matches CSV "" semantics instead of failing the finite-value contract.
+    return value is None or value == "" or (isinstance(value, float) and math.isnan(value))
 
 
 def _csv_value(value: object) -> object:

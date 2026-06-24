@@ -1689,7 +1689,7 @@ def _future_state_projection_from_mapping(
 
 def _required_str(row: Mapping[str, object], name: str) -> str:
     value = row[name]
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     result = str(value)
     if not result:
@@ -1733,14 +1733,14 @@ def _optional_csv_float(row: Mapping[str, str], name: str) -> float | None:
 
 def _required_int(row: Mapping[str, object], name: str) -> int:
     value = row[name]
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     return int(value)
 
 
 def _required_float(row: Mapping[str, object], name: str) -> float:
     value = row[name]
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     result = float(value)
     if not math.isfinite(result):
@@ -1808,12 +1808,9 @@ def _optional_bool(row: Mapping[str, object], name: str) -> bool | None:
 
 
 def _is_missing(value: object) -> bool:
-    if value == "":
-        return True
-    try:
-        return bool(pd.isna(value))
-    except TypeError:
-        return False
+    # Hot per-row check across CSV (str), Parquet to_pylist (None) and pandas
+    # itertuples (float NaN) sources. Avoid pandas.isna call overhead.
+    return value is None or value == "" or (isinstance(value, float) and math.isnan(value))
 
 
 def _tuple_value(row: object, name: str) -> object:
@@ -1822,7 +1819,7 @@ def _tuple_value(row: object, name: str) -> object:
 
 def _tuple_required_str(row: object, name: str) -> str:
     value = _tuple_value(row, name)
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     result = str(value)
     if not result:
@@ -1832,14 +1829,14 @@ def _tuple_required_str(row: object, name: str) -> str:
 
 def _tuple_required_int(row: object, name: str) -> int:
     value = _tuple_value(row, name)
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     return int(value)
 
 
 def _tuple_required_float(row: object, name: str) -> float:
     value = _tuple_value(row, name)
-    if pd.isna(value):
+    if _is_missing(value):
         raise ValueError(f"{name} is required")
     result = float(value)
     if not math.isfinite(result):
