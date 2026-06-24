@@ -39,7 +39,7 @@ def _state_row(
         snapshot_time_ms=snapshot_time_ms,
         feature_cutoff_time_ms=snapshot_time_ms,
         minutes_since_event_start=minute_of_day % 40,
-        minutes_since_detection=minute_of_day % 12,
+        minutes_since_detection=0,
         event_alive=True,
         running_high_asof_t=103.0,
         running_high_time_asof_t_ms=snapshot_time_ms,

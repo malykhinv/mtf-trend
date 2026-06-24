@@ -8,6 +8,7 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.prediction.builder import (
+    SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION,
     build_calibration_breakdown_rows,
     build_calibration_rows,
     build_prediction_metric_rows,
@@ -307,6 +308,11 @@ def _run_config_rows(
         RunConfigRow(key="stage", value="mvp1_prediction", source="runtime"),
         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="prediction_version", value=config.prediction_version, source="runtime"),
+        RunConfigRow(
+            key="supervised_anchor_minutes_since_detection",
+            value=str(SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION),
+            source="runtime",
+        ),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="target_label_column", value=config.target_label_column, source="runtime"),
         RunConfigRow(key="active_h_max_minutes", value=str(config.active_h_max_minutes), source="runtime"),

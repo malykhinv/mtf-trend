@@ -46,6 +46,7 @@ def _state_row(
     symbol: str = "AAA/USDT:USDT",
     current_return_from_start: float = 0.02,
     distance_to_running_high: float = -0.0005,
+    minutes_since_detection: int = 2,
 ) -> AnomalyState1mRow:
     snapshot_time_ms = BASE_DAY_MS + day_offset * ONE_DAY_MS + minute_of_day * ONE_MINUTE_MS
     return AnomalyState1mRow(
@@ -55,7 +56,7 @@ def _state_row(
         snapshot_time_ms=snapshot_time_ms,
         feature_cutoff_time_ms=snapshot_time_ms,
         minutes_since_event_start=4,
-        minutes_since_detection=2,
+        minutes_since_detection=minutes_since_detection,
         event_alive=True,
         running_high_asof_t=103.0,
         running_high_time_asof_t_ms=snapshot_time_ms,
@@ -182,17 +183,18 @@ def _training_and_test_rows() -> tuple[list[AnomalyState1mRow], list[AnomalyOutc
                 event_id=f"train_{index:03d}",
                 day_offset=-2,
                 minute_of_day=10 + index,
+                minutes_since_detection=0,
                 current_return_from_start=0.02 if scenario == "long_continuation" else -0.02 if scenario == "short_fade" else 0.0,
                 distance_to_running_high=-0.0005 if scenario == "long_continuation" else -0.04,
             )
         )
         labels.append(_label_row(state=states[-1], scenario_30m=scenario))
     test_states = [
-        _state_row(event_id="purged_short_1", day_offset=0, minute_of_day=23 * 60 + 30),
-        _state_row(event_id="purged_short_2", day_offset=0, minute_of_day=23 * 60 + 40),
-        _state_row(event_id="purged_short_3", day_offset=0, minute_of_day=23 * 60 + 50),
-        _state_row(event_id="test_row", day_offset=1, minute_of_day=60),
-        _state_row(event_id="test_row_2", day_offset=2, minute_of_day=60),
+        _state_row(event_id="purged_short_1", day_offset=0, minute_of_day=23 * 60 + 30, minutes_since_detection=0),
+        _state_row(event_id="purged_short_2", day_offset=0, minute_of_day=23 * 60 + 40, minutes_since_detection=0),
+        _state_row(event_id="purged_short_3", day_offset=0, minute_of_day=23 * 60 + 50, minutes_since_detection=0),
+        _state_row(event_id="test_row", day_offset=1, minute_of_day=60, minutes_since_detection=0),
+        _state_row(event_id="test_row_2", day_offset=2, minute_of_day=60, minutes_since_detection=0),
     ]
     states.extend(test_states)
     labels.extend(_label_row(state=state, scenario_30m="long_continuation") for state in test_states)
@@ -211,10 +213,13 @@ def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:
     write_csv_artifact(path, feature_matrix_rows_to_artifact(rows), get_artifact_schema("anomaly_feature_matrix.csv"))
 
 
-def test_load_prediction_inputs_uses_row_aligned_artifact_join(tmp_path: Path) -> None:
-    first = _state_row(event_id="z_first", day_offset=0, minute_of_day=10)
-    second = _state_row(event_id="a_second", day_offset=0, minute_of_day=11)
-    states = [first, second]
+def test_load_prediction_inputs_keeps_only_per_event_anchor_rows(tmp_path: Path) -> None:
+    # Each event's online window expands per minute; only the detection-minute anchor
+    # (minutes_since_detection == 0) is a supervised row, the rest are dropped.
+    first_anchor = _state_row(event_id="z_first", day_offset=0, minute_of_day=10, minutes_since_detection=0)
+    first_followup = _state_row(event_id="z_first", day_offset=0, minute_of_day=11, minutes_since_detection=1)
+    second_anchor = _state_row(event_id="a_second", day_offset=0, minute_of_day=20, minutes_since_detection=0)
+    states = [first_anchor, first_followup, second_anchor]
     labels = [_label_row(state=state, scenario_30m="long_continuation") for state in states]
     features = [_feature_row(state=state) for state in states]
     state_path = tmp_path / "anomaly_state_1m.csv"
@@ -231,6 +236,7 @@ def test_load_prediction_inputs_uses_row_aligned_artifact_join(tmp_path: Path) -
     )
 
     assert [row.state.event_id for row in inputs] == ["z_first", "a_second"]
+    assert all(row.state.minutes_since_detection == 0 for row in inputs)
 
 
 def test_iter_prediction_inputs_rejects_non_row_aligned_artifacts(tmp_path: Path) -> None:

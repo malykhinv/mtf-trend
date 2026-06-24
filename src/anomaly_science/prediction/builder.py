@@ -125,25 +125,43 @@ class PredictionInputRow:
         return self.label.scenario_180m
 
 
+# Episodic supervised-dataset anchor (methodology section 11.1): an event's online
+# state expands to one row per minute of its post-detection window, but those minutes
+# are autocorrelated and must not be treated as independent supervised examples.
+# The supervised dataset (train/calibration/OOS prediction, and the EV/simulation that
+# read it) keeps exactly one anchor row per event at this fixed, pre-registered offset.
+# The per-minute confidence trajectory (section 17 decision timing) is a separate
+# descriptive layer over the frozen model, not part of the supervised population.
+SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION = 0
+
+
+def is_supervised_anchor_row(row: PredictionInputRow) -> bool:
+    return row.state.minutes_since_detection == SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION
+
+
 def load_prediction_inputs(
     *,
     state_path: str | Path,
     labels_path: str | Path,
     feature_matrix_path: str | Path,
 ) -> tuple[PredictionInputRow, ...]:
-    """Load prediction inputs through strict state, label, and feature schema boundaries.
+    """Load the episodic supervised prediction dataset from strict artifacts.
 
-    Artifact-backed runs use the row-aligned streaming join below. That keeps
-    state and feature Parquet sidecars on their bounded iterator paths and avoids
-    the old pattern of materializing three complete artifacts plus join-index
-    dictionaries before prediction/control evaluation starts.
+    Artifact-backed runs use the row-aligned streaming join below, then keep only the
+    per-event anchor snapshot (``minutes_since_detection ==
+    SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION``). This enforces the methodology
+    episodic-dataset rule: a single online impulse contributes one supervised example,
+    not one per minute. The join still streams and validates every state/label/feature
+    row, so non-anchor minutes remain available to a future decision-timing layer.
     """
     return tuple(
-        iter_prediction_inputs_from_artifacts(
+        row
+        for row in iter_prediction_inputs_from_artifacts(
             state_path=state_path,
             labels_path=labels_path,
             feature_matrix_path=feature_matrix_path,
         )
+        if is_supervised_anchor_row(row)
     )
 
 
