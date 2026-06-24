@@ -1387,7 +1387,9 @@ def _build_nature_atlas(*, rows: Sequence[AtlasInputRow], config: AtlasConfig) -
         for horizon, outcome_bin in row.atlas_outcome_bins:
             for split_family, split_value in row.contexts:
                 key = (split_family, split_value, horizon, outcome_bin)
-                groups.setdefault(key, _NatureAccumulator()).add(row=row, horizon=horizon)
+                if key not in groups:
+                    groups[key] = _NatureAccumulator.with_exact_medians()
+                groups[key].add(row=row, horizon=horizon)
 
     result: list[AtlasNatureRow] = []
     for (split_family, split_value, horizon, outcome_bin), stats in sorted(groups.items()):
@@ -1558,6 +1560,10 @@ class _MeanAccumulator:
     count: int = 0
     values: list[float] | None = None
 
+    @classmethod
+    def exact_median(cls) -> "_MeanAccumulator":
+        return cls(values=[])
+
     def add(self, value: float | int | None) -> None:
         if value is None:
             return
@@ -1575,6 +1581,8 @@ class _MeanAccumulator:
         return self.total / self.count
 
     def median(self) -> float | None:
+        if self.values is None:
+            return None
         if not self.values:
             return None
         return float(median(self.values))
@@ -1603,16 +1611,23 @@ class _NatureAccumulator:
     row_count: int = 0
     event_ids: set[str] = field(default_factory=set)
     symbols: set[str] = field(default_factory=set)
-    future_return_atr: _MeanAccumulator = field(default_factory=lambda: _MeanAccumulator(values=[]))
+    future_return_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
     future_max_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
     future_min_atr: _MeanAccumulator = field(default_factory=_MeanAccumulator)
-    future_return: _MeanAccumulator = field(default_factory=lambda: _MeanAccumulator(values=[]))
+    future_return: _MeanAccumulator = field(default_factory=_MeanAccumulator)
     future_max: _MeanAccumulator = field(default_factory=_MeanAccumulator)
     future_min: _MeanAccumulator = field(default_factory=_MeanAccumulator)
     reclaimed_running_high: _BoolRateAccumulator = field(default_factory=_BoolRateAccumulator)
     stop_first: _BoolRateAccumulator = field(default_factory=_BoolRateAccumulator)
     min_snapshot_time_ms: int = 0
     max_snapshot_time_ms: int = 0
+
+    @classmethod
+    def with_exact_medians(cls) -> "_NatureAccumulator":
+        return cls(
+            future_return_atr=_MeanAccumulator.exact_median(),
+            future_return=_MeanAccumulator.exact_median(),
+        )
 
     def add(self, *, row: AtlasInputRow, horizon: int) -> None:
         self.row_count += 1

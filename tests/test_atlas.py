@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from anomaly_science.artifacts import write_csv_artifact
@@ -241,6 +242,33 @@ def test_atlas_preserves_temporal_contract_in_outputs() -> None:
     assert artifacts.market_shock_group_rows[0].market_shock_candidate is False
 
 
+def test_streaming_nature_accumulator_does_not_store_exact_median_values() -> None:
+    from anomaly_science.atlas.builder import _NatureAccumulator, _accumulate_mean
+
+    accumulator = _NatureAccumulator()
+    _accumulate_mean(accumulator.future_return_atr, pd.Series([1.0, 2.0, 3.0]))
+    _accumulate_mean(accumulator.future_return, pd.Series([0.01, 0.02, 0.03]))
+
+    assert accumulator.future_return_atr.count == 3
+    assert accumulator.future_return_atr.mean() == 2.0
+    assert accumulator.future_return_atr.values is None
+    assert accumulator.future_return_atr.median() is None
+    assert accumulator.future_return.values is None
+
+
+def test_small_in_memory_nature_accumulator_keeps_exact_medians() -> None:
+    from anomaly_science.atlas.builder import _NatureAccumulator
+
+    accumulator = _NatureAccumulator.with_exact_medians()
+    accumulator.future_return_atr.add(1.0)
+    accumulator.future_return_atr.add(3.0)
+    accumulator.future_return.add(0.01)
+    accumulator.future_return.add(0.03)
+
+    assert accumulator.future_return_atr.values == [1.0, 3.0]
+    assert accumulator.future_return_atr.median() == 2.0
+    assert accumulator.future_return.median() == 0.02
+
 def test_run_mvp1_atlas_cli_requires_feature_matrix(tmp_path: Path) -> None:
     state_path = tmp_path / "anomaly_state_1m.csv"
     future_path = tmp_path / "anomaly_future_paths.csv"
@@ -334,7 +362,7 @@ def test_run_mvp1_atlas_cli_accepts_feature_matrix(tmp_path: Path) -> None:
     with (out_dir / "strategy_nature_atlas.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         atlas_rows = list(csv.DictReader(file_obj))
     assert atlas_rows
-    assert atlas_rows[0]["atlas_version"] == "mvp1_atlas_v3"
+    assert atlas_rows[0]["atlas_version"] == "mvp1_atlas_v4"
     assert {int(row["outcome_horizon_minutes"]) for row in atlas_rows} == {15, 30, 60, 120, 180}
     atlas_30m_rows = [row for row in atlas_rows if row["outcome_horizon_minutes"] == "30"]
     assert atlas_30m_rows

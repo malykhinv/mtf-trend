@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from anomaly_science.contracts.horizons import SUPPORTED_RESEARCH_HORIZONS, is_supported_research_horizon
 
-ATLAS_VERSION = "mvp1_atlas_v3"
+ATLAS_VERSION = "mvp1_atlas_v4"
 ATLAS_DEFAULT_OUTCOME_HORIZONS: tuple[int, ...] = SUPPORTED_RESEARCH_HORIZONS
 
 
