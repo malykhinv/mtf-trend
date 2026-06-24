@@ -206,3 +206,58 @@ def test_polars_atlas_backend_matches_legacy_csv_backend(tmp_path: Path) -> None
     )
 
     assert _artifacts_payload(polars_artifacts) == _artifacts_payload(legacy)
+
+
+def test_polars_atlas_backend_builds_nature_rows_without_legacy_nature_accumulator(monkeypatch, tmp_path: Path) -> None:
+    pytest.importorskip("polars")
+    import anomaly_science.atlas.polars_backend as polars_backend
+    from anomaly_science.atlas.builder import AtlasArtifacts
+
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    future_path = tmp_path / "anomaly_future_paths.csv"
+    feature_path = tmp_path / "anomaly_feature_matrix.csv"
+    _write_rows(
+        state_path,
+        schema_name="anomaly_state_1m.csv",
+        rows=[_state_payload(event_id="evt_atlas_1", offset_minutes=2)],
+    )
+    _write_rows(
+        future_path,
+        schema_name="anomaly_future_paths.csv",
+        rows=[
+            _future_payload(
+                event_id="evt_atlas_1",
+                offset_minutes=2,
+                future_return=1.2,
+                future_max=1.4,
+                future_min=-0.1,
+                reclaimed=True,
+            )
+        ],
+    )
+    _write_rows(
+        feature_path,
+        schema_name="anomaly_feature_matrix.csv",
+        rows=[_feature_payload(event_id="evt_atlas_1", offset_minutes=2, systemic_cluster_regime="idiosyncratic")],
+    )
+
+    def legacy_without_nature(*args, **kwargs):
+        return AtlasArtifacts(
+            nature_atlas_rows=(),
+            context_split_rows=(),
+            response_surface_rows=(),
+            market_shock_group_rows=(),
+        )
+
+    monkeypatch.setattr(polars_backend, "_build_atlas_artifacts_from_frame", legacy_without_nature)
+
+    artifacts = build_atlas_artifacts_polars_from_csv_paths(
+        state_path=state_path,
+        future_path=future_path,
+        feature_matrix_path=feature_path,
+    )
+
+    assert artifacts.nature_atlas_rows
+    assert {row.split_family for row in artifacts.nature_atlas_rows} >= {"price_shape_atr", "feature_matrix"}
+    assert {row.median_future_return_atr for row in artifacts.nature_atlas_rows} == {None}
+    assert artifacts.context_split_rows == ()
