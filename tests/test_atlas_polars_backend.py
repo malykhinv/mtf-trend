@@ -208,7 +208,7 @@ def test_polars_atlas_backend_matches_legacy_csv_backend(tmp_path: Path) -> None
     assert _artifacts_payload(polars_artifacts) == _artifacts_payload(legacy)
 
 
-def test_polars_atlas_backend_builds_nature_rows_without_legacy_nature_accumulator(monkeypatch, tmp_path: Path) -> None:
+def test_polars_atlas_backend_builds_nature_and_response_rows_without_legacy_accumulators(monkeypatch, tmp_path: Path) -> None:
     pytest.importorskip("polars")
     import anomaly_science.atlas.polars_backend as polars_backend
     from anomaly_science.atlas.builder import AtlasArtifacts
@@ -258,6 +258,9 @@ def test_polars_atlas_backend_builds_nature_rows_without_legacy_nature_accumulat
     )
 
     assert artifacts.nature_atlas_rows
+    assert artifacts.response_surface_rows
     assert {row.split_family for row in artifacts.nature_atlas_rows} >= {"price_shape_atr", "feature_matrix"}
+    assert {row.surface_name for row in artifacts.response_surface_rows} >= {"price_shape_atr_x_alpha_decay", "session_x_market_context"}
     assert {row.median_future_return_atr for row in artifacts.nature_atlas_rows} == {None}
     assert artifacts.context_split_rows == ()
+    assert artifacts.market_shock_group_rows == ()

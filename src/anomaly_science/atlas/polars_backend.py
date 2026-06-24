@@ -37,7 +37,7 @@ from anomaly_science.atlas.builder import (
 )
 from anomaly_science.atlas.config import AtlasConfig
 from anomaly_science.contracts.artifacts import get_artifact_schema
-from anomaly_science.contracts.atlas import AtlasNatureRow
+from anomaly_science.contracts.atlas import AtlasNatureRow, AtlasResponseSurfaceRow
 from anomaly_science.contracts.future import BARRIER_RESOLUTION_STOP_LOSS_FIRST
 
 _JOIN_COLUMNS = ("event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms")
@@ -90,11 +90,12 @@ def build_atlas_artifacts_polars_from_csv_paths(
     _enforce_atlas_polars_temporal_contract(joined)
     joined = _add_atlas_context_columns_polars(joined)
     nature_rows = _build_polars_nature_atlas_rows(joined=joined, config=cfg)
+    response_rows = _build_polars_response_surface_rows(joined=joined, config=cfg)
 
-    # The remaining atlas outputs are intentionally still produced by the legacy
-    # path in this migration step. Patch 3 only moves the toxic nature/context
-    # grouping core off Python list/dict accumulation; response surfaces and market
-    # summaries are migrated in the next patches.
+    # Context split rows and market summaries are intentionally still produced by
+    # the legacy path in this migration step. Nature rows and response surfaces are
+    # now owned by the explicit Polars backend, so they no longer depend on the
+    # legacy Python/pandas accumulator path.
     joined_pandas = joined.to_pandas()
     _enforce_atlas_frame_temporal_contract(joined_pandas)
     legacy_artifacts = _with_streaming_median_semantics(
@@ -103,7 +104,7 @@ def build_atlas_artifacts_polars_from_csv_paths(
     return AtlasArtifacts(
         nature_atlas_rows=tuple(nature_rows),
         context_split_rows=legacy_artifacts.context_split_rows,
-        response_surface_rows=legacy_artifacts.response_surface_rows,
+        response_surface_rows=tuple(response_rows),
         market_shock_group_rows=legacy_artifacts.market_shock_group_rows,
     )
 
@@ -396,6 +397,148 @@ def _polars_nature_rows_for_context(
         )
     return rows
 
+
+
+def _response_surface_specs() -> tuple[tuple[str, str, str, str, str], ...]:
+    return (
+        ("price_shape_atr_x_alpha_decay", "price_shape_atr", "ctx_price_shape_atr", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
+        (
+            "liquidation_x_cvd_divergence",
+            "liquidation_regime_relative",
+            "ctx_liquidation_regime_relative",
+            "cvd_divergence_regime",
+            "ctx_cvd_divergence_regime",
+        ),
+        (
+            "cross_section_x_systemic_cluster",
+            "cross_sectional_rank_regime",
+            "ctx_cross_sectional_rank_regime",
+            "systemic_cluster_regime",
+            "ctx_systemic_cluster_regime",
+        ),
+        ("btc_relative_x_volume_rank", "btc_relative_regime", "ctx_btc_relative_regime", "volume_regime_relative", "ctx_volume_regime_relative"),
+        ("session_x_market_context", "session", "ctx_session", "market_context", "ctx_market_context"),
+        ("speed_x_alpha_decay", "speed_regime", "ctx_speed_regime", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
+        (
+            "initial_pump_x_consolidation",
+            "initial_pump_height_atr",
+            "ctx_initial_pump_height_atr",
+            "consolidation_width_ratio",
+            "ctx_consolidation_width_ratio",
+        ),
+        ("shelf_position_x_alpha_decay", "shelf_position_atr", "ctx_shelf_position_atr", "alpha_decay_bucket", "ctx_alpha_decay_bucket"),
+        (
+            "shelf_break_x_systemic_cluster",
+            "shelf_break_risk",
+            "ctx_shelf_break_risk",
+            "systemic_cluster_regime",
+            "ctx_systemic_cluster_regime",
+        ),
+        (
+            "sweep_flow_x_liquidation",
+            "sweep_flow_regime",
+            "ctx_sweep_flow_regime",
+            "liquidation_regime_relative",
+            "ctx_liquidation_regime_relative",
+        ),
+    )
+
+
+def _build_polars_response_surface_rows(*, joined, config: AtlasConfig) -> tuple[AtlasResponseSurfaceRow, ...]:
+    rows: list[AtlasResponseSurfaceRow] = []
+    for horizon in config.outcome_horizon_minutes_list:
+        horizon_frame = _with_polars_horizon_columns(joined, horizon=horizon, config=config)
+        for surface_name, x_axis, x_column, y_axis, y_column in _response_surface_specs():
+            rows.extend(
+                _polars_response_surface_rows_for_surface(
+                    frame=horizon_frame,
+                    surface_name=surface_name,
+                    x_axis=x_axis,
+                    x_column=x_column,
+                    y_axis=y_axis,
+                    y_column=y_column,
+                    horizon=horizon,
+                    config=config,
+                )
+            )
+    return tuple(rows)
+
+
+def _polars_response_surface_rows_for_surface(
+    *,
+    frame,
+    surface_name: str,
+    x_axis: str,
+    x_column: str,
+    y_axis: str,
+    y_column: str,
+    horizon: int,
+    config: AtlasConfig,
+) -> list[AtlasResponseSurfaceRow]:
+    pl = _import_polars_for_atlas_backend()
+    grouped = (
+        frame.group_by([x_column, y_column])
+        .agg(
+            [
+                pl.col("event_id").count().alias("row_count"),
+                pl.col("event_id").n_unique().alias("unique_event_count"),
+                pl.col("_future_return_atr").mean().alias("mean_future_return_atr"),
+                pl.col("_future_max_atr").mean().alias("mean_future_max_atr"),
+                pl.col("_future_min_atr").mean().alias("mean_future_min_atr"),
+                pl.col("_reclaimed_running_high").cast(pl.Float64, strict=False).mean().alias("reclaim_rate"),
+                pl.col("_stop_first").cast(pl.Float64, strict=False).mean().alias("double_barrier_stop_first_rate"),
+            ]
+        )
+        .sort([x_column, y_column])
+    )
+    dominant = _polars_dominant_outcome_bins(frame=frame, group_columns=(x_column, y_column))
+    rows: list[AtlasResponseSurfaceRow] = []
+    for item in grouped.join(dominant, on=[x_column, y_column], how="left").iter_rows(named=True):
+        rows.append(
+            AtlasResponseSurfaceRow(
+                atlas_version=config.atlas_version,
+                surface_name=surface_name,
+                x_axis=x_axis,
+                x_bin=_bin_text(item[x_column]),
+                y_axis=y_axis,
+                y_bin=_bin_text(item[y_column]),
+                outcome_horizon_minutes=horizon,
+                outcome_coordinate=_outcome_coordinate(horizon),
+                row_count=int(item["row_count"]),
+                unique_event_count=int(item["unique_event_count"]),
+                mean_future_return_atr=_optional_float(item["mean_future_return_atr"]),
+                mean_future_max_atr=_optional_float(item["mean_future_max_atr"]),
+                mean_future_min_atr=_optional_float(item["mean_future_min_atr"]),
+                reclaim_rate=_optional_float(item["reclaim_rate"]),
+                double_barrier_stop_first_rate=_optional_float(item["double_barrier_stop_first_rate"]),
+                dominant_outcome_bin=str(item["dominant_outcome_bin"] or "none"),
+            )
+        )
+    return rows
+
+
+def _polars_dominant_outcome_bins(*, frame, group_columns: tuple[str, str]):
+    pl = _import_polars_for_atlas_backend()
+    x_column, y_column = group_columns
+    return (
+        frame.group_by([x_column, y_column, "_outcome_bin"])
+        .agg(pl.col("event_id").count().alias("_outcome_count"))
+        .sort([x_column, y_column, "_outcome_count", "_outcome_bin"], descending=[False, False, True, False])
+        .unique(subset=[x_column, y_column], keep="first", maintain_order=True)
+        .select([x_column, y_column, pl.col("_outcome_bin").alias("dominant_outcome_bin")])
+    )
+
+
+def _bin_text(value: object) -> str:
+    if value is None:
+        return "nan"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number != number:
+        return "nan"
+    return str(value)
 
 def _optional_float(value: object) -> float | None:
     if value is None:
