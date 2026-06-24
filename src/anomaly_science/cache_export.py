@@ -260,11 +260,8 @@ def _resolve_export_start_ms(*, config: CacheMvp1CsvExportConfig, symbols: tuple
         path = config.cache_dir / f"{symbol}.parquet"
         if not path.exists():
             raise FileNotFoundError(f"cache parquet is missing for {symbol}: {path}")
-        schema_columns = set(_read_parquet_schema_columns(path))
-        if "timestamp" not in schema_columns:
-            raise ValueError(f"{path} is missing required cache columns: ['timestamp']")
-        timestamps = pd.read_parquet(path, columns=["timestamp"], use_threads=config.parquet_use_threads)
-        if timestamps.empty:
+        symbol_max = _parquet_timestamp_max(path, use_threads=config.parquet_use_threads)
+        if symbol_max is None:
             _print_cache_export_progress(
                 config=config,
                 phase="scan",
@@ -275,7 +272,6 @@ def _resolve_export_start_ms(*, config: CacheMvp1CsvExportConfig, symbols: tuple
                 started_at=started_at,
             )
             continue
-        symbol_max = int(timestamps["timestamp"].astype("int64").max())
         max_open_time_ms = symbol_max if max_open_time_ms is None else max(max_open_time_ms, symbol_max)
         _print_cache_export_progress(
             config=config,
@@ -286,11 +282,41 @@ def _resolve_export_start_ms(*, config: CacheMvp1CsvExportConfig, symbols: tuple
             status=f"max_ts={symbol_max}",
             started_at=started_at,
         )
-        del timestamps
     if max_open_time_ms is None:
         return None
     end_day_start_ms = (max_open_time_ms // ONE_DAY_MS) * ONE_DAY_MS
     return end_day_start_ms - (config.days - 1) * ONE_DAY_MS
+
+
+def _parquet_timestamp_max(path: Path, *, use_threads: bool) -> int | None:
+    """Return the maximum ``timestamp`` without reading the column when possible.
+
+    Parquet row-group statistics already record per-group max, so the global max
+    comes from the footer metadata alone. Only when a row group lacks min/max
+    statistics do we fall back to reading the column, which yields the identical
+    value at higher cost.
+    """
+    parquet_file = pq.ParquetFile(path)
+    column_names = parquet_file.schema_arrow.names
+    if "timestamp" not in column_names:
+        raise ValueError(f"{path} is missing required cache columns: ['timestamp']")
+    metadata = parquet_file.metadata
+    if metadata.num_rows == 0:
+        return None
+    column_index = column_names.index("timestamp")
+    group_maxes: list[int] = []
+    for row_group_index in range(metadata.num_row_groups):
+        statistics = metadata.row_group(row_group_index).column(column_index).statistics
+        if statistics is None or not statistics.has_min_max:
+            group_maxes = []
+            break
+        group_maxes.append(int(statistics.max))
+    if group_maxes:
+        return max(group_maxes)
+    timestamps = pd.read_parquet(path, columns=["timestamp"], use_threads=use_threads)
+    if timestamps.empty:
+        return None
+    return int(timestamps["timestamp"].astype("int64").max())
 
 
 def _print_cache_export_progress(

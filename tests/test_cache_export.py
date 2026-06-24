@@ -337,48 +337,32 @@ def test_export_cache_applies_parquet_timestamp_filter_after_window_scan(monkeyp
     cache_dir = tmp_path / "cache"
     out_dir = tmp_path / "mvp1"
     cache_dir.mkdir()
-    parquet_path = cache_dir / "AAAUSDT.parquet"
-    parquet_path.write_bytes(b"placeholder")
-    columns = (
-        "timestamp",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "quote_volume",
-        "trade_count",
-        "taker_buy_quote_volume",
-        "open_interest",
-    )
+    # Two UTC days; days=1 must keep only the final day. The window-start scan now
+    # reads the max timestamp from Parquet footer statistics, so the only column
+    # read is the filtered main data read.
+    pd.DataFrame(
+        {
+            "timestamp": [1704067200000, 1704153600000],
+            "open": [1.0, 2.0],
+            "high": [1.0, 2.0],
+            "low": [1.0, 2.0],
+            "close": [1.0, 2.0],
+            "volume": [1.0, 2.0],
+            "quote_volume": [1.0, 2.0],
+            "trade_count": [1, 2],
+            "taker_buy_quote_volume": [1.0, 2.0],
+            "open_interest": [1.0, 2.0],
+        }
+    ).to_parquet(cache_dir / "AAAUSDT.parquet")
+
     read_calls: list[dict[str, object]] = []
+    real_read_parquet = pd.read_parquet
 
-    monkeypatch.setattr(cache_export, "_read_parquet_schema_columns", lambda path: columns)
-
-    def fake_read_parquet(path, *, columns=None, filters=None, use_threads=False):
+    def spy_read_parquet(path, *, columns=None, filters=None, use_threads=False):
         read_calls.append({"columns": tuple(columns or ()), "filters": filters})
-        frame = pd.DataFrame(
-            {
-                "timestamp": [1704067200000, 1704153600000],
-                "open": [1.0, 2.0],
-                "high": [1.0, 2.0],
-                "low": [1.0, 2.0],
-                "close": [1.0, 2.0],
-                "volume": [1.0, 2.0],
-                "quote_volume": [1.0, 2.0],
-                "trade_count": [1, 2],
-                "taker_buy_quote_volume": [1.0, 2.0],
-                "open_interest": [1.0, 2.0],
-            }
-        )
-        if filters:
-            for column, operator, value in filters:
-                assert column == "timestamp"
-                assert operator == ">="
-                frame = frame[frame[column] >= value].copy()
-        return frame[list(columns or frame.columns)]
+        return real_read_parquet(path, columns=columns, filters=filters)
 
-    monkeypatch.setattr(pd, "read_parquet", fake_read_parquet)
+    monkeypatch.setattr(pd, "read_parquet", spy_read_parquet)
 
     export_cache_to_mvp1_csv(
         CacheMvp1CsvExportConfig(
@@ -390,9 +374,10 @@ def test_export_cache_applies_parquet_timestamp_filter_after_window_scan(monkeyp
         )
     )
 
-    assert read_calls[0]["columns"] == ("timestamp",)
-    assert read_calls[0]["filters"] is None
-    assert read_calls[1]["filters"] == [("timestamp", ">=", 1704153600000)]
+    # Footer-statistics scan reads no column data; the single data read carries the
+    # window filter pushdown.
+    assert len(read_calls) == 1
+    assert read_calls[0]["filters"] == [("timestamp", ">=", 1704153600000)]
     candles = pd.read_csv(out_dir / "candles_1m.csv")
     assert candles["open_time_ms"].tolist() == [1704153600000]
 
