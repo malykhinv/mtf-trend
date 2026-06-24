@@ -34,6 +34,7 @@ from anomaly_science.future.builder import (
     load_anomaly_state_1m_csv,
     load_strategy_future_paths_csv,
     load_strategy_state_1m_csv,
+    read_future_paths_parquet_sidecar_table,
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
 from anomaly_science.future.run import run_mvp1_future
@@ -65,6 +66,7 @@ __all__ = [
     "iter_candles_1m_csv",
     "iter_strategy_state_1m_csv",
     "iter_anomaly_state_1m_csv",
+    "read_future_paths_parquet_sidecar_table",
     "future_row_to_artifact",
     "future_rows_to_artifact",
     "load_strategy_future_paths_csv",

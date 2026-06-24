@@ -13,8 +13,7 @@ from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_sch
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.labels import StrategyOutcomeLabelRow
 from anomaly_science.labels.builder import (
-    build_strategy_outcome_label_from_input,
-    iter_outcome_label_inputs_from_artifacts,
+    iter_strategy_outcome_labels_vectorized,
     outcome_label_row_attribute_name,
     validate_outcome_label_row_fieldnames,
 )
@@ -37,12 +36,10 @@ def run_mvp1_labels(
 
     label_written, label_row_count = _write_label_rows_with_aliases(
         output_path / "strategy_outcome_labels.csv",
-        (
-            build_strategy_outcome_label_from_input(input_row=input_row, config=cfg)
-            for input_row in iter_outcome_label_inputs_from_artifacts(
-                state_path=state_artifact_path,
-                future_path=future_artifact_path,
-            )
+        iter_strategy_outcome_labels_vectorized(
+            state_path=state_artifact_path,
+            future_path=future_artifact_path,
+            config=cfg,
         ),
         get_artifact_schema("strategy_outcome_labels.csv"),
     )

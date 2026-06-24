@@ -24,8 +24,16 @@ from anomaly_science.future import (
     iter_strategy_state_1m_csv,
     load_strategy_future_paths_csv,
     load_strategy_state_1m_csv,
+    read_future_paths_parquet_sidecar_table,
 )
+from anomaly_science.future.builder import future_paths_parquet_manifest_path
 from anomaly_science.labels.config import OutcomeLabelConfig
+from anomaly_science.state.parquet_sidecar import (
+    read_state_1m_parquet_sidecar_table,
+    state_1m_parquet_manifest_path,
+)
+
+_LABEL_JOIN_COLUMNS = ("event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms")
 
 
 class OutcomeLabelInputError(ValueError):
@@ -153,6 +161,150 @@ def build_strategy_outcome_labels_from_inputs(
 
 
 build_anomaly_outcome_labels_from_inputs = build_strategy_outcome_labels_from_inputs
+
+
+def iter_strategy_outcome_labels_vectorized(
+    *,
+    state_path: str | Path,
+    future_path: str | Path,
+    config: OutcomeLabelConfig | None = None,
+) -> Iterable[StrategyOutcomeLabelRow]:
+    """Columnar Polars label build from the strict state/future artifacts.
+
+    Reads the canonical Parquet sidecars (or CSV stubs) as Polars frames, enforces
+    the same one-to-one row-aligned join and temporal/double-barrier contracts as
+    the per-row path, assigns ATR scenarios per horizon with vectorized expressions,
+    then yields identical ``StrategyOutcomeLabelRow`` objects so the artifact bytes
+    are unchanged.
+    """
+    cfg = config or OutcomeLabelConfig()
+    frame = _build_label_output_frame(state_path=Path(state_path), future_path=Path(future_path), config=cfg)
+    for record in frame.iter_rows(named=True):
+        yield StrategyOutcomeLabelRow(**record)
+
+
+def _build_label_output_frame(*, state_path: Path, future_path: Path, config: OutcomeLabelConfig):
+    import polars as pl
+
+    if not state_path.exists():
+        raise OutcomeLabelInputError(f"state artifact is missing: {state_path}")
+    if not future_path.exists():
+        raise OutcomeLabelInputError(f"future artifact is missing: {future_path}")
+
+    future_columns = list(get_artifact_schema("strategy_future_paths.csv").required_columns)
+    state_columns = list(get_artifact_schema("strategy_state_1m.csv").required_columns)
+    future_frame = _read_label_sidecar_polars_frame(
+        pl, csv_path=future_path, schema_columns=future_columns, select=future_columns, kind="future"
+    )
+    state_frame = _read_label_sidecar_polars_frame(
+        pl, csv_path=state_path, schema_columns=state_columns, select=list(_LABEL_JOIN_COLUMNS), kind="state"
+    )
+
+    if state_frame.height != future_frame.height:
+        raise OutcomeLabelInputError(
+            "state/future label join must be one-to-one on "
+            f"{','.join(_LABEL_JOIN_COLUMNS)}; state_rows={state_frame.height}, future_rows={future_frame.height}"
+        )
+    for column in _LABEL_JOIN_COLUMNS:
+        if not state_frame.get_column(column).equals(future_frame.get_column(column)):
+            raise OutcomeLabelInputError(
+                "state/future label join must be row-aligned on "
+                f"{','.join(_LABEL_JOIN_COLUMNS)}; first mismatch in column {column!r}"
+            )
+
+    _enforce_label_future_frame_contract(pl, future_frame=future_frame, config=config)
+
+    scenario_exprs = [
+        _scenario_polars_expr(pl, horizon=horizon, config=config).alias(f"scenario_{horizon}m")
+        for horizon in config.horizons_minutes
+    ]
+    framed = future_frame.with_columns(scenario_exprs)
+    framed = framed.with_columns(
+        [
+            (pl.col(f"scenario_{horizon}m") != MISSING_FUTURE_SCENARIO).alias(f"label_available_{horizon}m")
+            for horizon in config.horizons_minutes
+        ]
+    )
+    return framed.select(
+        pl.lit(config.label_schema_version).alias("label_schema_version"),
+        pl.lit(config.atr_window_minutes).alias("atr_window_minutes"),
+        pl.col("ATR_1d_asof_t").cast(pl.Float64).alias("core_atr_1440"),
+        pl.lit(config.k_continuation).alias("k_continuation"),
+        pl.lit(config.k_fade).alias("k_fade"),
+        pl.lit(config.k_chop).alias("k_chop"),
+        pl.col("event_id"),
+        pl.col("symbol"),
+        pl.col("snapshot_time_ms"),
+        pl.col("feature_cutoff_time_ms"),
+        pl.col("future_start_time_ms"),
+        *[pl.col(f"scenario_{horizon}m") for horizon in config.horizons_minutes],
+        *[pl.col(f"label_available_{horizon}m") for horizon in config.horizons_minutes],
+        pl.lit(ATR_LABEL_SOURCE).alias("label_source"),
+        pl.lit(TEMPORAL_LABEL_CONTRACT).alias("temporal_contract"),
+    )
+
+
+def _read_label_sidecar_polars_frame(pl, *, csv_path: Path, schema_columns: list[str], select: list[str], kind: str):
+    if kind == "future" and future_paths_parquet_manifest_path(csv_path).is_file():
+        table = read_future_paths_parquet_sidecar_table(csv_path=csv_path, expected_columns=schema_columns)
+        return pl.from_arrow(table).select(select)
+    if kind == "state" and state_1m_parquet_manifest_path(csv_path).is_file():
+        table = read_state_1m_parquet_sidecar_table(csv_path=csv_path, expected_columns=schema_columns, columns=select)
+        return pl.from_arrow(table).select(select)
+    return pl.read_csv(csv_path, columns=select)
+
+
+def _scenario_polars_expr(pl, *, horizon: int, config: OutcomeLabelConfig):
+    suffix = f"{horizon}m"
+    return_atr = pl.col(f"future_return_atr_{suffix}").cast(pl.Float64)
+    max_atr = pl.col(f"future_max_atr_{suffix}").cast(pl.Float64)
+    min_atr = pl.col(f"future_min_atr_{suffix}").cast(pl.Float64)
+    core_atr = pl.col("ATR_1d_asof_t").cast(pl.Float64)
+    hit = pl.col(f"intracandle_double_barrier_hit_{suffix}")
+    resolution = pl.col(f"barrier_resolution_{suffix}")
+    missing = core_atr.is_null() | return_atr.is_null() | max_atr.is_null() | min_atr.is_null()
+    stop_first = (hit == True).fill_null(False) & (  # noqa: E712 - explicit True for nullable bool
+        resolution == BARRIER_RESOLUTION_STOP_LOSS_FIRST
+    ).fill_null(False)
+    upside = max_atr >= config.k_continuation
+    downside = min_atr <= -config.k_fade
+    return (
+        pl.when(missing)
+        .then(pl.lit(MISSING_FUTURE_SCENARIO))
+        .when(stop_first)
+        .then(pl.lit("unclear"))
+        .when(upside & downside)
+        .then(pl.lit("unclear"))
+        .when(upside & (return_atr >= config.k_chop))
+        .then(pl.lit("long_continuation"))
+        .when(downside & (return_atr <= -config.k_chop))
+        .then(pl.lit("short_fade"))
+        .when((max_atr < config.k_chop) & (min_atr > -config.k_chop))
+        .then(pl.lit("static_or_chop"))
+        .otherwise(pl.lit("unclear"))
+    )
+
+
+def _enforce_label_future_frame_contract(pl, *, future_frame, config: OutcomeLabelConfig) -> None:
+    for horizon in config.horizons_minutes:
+        suffix = f"{horizon}m"
+        hit_present = future_frame.filter(pl.col(f"intracandle_double_barrier_hit_{suffix}").is_not_null())
+        if hit_present.height:
+            kc = hit_present.get_column("double_barrier_k_continuation")
+            kf = hit_present.get_column("double_barrier_k_fade")
+            if kc.is_null().any() or (kc != config.k_continuation).any():
+                raise MarketDataContractError(
+                    f"future double_barrier_k_continuation must match label k_continuation for horizon {suffix}"
+                )
+            if kf.is_null().any() or (kf != config.k_fade).any():
+                raise MarketDataContractError(
+                    f"future double_barrier_k_fade must match label k_fade for horizon {suffix}"
+                )
+        for base in ("future_return_atr", "future_max_atr", "future_min_atr"):
+            series = future_frame.get_column(f"{base}_{suffix}").cast(pl.Float64)
+            present = series.drop_nulls()
+            if present.len() and not present.is_finite().all():
+                raise MarketDataContractError(f"{base}_{suffix} must be finite when present")
 
 
 def build_strategy_outcome_label_from_input(

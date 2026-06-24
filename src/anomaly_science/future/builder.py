@@ -270,6 +270,11 @@ def _future_paths_parquet_sidecar_exists(csv_path: Path) -> bool:
     return manifest_exists
 
 
+def read_future_paths_parquet_sidecar_table(*, csv_path: Path, expected_columns: Sequence[str]):
+    """Public strict reader: ordered Arrow table of future paths from the sidecar."""
+    return _read_future_paths_parquet_sidecar_table(csv_path=csv_path, expected_columns=expected_columns)
+
+
 def _read_future_paths_parquet_sidecar_table(*, csv_path: Path, expected_columns: Sequence[str]):
     payload = _load_and_validate_future_paths_parquet_manifest(
         csv_path=csv_path,
