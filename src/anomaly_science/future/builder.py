@@ -207,41 +207,101 @@ def _iter_future_state_projection_csv(path: str | Path) -> Iterable[_FutureState
             )
 
 
-def iter_candles_1m_csv(path: str | Path, *, max_open_time_ms: int | None = None) -> Iterable[Candle1m]:
-    """Stream normalized 1m candles from the explicit CSV boundary."""
+def iter_candles_1m_csv(
+    path: str | Path,
+    *,
+    max_open_time_ms: int | None = None,
+    symbol: str | None = None,
+) -> Iterable[Candle1m]:
+    """Stream normalized 1m candles from the explicit CSV boundary.
+
+    Uses positional ``csv.reader`` access instead of ``DictReader`` to avoid one
+    dict allocation and per-field dict lookups for every candle; this is the
+    shared hot path for the state/future/feature-matrix/simulation candle scans.
+    When ``symbol`` is given, non-matching rows are skipped before the typed
+    candle is constructed so single-symbol context scans do not pay full
+    validation for the whole market.
+    """
     candles_path = Path(path)
     if not candles_path.exists():
         raise CsvDataSourceError(f"required dataset 'candles_1m.csv' is missing: {candles_path}")
     with candles_path.open(encoding="utf-8-sig", newline="") as file_obj:
-        reader = csv.DictReader(file_obj)
-        actual_columns = tuple(reader.fieldnames or ())
+        reader = csv.reader(file_obj)
+        header = next(reader, None)
+        actual_columns = tuple(header or ())
         missing = [name for name in CANDLE_REQUIRED_COLUMNS if name not in actual_columns]
         if missing:
             raise CsvDataSourceError(f"dataset 'candles_1m.csv' is missing required columns: {missing}")
-        has_number_of_trades = "number_of_trades" in actual_columns
-        has_taker_buy_quote_volume = "taker_buy_quote_volume" in actual_columns
-        for row_index, row in enumerate(reader):
+        index_of = {name: position for position, name in enumerate(actual_columns)}
+        i_symbol = index_of["symbol"]
+        i_open_time = index_of["open_time_ms"]
+        i_available = index_of["available_time_ms"]
+        i_open = index_of["open"]
+        i_high = index_of["high"]
+        i_low = index_of["low"]
+        i_close = index_of["close"]
+        i_volume = index_of["volume"]
+        i_quote = index_of["quote_volume"]
+        i_trades = index_of.get("number_of_trades")
+        i_taker = index_of.get("taker_buy_quote_volume")
+        for row_index, values in enumerate(reader):
+            if symbol is not None and values[i_symbol] != symbol:
+                continue
             try:
-                open_time_ms = _required_csv_int(row, "open_time_ms")
+                open_time_ms = _required_cell_int(values, i_open_time, "open_time_ms")
                 if max_open_time_ms is not None and open_time_ms >= max_open_time_ms:
                     continue
                 yield Candle1m(
-                    symbol=_required_csv_str(row, "symbol"),
+                    symbol=_required_cell_str(values, i_symbol, "symbol"),
                     open_time_ms=open_time_ms,
-                    available_time_ms=_required_csv_int(row, "available_time_ms"),
-                    open=_required_csv_float(row, "open"),
-                    high=_required_csv_float(row, "high"),
-                    low=_required_csv_float(row, "low"),
-                    close=_required_csv_float(row, "close"),
-                    volume=_required_csv_float(row, "volume"),
-                    quote_volume=_required_csv_float(row, "quote_volume"),
-                    number_of_trades=_optional_csv_float(row, "number_of_trades") if has_number_of_trades else None,
+                    available_time_ms=_required_cell_int(values, i_available, "available_time_ms"),
+                    open=_required_cell_float(values, i_open, "open"),
+                    high=_required_cell_float(values, i_high, "high"),
+                    low=_required_cell_float(values, i_low, "low"),
+                    close=_required_cell_float(values, i_close, "close"),
+                    volume=_required_cell_float(values, i_volume, "volume"),
+                    quote_volume=_required_cell_float(values, i_quote, "quote_volume"),
+                    number_of_trades=_optional_cell_float(values, i_trades) if i_trades is not None else None,
                     taker_buy_quote_volume=(
-                        _optional_csv_float(row, "taker_buy_quote_volume") if has_taker_buy_quote_volume else None
+                        _optional_cell_float(values, i_taker) if i_taker is not None else None
                     ),
                 )
-            except (TypeError, ValueError) as exc:
+            except (TypeError, ValueError, IndexError) as exc:
                 raise CsvDataSourceError(f"invalid candles_1m.csv row {row_index}: {exc}") from exc
+
+
+def _required_cell_str(values: Sequence[str], index: int, name: str) -> str:
+    value = values[index]
+    if value == "":
+        raise ValueError(f"{name} is required")
+    return value
+
+
+def _required_cell_int(values: Sequence[str], index: int, name: str) -> int:
+    value = values[index]
+    if value == "":
+        raise ValueError(f"{name} is required")
+    return int(value)
+
+
+def _required_cell_float(values: Sequence[str], index: int, name: str) -> float:
+    value = values[index]
+    if value == "":
+        raise ValueError(f"{name} is required")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _optional_cell_float(values: Sequence[str], index: int) -> float | None:
+    value = values[index]
+    if value == "":
+        return None
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("value must be finite when present")
+    return result
 
 
 

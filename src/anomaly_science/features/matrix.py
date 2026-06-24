@@ -1388,11 +1388,9 @@ def _symbol_groups(
 
 
 def _load_symbol_candle_series(candles_path: Path, symbol: str, *, max_input_time_ms: int | None = None) -> _CandleSeries:
-    rows = [
-        candle
-        for candle in iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms)
-        if candle.symbol == symbol
-    ]
+    rows = list(
+        iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms, symbol=symbol)
+    )
     return _CandleSeries(rows)
 
 
