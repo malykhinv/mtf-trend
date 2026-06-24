@@ -238,8 +238,7 @@ def test_polars_atlas_backend_matches_legacy_csv_backend(tmp_path: Path) -> None
 
 def test_polars_atlas_backend_builds_nature_and_response_rows_without_legacy_accumulators(monkeypatch, tmp_path: Path) -> None:
     pytest.importorskip("polars")
-    import anomaly_science.atlas.polars_backend as polars_backend
-    from anomaly_science.atlas.builder import AtlasArtifacts
+    import anomaly_science.atlas.builder as legacy_builder
 
     state_path = tmp_path / "anomaly_state_1m.csv"
     future_path = tmp_path / "anomaly_future_paths.csv"
@@ -269,15 +268,10 @@ def test_polars_atlas_backend_builds_nature_and_response_rows_without_legacy_acc
         rows=[_feature_payload(event_id="evt_atlas_1", offset_minutes=2, systemic_cluster_regime="idiosyncratic")],
     )
 
-    def legacy_without_nature(*args, **kwargs):
-        return AtlasArtifacts(
-            nature_atlas_rows=(),
-            context_split_rows=(),
-            response_surface_rows=(),
-            market_shock_group_rows=(),
-        )
+    def fail_exact_median_accumulator(cls):
+        raise AssertionError("Polars atlas backend must not use legacy exact-median accumulators")
 
-    monkeypatch.setattr(polars_backend, "_build_atlas_artifacts_from_frame", legacy_without_nature)
+    monkeypatch.setattr(legacy_builder._NatureAccumulator, "with_exact_medians", classmethod(fail_exact_median_accumulator))
 
     artifacts = build_atlas_artifacts_polars_from_csv_paths(
         state_path=state_path,
@@ -435,3 +429,71 @@ def test_run_mvp1_atlas_outputs_match_explicit_polars_backend_artifacts(tmp_path
 
     assert (out_dir / "artifact_manifest.json").is_file()
 
+
+
+def test_polars_atlas_backend_large_fixture_has_bounded_progress_and_no_median_accumulators(monkeypatch, tmp_path: Path) -> None:
+    pytest.importorskip("polars")
+    import anomaly_science.atlas.builder as legacy_builder
+    from anomaly_science.atlas.config import AtlasConfig
+
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    future_path = tmp_path / "anomaly_future_paths.csv"
+    feature_path = tmp_path / "anomaly_feature_matrix.csv"
+    row_count = 1024
+    state_rows = []
+    future_rows = []
+    feature_rows = []
+    regimes = ("idiosyncratic", "systemic_beta_shock", "localized_cluster")
+    for index in range(row_count):
+        symbol = f"SYM{index % 32:03d}/USDT:USDT"
+        event_id = f"evt_perf_{index:05d}"
+        offset_minutes = index + 2
+        state_rows.append(_state_payload(event_id=event_id, offset_minutes=offset_minutes, symbol=symbol))
+        future_return = 1.2 if index % 3 == 0 else (-1.2 if index % 3 == 1 else 0.05)
+        future_rows.append(
+            _future_payload(
+                event_id=event_id,
+                offset_minutes=offset_minutes,
+                future_return=future_return,
+                future_max=1.4 if future_return > 1.0 else 0.2,
+                future_min=-1.4 if future_return < -1.0 else -0.2,
+                reclaimed=index % 2 == 0,
+                symbol=symbol,
+            )
+        )
+        feature_rows.append(
+            _feature_payload(
+                event_id=event_id,
+                offset_minutes=offset_minutes,
+                systemic_cluster_regime=regimes[index % len(regimes)],
+                symbol=symbol,
+            )
+        )
+
+    _write_rows(state_path, schema_name="anomaly_state_1m.csv", rows=state_rows)
+    _write_rows(future_path, schema_name="anomaly_future_paths.csv", rows=future_rows)
+    _write_rows(feature_path, schema_name="anomaly_feature_matrix.csv", rows=feature_rows)
+
+    def fail_exact_median_accumulator(cls):
+        raise AssertionError("Polars atlas backend must not use legacy exact-median accumulators")
+
+    monkeypatch.setattr(legacy_builder._NatureAccumulator, "with_exact_medians", classmethod(fail_exact_median_accumulator))
+    progress_updates = []
+
+    artifacts = build_atlas_artifacts_polars_from_csv_paths(
+        state_path=state_path,
+        future_path=future_path,
+        feature_matrix_path=feature_path,
+        config=AtlasConfig(outcome_horizon_minutes=30),
+        progress_callback=progress_updates.append,
+    )
+
+    assert artifacts.nature_atlas_rows
+    assert artifacts.context_split_rows
+    assert artifacts.response_surface_rows
+    assert artifacts.market_shock_group_rows
+    assert {row.median_future_return_atr for row in artifacts.nature_atlas_rows} == {None}
+    assert {row.median_future_return for row in artifacts.nature_atlas_rows} == {None}
+    assert [update.done for update in progress_updates] == [0, 1, 2, 3, 4, 5, 6]
+    assert {update.total for update in progress_updates} == {6}
+    assert all(update.unit == "steps" for update in progress_updates)
