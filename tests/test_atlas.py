@@ -320,6 +320,8 @@ def test_run_mvp1_atlas_cli_accepts_feature_matrix(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "mvp1 strategy atlas artifacts written" in result.stdout
+    assert "atlas" in result.stderr
+    assert "rows" in result.stderr
     assert (out_dir / "strategy_nature_atlas.csv").is_file()
     assert (out_dir / "strategy_context_splits.csv").is_file()
     assert (out_dir / "strategy_response_surfaces.csv").is_file()

@@ -1066,7 +1066,8 @@ def _load_feature_matrix_parquet_sidecar(
 
 def iter_strategy_feature_matrix_frame_chunks_prefer_parquet(
     *,
-    csv_path: str | Path,
+    csv_path: str | Path | None = None,
+    path: str | Path | None = None,
     usecols: Sequence[str],
     chunksize: int,
 ):
@@ -1075,11 +1076,16 @@ def iter_strategy_feature_matrix_frame_chunks_prefer_parquet(
     The Parquet sidecar is used only when both the sidecar file and its manifest are
     present. A partially written or invalid sidecar is an explicit error rather than
     a silent CSV fallback. If no sidecar exists, callers keep the historical strict
-    CSV path.
+    CSV path. ``path`` is accepted as a compatibility alias for the artifact path so
+    caller/callee keyword drift fails in tests instead of during a multi-hour run.
     """
     import pandas as pd
 
-    path = Path(csv_path)
+    if (csv_path is None) == (path is None):
+        raise TypeError("exactly one of csv_path or path is required")
+    feature_matrix_path = csv_path if csv_path is not None else path
+    assert feature_matrix_path is not None
+    path = Path(feature_matrix_path)
     manifest_path = _feature_matrix_parquet_manifest_path(path)
     sidecar_path = _feature_matrix_parquet_path(path)
     manifest_exists = manifest_path.is_file()

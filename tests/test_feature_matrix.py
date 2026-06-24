@@ -15,6 +15,7 @@ from anomaly_science.features import (
     alpha_decay_bucket,
     build_price_time_feature_matrix,
     feature_matrix_rows_to_artifact,
+    iter_strategy_feature_matrix_frame_chunks_prefer_parquet,
     load_strategy_feature_matrix_csv,
     run_mvp1_feature_matrix,
 )
@@ -520,6 +521,22 @@ def test_run_mvp1_feature_matrix_writes_artifacts(tmp_path: Path) -> None:
     assert len(loaded_rows) == 1
     assert loaded_rows[0].alpha_decay_bucket == "3-5m"
     assert loaded_rows[0].event_age_ratio == state.minutes_since_detection / 30
+
+    chunks = list(
+        iter_strategy_feature_matrix_frame_chunks_prefer_parquet(
+            path=matrix_path,
+            usecols=["event_id", "symbol", "snapshot_time_ms"],
+            chunksize=1,
+        )
+    )
+    assert len(chunks) == 1
+    assert chunks[0].to_dict("records") == [
+        {
+            "event_id": state.event_id,
+            "symbol": state.symbol,
+            "snapshot_time_ms": state.snapshot_time_ms,
+        }
+    ]
 
     with audit_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
         audit_rows = {row["check_name"]: row for row in csv.DictReader(file_obj)}

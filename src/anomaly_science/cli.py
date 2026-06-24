@@ -17,6 +17,7 @@ from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matri
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
+from anomaly_science.progress import make_stderr_progress_callback
 from anomaly_science.research import ResearchDatasetBuildConfig, ResearchRunConfig, build_research_dataset, run_research_pipeline
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
@@ -513,6 +514,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             future_path=Path(args.future),
             feature_matrix_path=Path(args.features),
             out_dir=Path(args.out),
+            progress_callback=make_stderr_progress_callback(stage_name="atlas", unit="rows"),
         )
         print(f"mvp1 strategy atlas artifacts written: {output_dir}")
         return 0
