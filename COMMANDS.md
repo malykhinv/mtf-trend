@@ -69,6 +69,15 @@ Low-level target-horizon commands use the same horizon contract as `run-research
 
 `run-research` defaults to `--research-mode is`, which excludes the final holdout from downstream research stages before data audit/events/state/features/prediction. For short exported windows, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to preserve the final holdout while keeping up to 8 non-holdout research days for weekly WFA proof when the window allows it. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records an explicit approved holdout access row. `run-research` writes `stages/forensic_audit/strategy_protocol_audit.csv` after simulation and exits non-zero if the independent forensic audit has any `FAIL` row. `research_run_summary.csv` records holdout mode plus forensic audit status/counts.
 
+Weekly walk-forward reuse: the deterministic heavy phases (input, data audit, events, state, future, feature_matrix) are pure functions of the cache snapshot, strategy and window, so build them once per week and reuse them for every evaluation:
+
+```bash
+python main.py build-research-dataset broad_anomaly_v1_h30 --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out .output/results/dataset_stores/broad_anomaly_v1_h30_d380 --days 380 --max-phase feature_matrix
+python main.py run-research broad_anomaly_v1_h30 --days 380 --dataset-store .output/results/dataset_stores/broad_anomaly_v1_h30_d380
+```
+
+With `--dataset-store`, `run-research` hardlinks the store's phases into the run directory (no data copy) and rebuilds only atlas/labels/prediction/controls/EV/simulation plus the forensic audit. The store is validated and must match `strategy_name/cache_dir/days/research_mode` and be built through `feature_matrix`; the run aborts if the store's input boundary differs from the run's research input view. `build-research-dataset` and `run-research` share the same holdout/input-view contract, so a stored IS window is identical to the one `run-research` computes.
+
 MVP1 weekly CatBoost+Isotonic calibrated prediction:
 
 ```bash
