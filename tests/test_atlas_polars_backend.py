@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from anomaly_science.atlas.builder import build_atlas_artifacts_from_csv_paths
+from anomaly_science.atlas.builder import (
+    build_atlas_artifacts_from_csv_paths,
+    context_split_rows_to_artifact,
+    market_shock_group_rows_to_artifact,
+    nature_rows_to_artifact,
+    response_surface_rows_to_artifact,
+)
 from anomaly_science.atlas.polars_backend import build_atlas_artifacts_polars_from_csv_paths
 from anomaly_science.contracts.artifacts import get_artifact_schema
 
@@ -164,6 +170,28 @@ def _artifacts_payload(artifacts) -> dict[str, list[dict[str, object]]]:
     }
 
 
+def _read_csv_artifact_rows(path: Path, *, schema_name: str) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+        reader = csv.DictReader(file_obj)
+        assert reader.fieldnames == list(get_artifact_schema(schema_name).required_columns)
+        return [dict(row) for row in reader]
+
+
+def _csv_string_rows(*, schema_name: str, rows: list[dict[str, object]]) -> list[dict[str, str]]:
+    fieldnames = list(get_artifact_schema(schema_name).required_columns)
+    result: list[dict[str, str]] = []
+    for row in rows:
+        result.append({name: "" if row[name] is None else str(row[name]) for name in fieldnames})
+    return result
+
+
+def _assert_output_artifact_matches_rows(path: Path, *, schema_name: str, rows: list[dict[str, object]]) -> None:
+    assert _read_csv_artifact_rows(path, schema_name=schema_name) == _csv_string_rows(
+        schema_name=schema_name,
+        rows=rows,
+    )
+
+
 def test_polars_atlas_backend_matches_legacy_csv_backend(tmp_path: Path) -> None:
     pytest.importorskip("polars")
     state_path = tmp_path / "anomaly_state_1m.csv"
@@ -317,3 +345,93 @@ def test_run_mvp1_atlas_uses_polars_backend_without_legacy_fallback(monkeypatch,
     assert output_dir == out_dir
     assert (out_dir / "strategy_nature_atlas.csv").is_file()
     assert (out_dir / "strategy_response_surfaces.csv").is_file()
+
+def test_run_mvp1_atlas_outputs_match_explicit_polars_backend_artifacts(tmp_path: Path) -> None:
+    pytest.importorskip("polars")
+    from anomaly_science.atlas.run import run_mvp1_atlas
+
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    future_path = tmp_path / "anomaly_future_paths.csv"
+    feature_path = tmp_path / "anomaly_feature_matrix.csv"
+    out_dir = tmp_path / "atlas"
+    _write_rows(
+        state_path,
+        schema_name="anomaly_state_1m.csv",
+        rows=[
+            _state_payload(event_id="evt_atlas_1", offset_minutes=2),
+            _state_payload(event_id="evt_atlas_2", offset_minutes=3, symbol="BBB/USDT:USDT"),
+        ],
+    )
+    _write_rows(
+        future_path,
+        schema_name="anomaly_future_paths.csv",
+        rows=[
+            _future_payload(
+                event_id="evt_atlas_1",
+                offset_minutes=2,
+                future_return=1.2,
+                future_max=1.4,
+                future_min=-0.1,
+                reclaimed=True,
+            ),
+            _future_payload(
+                event_id="evt_atlas_2",
+                offset_minutes=3,
+                future_return=-1.2,
+                future_max=0.1,
+                future_min=-1.4,
+                reclaimed=False,
+                symbol="BBB/USDT:USDT",
+            ),
+        ],
+    )
+    _write_rows(
+        feature_path,
+        schema_name="anomaly_feature_matrix.csv",
+        rows=[
+            _feature_payload(event_id="evt_atlas_1", offset_minutes=2, systemic_cluster_regime="idiosyncratic"),
+            _feature_payload(
+                event_id="evt_atlas_2",
+                offset_minutes=3,
+                systemic_cluster_regime="systemic_beta_shock",
+                symbol="BBB/USDT:USDT",
+            ),
+        ],
+    )
+
+    expected = build_atlas_artifacts_polars_from_csv_paths(
+        state_path=state_path,
+        future_path=future_path,
+        feature_matrix_path=feature_path,
+    )
+
+    run_mvp1_atlas(
+        state_path=state_path,
+        future_path=future_path,
+        feature_matrix_path=feature_path,
+        out_dir=out_dir,
+    )
+
+    _assert_output_artifact_matches_rows(
+        out_dir / "strategy_nature_atlas.csv",
+        schema_name="strategy_nature_atlas.csv",
+        rows=nature_rows_to_artifact(expected.nature_atlas_rows),
+    )
+    _assert_output_artifact_matches_rows(
+        out_dir / "strategy_context_splits.csv",
+        schema_name="strategy_context_splits.csv",
+        rows=context_split_rows_to_artifact(expected.context_split_rows),
+    )
+    _assert_output_artifact_matches_rows(
+        out_dir / "strategy_response_surfaces.csv",
+        schema_name="strategy_response_surfaces.csv",
+        rows=response_surface_rows_to_artifact(expected.response_surface_rows),
+    )
+    _assert_output_artifact_matches_rows(
+        out_dir / "strategy_market_shock_groups.csv",
+        schema_name="strategy_market_shock_groups.csv",
+        rows=market_shock_group_rows_to_artifact(expected.market_shock_group_rows),
+    )
+
+    assert (out_dir / "artifact_manifest.json").is_file()
+
