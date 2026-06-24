@@ -307,6 +307,7 @@ def _optional_cell_float(values: Sequence[str], index: int) -> float | None:
 
 FUTURE_PATHS_PARQUET_SIDECAR_VERSION = "future_paths_partitioned_parquet_v1"
 FUTURE_PATHS_PARQUET_ORDER_COLUMN = "__row_index"
+FUTURE_PATHS_SIDECAR_PYLIST_BATCH_ROWS = 50_000
 
 
 def future_paths_parquet_sidecar_dir(csv_path: str | Path) -> Path:
@@ -458,8 +459,13 @@ def iter_strategy_future_paths_artifact_csv(path: str | Path) -> Iterable[Future
             csv_path=future_path,
             expected_columns=expected_columns,
         )
-        for row_index, row in enumerate(table.to_pylist()):
-            yield _future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name)
+        # Materialize dicts one Arrow batch at a time so this streaming reader does
+        # not hold every future row as a dict at once for large universes.
+        row_index = 0
+        for batch in table.to_batches(max_chunksize=FUTURE_PATHS_SIDECAR_PYLIST_BATCH_ROWS):
+            for row in batch.to_pylist():
+                yield _future_path_row_from_mapping(row=row, row_index=row_index, artifact_name=future_path.name)
+                row_index += 1
         return
 
     with future_path.open(encoding="utf-8-sig", newline="") as file_obj:

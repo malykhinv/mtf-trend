@@ -125,6 +125,9 @@ def read_state_1m_parquet_sidecar_table(*, csv_path: str | Path, expected_column
     return table.drop([STATE_1M_PARQUET_ORDER_COLUMN])
 
 
+STATE_1M_SIDECAR_PYLIST_BATCH_ROWS = 50_000
+
+
 def iter_state_1m_parquet_sidecar_mappings(
     *,
     csv_path: str | Path,
@@ -136,4 +139,8 @@ def iter_state_1m_parquet_sidecar_mappings(
         expected_columns=expected_columns,
         columns=columns,
     )
-    yield from table.to_pylist()
+    # Materialize Python dicts one Arrow batch at a time. A single table.to_pylist()
+    # would hold every state row as a dict simultaneously (millions of rows across
+    # every consumer); batching keeps the dict copy bounded while preserving order.
+    for batch in table.to_batches(max_chunksize=STATE_1M_SIDECAR_PYLIST_BATCH_ROWS):
+        yield from batch.to_pylist()
