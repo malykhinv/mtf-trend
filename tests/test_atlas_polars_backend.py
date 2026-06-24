@@ -262,5 +262,7 @@ def test_polars_atlas_backend_builds_nature_and_response_rows_without_legacy_acc
     assert {row.split_family for row in artifacts.nature_atlas_rows} >= {"price_shape_atr", "feature_matrix"}
     assert {row.surface_name for row in artifacts.response_surface_rows} >= {"price_shape_atr_x_alpha_decay", "session_x_market_context"}
     assert {row.median_future_return_atr for row in artifacts.nature_atlas_rows} == {None}
-    assert artifacts.context_split_rows == ()
-    assert artifacts.market_shock_group_rows == ()
+    assert artifacts.context_split_rows
+    assert artifacts.market_shock_group_rows
+    assert {row.context_name for row in artifacts.context_split_rows} >= {"price_shape_atr", "feature_matrix"}
+    assert {row.market_shock_id for row in artifacts.market_shock_group_rows} == {"idiosyncratic:AAA/USDT:USDT"}

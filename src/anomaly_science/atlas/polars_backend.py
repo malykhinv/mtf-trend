@@ -25,6 +25,7 @@ from anomaly_science.atlas.builder import (
     _liquidation_regime_frame_bin,
     _market_context_frame_bin,
     _outcome_coordinate,
+    _outcome_bin_name,
     _percentile_value_bin,
     _price_shape_atr_value_bin,
     _shelf_break_risk_value_bin,
@@ -37,7 +38,12 @@ from anomaly_science.atlas.builder import (
 )
 from anomaly_science.atlas.config import AtlasConfig
 from anomaly_science.contracts.artifacts import get_artifact_schema
-from anomaly_science.contracts.atlas import AtlasNatureRow, AtlasResponseSurfaceRow
+from anomaly_science.contracts.atlas import (
+    AtlasContextSplitRow,
+    AtlasMarketShockGroupRow,
+    AtlasNatureRow,
+    AtlasResponseSurfaceRow,
+)
 from anomaly_science.contracts.future import BARRIER_RESOLUTION_STOP_LOSS_FIRST
 
 _JOIN_COLUMNS = ("event_id", "symbol", "snapshot_time_ms", "feature_cutoff_time_ms")
@@ -90,22 +96,15 @@ def build_atlas_artifacts_polars_from_csv_paths(
     _enforce_atlas_polars_temporal_contract(joined)
     joined = _add_atlas_context_columns_polars(joined)
     nature_rows = _build_polars_nature_atlas_rows(joined=joined, config=cfg)
+    context_rows = _build_polars_context_split_rows(joined=joined, config=cfg)
     response_rows = _build_polars_response_surface_rows(joined=joined, config=cfg)
+    market_rows = _build_polars_market_shock_group_rows(joined=joined, config=cfg)
 
-    # Context split rows and market summaries are intentionally still produced by
-    # the legacy path in this migration step. Nature rows and response surfaces are
-    # now owned by the explicit Polars backend, so they no longer depend on the
-    # legacy Python/pandas accumulator path.
-    joined_pandas = joined.to_pandas()
-    _enforce_atlas_frame_temporal_contract(joined_pandas)
-    legacy_artifacts = _with_streaming_median_semantics(
-        _build_atlas_artifacts_from_frame(joined=joined_pandas, config=cfg)
-    )
     return AtlasArtifacts(
         nature_atlas_rows=tuple(nature_rows),
-        context_split_rows=legacy_artifacts.context_split_rows,
+        context_split_rows=tuple(context_rows),
         response_surface_rows=tuple(response_rows),
-        market_shock_group_rows=legacy_artifacts.market_shock_group_rows,
+        market_shock_group_rows=tuple(market_rows),
     )
 
 
@@ -398,6 +397,93 @@ def _polars_nature_rows_for_context(
     return rows
 
 
+def _build_polars_context_split_rows(*, joined, config: AtlasConfig) -> tuple[AtlasContextSplitRow, ...]:
+    rows: list[AtlasContextSplitRow] = []
+    for horizon in config.outcome_horizon_minutes_list:
+        horizon_frame = _with_polars_horizon_columns(joined, horizon=horizon, config=config)
+        for context_name, context_column in _atlas_context_columns():
+            rows.extend(
+                _polars_context_split_rows_for_context(
+                    frame=horizon_frame,
+                    context_name=context_name,
+                    context_column=context_column,
+                    horizon=horizon,
+                    config=config,
+                )
+            )
+    return tuple(rows)
+
+
+def _polars_context_split_rows_for_context(
+    *,
+    frame,
+    context_name: str,
+    context_column: str,
+    horizon: int,
+    config: AtlasConfig,
+) -> list[AtlasContextSplitRow]:
+    pl = _import_polars_for_atlas_backend()
+    expected_bins = tuple(
+        _outcome_bin_name(prefix, horizon)
+        for prefix in (
+            "upside_continuation",
+            "downside_extension",
+            "two_sided",
+            "range_chop",
+            "mixed_drift",
+            "missing_atr_future",
+            "stop_first_double_barrier",
+        )
+    )
+    grouped = (
+        frame.group_by(context_column)
+        .agg(
+            [
+                pl.col("event_id").count().alias("row_count"),
+                pl.col("event_id").n_unique().alias("unique_event_count"),
+                pl.col("symbol").n_unique().alias("unique_symbol_count"),
+                pl.col("minutes_since_trigger").mean().alias("mean_minutes_since_trigger"),
+                pl.col("current_return_from_start").mean().alias("mean_current_return_from_start"),
+                pl.col("distance_to_running_high_atr").mean().alias("mean_distance_to_running_high_atr"),
+                *[
+                    (pl.col("_outcome_bin") == outcome_bin).cast(pl.Int64).sum().alias(f"_count_{index}")
+                    for index, outcome_bin in enumerate(expected_bins)
+                ],
+            ]
+        )
+        .sort(context_column)
+    )
+    rows: list[AtlasContextSplitRow] = []
+    for item in grouped.iter_rows(named=True):
+        row_count = int(item["row_count"])
+        shares = [
+            _share(numerator=int(item[f"_count_{index}"]), denominator=row_count)
+            for index, _outcome_bin in enumerate(expected_bins)
+        ]
+        rows.append(
+            AtlasContextSplitRow(
+                atlas_version=config.atlas_version,
+                context_name=context_name,
+                context_value=str(item[context_column]),
+                outcome_horizon_minutes=horizon,
+                outcome_coordinate=_outcome_coordinate(horizon),
+                row_count=row_count,
+                unique_event_count=int(item["unique_event_count"]),
+                unique_symbol_count=int(item["unique_symbol_count"]),
+                mean_minutes_since_trigger=_optional_float(item["mean_minutes_since_trigger"]),
+                mean_current_return_from_start=_optional_float(item["mean_current_return_from_start"]),
+                mean_distance_to_running_high_atr=_optional_float(item["mean_distance_to_running_high_atr"]),
+                upside_continuation_share=shares[0],
+                downside_extension_share=shares[1],
+                two_sided_share=shares[2],
+                range_chop_share=shares[3],
+                mixed_drift_share=shares[4],
+                missing_atr_future_share=shares[5],
+                stop_first_barrier_share=shares[6],
+            )
+        )
+    return rows
+
 
 def _response_surface_specs() -> tuple[tuple[str, str, str, str, str], ...]:
     return (
@@ -517,16 +603,79 @@ def _polars_response_surface_rows_for_surface(
     return rows
 
 
-def _polars_dominant_outcome_bins(*, frame, group_columns: tuple[str, str]):
+def _polars_dominant_outcome_bins(*, frame, group_columns: Sequence[str]):
     pl = _import_polars_for_atlas_backend()
-    x_column, y_column = group_columns
+    columns = list(group_columns)
     return (
-        frame.group_by([x_column, y_column, "_outcome_bin"])
+        frame.group_by([*columns, "_outcome_bin"])
         .agg(pl.col("event_id").count().alias("_outcome_count"))
-        .sort([x_column, y_column, "_outcome_count", "_outcome_bin"], descending=[False, False, True, False])
-        .unique(subset=[x_column, y_column], keep="first", maintain_order=True)
-        .select([x_column, y_column, pl.col("_outcome_bin").alias("dominant_outcome_bin")])
+        .sort([*columns, "_outcome_count", "_outcome_bin"], descending=[*[False for _ in columns], True, False])
+        .unique(subset=columns, keep="first", maintain_order=True)
+        .select([*columns, pl.col("_outcome_bin").alias("dominant_outcome_bin")])
     )
+
+
+def _build_polars_market_shock_group_rows(*, joined, config: AtlasConfig) -> tuple[AtlasMarketShockGroupRow, ...]:
+    rows: list[AtlasMarketShockGroupRow] = []
+    for horizon in config.outcome_horizon_minutes_list:
+        horizon_frame = _with_polars_horizon_columns(joined, horizon=horizon, config=config)
+        rows.extend(_polars_market_shock_group_rows_for_horizon(frame=horizon_frame, horizon=horizon, config=config))
+    return tuple(rows)
+
+
+def _polars_market_shock_group_rows_for_horizon(*, frame, horizon: int, config: AtlasConfig) -> list[AtlasMarketShockGroupRow]:
+    pl = _import_polars_for_atlas_backend()
+    group_columns = ("market_shock_id", "systemic_cluster_regime", "snapshot_time_ms")
+    grouped = (
+        frame.group_by(list(group_columns))
+        .agg(
+            [
+                pl.col("event_id").count().alias("row_count"),
+                pl.col("event_id").n_unique().alias("unique_event_count"),
+                pl.col("symbol").n_unique().alias("unique_symbol_count"),
+                pl.col("symbol").drop_nulls().unique().sort().alias("_symbols"),
+                pl.col("simultaneous_anomalies_count_1m").max().alias("simultaneous_anomalies_count_1m"),
+                pl.col("simultaneous_anomalies_share_1m").mean().alias("simultaneous_anomalies_share_1m"),
+                pl.col("current_return_from_start").mean().alias("mean_current_return_from_start"),
+                pl.col("_future_return_atr").mean().alias("mean_future_return_atr"),
+            ]
+        )
+        .sort(list(group_columns))
+    )
+    dominant = _polars_dominant_outcome_bins(frame=frame, group_columns=group_columns)
+    rows: list[AtlasMarketShockGroupRow] = []
+    for item in grouped.join(dominant, on=list(group_columns), how="left").iter_rows(named=True):
+        market_shock_id = _bin_text(item["market_shock_id"])
+        systemic_cluster_regime = _bin_text(item["systemic_cluster_regime"])
+        snapshot_time_ms = int(item["snapshot_time_ms"])
+        symbols = _sorted_symbol_text(item["_symbols"])
+        unique_symbol_count = int(item["unique_symbol_count"])
+        rows.append(
+            AtlasMarketShockGroupRow(
+                atlas_version=config.atlas_version,
+                market_shock_group_id=f"{market_shock_id}:{snapshot_time_ms}:{horizon}m",
+                market_shock_id=market_shock_id,
+                systemic_cluster_regime=systemic_cluster_regime,
+                snapshot_time_ms=snapshot_time_ms,
+                outcome_horizon_minutes=horizon,
+                outcome_coordinate=_outcome_coordinate(horizon),
+                row_count=int(item["row_count"]),
+                unique_event_count=int(item["unique_event_count"]),
+                unique_symbol_count=unique_symbol_count,
+                simultaneous_anomalies_count_1m=int(item["simultaneous_anomalies_count_1m"] or 0),
+                simultaneous_anomalies_share_1m=_optional_float(item["simultaneous_anomalies_share_1m"]),
+                symbols="|".join(symbols),
+                market_shock_candidate=systemic_cluster_regime == "systemic_beta_shock"
+                or unique_symbol_count >= config.min_symbols_for_market_shock_candidate,
+                mean_current_return_from_start=_optional_float(item["mean_current_return_from_start"]),
+                mean_future_return_atr=_optional_float(item["mean_future_return_atr"]),
+                dominant_outcome_bin=str(item["dominant_outcome_bin"] or "none"),
+                temporal_contract=TEMPORAL_CONTRACT_TEXT,
+            )
+        )
+    return rows
+
+
 
 
 def _bin_text(value: object) -> str:
@@ -539,6 +688,22 @@ def _bin_text(value: object) -> str:
     if number != number:
         return "nan"
     return str(value)
+
+def _sorted_symbol_text(value: object) -> list[str]:
+    if value is None:
+        return []
+    if hasattr(value, "to_list"):
+        value = value.to_list()
+    if isinstance(value, (list, tuple, set)):
+        return sorted(str(item) for item in value if item is not None)
+    return [str(value)]
+
+
+def _share(*, numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return numerator / denominator
+
 
 def _optional_float(value: object) -> float | None:
     if value is None:
