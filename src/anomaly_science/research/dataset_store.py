@@ -73,6 +73,11 @@ class ResearchDatasetBuildConfig:
     # the heavy stages are ~H_max times smaller and faster. The per-minute online
     # window (needed by the decision-timing layer) is omitted in this mode.
     supervised_anchor_only: bool = False
+    # Explicit online-state window after detection (minutes). None keeps the default
+    # (anchor-only when supervised_anchor_only, else H_max). Set this to build minutes
+    # 0..N once and sweep the supervised anchor offset over {0..N} for the
+    # decision-timing study without rebuilding per offset.
+    state_window_minutes_after_detection: int | None = None
 
     def __post_init__(self) -> None:
         if not self.strategy_name:
@@ -89,6 +94,11 @@ class ResearchDatasetBuildConfig:
             raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
         if self.holdout_days <= 0:
             raise ValueError("holdout_days must be positive")
+        if (
+            self.state_window_minutes_after_detection is not None
+            and self.state_window_minutes_after_detection < 0
+        ):
+            raise ValueError("state_window_minutes_after_detection must be non-negative when provided")
         if self.research_mode == "frozen_holdout" and not self.protocol_freeze_id:
             raise ValueError("protocol_freeze_id is required for frozen_holdout mode")
         if self.expected_event_lifetime_minutes <= 0:
@@ -253,9 +263,7 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
             events_path=events_dir / "strategy_events.csv",
             out_dir=stages_dir / "state",
             config=OnlineStateBuilderConfig(
-                max_state_minutes_after_detection=(
-                    0 if config.supervised_anchor_only else active_strategy_h_max_minutes((config.strategy_name,))
-                )
+                max_state_minutes_after_detection=_resolve_state_window_minutes(config),
             ),
             max_input_time_ms=input_view.max_input_time_ms,
             progress_callback=make_stderr_progress_callback(stage_name="dataset state", unit="rows"),
@@ -447,6 +455,14 @@ def _input_date_range(candles_path: Path) -> tuple[date, date]:
     if min_ms is None or max_ms is None:
         raise ValueError(f"{candles_path} has no candle rows")
     return _date_from_ms(min_ms), _date_from_ms(max_ms)
+
+
+def _resolve_state_window_minutes(config: ResearchDatasetBuildConfig) -> int:
+    if config.state_window_minutes_after_detection is not None:
+        return config.state_window_minutes_after_detection
+    if config.supervised_anchor_only:
+        return 0
+    return active_strategy_h_max_minutes((config.strategy_name,))
 
 
 def _protocol_freeze_id(*, strategy_name: str, start_date: date, end_date: date) -> str:

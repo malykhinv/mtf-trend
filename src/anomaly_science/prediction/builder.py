@@ -135,8 +135,12 @@ class PredictionInputRow:
 SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION = 0
 
 
-def is_supervised_anchor_row(row: PredictionInputRow) -> bool:
-    return row.state.minutes_since_detection == SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION
+def is_supervised_anchor_row(
+    row: PredictionInputRow,
+    *,
+    anchor_minutes_since_detection: int = SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION,
+) -> bool:
+    return row.state.minutes_since_detection == anchor_minutes_since_detection
 
 
 def load_prediction_inputs(
@@ -144,6 +148,7 @@ def load_prediction_inputs(
     state_path: str | Path,
     labels_path: str | Path,
     feature_matrix_path: str | Path,
+    anchor_minutes_since_detection: int = SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION,
 ) -> tuple[PredictionInputRow, ...]:
     """Load the episodic supervised prediction dataset from strict artifacts.
 
@@ -161,7 +166,7 @@ def load_prediction_inputs(
             labels_path=labels_path,
             feature_matrix_path=feature_matrix_path,
         )
-        if is_supervised_anchor_row(row)
+        if is_supervised_anchor_row(row, anchor_minutes_since_detection=anchor_minutes_since_detection)
     )
 
 

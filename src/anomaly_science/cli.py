@@ -169,6 +169,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     dataset.add_argument(
+        "--state-window-minutes",
+        type=int,
+        default=None,
+        help=(
+            "Explicit online-state window after detection (minutes). Build minutes 0..N once and sweep the "
+            "supervised anchor offset over {0..N} (decision-timing study) without rebuilding per offset. "
+            "Default: anchor-only when --supervised-anchor-only, else H_max."
+        ),
+    )
+    dataset.add_argument(
         "--expected-event-lifetime-minutes",
         type=int,
         default=60,
@@ -473,6 +483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parquet_use_threads=args.parquet_use_threads,
                 expected_event_lifetime_minutes=args.expected_event_lifetime_minutes,
                 supervised_anchor_only=args.supervised_anchor_only,
+                state_window_minutes_after_detection=args.state_window_minutes,
             )
         )
         print(f"research dataset written: {output_dir}")

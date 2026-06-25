@@ -46,6 +46,7 @@ def run_mvp1_prediction(
         state_path=state_artifact_path,
         labels_path=labels_artifact_path,
         feature_matrix_path=feature_artifact_path,
+        anchor_minutes_since_detection=cfg.supervised_anchor_minutes_since_detection,
     )
     prediction_result = build_walk_forward_prediction_result(inputs=inputs, config=cfg)
     predictions = prediction_result.predictions

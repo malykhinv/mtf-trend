@@ -29,6 +29,11 @@ class WalkForwardPredictionConfig:
     random_seed: int = 20260618
     excluded_model_feature_prefixes: tuple[str, ...] = ()
     sample_weight_policy: str = "uniform_v1"
+    # Per-event supervised anchor offset: keep exactly the state snapshot at this
+    # minutes_since_detection as the one supervised row per event. The offset is a
+    # pre-registered choice (or a frozen walk-forward hyperparameter), never picked
+    # by maximizing OOS lift. Sweeping it descriptively is the decision-timing study.
+    supervised_anchor_minutes_since_detection: int = 0
 
     def __post_init__(self) -> None:
         if not self.prediction_version:
@@ -60,6 +65,8 @@ class WalkForwardPredictionConfig:
             raise ValueError("excluded_model_feature_prefixes must not contain empty values")
         if self.sample_weight_policy != "uniform_v1":
             raise ValueError("sample_weight_policy must be 'uniform_v1'")
+        if self.supervised_anchor_minutes_since_detection < 0:
+            raise ValueError("supervised_anchor_minutes_since_detection must be non-negative")
 
     @property
     def active_h_max_minutes(self) -> int:
