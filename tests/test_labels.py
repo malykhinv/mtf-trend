@@ -236,8 +236,8 @@ def test_double_barrier_stop_first_prevents_profit_label() -> None:
             future_min_atr_30m=-1.5,
             intracandle_double_barrier_hit_30m=True,
             barrier_resolution_30m="stop_loss_first",
-            double_barrier_k_continuation=1.0,
-            double_barrier_k_fade=1.0,
+            double_barrier_k_continuation=2.0,
+            double_barrier_k_fade=2.0,
         ),
         horizon_minutes=30,
     )
@@ -343,12 +343,12 @@ def test_run_mvp1_labels_cli_writes_label_artifacts(tmp_path: Path) -> None:
         rows = list(csv.DictReader(file_obj))
     assert rows == [
         {
-            "label_schema_version": "atr_outcome_labels_v1",
+            "label_schema_version": "atr_outcome_labels_v2_population_scaled",
             "atr_window_minutes": "1440",
             "ATR_1d_asof_t": "2.0",
-            "k_continuation": "1.0",
-            "k_fade": "1.0",
-            "k_chop": "0.25",
+            "k_continuation": "2.0",
+            "k_fade": "2.0",
+            "k_chop": "0.5",
             "event_id": "evt_labels",
             "symbol": "AAA/USDT:USDT",
             "snapshot_time_ms": str(BASE_TS + 2 * 60_000),

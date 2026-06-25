@@ -24,8 +24,12 @@ class FuturePathBuilderConfig:
     future_return_horizons_minutes: tuple[int, ...] = FUTURE_RETURN_HORIZONS_MINUTES
     future_reclaim_horizons_minutes: tuple[int, ...] = FUTURE_RECLAIM_HORIZONS_MINUTES
     atr_window_minutes: int = ATR_1D_WINDOW_MINUTES
-    double_barrier_k_continuation: float = 1.0
-    double_barrier_k_fade: float = 1.0
+    # Must match OutcomeLabelConfig.k_continuation / k_fade: the label stage enforces
+    # future.double_barrier_k_* == label k_* per horizon. Recalibrated to the anomaly
+    # population scale (median 30m move ~2.3 ATR) so the descriptive double-barrier
+    # outcome is not dominated by both-sided hits at the old 1.0-ATR threshold.
+    double_barrier_k_continuation: float = 2.0
+    double_barrier_k_fade: float = 2.0
     future_path_builder_version: str = FUTURE_PATH_BUILDER_VERSION
 
     def __post_init__(self) -> None:

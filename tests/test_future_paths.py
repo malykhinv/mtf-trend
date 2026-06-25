@@ -181,7 +181,7 @@ def test_future_builder_marks_intracandle_double_barrier_as_stop_loss_first() ->
         _candle(0, open_price=100.0, high=101.0, low=99.0, close=100.0),
         _candle(1, open_price=100.0, high=103.0, low=99.0, close=102.0),
         _candle(2, open_price=102.0, high=102.5, low=101.0, close=102.0),
-        _candle(3, open_price=102.0, high=106.0, low=98.0, close=103.0),
+        _candle(3, open_price=102.0, high=110.0, low=90.0, close=103.0),
         _candle(4, open_price=103.0, high=103.5, low=102.5, close=103.0),
         _candle(5, open_price=103.0, high=103.5, low=102.5, close=103.0),
         _candle(6, open_price=103.0, high=103.5, low=102.5, close=103.0),
@@ -193,8 +193,8 @@ def test_future_builder_marks_intracandle_double_barrier_as_stop_loss_first() ->
         config=FuturePathBuilderConfig(atr_window_minutes=1),
     )[0]
 
-    assert row.double_barrier_k_continuation == 1.0
-    assert row.double_barrier_k_fade == 1.0
+    assert row.double_barrier_k_continuation == 2.0
+    assert row.double_barrier_k_fade == 2.0
     assert row.intracandle_double_barrier_hit_5m is True
     assert row.barrier_resolution_5m == "stop_loss_first"
 
