@@ -273,7 +273,7 @@ def _write_valid_minimal_forensic_fixture(root: Path) -> None:
             "calibration_row_count": 20,
             "best_iteration": 12,
             "class_order": "long_continuation|short_fade|static_or_chop|unclear",
-            "model_feature_names": "feature_matrix.volume_zscore|feature_matrix.quote_volume_zscore",
+            "model_feature_names": "feature_matrix.volume_zscore,feature_matrix.quote_volume_zscore",
             "calibration_method": "isotonic",
         },
     )

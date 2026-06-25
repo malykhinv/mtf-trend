@@ -1339,7 +1339,7 @@ def _feature_catalog_full_coverage_row(found: Mapping[str, tuple[Path, ...]]) ->
     model_features_checked = 0
     for path in found.get("strategy_model_metadata.csv", ()):
         for row_index, row in enumerate(_read_csv_rows(path), start=2):
-            for raw_name in _split_pipe_list(row.get("model_feature_names", "")):
+            for raw_name in _split_comma_list(row.get("model_feature_names", "")):
                 model_features_checked += 1
                 feature_name = _normalize_model_feature_name(raw_name)
                 catalog_row = catalog_by_name.get(feature_name)
@@ -1409,8 +1409,10 @@ def _feature_catalog_row_failures(*, path: Path, row_index: int, row: Mapping[st
     return failures
 
 
-def _split_pipe_list(value: str) -> tuple[str, ...]:
-    return tuple(item.strip() for item in value.split("|") if item.strip())
+def _split_comma_list(value: str) -> tuple[str, ...]:
+    # strategy_model_metadata.csv stores model_feature_names comma-joined (matching
+    # the writer and the artifact's class-order field), not pipe-joined.
+    return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
 def _normalize_model_feature_name(value: str) -> str:
