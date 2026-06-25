@@ -160,6 +160,15 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--progress-every", type=int, default=25, help="Print build progress every N symbols. Use 0 to disable progress output.")
     dataset.add_argument("--parquet-use-threads", action="store_true", help="Allow parquet reader to use multiple threads. Disabled by default to keep laptop RAM bounded.")
     dataset.add_argument(
+        "--supervised-anchor-only",
+        action="store_true",
+        help=(
+            "Build only the per-event anchor snapshot (minutes_since_detection==0) of state/future/feature_matrix. "
+            "The supervised gate keeps the same anchor, so results are identical while the heavy stages are ~H_max "
+            "times smaller and faster. Omits the per-minute online window used by the decision-timing layer."
+        ),
+    )
+    dataset.add_argument(
         "--expected-event-lifetime-minutes",
         type=int,
         default=60,
@@ -463,6 +472,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 progress_every=args.progress_every,
                 parquet_use_threads=args.parquet_use_threads,
                 expected_event_lifetime_minutes=args.expected_event_lifetime_minutes,
+                supervised_anchor_only=args.supervised_anchor_only,
             )
         )
         print(f"research dataset written: {output_dir}")

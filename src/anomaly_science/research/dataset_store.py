@@ -66,6 +66,13 @@ class ResearchDatasetBuildConfig:
     progress_every: int = 25
     parquet_use_threads: bool = False
     expected_event_lifetime_minutes: int = 60
+    # Build only the per-event anchor snapshot (minutes_since_detection == 0) of the
+    # online state, so state/future/feature_matrix carry one row per event instead
+    # of the full per-minute window. The supervised gate (prediction/controls/EV)
+    # already keeps only that anchor, so the supervised result is identical while
+    # the heavy stages are ~H_max times smaller and faster. The per-minute online
+    # window (needed by the decision-timing layer) is omitted in this mode.
+    supervised_anchor_only: bool = False
 
     def __post_init__(self) -> None:
         if not self.strategy_name:
@@ -245,7 +252,11 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
             input_dir=input_dir,
             events_path=events_dir / "strategy_events.csv",
             out_dir=stages_dir / "state",
-            config=OnlineStateBuilderConfig(max_state_minutes_after_detection=active_strategy_h_max_minutes((config.strategy_name,))),
+            config=OnlineStateBuilderConfig(
+                max_state_minutes_after_detection=(
+                    0 if config.supervised_anchor_only else active_strategy_h_max_minutes((config.strategy_name,))
+                )
+            ),
             max_input_time_ms=input_view.max_input_time_ms,
             progress_callback=make_stderr_progress_callback(stage_name="dataset state", unit="rows"),
         )
