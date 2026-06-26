@@ -349,6 +349,8 @@ def _build_event_rows(
         if current_index < start_index:
             continue
         state_time_ms = current.available_time_ms
+        if _minutes_between(event.event_detection_time_ms, state_time_ms) < config.min_state_minutes_after_detection:
+            continue
         if first_candle is None or running_high is None or running_low is None:
             continue
         row = StrategyState1mRow(

@@ -78,6 +78,11 @@ class ResearchDatasetBuildConfig:
     # 0..N once and sweep the supervised anchor offset over {0..N} for the
     # decision-timing study without rebuilding per offset.
     state_window_minutes_after_detection: int | None = None
+    # Build a single supervised anchor offset: emit only the state row at
+    # minutes_since_detection == this value (one row per event), so each offset of
+    # the decision-timing sweep is a memory-bounded ~event-count build that fits a
+    # laptop instead of the full per-minute window. Overrides the window when set.
+    state_anchor_offset_minutes: int | None = None
 
     def __post_init__(self) -> None:
         if not self.strategy_name:
@@ -99,6 +104,8 @@ class ResearchDatasetBuildConfig:
             and self.state_window_minutes_after_detection < 0
         ):
             raise ValueError("state_window_minutes_after_detection must be non-negative when provided")
+        if self.state_anchor_offset_minutes is not None and self.state_anchor_offset_minutes < 0:
+            raise ValueError("state_anchor_offset_minutes must be non-negative when provided")
         if self.research_mode == "frozen_holdout" and not self.protocol_freeze_id:
             raise ValueError("protocol_freeze_id is required for frozen_holdout mode")
         if self.expected_event_lifetime_minutes <= 0:
@@ -262,9 +269,7 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
             input_dir=input_dir,
             events_path=events_dir / "strategy_events.csv",
             out_dir=stages_dir / "state",
-            config=OnlineStateBuilderConfig(
-                max_state_minutes_after_detection=_resolve_state_window_minutes(config),
-            ),
+            config=_state_builder_config(config),
             max_input_time_ms=input_view.max_input_time_ms,
             progress_callback=make_stderr_progress_callback(stage_name="dataset state", unit="rows"),
         )
@@ -463,6 +468,16 @@ def _resolve_state_window_minutes(config: ResearchDatasetBuildConfig) -> int:
     if config.supervised_anchor_only:
         return 0
     return active_strategy_h_max_minutes((config.strategy_name,))
+
+
+def _state_builder_config(config: ResearchDatasetBuildConfig) -> OnlineStateBuilderConfig:
+    if config.state_anchor_offset_minutes is not None:
+        offset = config.state_anchor_offset_minutes
+        return OnlineStateBuilderConfig(
+            min_state_minutes_after_detection=offset,
+            max_state_minutes_after_detection=offset,
+        )
+    return OnlineStateBuilderConfig(max_state_minutes_after_detection=_resolve_state_window_minutes(config))
 
 
 def _protocol_freeze_id(*, strategy_name: str, start_date: date, end_date: date) -> str:

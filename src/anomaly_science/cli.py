@@ -179,6 +179,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     dataset.add_argument(
+        "--state-anchor-offset-minutes",
+        type=int,
+        default=None,
+        help=(
+            "Build a single supervised anchor offset: emit only the state row at this minutes_since_detection "
+            "(one row per event). Memory-bounded per offset for the decision-timing sweep on a laptop. "
+            "Overrides --state-window-minutes / --supervised-anchor-only when set."
+        ),
+    )
+    dataset.add_argument(
         "--expected-event-lifetime-minutes",
         type=int,
         default=60,
@@ -484,6 +494,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_event_lifetime_minutes=args.expected_event_lifetime_minutes,
                 supervised_anchor_only=args.supervised_anchor_only,
                 state_window_minutes_after_detection=args.state_window_minutes,
+                state_anchor_offset_minutes=args.state_anchor_offset_minutes,
             )
         )
         print(f"research dataset written: {output_dir}")
