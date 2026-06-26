@@ -21,6 +21,7 @@ from anomaly_science.contracts.features import StrategyFeatureMatrixRow
 from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, MarketDataContractError, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
 from anomaly_science.contracts.state import StrategyState1mRow
 from anomaly_science.contracts.time import utc_ms_to_datetime
+from anomaly_science.memory_guard import check_memory_budget
 from anomaly_science.data.normalized import normalize_candles_1m, normalize_liquidations, normalize_open_interest_5m, normalize_symbol_universe_by_day
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource, MarketDataSource
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION, build_default_feature_catalog, feature_rows_to_artifact
@@ -642,8 +643,14 @@ def iter_price_time_feature_matrix(
     else:
         state_rows = state_rows
     raw_candles_by_symbol: dict[str, list[Candle1m]] = {}
+    _loaded_candle_count = 0
     for candle in candles_1m:
         raw_candles_by_symbol.setdefault(candle.symbol, []).append(candle)
+        _loaded_candle_count += 1
+        if _loaded_candle_count % 2_000_000 == 0:
+            check_memory_budget(
+                label="feature_matrix cross-section candle load (in-memory candle universe)"
+            )
     candles_by_symbol: dict[str, _CandleSeries] = {
         symbol: _CandleSeries(rows)
         for symbol, rows in raw_candles_by_symbol.items()
