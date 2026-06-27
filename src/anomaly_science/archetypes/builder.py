@@ -10,7 +10,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
-from scipy.stats import binomtest
 from sklearn.metrics import roc_auc_score
 
 from anomaly_science.archetypes.config import ArchetypeDiscoveryConfig
@@ -54,12 +53,21 @@ class RuleCandidate:
     discovery_rate: float
     discovery_lift: float
     discovery_lower: float
+    discovery_matched_rate: float
+    discovery_edge_lower: float
+    discovery_matched_count: int
+    discovery_unique_fraction: float = 0.0
+    discovery_inference_blocks: int = 0
     verification_indices: np.ndarray | None = None
     verification_count: int = 0
     verification_fades: int = 0
     verification_rate: float = 0.0
     verification_lift: float = 0.0
     verification_lower: float = 0.0
+    verification_matched_rate: float = 0.0
+    verification_edge_lower: float = 0.0
+    verification_matched_count: int = 0
+    verification_inference_blocks: int = 0
     verification_p: float = 1.0
     verification_q: float = 1.0
     stability_periods: int = 0
@@ -88,12 +96,17 @@ def _required_input_columns(config: ArchetypeDiscoveryConfig) -> set[str]:
         contract.snapshot_time_column,
         contract.resolution_time_column,
         *config.features.numeric,
+        *config.features.decision_timing_numeric,
         *config.features.categorical,
     }
     if contract.feature_cutoff_time_column:
         required.add(contract.feature_cutoff_time_column)
     if contract.future_start_time_column:
         required.add(contract.future_start_time_column)
+    if contract.label_available_column:
+        required.add(contract.label_available_column)
+    if contract.label_schema_column:
+        required.add(contract.label_schema_column)
     if config.population.minimum_value_column:
         required.add(config.population.minimum_value_column)
     return required
@@ -112,7 +125,11 @@ def _validate_feature_boundary(config: ArchetypeDiscoveryConfig) -> None:
         forbidden.add(contract.feature_cutoff_time_column)
     if contract.future_start_time_column:
         forbidden.add(contract.future_start_time_column)
-    selected = set(config.features.numeric) | set(config.features.categorical)
+    selected = (
+        set(config.features.numeric)
+        | set(config.features.decision_timing_numeric)
+        | set(config.features.categorical)
+    )
     overlap = selected & forbidden
     if overlap:
         raise ArchetypeDiscoveryError(
@@ -135,7 +152,8 @@ def _coerce_int_time(frame: pd.DataFrame, column: str) -> np.ndarray:
 def _time_arrays(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig) -> tuple[np.ndarray, ...]:
     contract = config.input
     snapshot = _coerce_int_time(frame, contract.snapshot_time_column)
-    resolution = _coerce_int_time(frame, contract.resolution_time_column)
+    resolution_values = pd.to_numeric(frame[contract.resolution_time_column], errors="coerce")
+    resolution = resolution_values.to_numpy(dtype=float)
     if contract.feature_cutoff_time_column:
         cutoff = _coerce_int_time(frame, contract.feature_cutoff_time_column)
     else:
@@ -149,7 +167,14 @@ def _time_arrays(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig) -> tuple
         raise TemporalContractError("feature_cutoff_time must be <= snapshot_time for every row")
     if np.any(future_start <= snapshot):
         raise TemporalContractError("future_start_time must be > snapshot_time for every row")
-    if np.any(resolution < future_start):
+    available = (
+        frame[contract.label_available_column].astype(bool).to_numpy()
+        if contract.label_available_column
+        else np.ones(len(frame), dtype=bool)
+    )
+    if np.any(available & ~np.isfinite(resolution)):
+        raise TemporalContractError("available labels require a finite resolution_time")
+    if np.any(available & (resolution < future_start)):
         raise TemporalContractError("resolution_time must be >= future_start_time for every labeled row")
     return snapshot, cutoff, future_start, resolution
 
@@ -180,11 +205,19 @@ def _make_model_matrices(
     disc_parts: list[pd.DataFrame] = []
     ver_parts: list[pd.DataFrame] = []
     unknown_categories: list[str] = []
-    for column in config.features.numeric:
+    numeric_columns = list(config.features.numeric)
+    if config.features.include_decision_timing:
+        numeric_columns.extend(config.features.decision_timing_numeric)
+    for column in numeric_columns:
         disc_values = pd.to_numeric(discovery[column], errors="raise").astype(np.float32)
         ver_values = pd.to_numeric(verification[column], errors="raise").astype(np.float32)
         if np.isinf(disc_values.to_numpy()).any() or np.isinf(ver_values.to_numpy()).any():
             raise ArchetypeDiscoveryError(f"numeric feature {column!r} contains infinity")
+        if disc_values.isna().any() or ver_values.isna().any():
+            raise ArchetypeDiscoveryError(
+                f"numeric feature {column!r} contains missing values; explicit causal imputation "
+                "must occur before rule discovery so exported inequalities remain reproducible"
+            )
         disc_parts.append(disc_values.to_frame(column))
         ver_parts.append(ver_values.to_frame(column))
     for column in config.features.categorical:
@@ -230,12 +263,15 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
         raise ArchetypeDiscoveryError("input dataset is empty")
     work = frame.copy()
     contract = config.input
+    if contract.label_schema_column:
+        observed_schemas = set(work[contract.label_schema_column].dropna().astype(str).unique())
+        if observed_schemas != {contract.required_label_schema_value}:
+            raise ArchetypeDiscoveryError(
+                f"label schema mismatch: expected {contract.required_label_schema_value!r}, "
+                f"observed {sorted(observed_schemas)}"
+            )
     if work[contract.group_column].isna().any() or work[contract.symbol_column].isna().any():
         raise ArchetypeDiscoveryError("group and symbol columns cannot contain missing values")
-    labels = pd.to_numeric(work[contract.label_column], errors="raise")
-    if not set(labels.unique()).issubset({0, 1}):
-        raise ArchetypeDiscoveryError("label column must be binary 0/1")
-    work[contract.label_column] = labels.astype(np.int8)
     snapshot, cutoff, future_start, resolution = _time_arrays(work, config)
     work["__snapshot_ms"] = snapshot
     work["__feature_cutoff_ms"] = cutoff
@@ -250,6 +286,14 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
         raise ArchetypeDiscoveryError("population filter removed every row")
 
     group_bounds = work.groupby(contract.group_column, sort=False)["__snapshot_ms"].agg(["min", "max"])
+    if contract.label_available_column:
+        work = work[work[contract.label_available_column].astype(bool)].copy()
+    else:
+        work = work[np.isfinite(work["__resolution_ms"])].copy()
+    labels = pd.to_numeric(work[contract.label_column], errors="raise")
+    if not set(labels.unique()).issubset({0, 1}):
+        raise ArchetypeDiscoveryError("available label rows must contain binary 0/1 targets")
+    work[contract.label_column] = labels.astype(np.int8)
     discovery_groups = group_bounds.index[
         (group_bounds["min"] >= config.discovery_start_ms)
         & (group_bounds["max"] < config.discovery_end_ms)
@@ -378,14 +422,93 @@ def _canonical_rule(
     return tuple(conditions), " AND ".join(text), tuple(sorted(bounds))
 
 
-def wilson_lower(successes: int, count: int, *, z: float = 1.959963984540054) -> float:
-    if count <= 0:
-        return 0.0
-    proportion = successes / count
-    denominator = 1.0 + z * z / count
-    centre = proportion + z * z / (2.0 * count)
-    spread = z * math.sqrt(proportion * (1.0 - proportion) / count + z * z / (4.0 * count * count))
-    return max(0.0, (centre - spread) / denominator)
+def _matched_probabilities(
+    frame: pd.DataFrame,
+    config: ArchetypeDiscoveryConfig,
+    *,
+    labels: np.ndarray | None = None,
+) -> np.ndarray:
+    target = (
+        frame[config.input.label_column].to_numpy(dtype=np.int8)
+        if labels is None
+        else np.asarray(labels, dtype=np.int8)
+    )
+    strata = pd.DataFrame(index=frame.index)
+    strata["calendar_month"] = pd.to_datetime(
+        frame["__snapshot_ms"], unit="ms", utc=True
+    ).dt.strftime("%Y-%m")
+    for column in config.matched_control_columns:
+        strata[f"exact:{column}"] = frame[column].astype("string").fillna("__MISSING__")
+    for column in config.matched_control_quantile_columns:
+        values = pd.to_numeric(frame[column], errors="raise")
+        ranked = values.rank(method="first")
+        strata[f"quantile:{column}"] = pd.qcut(
+            ranked,
+            q=config.matched_control_quantiles,
+            labels=False,
+            duplicates="drop",
+        ).astype("Int64")
+    stratum_key = pd.util.hash_pandas_object(strata, index=False).to_numpy(dtype=np.uint64)
+    groups = frame[config.input.group_column].astype(str).to_numpy()
+    pair = pd.DataFrame({"group": groups, "stratum": stratum_key})
+    pair_counts = pair.groupby(["group", "stratum"], sort=False)["group"].transform("size")
+    weights = 1.0 / pair_counts.to_numpy(dtype=float)
+    summary = pd.DataFrame(
+        {
+            "stratum": stratum_key,
+            "weighted_target": target * weights,
+            "weight": weights,
+            "group": groups,
+        }
+    ).groupby("stratum", sort=False).agg(
+        weighted_target=("weighted_target", "sum"),
+        weight=("weight", "sum"),
+        group_count=("group", "nunique"),
+    )
+    rates = summary["weighted_target"] / summary["weight"]
+    valid_rates = rates.where(summary["group_count"] >= config.min_matched_control_rows)
+    return pd.Series(stratum_key).map(valid_rates).to_numpy(dtype=float)
+
+
+def _cluster_bootstrap(
+    *,
+    frame: pd.DataFrame,
+    indices: np.ndarray,
+    labels: np.ndarray,
+    matched_probability: np.ndarray,
+    iterations: int,
+    seed: int,
+) -> tuple[float, float, float, int]:
+    if len(indices) == 0:
+        return 0.0, 0.0, 1.0, 0
+    selected_labels = labels[indices].astype(float)
+    matched = matched_probability[indices]
+    if np.any(~np.isfinite(matched)):
+        return 0.0, -1.0, 1.0, 0
+    block_time = pd.to_datetime(frame.loc[indices, "__snapshot_ms"], unit="ms", utc=True)
+    iso = block_time.dt.isocalendar()
+    block = iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
+    block_positions = [
+        np.flatnonzero(block.to_numpy() == value) for value in pd.unique(block)
+    ]
+    rng = np.random.default_rng(seed)
+    rate_samples = np.empty(iterations, dtype=float)
+    edge_samples = np.empty(iterations, dtype=float)
+    residual = selected_labels - matched
+    block_residual_sums = np.asarray([residual[position].sum() for position in block_positions])
+    observed_edge = float(residual.mean())
+    null_edges = np.empty(iterations, dtype=float)
+    for iteration in range(iterations):
+        sampled_blocks = rng.integers(0, len(block_positions), size=len(block_positions))
+        sampled = np.concatenate([block_positions[index] for index in sampled_blocks])
+        rate_samples[iteration] = float(selected_labels[sampled].mean())
+        edge_samples[iteration] = float((selected_labels[sampled] - matched[sampled]).mean())
+        signs = rng.choice(np.asarray([-1.0, 1.0]), size=len(block_positions))
+        null_edges[iteration] = float(np.sum(signs * block_residual_sums) / len(residual))
+    lower_rate = float(np.quantile(rate_samples, 0.025))
+    lower_edge = float(np.quantile(edge_samples, 0.025))
+    p_value = float((1 + np.count_nonzero(null_edges >= observed_edge)) / (iterations + 1))
+    return lower_rate, lower_edge, p_value, len(block_positions)
 
 
 def _first_rows_per_group(frame: pd.DataFrame, group_column: str) -> np.ndarray:
@@ -430,7 +553,7 @@ def discover_candidates(
         if discovery_labels is None
         else np.asarray(discovery_labels, dtype=np.int8)
     )
-    _, blind_rate = _blind_rate(frame.assign(**{config.input.label_column: labels}), config)
+    matched_probability = _matched_probabilities(frame, config, labels=labels)
     leaf_matrix = np.asarray(model.calc_leaf_indexes(prepared.x_discovery))
     trees = model_json["oblivious_trees"]
     candidates: list[RuleCandidate] = []
@@ -448,9 +571,26 @@ def discover_candidates(
                 continue
             fades = int(labels[indices].sum())
             rate = fades / count
-            lift = rate / blind_rate if blind_rate > 0.0 else math.inf
-            lower = wilson_lower(fades, count)
+            matched_indices = indices[np.isfinite(matched_probability[indices])]
+            if (
+                len(matched_indices) < config.min_discovery_events
+                or len(matched_indices) / count < config.min_matched_signal_fraction
+            ):
+                continue
+            matched_rate = float(matched_probability[matched_indices].mean())
+            matched_signal_rate = float(labels[matched_indices].mean())
+            lift = matched_signal_rate / matched_rate if matched_rate > 0.0 else math.inf
             if rate < config.min_discovery_fade_rate or lift < config.min_discovery_lift:
+                continue
+            lower, edge_lower, _, inference_blocks = _cluster_bootstrap(
+                frame=frame,
+                indices=matched_indices,
+                labels=labels,
+                matched_probability=matched_probability,
+                iterations=config.block_bootstrap_iterations,
+                seed=config.random_seed + tree_index * 257 + leaf_index,
+            )
+            if edge_lower <= 0.0 or inference_blocks < config.min_inference_blocks:
                 continue
             rule, rule_text, feature_names = _canonical_rule(tree, leaf_index, model_json)
             if not rule:
@@ -470,6 +610,10 @@ def discover_candidates(
                     discovery_rate=rate,
                     discovery_lift=lift,
                     discovery_lower=lower,
+                    discovery_matched_rate=matched_rate,
+                    discovery_edge_lower=edge_lower,
+                    discovery_matched_count=len(matched_indices),
+                    discovery_inference_blocks=inference_blocks,
                 )
             )
     return candidates
@@ -484,6 +628,7 @@ def select_distinct_candidates(
         reverse=True,
     )
     selected: list[RuleCandidate] = []
+    covered: set[str] = set()
     for candidate in ranked:
         distinct = True
         for existing in selected:
@@ -492,24 +637,30 @@ def select_distinct_candidates(
             if overlap > config.max_membership_jaccard:
                 distinct = False
                 break
+        unique_fraction = len(candidate.discovery_groups - covered) / len(candidate.discovery_groups)
+        if unique_fraction < config.min_unique_event_fraction:
+            distinct = False
         if distinct:
+            candidate.discovery_unique_fraction = unique_fraction
             selected.append(candidate)
+            covered.update(candidate.discovery_groups)
         if len(selected) >= config.max_categories:
             break
     return selected
 
 
-def _benjamini_hochberg(p_values: list[float]) -> list[float]:
+def _benjamini_yekutieli(p_values: list[float]) -> list[float]:
     count = len(p_values)
     if count == 0:
         return []
     order = np.argsort(np.asarray(p_values, dtype=float))
     adjusted = np.ones(count, dtype=float)
     running = 1.0
+    dependence_factor = sum(1.0 / rank for rank in range(1, count + 1))
     for reverse_rank in range(count - 1, -1, -1):
         index = int(order[reverse_rank])
         rank = reverse_rank + 1
-        running = min(running, p_values[index] * count / rank)
+        running = min(running, p_values[index] * count * dependence_factor / rank)
         adjusted[index] = min(1.0, running)
     return adjusted.tolist()
 
@@ -524,7 +675,8 @@ def evaluate_candidates(
     if not candidates:
         return
     frame = prepared.verification
-    _, blind_rate = _blind_rate(frame, config)
+    labels_all = frame[config.input.label_column].to_numpy(dtype=np.int8)
+    matched_probability = _matched_probabilities(frame, config)
     leaf_matrix = np.asarray(model.calc_leaf_indexes(prepared.x_verification))
     by_tree: dict[int, list[RuleCandidate]] = {}
     for candidate in candidates:
@@ -548,74 +700,103 @@ def evaluate_candidates(
             candidate.verification_count = count
             candidate.verification_fades = fades
             candidate.verification_rate = rate
-            candidate.verification_lift = rate / blind_rate if blind_rate > 0.0 else 0.0
-            candidate.verification_lower = wilson_lower(fades, count)
-            candidate.verification_p = (
-                float(binomtest(fades, count, blind_rate, alternative="greater").pvalue)
-                if count and 0.0 < blind_rate < 1.0
-                else 1.0
-            )
-            if count:
-                times = pd.to_datetime(frame.loc[indices, "__snapshot_ms"], unit="ms", utc=True)
+            matched_indices = indices[np.isfinite(matched_probability[indices])]
+            if (
+                count
+                and len(matched_indices) >= config.min_verification_events
+                and len(matched_indices) / count >= config.min_matched_signal_fraction
+            ):
+                candidate.verification_matched_count = len(matched_indices)
+                candidate.verification_matched_rate = float(matched_probability[matched_indices].mean())
+                matched_signal_rate = float(labels_all[matched_indices].mean())
+                candidate.verification_lift = (
+                    matched_signal_rate / candidate.verification_matched_rate
+                    if candidate.verification_matched_rate > 0.0
+                    else 0.0
+                )
+                (
+                    candidate.verification_lower,
+                    candidate.verification_edge_lower,
+                    candidate.verification_p,
+                    candidate.verification_inference_blocks,
+                ) = _cluster_bootstrap(
+                    frame=frame,
+                    indices=matched_indices,
+                    labels=labels_all,
+                    matched_probability=matched_probability,
+                    iterations=config.block_bootstrap_iterations,
+                    seed=config.random_seed + 1_000_003 + tree_index * 257 + candidate.leaf_index,
+                )
+                times = pd.to_datetime(frame.loc[matched_indices, "__snapshot_ms"], unit="ms", utc=True)
                 periods = times.dt.tz_localize(None).dt.to_period(config.stability_frequency)
-                summary = pd.DataFrame({"period": periods.astype(str), "label": labels}).groupby("period")[
-                    "label"
-                ].agg(["count", "mean"])
+                summary = pd.DataFrame(
+                    {
+                        "period": periods.astype(str).to_numpy(),
+                        "label": labels_all[matched_indices],
+                        "matched": matched_probability[matched_indices],
+                    }
+                ).groupby("period").agg(count=("label", "count"), mean=("label", "mean"), matched=("matched", "mean"))
                 eligible = summary[summary["count"] >= config.min_events_per_stability_period]
                 candidate.stability_periods = len(eligible)
                 candidate.positive_period_fraction = (
-                    float((eligible["mean"] > blind_rate).mean()) if len(eligible) else 0.0
+                    float((eligible["mean"] > eligible["matched"]).mean()) if len(eligible) else 0.0
                 )
             evaluated.append(candidate)
     p_values = [candidate.verification_p for candidate in evaluated]
-    for candidate, q_value in zip(evaluated, _benjamini_hochberg(p_values), strict=True):
+    for candidate, q_value in zip(evaluated, _benjamini_yekutieli(p_values), strict=True):
         candidate.verification_q = q_value
 
 
 def _is_verified(
     candidate: RuleCandidate,
     *,
-    verification_blind_rate: float,
     config: ArchetypeDiscoveryConfig,
 ) -> bool:
     return (
         candidate.verification_count >= config.min_verification_events
+        and candidate.verification_matched_count >= config.min_verification_events
+        and candidate.verification_inference_blocks >= config.min_inference_blocks
         and candidate.verification_rate >= config.min_verification_fade_rate
         and candidate.verification_lift >= config.min_verification_lift
-        and candidate.verification_lower > verification_blind_rate
+        and candidate.verification_edge_lower > 0.0
         and candidate.verification_q <= config.fdr_alpha
         and candidate.stability_periods > 0
         and candidate.positive_period_fraction >= config.min_positive_stability_fraction
     )
 
 
-def groupwise_permute_labels(
-    frame: pd.DataFrame, *, group_column: str, label_column: str, seed: int
+def calendar_block_permute_labels(
+    frame: pd.DataFrame, *, config: ArchetypeDiscoveryConfig, seed: int
 ) -> tuple[np.ndarray, float]:
     rng = np.random.default_rng(seed)
-    labels = frame[label_column].to_numpy(dtype=np.int8)
+    labels = frame[config.input.label_column].to_numpy(dtype=np.int8)
     shuffled = labels.copy()
-    group_positions = frame.groupby(group_column, sort=False).indices
-    by_length: dict[int, list[str]] = {}
-    for group, positions in group_positions.items():
-        by_length.setdefault(len(positions), []).append(group)
-    moved_groups = 0
-    for groups in by_length.values():
-        if len(groups) < 2:
+    strata = pd.DataFrame(index=frame.index)
+    strata["calendar_month"] = pd.to_datetime(
+        frame["__snapshot_ms"], unit="ms", utc=True
+    ).dt.strftime("%Y-%m")
+    stratum_key = pd.util.hash_pandas_object(strata, index=False).to_numpy(dtype=np.uint64)
+    moved_rows = 0
+    for key in np.unique(stratum_key):
+        positions = np.flatnonzero(stratum_key == key)
+        if len(positions) < 2:
             continue
-        order = list(rng.permutation(groups))
-        donors = order[1:] + order[:1]
-        for target_group, donor_group in zip(order, donors, strict=True):
-            target_positions = np.asarray(group_positions[target_group], dtype=np.int64)
-            donor_positions = np.asarray(group_positions[donor_group], dtype=np.int64)
-            shuffled[target_positions] = labels[donor_positions]
-            moved_groups += 1
-    fraction = moved_groups / len(group_positions) if group_positions else 0.0
+        order = rng.permutation(positions)
+        donors = np.roll(order, 1)
+        shuffled[order] = labels[donors]
+        moved_rows += len(positions)
+    fraction = moved_rows / len(frame) if len(frame) else 0.0
     return shuffled, fraction
 
 
-def _safe_auc(y_true: np.ndarray, probability: np.ndarray) -> float:
-    return float(roc_auc_score(y_true, probability)) if len(np.unique(y_true)) == 2 else 0.5
+def _safe_auc(
+    y_true: np.ndarray, probability: np.ndarray, *, sample_weight: np.ndarray
+) -> float:
+    return (
+        float(roc_auc_score(y_true, probability, sample_weight=sample_weight))
+        if len(np.unique(y_true)) == 2
+        else 0.5
+    )
 
 
 def _build_category_outputs(
@@ -632,13 +813,20 @@ def _build_category_outputs(
     contract = config.input
     for rank, candidate in enumerate(candidates, start=1):
         category_id = f"fade_archetype_{rank:03d}"
-        verified = _is_verified(
-            candidate, verification_blind_rate=verification_blind, config=config
+        passed = _is_verified(candidate, config=config)
+        status = (
+            "REJECTED"
+            if not passed
+            else "PRISTINE_VERIFIED"
+            if config.evidence_mode == "pristine_holdout"
+            else "DEVELOPMENT_REPLICATED"
         )
         rows.append(
             ArchetypeCategoryRow(
                 category_id=category_id,
-                status="VERIFIED" if verified else "REJECTED",
+                status=status,
+                evidence_mode=config.evidence_mode,
+                protocol_freeze_id=config.protocol_freeze_id,
                 tree_index=candidate.tree_index,
                 leaf_index=candidate.leaf_index,
                 rule_text=candidate.rule_text,
@@ -646,16 +834,25 @@ def _build_category_outputs(
                 feature_names=";".join(candidate.feature_names),
                 discovery_event_count=candidate.discovery_count,
                 discovery_fade_count=candidate.discovery_fades,
+                discovery_matched_event_count=candidate.discovery_matched_count,
+                discovery_unique_event_fraction=candidate.discovery_unique_fraction,
+                discovery_inference_block_count=candidate.discovery_inference_blocks,
                 discovery_fade_rate=candidate.discovery_rate,
-                discovery_blind_rate=discovery_blind,
+                discovery_global_blind_rate=discovery_blind,
+                discovery_matched_blind_rate=candidate.discovery_matched_rate,
                 discovery_lift=candidate.discovery_lift,
-                discovery_wilson_lower_95=candidate.discovery_lower,
+                discovery_cluster_lower_95=candidate.discovery_lower,
+                discovery_cluster_edge_lower_95=candidate.discovery_edge_lower,
                 verification_event_count=candidate.verification_count,
                 verification_fade_count=candidate.verification_fades,
+                verification_matched_event_count=candidate.verification_matched_count,
+                verification_inference_block_count=candidate.verification_inference_blocks,
                 verification_fade_rate=candidate.verification_rate,
-                verification_blind_rate=verification_blind,
+                verification_global_blind_rate=verification_blind,
+                verification_matched_blind_rate=candidate.verification_matched_rate,
                 verification_lift=candidate.verification_lift,
-                verification_wilson_lower_95=candidate.verification_lower,
+                verification_cluster_lower_95=candidate.verification_lower,
+                verification_cluster_edge_lower_95=candidate.verification_edge_lower,
                 verification_p_value=candidate.verification_p,
                 verification_q_value=candidate.verification_q,
                 verification_stability_periods=candidate.stability_periods,
@@ -664,7 +861,7 @@ def _build_category_outputs(
                 temporal_contract=ARCHETYPE_TEMPORAL_CONTRACT,
             )
         )
-        if not verified:
+        if not passed:
             continue
         for split_name, frame, indices in (
             ("discovery", prepared.discovery, candidate.discovery_indices),
@@ -713,10 +910,15 @@ def build_archetype_discovery(
     )
     y_verification = prepared.verification[config.input.label_column].to_numpy(dtype=np.int8)
     verification_probability = model.predict_proba(prepared.x_verification)[:, 1]
-    verification_auc = _safe_auc(y_verification, verification_probability)
+    verification_weight = _group_inverse_weights(
+        prepared.verification, config.input.group_column
+    )
+    verification_auc = _safe_auc(
+        y_verification, verification_probability, sample_weight=verification_weight
+    )
     discovery_event_count, discovery_blind = _blind_rate(prepared.discovery, config)
     verification_event_count, verification_blind = _blind_rate(prepared.verification, config)
-    real_verified = sum(row.status == "VERIFIED" for row in category_rows)
+    real_verified = sum(row.status != "REJECTED" for row in category_rows)
     controls = [
         ArchetypeControlRow(
             control_name="blind",
@@ -729,7 +931,7 @@ def build_archetype_discovery(
             discovery_candidate_count=0,
             distinct_candidate_count=0,
             verified_category_count=0,
-            shuffled_group_fraction=0.0,
+            shuffled_row_fraction=0.0,
             notes="First eligible causal snapshot per anomaly; no feature selection.",
         ),
         ArchetypeControlRow(
@@ -743,16 +945,16 @@ def build_archetype_discovery(
             discovery_candidate_count=len(candidates),
             distinct_candidate_count=len(selected),
             verified_category_count=real_verified,
-            shuffled_group_fraction=0.0,
-            notes="Rules generated on discovery labels and frozen before temporal verification.",
+            shuffled_row_fraction=0.0,
+            notes=(
+                "Rules generated on discovery labels and frozen before the later interval; "
+                "AUC uses inverse-group weights so each anomaly has unit total weight."
+            ),
         ),
     ]
     for seed in config.shuffled_seeds:
-        shuffled_labels, shuffled_fraction = groupwise_permute_labels(
-            prepared.discovery,
-            group_column=config.input.group_column,
-            label_column=config.input.label_column,
-            seed=seed,
+        shuffled_labels, shuffled_fraction = calendar_block_permute_labels(
+            prepared.discovery, config=config, seed=seed
         )
         shuffled_model = fit_rule_generator(
             prepared, config, labels=shuffled_labels, random_seed=seed
@@ -773,25 +975,30 @@ def build_archetype_discovery(
             config=config,
         )
         shuffled_verified = sum(
-            _is_verified(item, verification_blind_rate=verification_blind, config=config)
+            _is_verified(item, config=config)
             for item in shuffled_selected
         )
         shuffled_probability = shuffled_model.predict_proba(prepared.x_verification)[:, 1]
         controls.append(
             ArchetypeControlRow(
-                control_name="group_shuffled_labels",
+                control_name="calendar_block_shuffled_labels",
                 random_seed=seed,
                 discovery_event_count=discovery_event_count,
                 verification_event_count=verification_event_count,
                 discovery_blind_rate=discovery_blind,
                 verification_blind_rate=verification_blind,
-                verification_auc=_safe_auc(y_verification, shuffled_probability),
+                verification_auc=_safe_auc(
+                    y_verification,
+                    shuffled_probability,
+                    sample_weight=verification_weight,
+                ),
                 discovery_candidate_count=len(shuffled_candidates),
                 distinct_candidate_count=len(shuffled_selected),
                 verified_category_count=shuffled_verified,
-                shuffled_group_fraction=shuffled_fraction,
+                shuffled_row_fraction=shuffled_fraction,
                 notes=(
-                    "Whole label trajectories are permuted between equal-length anomaly groups; "
+                    "Labels are permuted across anomaly groups inside calendar-month blocks, "
+                    "destroying decision-position and feature association while preserving regime base rate; "
                     "rules are evaluated on real later outcomes."
                 ),
             )

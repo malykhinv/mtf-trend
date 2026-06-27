@@ -6,6 +6,13 @@
 
 Core отвечает за честность данных, временные контракты, walk-forward, calibration, EV, simulation, audit и воспроизводимость.
 
+Для rule/archetype discovery универсальная реализация Core находится в
+`anomaly_science.archetypes`. Evidence status, matched controls, clustered
+inference и pristine-holdout governance описаны в
+[`pump_fade_archetype_protocol.md`](pump_fade_archetype_protocol.md) на
+конкретной зарегистрированной стратегии. Эти статистические механизмы остаются
+strategy-neutral; стратегия задаёт только causal feature manifest и target.
+
 Core не должен знать, является ли стратегия anomaly, post-pump, mean-reversion, trend-following, liquidity sweep, basis/funding, market-making или чем-то ещё.
 
 ## 1. Главный принцип разделения

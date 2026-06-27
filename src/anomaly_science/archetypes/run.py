@@ -98,14 +98,17 @@ def run_archetype_discovery(
         "discovery_candidate_count": result.discovery_candidate_count,
         "distinct_candidate_count": result.distinct_candidate_count,
         "verified_category_count": sum(
-            row.status == "VERIFIED" for row in result.category_rows
+            row.status == "PRISTINE_VERIFIED" for row in result.category_rows
+        ),
+        "development_replicated_category_count": sum(
+            row.status == "DEVELOPMENT_REPLICATED" for row in result.category_rows
         ),
         "verification_auc": result.verification_auc,
         "methodology": (
-            "A single shallow CatBoost fit on the discovery interval generates interpretable rule paths. "
-            "Rules and overlap pruning are frozen before the later verification interval. This is category "
-            "hypothesis generation, not rolling production prediction; weekly WFA remains required for any "
-            "probability model subsequently used in trading."
+            "A shallow CatBoost fit on the discovery interval generates interpretable rule paths. Rules and "
+            "overlap pruning are frozen before the later interval. Development evidence is never reported as "
+            "blind verification; PRISTINE_VERIFIED requires a pre-registered freeze id and untouched forward "
+            "holdout. Weekly WFA remains required for any probability model subsequently used in trading."
         ),
         "config": config_to_json_dict(config),
     }

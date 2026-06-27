@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from anomaly_science.archetypes import (
+    ArchetypeConfigError,
     ArchetypeDiscoveryConfig,
     ArchetypeFeatureSpec,
     ArchetypeInputContract,
@@ -64,6 +65,9 @@ def _config() -> ArchetypeDiscoveryConfig:
         stability_frequency="M",
         min_events_per_stability_period=4,
         min_positive_stability_fraction=0.75,
+        min_matched_control_rows=5,
+        block_bootstrap_iterations=200,
+        evidence_mode="development",
         shuffled_seeds=(19,),
     )
 
@@ -106,15 +110,15 @@ def test_archetype_discovery_finds_frozen_rule_and_defeats_controls() -> None:
     frame = _synthetic_rows()
     result = build_archetype_discovery(frame, _config())
 
-    verified = [row for row in result.category_rows if row.status == "VERIFIED"]
+    verified = [row for row in result.category_rows if row.status == "DEVELOPMENT_REPLICATED"]
     assert verified
     assert any("nature_signal" in row.feature_names for row in verified)
     assert all(row.verification_event_count <= 160 for row in result.category_rows)
     assert result.verification_auc > 0.95
     controls = {(row.control_name, row.random_seed): row for row in result.control_rows}
     assert controls[("blind", 0)].verification_auc == 0.5
-    assert controls[("group_shuffled_labels", 19)].verification_auc < 0.65
-    assert controls[("group_shuffled_labels", 19)].verified_category_count == 0
+    assert controls[("calendar_block_shuffled_labels", 19)].verification_auc < 0.65
+    assert controls[("calendar_block_shuffled_labels", 19)].verified_category_count == 0
     assert set(result.assignments["split"]) == {"discovery", "verification"}
 
 
@@ -134,6 +138,40 @@ def test_archetype_feature_manifest_rejects_target_as_feature() -> None:
 
     with pytest.raises(ArchetypeDiscoveryError, match="cannot be model features"):
         prepare_archetype_data(_synthetic_rows(), config)
+
+
+def test_matched_blind_rejects_rule_that_only_recovers_matching_stratum() -> None:
+    config = replace(
+        _config(),
+        matched_control_columns=("nature_signal",),
+        min_matched_control_rows=5,
+    )
+
+    result = build_archetype_discovery(_synthetic_rows(), config)
+
+    assert not [row for row in result.category_rows if row.status != "REJECTED"]
+
+
+def test_pristine_holdout_status_requires_pre_registered_freeze() -> None:
+    with pytest.raises(ArchetypeConfigError, match="protocol_freeze_id"):
+        replace(_config(), evidence_mode="pristine_holdout", protocol_freeze_id="")
+
+
+def test_registered_label_schema_rejects_old_target() -> None:
+    base = _config()
+    config = replace(
+        base,
+        input=replace(
+            base.input,
+            label_schema_column="label_schema_version",
+            required_label_schema_value="canonical_v1",
+        ),
+    )
+    frame = _synthetic_rows()
+    frame["label_schema_version"] = "buffered_capped_old"
+
+    with pytest.raises(ArchetypeDiscoveryError, match="label schema mismatch"):
+        prepare_archetype_data(frame, config)
 
 
 def test_archetype_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
@@ -157,4 +195,5 @@ def test_archetype_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
     assert (out_dir / "artifact_manifest.json").is_file()
     run = json.loads((out_dir / "archetype_run.json").read_text(encoding="utf-8"))
     assert run["verification_groups"] == 160
-    assert run["verified_category_count"] > 0
+    assert run["verified_category_count"] == 0
+    assert run["development_replicated_category_count"] > 0

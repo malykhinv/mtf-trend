@@ -23,6 +23,7 @@ from anomaly_science.research import ResearchDatasetBuildConfig, ResearchRunConf
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 from anomaly_science.strategy import run_mvp1_strategy_registry
+from anomaly_science.strategy.pump_fade import run_pump_fade_dataset_build
 from anomaly_science.strategy.registry import StrategyRegistryError, validate_strategy_horizon
 from anomaly_science.validation import run_mvp1_holdout_governance
 
@@ -462,6 +463,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Deterministic sorted-symbol limit for a smoke run. Omit for the registered full run.",
     )
 
+    pump_fade_dataset = subparsers.add_parser(
+        "build-pump-fade-dataset",
+        help="Build the canonical causal new-high decision dataset for the structural pump-fade target.",
+    )
+    pump_fade_dataset.add_argument(
+        "--cache-dir", required=True, help="Per-symbol enriched 1m parquet cache directory."
+    )
+    pump_fade_dataset.add_argument("--out", required=True, help="Output parquet path.")
+    pump_fade_dataset.add_argument(
+        "--limit-symbols",
+        type=int,
+        default=None,
+        help="Deterministic sorted-symbol limit for a smoke build. Omit for all symbols.",
+    )
+    pump_fade_dataset.add_argument(
+        "--progress-every", type=int, default=10, help="Print progress every N symbols; zero disables it."
+    )
+
 
     return parser
 
@@ -482,6 +501,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit_symbols=args.limit_symbols,
         )
         print(f"archetype discovery artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "build-pump-fade-dataset":
+        output_path = run_pump_fade_dataset_build(
+            cache_dir=Path(args.cache_dir),
+            output_path=Path(args.out),
+            limit_symbols=args.limit_symbols,
+            progress_every=args.progress_every,
+        )
+        print(f"pump-fade causal dataset written: {output_path}")
         return 0
 
     if args.command == "run-research":

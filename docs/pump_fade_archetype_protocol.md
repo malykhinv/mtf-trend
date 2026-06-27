@@ -1,0 +1,134 @@
+# Pump-fade archetype discovery protocol
+
+This is the canonical repository contract for the structural pump-fade
+research thread. It supersedes fixed-horizon and ATR-barrier targets for this
+strategy. The generic MVP1 pipeline remains available for other strategies.
+
+## Scientific question
+
+At a closed one-minute candle that sets a new running high during a causally
+qualified pump, can information available at that close identify pump natures
+that will subsequently close back at the pre-ignition base before any later
+close exceeds the anchor high?
+
+Trade entry, stop buffers, costs, and exit optimization are separate later
+phases and cannot alter this label.
+
+## Online anomaly and decision contract
+
+- Ignition: trade count or quote volume is at least 10x its trailing 24-hour
+  median. The current candle is excluded from both baselines.
+- Baselines are computed only inside contiguous one-minute blocks. After a
+  market-data gap they are unavailable until 1,440 prior contiguous minutes
+  exist; data before the gap is never silently treated as adjacent.
+- Base: low of the last closed red candle strictly before ignition.
+- Period: closes after five consecutive minutes below 25% of the running peak
+  activity, or after 60 minutes. Confirmation candles remain in the online
+  period because their eventual sequence is not known beforehand.
+- Qualification is absorbing and evaluated as-of each candle: running pump
+  size at least 5%, cumulative turnover at least 300,000 USDT, and running
+  median true range at least 3x the pre-ignition 24-hour median true range.
+- Decision rows: only closed candles that set a strict new running high, and
+  only after causal qualification.
+
+An event is never admitted because of its final size, duration, ATR, peak, or
+any other full-period value.
+
+## Exact target
+
+For base `B`, anchor high `H`, and future one-minute closes strictly after the
+decision snapshot:
+
+- fade: first close `<= B`;
+- invalidation: first close `> H`;
+- the earlier close wins.
+
+There is no stop buffer and no fixed time horizon. If neither barrier resolves
+before the first market-data gap or end of data, the row is censored
+(`label_available=false`) and cannot enter supervised fitting or evaluation.
+
+`snapshot_time_ms` and `feature_cutoff_time_ms` are the availability time of
+the closed decision candle. `future_start_time_ms` is the availability time of
+the next closed candle. These fields are materialized by the builder; the
+registered config does not accept inferred timestamps or an attestation.
+The miner also requires the exact label schema value
+`pump_fade_close_race_horizon_free_v1`; a dataset with buffered or capped labels
+fails before model fitting.
+
+## Nature versus timing
+
+The registered archetype model uses only `features.numeric`, categorical
+context, and causal clock features. `features.decision_timing_numeric` is
+declared separately and excluded by default. This prevents a category such as
+"already pulled back 6%" from being presented as a pump nature.
+
+Clock features used for nature discovery are anchored to ignition, not to the
+later decision snapshot. In particular, round-hour means distance of the
+ignition minute from `hh:00`.
+
+Timing variables may be stacked later after pump natures independently pass
+the predictability gate. Their incremental value must be reported separately.
+
+## Validation and evidence language
+
+Time-series periods must never be randomized into IS/OOS rows.
+
+All history already inspected by researchers is development data. A later
+temporal interval can replicate a rule during development, but it is not a
+blind holdout. Such categories are labeled `DEVELOPMENT_REPLICATED`.
+
+`PRISTINE_VERIFIED` requires:
+
+1. a protocol freeze identifier created before holdout access;
+2. a chronologically later interval whose labels were not inspected during
+   feature, threshold, rule, or code development;
+3. frozen discovery rules and controls;
+4. no tuning after seeing holdout results.
+
+Until new forward data exists, historical robustness should additionally be
+estimated with rolling-origin development analysis. It cannot restore a blind
+holdout once historical labels have been inspected.
+
+Trade simulation on the same later interval used to assign
+`DEVELOPMENT_REPLICATED` is descriptive only. An unbiased EV estimate requires
+outer rolling-origin folds whose test blocks were not used to choose the rule,
+or the future pristine holdout after protocol freeze.
+
+## Controls and inference
+
+- Global blind is descriptive only.
+- Diagnostic real/shuffled AUC uses inverse-anomaly weights, so long pumps with
+  more new-high decisions do not dominate the metric.
+- The inferential blind is matched by calendar month, decision index, and
+  remaining-distance-to-base quantile.
+- Confidence bounds resample ISO-week blocks and p-values use week-level wild
+  sign flips. This preserves systemic waves and 24–48 hour same-coin recurrence;
+  candidates spanning fewer than eight inference weeks are rejected.
+- Benjamini-Yekutieli false-discovery correction is applied to frozen distinct
+  candidates, remaining valid under arbitrary dependence between overlapping
+  rule tests.
+- Shuffled labels are permuted across anomaly groups inside calendar-month
+  blocks. This preserves broad regime base rates while destroying feature and
+  decision-position association. A useful null must produce approximately 0.5
+  later-period AUC and no replicated categories.
+- Rule regions are pruned by event-set Jaccard overlap and minimum unique event
+  coverage. Different rule text alone does not establish a different nature.
+
+## Commands
+
+```powershell
+.venv/Scripts/python.exe main.py build-pump-fade-dataset `
+  --cache-dir .output/market/binance_vision/um_futures/enriched_1m `
+  --out .output/results/pump_fade_decisions_30.parquet `
+  --limit-symbols 30
+
+.venv/Scripts/python.exe main.py run-archetype-discovery `
+  --input .output/results/pump_fade_decisions_30.parquet `
+  --config research/pump_fade_archetype_discovery.json `
+  --out .output/results/pump_fade_archetypes_30
+```
+
+The old scratchpad `trades.parquet` does not satisfy this protocol: it contains
+every-candle pullback rows, a 0.5% invalidation buffer, a 1440-minute label cap,
+open-time timestamps for closed-candle features, and full-period eligibility.
+It must not be used for new claims.

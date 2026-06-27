@@ -7,19 +7,20 @@
     "group_column": "group",
     "symbol_column": "symbol",
     "label_column": "y",
-    "snapshot_time_column": "anchor_time",
-    "resolution_time_column": "resolution_time",
-    "feature_cutoff_time_column": null,
-    "future_start_time_column": null,
-    "attest_feature_cutoff_equals_snapshot": true,
-    "future_start_offset_ms": 60000
+    "snapshot_time_column": "snapshot_time_ms",
+    "resolution_time_column": "resolution_time_ms",
+    "label_available_column": "label_available",
+    "label_schema_column": "label_schema_version",
+    "required_label_schema_value": "pump_fade_close_race_horizon_free_v1",
+    "feature_cutoff_time_column": "feature_cutoff_time_ms",
+    "future_start_time_column": "future_start_time_ms",
+    "attest_feature_cutoff_equals_snapshot": false,
+    "future_start_offset_ms": null
   },
   "features": {
     "numeric": [
-      "pullback_depth",
       "pump_size",
-      "pump_dur_min",
-      "pump_ncandles",
+      "pump_elapsed_min",
       "verticality",
       "max_candle_share",
       "turnover",
@@ -27,7 +28,6 @@
       "act_now",
       "act_now_over_peak",
       "rel_vol_phase",
-      "min_since_ign",
       "n_prior_24h",
       "n_prior_48h",
       "min_since_last_prior",
@@ -36,6 +36,15 @@
       "last_prior_size",
       "cluster_idx_day",
       "base_broken_before",
+      "ignition_hour_utc",
+      "ignition_minute_of_hour",
+      "ignition_minutes_from_round_hour",
+      "ignition_day_of_week_utc"
+    ],
+    "decision_timing_numeric": [
+      "decision_index",
+      "remaining_to_base",
+      "close_drawdown_from_high",
       "ext_vwap",
       "upper_wick5",
       "taker_decline",
@@ -43,16 +52,12 @@
       "range_contraction",
       "candles_since_red"
     ],
-    "categorical": ["entry_type", "session"],
-    "derived_time": [
-      "hour_utc",
-      "minute_of_hour",
-      "minutes_from_round_hour",
-      "day_of_week_utc"
-    ]
+    "include_decision_timing": false,
+    "categorical": ["session"],
+    "derived_time": []
   },
   "population": {
-    "minimum_value_column": "reward",
+    "minimum_value_column": "remaining_to_base",
     "minimum_value": 0.03
   },
   "random_seed": 20260627,
@@ -66,11 +71,21 @@
   "min_verification_fade_rate": 0.58,
   "min_discovery_lift": 1.15,
   "min_verification_lift": 1.15,
-  "max_membership_jaccard": 0.8,
-  "max_categories": 30,
+  "max_membership_jaccard": 0.5,
+  "min_unique_event_fraction": 0.3,
+  "max_categories": 20,
   "fdr_alpha": 0.05,
   "stability_frequency": "M",
   "min_events_per_stability_period": 15,
   "min_positive_stability_fraction": 0.6,
+  "matched_control_columns": ["decision_index"],
+  "matched_control_quantile_columns": ["remaining_to_base"],
+  "matched_control_quantiles": 5,
+  "min_matched_control_rows": 30,
+  "min_matched_signal_fraction": 0.8,
+  "block_bootstrap_iterations": 1000,
+  "min_inference_blocks": 8,
+  "evidence_mode": "development",
+  "protocol_freeze_id": "",
   "shuffled_seeds": [11, 29, 47]
 }

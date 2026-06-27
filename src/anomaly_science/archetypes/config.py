@@ -34,6 +34,9 @@ class ArchetypeInputContract:
     label_column: str
     snapshot_time_column: str
     resolution_time_column: str
+    label_available_column: str | None = None
+    label_schema_column: str | None = None
+    required_label_schema_value: str | None = None
     feature_cutoff_time_column: str | None = None
     future_start_time_column: str | None = None
     attest_feature_cutoff_equals_snapshot: bool = False
@@ -59,16 +62,22 @@ class ArchetypeInputContract:
                 raise ArchetypeConfigError(
                     "future_start_time_column or a positive future_start_offset_ms is required"
                 )
+        if (self.label_schema_column is None) != (self.required_label_schema_value is None):
+            raise ArchetypeConfigError(
+                "label_schema_column and required_label_schema_value must be set together"
+            )
 
 
 @dataclass(frozen=True, slots=True)
 class ArchetypeFeatureSpec:
     numeric: tuple[str, ...]
+    decision_timing_numeric: tuple[str, ...] = ()
     categorical: tuple[str, ...] = ()
     derived_time: tuple[str, ...] = ()
+    include_decision_timing: bool = False
 
     def __post_init__(self) -> None:
-        all_columns = (*self.numeric, *self.categorical)
+        all_columns = (*self.numeric, *self.decision_timing_numeric, *self.categorical)
         if not all_columns:
             raise ArchetypeConfigError("at least one explicit causal feature is required")
         if len(set(all_columns)) != len(all_columns):
@@ -111,11 +120,21 @@ class ArchetypeDiscoveryConfig:
     min_discovery_lift: float = 1.15
     min_verification_lift: float = 1.15
     max_membership_jaccard: float = 0.80
+    min_unique_event_fraction: float = 0.25
     max_categories: int = 30
     fdr_alpha: float = 0.05
     stability_frequency: str = "M"
     min_events_per_stability_period: int = 15
     min_positive_stability_fraction: float = 0.60
+    matched_control_columns: tuple[str, ...] = ()
+    matched_control_quantile_columns: tuple[str, ...] = ()
+    matched_control_quantiles: int = 5
+    min_matched_control_rows: int = 30
+    min_matched_signal_fraction: float = 0.80
+    block_bootstrap_iterations: int = 1000
+    min_inference_blocks: int = 8
+    evidence_mode: str = "development"
+    protocol_freeze_id: str = ""
     shuffled_seeds: tuple[int, ...] = (11, 29, 47)
 
     def __post_init__(self) -> None:
@@ -143,12 +162,40 @@ class ArchetypeDiscoveryConfig:
             raise ArchetypeConfigError("minimum lifts must be greater than one")
         if not 0.0 <= self.max_membership_jaccard < 1.0:
             raise ArchetypeConfigError("max_membership_jaccard must be within [0, 1)")
+        if not 0.0 < self.min_unique_event_fraction <= 1.0:
+            raise ArchetypeConfigError("min_unique_event_fraction must be within (0, 1]")
         if self.max_categories <= 0:
             raise ArchetypeConfigError("max_categories must be positive")
         if self.min_events_per_stability_period <= 0:
             raise ArchetypeConfigError("min_events_per_stability_period must be positive")
         if not 0.0 <= self.min_positive_stability_fraction <= 1.0:
             raise ArchetypeConfigError("min_positive_stability_fraction must be within [0, 1]")
+        if self.matched_control_quantiles < 2:
+            raise ArchetypeConfigError("matched_control_quantiles must be at least two")
+        if self.min_matched_control_rows <= 0 or self.block_bootstrap_iterations < 200:
+            raise ArchetypeConfigError(
+                "min_matched_control_rows must be positive and block_bootstrap_iterations at least 200"
+            )
+        if self.min_inference_blocks < 4:
+            raise ArchetypeConfigError("min_inference_blocks must be at least four")
+        if not 0.0 < self.min_matched_signal_fraction <= 1.0:
+            raise ArchetypeConfigError("min_matched_signal_fraction must be within (0, 1]")
+        if self.evidence_mode not in {"development", "pristine_holdout"}:
+            raise ArchetypeConfigError("evidence_mode must be development or pristine_holdout")
+        if self.evidence_mode == "pristine_holdout" and not self.protocol_freeze_id.strip():
+            raise ArchetypeConfigError(
+                "pristine_holdout evidence requires a protocol_freeze_id created before holdout access"
+            )
+        feature_columns = set(self.features.numeric) | set(self.features.decision_timing_numeric) | set(
+            self.features.categorical
+        )
+        missing_match = (
+            set(self.matched_control_columns) | set(self.matched_control_quantile_columns)
+        ) - feature_columns
+        if missing_match:
+            raise ArchetypeConfigError(
+                f"matched-control columns must be explicit causal features: {sorted(missing_match)}"
+            )
 
     @property
     def discovery_start_ms(self) -> int:
@@ -182,19 +229,33 @@ def load_archetype_discovery_config(path: Path) -> ArchetypeDiscoveryConfig:
     population_raw = dict(raw.pop("population", {}))
     feature_spec = ArchetypeFeatureSpec(
         numeric=_tuple_strings(feature_raw.pop("numeric"), field_name="features.numeric"),
+        decision_timing_numeric=_tuple_strings(
+            feature_raw.pop("decision_timing_numeric", []),
+            field_name="features.decision_timing_numeric",
+        ),
         categorical=_tuple_strings(feature_raw.pop("categorical", []), field_name="features.categorical"),
         derived_time=_tuple_strings(feature_raw.pop("derived_time", []), field_name="features.derived_time"),
+        include_decision_timing=bool(feature_raw.pop("include_decision_timing", False)),
     )
     if feature_raw:
         raise ArchetypeConfigError(f"unknown feature config keys: {sorted(feature_raw)}")
     shuffled_seeds = raw.pop("shuffled_seeds", [11, 29, 47])
     if not isinstance(shuffled_seeds, list) or any(not isinstance(seed, int) for seed in shuffled_seeds):
         raise ArchetypeConfigError("shuffled_seeds must be a JSON array of integers")
+    matched_control_columns = _tuple_strings(
+        raw.pop("matched_control_columns", []), field_name="matched_control_columns"
+    )
+    matched_control_quantile_columns = _tuple_strings(
+        raw.pop("matched_control_quantile_columns", []),
+        field_name="matched_control_quantile_columns",
+    )
     return ArchetypeDiscoveryConfig(
         input=ArchetypeInputContract(**input_raw),
         features=feature_spec,
         population=ArchetypePopulationSpec(**population_raw),
         shuffled_seeds=tuple(shuffled_seeds),
+        matched_control_columns=matched_control_columns,
+        matched_control_quantile_columns=matched_control_quantile_columns,
         **raw,
     )
 

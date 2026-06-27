@@ -1,5 +1,11 @@
 # Strategy Spec: anomaly family
 
+> Scope boundary: this file documents the older `broad_anomaly_v1_h*`
+> fixed-horizon strategy variants. It is not the contract for the structural
+> pump-fade/new-high research target. That target is defined in
+> [../pump_fade_archetype_protocol.md](../pump_fade_archetype_protocol.md),
+> which explicitly forbids ATR outcome barriers and fixed label horizons.
+
 Status:
 
 ```text

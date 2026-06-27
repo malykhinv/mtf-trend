@@ -18,6 +18,11 @@ Methodology completion is tracked explicitly in `research/METHODOLOGY_GAP_LEDGER
 
 ## Current executable stage
 
+The structural pump-fade archetype thread follows the separate canonical
+protocol in [docs/pump_fade_archetype_protocol.md](docs/pump_fade_archetype_protocol.md).
+It uses a horizon-free close race at causally qualified new running highs and
+must not consume the historical scratchpad `trades.parquet` prototype.
+
 Primary offline research commands:
 
 ```bash
