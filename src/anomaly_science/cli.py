@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from anomaly_science.atlas import run_mvp1_atlas
+from anomaly_science.archetypes import load_archetype_discovery_config, run_archetype_discovery
 from anomaly_science.contracts.horizons import SUPPORTED_RESEARCH_HORIZONS
 from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.cache_export import CacheMvp1CsvExportConfig, export_cache_to_mvp1_csv
@@ -443,6 +444,24 @@ def build_parser() -> argparse.ArgumentParser:
     validate_cache.add_argument("--allow-missing-utc-days", action="store_true", help="Do not fail if a symbol has missing UTC days inside its exported first/last date span.")
     validate_cache.add_argument("--allow-unclassified-1m-gaps", action="store_true", help="Do not fail if missing 1m rows cannot be classified.")
 
+    archetypes = subparsers.add_parser(
+        "run-archetype-discovery",
+        help="Mine interpretable causal CatBoost tree-path archetypes and verify them on a later period.",
+    )
+    archetypes.add_argument("--input", required=True, help="Causal decision-row parquet or CSV dataset.")
+    archetypes.add_argument(
+        "--config",
+        required=True,
+        help="Explicit JSON feature/time contract and frozen discovery/verification protocol.",
+    )
+    archetypes.add_argument("--out", required=True, help="Directory for catalog, controls, model, and assignments.")
+    archetypes.add_argument(
+        "--limit-symbols",
+        type=int,
+        default=None,
+        help="Deterministic sorted-symbol limit for a smoke run. Omit for the registered full run.",
+    )
+
 
     return parser
 
@@ -453,6 +472,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "doctor":
         print(_BOOTSTRAP_MESSAGE)
+        return 0
+
+    if args.command == "run-archetype-discovery":
+        output_dir = run_archetype_discovery(
+            input_path=Path(args.input),
+            out_dir=Path(args.out),
+            config=load_archetype_discovery_config(Path(args.config)),
+            limit_symbols=args.limit_symbols,
+        )
+        print(f"archetype discovery artifacts written: {output_dir}")
         return 0
 
     if args.command == "run-research":
