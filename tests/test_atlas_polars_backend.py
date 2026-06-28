@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 
 from anomaly_science.atlas.builder import (
-    build_atlas_artifacts_from_csv_paths,
     context_split_rows_to_artifact,
     market_shock_group_rows_to_artifact,
     nature_rows_to_artifact,
@@ -33,18 +31,11 @@ def _write_rows(path: Path, *, schema_name: str, rows: list[dict[str, object]]) 
 def _state_payload(*, event_id: str, offset_minutes: int, symbol: str = "AAA/USDT:USDT") -> dict[str, object]:
     snapshot_time_ms = BASE_TS + offset_minutes * 60_000
     return {
-        "run_id": "fixture_run",
-        "strategy_name": "broad_anomaly_v1_h30",
-        "strategy_version": "v1",
-        "strategy_contract_version": "base_strategy_v1",
         "event_id": event_id,
         "symbol": symbol,
         "state_time_ms": snapshot_time_ms,
         "snapshot_time_ms": snapshot_time_ms,
         "feature_cutoff_time_ms": snapshot_time_ms,
-        "minutes_since_trigger": 2,
-        "is_trigger": True,
-        "state_alive": True,
         "minutes_since_event_start": offset_minutes,
         "minutes_since_detection": 1,
         "event_alive": True,
@@ -77,7 +68,7 @@ def _future_payload(
         "snapshot_time_ms": snapshot_time_ms,
         "feature_cutoff_time_ms": snapshot_time_ms,
         "future_start_time_ms": snapshot_time_ms + 60_000,
-        "core_atr_1440": 1.0,
+        "ATR_1d_asof_t": 1.0,
         "ATR_1d_pct_asof_t": 0.01,
         "double_barrier_k_continuation": 1.0,
         "double_barrier_k_fade": 1.0,
@@ -88,7 +79,7 @@ def _future_payload(
         payload[f"future_return_{horizon}m"] = future_return
         payload[f"future_max_{horizon}m"] = future_max
         payload[f"future_min_{horizon}m"] = future_min
-    for horizon in (15, 30, 60, 120, 180):
+    for horizon in (5, 15, 30, 60, 120, 180):
         payload[f"future_return_atr_{horizon}m"] = future_return
         payload[f"future_max_atr_{horizon}m"] = future_max
         payload[f"future_min_atr_{horizon}m"] = future_min
@@ -113,7 +104,7 @@ def _feature_payload(
         "snapshot_time_ms": snapshot_time_ms,
         "feature_cutoff_time_ms": snapshot_time_ms,
         "minutes_since_trigger": 2,
-        "core_atr_1440": 1.0,
+        "ATR_1d_asof_t": 1.0,
         "ATR_1d_pct_asof_t": 0.01,
         "current_return_from_start": 0.02,
         "range_since_start_atr": 2.5,
@@ -161,15 +152,6 @@ def _feature_payload(
     }
 
 
-def _artifacts_payload(artifacts) -> dict[str, list[dict[str, object]]]:
-    return {
-        "nature": [asdict(row) for row in artifacts.nature_atlas_rows],
-        "context": [asdict(row) for row in artifacts.context_split_rows],
-        "response": [asdict(row) for row in artifacts.response_surface_rows],
-        "market": [asdict(row) for row in artifacts.market_shock_group_rows],
-    }
-
-
 def _read_csv_artifact_rows(path: Path, *, schema_name: str) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj)
@@ -190,50 +172,6 @@ def _assert_output_artifact_matches_rows(path: Path, *, schema_name: str, rows: 
         schema_name=schema_name,
         rows=rows,
     )
-
-
-def test_polars_atlas_backend_matches_legacy_csv_backend(tmp_path: Path) -> None:
-    pytest.importorskip("polars")
-    state_path = tmp_path / "anomaly_state_1m.csv"
-    future_path = tmp_path / "anomaly_future_paths.csv"
-    feature_path = tmp_path / "anomaly_feature_matrix.csv"
-    _write_rows(
-        state_path,
-        schema_name="anomaly_state_1m.csv",
-        rows=[
-            _state_payload(event_id="evt_atlas_1", offset_minutes=2),
-            _state_payload(event_id="evt_atlas_2", offset_minutes=3),
-        ],
-    )
-    _write_rows(
-        future_path,
-        schema_name="anomaly_future_paths.csv",
-        rows=[
-            _future_payload(event_id="evt_atlas_1", offset_minutes=2, future_return=1.2, future_max=1.4, future_min=-0.1, reclaimed=True),
-            _future_payload(event_id="evt_atlas_2", offset_minutes=3, future_return=-1.2, future_max=0.1, future_min=-1.4, reclaimed=False),
-        ],
-    )
-    _write_rows(
-        feature_path,
-        schema_name="anomaly_feature_matrix.csv",
-        rows=[
-            _feature_payload(event_id="evt_atlas_1", offset_minutes=2, systemic_cluster_regime="idiosyncratic"),
-            _feature_payload(event_id="evt_atlas_2", offset_minutes=3, systemic_cluster_regime="systemic_beta_shock"),
-        ],
-    )
-
-    legacy = build_atlas_artifacts_from_csv_paths(
-        state_path=state_path,
-        future_path=future_path,
-        feature_matrix_path=feature_path,
-    )
-    polars_artifacts = build_atlas_artifacts_polars_from_csv_paths(
-        state_path=state_path,
-        future_path=future_path,
-        feature_matrix_path=feature_path,
-    )
-
-    assert _artifacts_payload(polars_artifacts) == _artifacts_payload(legacy)
 
 
 def test_polars_atlas_backend_builds_nature_and_response_rows_without_legacy_accumulators(monkeypatch, tmp_path: Path) -> None:

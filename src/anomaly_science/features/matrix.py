@@ -15,7 +15,12 @@ from typing import Callable, Iterable, Mapping, Sequence, TypeVar, get_args, get
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.artifacts.manifest import sha256_file
 from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
-from anomaly_science.contracts.artifacts import ArtifactSchema, get_artifact_schema, get_strategy_artifact_companion_names
+from anomaly_science.contracts.artifacts import (
+    ArtifactSchema,
+    get_artifact_schema,
+    get_strategy_artifact_companion_names,
+    should_materialize_strategy_artifact_alias,
+)
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.contracts.features import StrategyFeatureMatrixRow
 from anomaly_science.contracts.market import FIVE_MINUTES_MS, Candle1m, LiquidationEvent, MarketDataContractError, ONE_MINUTE_MS, OpenInterest5m, SymbolDayUniverseRow
@@ -2291,6 +2296,8 @@ def _write_feature_matrix_artifact_with_aliases(
     row_count = row_count_writer(path)
     written = [path]
     for alias_name in get_strategy_artifact_companion_names(schema.name):
+        if not should_materialize_strategy_artifact_alias(schema.name, alias_name):
+            continue
         alias_path = path.with_name(alias_name)
         alias_schema = get_artifact_schema(alias_name)
         if tuple(alias_schema.required_columns) != tuple(schema.required_columns):

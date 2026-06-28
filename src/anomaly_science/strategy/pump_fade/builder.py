@@ -33,6 +33,12 @@ class _EventRecord:
     size: float
 
 
+@dataclass(frozen=True, slots=True)
+class PumpFadeSymbolBuildResult:
+    decisions: pd.DataFrame
+    quality: dict[str, object]
+
+
 class _BarrierIndex:
     """First future close crossing a threshold in O(log n)."""
 
@@ -194,7 +200,7 @@ def _window_mean(values: np.ndarray, end: int, width: int) -> float:
     return float(np.nanmean(window)) if len(window) else 0.0
 
 
-def _load_symbol(path: Path) -> pd.DataFrame:
+def _load_symbol(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
     dataset = ds.dataset(path)
     required = {"timestamp", "open", "high", "low", "close", "quote_volume", "trade_count"}
     missing = required - set(dataset.schema.names)
@@ -203,36 +209,55 @@ def _load_symbol(path: Path) -> pd.DataFrame:
     columns = sorted(required)
     if "taker_buy_quote_volume" in dataset.schema.names:
         columns.append("taker_buy_quote_volume")
-    frame = dataset.to_table(columns=columns).to_pandas().sort_values("timestamp")
+    frame = dataset.to_table(columns=columns).to_pandas()
+    source_rows = len(frame)
+    numeric_required = sorted(required)
+    numeric = frame[numeric_required].apply(pd.to_numeric, errors="coerce")
+    non_finite = ~np.isfinite(numeric.to_numpy(dtype=float)).all(axis=1)
+    finite = ~non_finite
+    invalid_ohlc = finite & (
+        (numeric["high"] < numeric[["open", "close"]].max(axis=1))
+        | (numeric["low"] > numeric[["open", "close"]].min(axis=1))
+        | (numeric["low"] > numeric["high"])
+    ).to_numpy()
+    negative_activity = finite & (
+        (numeric["quote_volume"] < 0) | (numeric["trade_count"] < 0)
+    ).to_numpy()
+    invalid = non_finite | invalid_ohlc | negative_activity
+    frame = frame.loc[~invalid].sort_values("timestamp").reset_index(drop=True)
     if frame["timestamp"].duplicated().any():
         raise PumpFadeBuildError(f"{path.name} contains duplicate timestamps")
-    numeric_required = sorted(required)
-    numeric = frame[numeric_required].apply(pd.to_numeric, errors="raise")
-    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
-        raise PumpFadeBuildError(f"{path.name} contains non-finite required market values")
-    invalid_ohlc = (
-        (frame["high"] < frame[["open", "close"]].max(axis=1))
-        | (frame["low"] > frame[["open", "close"]].min(axis=1))
-        | (frame["low"] > frame["high"])
-    )
-    if invalid_ohlc.any():
-        raise PumpFadeBuildError(f"{path.name} contains invalid OHLC rows")
-    if (frame["quote_volume"] < 0).any() or (frame["trade_count"] < 0).any():
-        raise PumpFadeBuildError(f"{path.name} contains negative activity values")
-    return frame.reset_index(drop=True)
+    return frame, {
+        "source_row_count": source_rows,
+        "valid_row_count": len(frame),
+        "dropped_row_count": int(invalid.sum()),
+        "non_finite_row_count": int(non_finite.sum()),
+        "invalid_ohlc_row_count": int(invalid_ohlc.sum()),
+        "negative_activity_row_count": int(negative_activity.sum()),
+    }
 
 
-def build_pump_fade_symbol(
+def build_pump_fade_symbol_result(
     path: Path,
     *,
     symbol: str | None = None,
     config: PumpFadeDecisionConfig | None = None,
-) -> pd.DataFrame:
+) -> PumpFadeSymbolBuildResult:
     config = config or PumpFadeDecisionConfig()
-    frame = _load_symbol(path)
     symbol = symbol or path.stem
+    frame, quality_counts = _load_symbol(path)
     if len(frame) < config.baseline_min_periods + 2:
-        return pd.DataFrame()
+        return PumpFadeSymbolBuildResult(
+            decisions=pd.DataFrame(),
+            quality={
+                "symbol": symbol,
+                **quality_counts,
+                "decision_row_count": 0,
+                "event_count": 0,
+                "status": "INSUFFICIENT_VALID_HISTORY",
+                "reason": "valid rows do not satisfy baseline warm-up",
+            },
+        )
     timestamps = frame["timestamp"].to_numpy(dtype=np.int64)
     if np.any(np.diff(timestamps) <= 0):
         raise PumpFadeBuildError(f"{symbol} timestamps must be strictly increasing")
@@ -553,7 +578,30 @@ def build_pump_fade_symbol(
     if not result.empty:
         result["y"] = result["y"].astype("Int8")
         result["resolution_time_ms"] = result["resolution_time_ms"].astype("Int64")
-    return result
+    return PumpFadeSymbolBuildResult(
+        decisions=result,
+        quality={
+            "symbol": symbol,
+            **quality_counts,
+            "decision_row_count": len(result),
+            "event_count": int(result["event_id"].nunique()) if not result.empty else 0,
+            "status": "OK_WITH_DROPPED_ROWS" if quality_counts["dropped_row_count"] else "OK",
+            "reason": (
+                "invalid required market rows were removed and became explicit time gaps"
+                if quality_counts["dropped_row_count"]
+                else "all required market rows passed validation"
+            ),
+        },
+    )
+
+
+def build_pump_fade_symbol(
+    path: Path,
+    *,
+    symbol: str | None = None,
+    config: PumpFadeDecisionConfig | None = None,
+) -> pd.DataFrame:
+    return build_pump_fade_symbol_result(path, symbol=symbol, config=config).decisions
 
 
 def build_pump_fade_decisions(
@@ -563,17 +611,60 @@ def build_pump_fade_decisions(
     limit_symbols: int | None = None,
     progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> pd.DataFrame:
+    decisions, _ = build_pump_fade_decisions_with_quality(
+        cache_dir=cache_dir,
+        config=config,
+        limit_symbols=limit_symbols,
+        progress_callback=progress_callback,
+    )
+    return decisions
+
+
+def build_pump_fade_decisions_with_quality(
+    *,
+    cache_dir: Path,
+    config: PumpFadeDecisionConfig | None = None,
+    limit_symbols: int | None = None,
+    progress_callback: Callable[[int, int, str, int], None] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     config = config or PumpFadeDecisionConfig()
     paths = sorted(cache_dir.glob("*.parquet"), key=lambda item: item.stem)
     if limit_symbols is not None:
         if limit_symbols <= 0:
             raise PumpFadeBuildError("limit_symbols must be positive")
         paths = paths[:limit_symbols]
+    if not paths:
+        raise PumpFadeBuildError(f"no parquet symbol caches found in {cache_dir}")
     frames: list[pd.DataFrame] = []
+    quality_rows: list[dict[str, object]] = []
     for index, path in enumerate(paths, start=1):
-        frame = build_pump_fade_symbol(path, symbol=path.stem, config=config)
+        try:
+            symbol_result = build_pump_fade_symbol_result(
+                path, symbol=path.stem, config=config
+            )
+            frame = symbol_result.decisions
+            quality_rows.append(symbol_result.quality)
+        except PumpFadeBuildError as exc:
+            frame = pd.DataFrame()
+            quality_rows.append(
+                {
+                    "symbol": path.stem,
+                    "source_row_count": 0,
+                    "valid_row_count": 0,
+                    "dropped_row_count": 0,
+                    "non_finite_row_count": 0,
+                    "invalid_ohlc_row_count": 0,
+                    "negative_activity_row_count": 0,
+                    "decision_row_count": 0,
+                    "event_count": 0,
+                    "status": "REJECTED",
+                    "reason": str(exc),
+                }
+            )
         if not frame.empty:
             frames.append(frame)
         if progress_callback is not None:
             progress_callback(index, len(paths), path.stem, len(frame))
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    decisions = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    quality = pd.DataFrame(quality_rows)
+    return decisions, quality

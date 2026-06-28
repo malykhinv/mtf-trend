@@ -11,8 +11,13 @@ from anomaly_science.strategy.pump_fade.builder import (
     _race,
     PumpFadeBuildError,
     build_pump_fade_symbol,
+    build_pump_fade_symbol_result,
 )
 from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
+from anomaly_science.strategy.pump_fade.run import (
+    PumpFadeDataQualityPolicy,
+    run_pump_fade_dataset_build,
+)
 
 
 def _config() -> PumpFadeDecisionConfig:
@@ -188,12 +193,73 @@ def test_pump_fade_cli_routes_progress_to_dataset_builder(
     assert captured["progress_every"] == 5
 
 
-def test_builder_rejects_invalid_market_rows(tmp_path: Path) -> None:
+def test_builder_materializes_invalid_market_rows_as_audited_gaps(tmp_path: Path) -> None:
     path = tmp_path / "TEST.parquet"
     _write_market(path)
     frame = pd.read_parquet(path)
     frame.loc[3, "high"] = frame.loc[3, "low"] - 1.0
     frame.to_parquet(path, index=False)
 
-    with pytest.raises(PumpFadeBuildError, match="invalid OHLC"):
-        build_pump_fade_symbol(path, config=_config())
+    result = build_pump_fade_symbol_result(path, config=_config())
+
+    assert result.quality["dropped_row_count"] == 1
+    assert result.quality["invalid_ohlc_row_count"] == 1
+    assert result.quality["status"] == "OK_WITH_DROPPED_ROWS"
+
+
+def test_dataset_run_writes_data_quality_artifact(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_market(cache_dir / "TEST.parquet")
+    output = tmp_path / "decisions.parquet"
+
+    run_pump_fade_dataset_build(
+        cache_dir=cache_dir,
+        output_path=output,
+        config=_config(),
+        progress_every=0,
+    )
+
+    quality = pd.read_csv(tmp_path / "decisions.data_quality.csv")
+    assert quality.loc[0, "symbol"] == "TEST"
+    assert quality.loc[0, "status"] == "OK"
+    assert (tmp_path / "decisions.metadata.json").is_file()
+    assert (tmp_path / "decisions.manifest.json").is_file()
+
+
+def test_dataset_run_fails_closed_when_dropped_rows_exceed_policy(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    path = cache_dir / "TEST.parquet"
+    _write_market(path)
+    frame = pd.read_parquet(path)
+    frame.loc[3, "quote_volume"] = float("nan")
+    frame.to_parquet(path, index=False)
+    output = tmp_path / "decisions.parquet"
+    output.write_bytes(b"stale artifact")
+
+    with pytest.raises(PumpFadeBuildError, match="dropped market row fraction"):
+        run_pump_fade_dataset_build(
+            cache_dir=cache_dir,
+            output_path=output,
+            config=_config(),
+            quality_policy=PumpFadeDataQualityPolicy(
+                max_rejected_symbol_fraction=1.0,
+                max_dropped_market_row_fraction=0.0,
+            ),
+            progress_every=0,
+        )
+
+    assert not output.exists()
+    quality = pd.read_csv(tmp_path / "decisions.data_quality.csv")
+    assert quality.loc[0, "dropped_row_count"] == 1
+
+
+def test_dataset_builder_rejects_empty_cache(tmp_path: Path) -> None:
+    with pytest.raises(PumpFadeBuildError, match="no parquet symbol caches"):
+        run_pump_fade_dataset_build(
+            cache_dir=tmp_path,
+            output_path=tmp_path / "decisions.parquet",
+            config=_config(),
+            progress_every=0,
+        )

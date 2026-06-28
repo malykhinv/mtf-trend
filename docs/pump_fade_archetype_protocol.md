@@ -21,6 +21,14 @@ phases and cannot alter this label.
 - Baselines are computed only inside contiguous one-minute blocks. After a
   market-data gap they are unavailable until 1,440 prior contiguous minutes
   exist; data before the gap is never silently treated as adjacent.
+- Non-finite/invalid required market rows are removed explicitly and become
+  time gaps. Counts and reasons are written to the dataset's
+  `.data_quality.csv`; malformed symbols are quarantined as `REJECTED` instead
+  of aborting or silently weakening the universe.
+- A dataset build fails closed after writing the diagnostic quality table when
+  rejected symbols exceed 2% of the requested universe or dropped required
+  market rows exceed 1% overall. These operational thresholds are independent
+  of the anomaly and label definition.
 - Base: low of the last closed red candle strictly before ignition.
 - Period: closes after five consecutive minutes below 25% of the running peak
   activity, or after 60 minutes. Confirmation candles remain in the online
