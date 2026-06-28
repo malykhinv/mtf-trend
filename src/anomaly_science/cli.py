@@ -420,6 +420,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refresh cached Binance Vision file listings before processing each symbol when --archive-file-index is enabled.",
     )
 
+    oi_backfill = subparsers.add_parser(
+        "backfill-binance-vision-oi",
+        help="Backfill daily Binance Vision USD-M open interest into an existing enriched 1m cache.",
+    )
+    oi_backfill.add_argument("--cache-dir", default="", help="Existing enriched parquet cache directory.")
+    oi_backfill.add_argument("--symbols", default="", help="Optional comma-separated symbols. Empty means all cache symbols.")
+    oi_backfill.add_argument("--max-symbols", type=int, default=None, help="Optional cap for smoke tests.")
+    oi_backfill.add_argument("--workers", type=int, default=16, help="Concurrent small daily metrics downloads; valid range: 1..32.")
+    oi_backfill.add_argument("--retries", type=int, default=5, help="Retries per network request.")
+    oi_backfill.add_argument("--timeout", type=float, default=45.0, help="Per-request read timeout in seconds.")
+    oi_backfill.add_argument("--connect-timeout", type=float, default=8.0, help="Per-request connect timeout in seconds.")
+    oi_backfill.add_argument(
+        "--max-staleness-minutes",
+        type=int,
+        default=10,
+        help="Maximum causal age of an OI sample. Samples never cross a UTC-day boundary.",
+    )
+    oi_backfill.add_argument("--refresh", action="store_true", help="Re-download symbols with an intact completion proof.")
+
     export_cache = subparsers.add_parser(
         "export-cache-mvp1-csv",
         help="Export Binance Vision enriched parquet cache into the explicit MVP1 CSV data boundary.",
@@ -766,6 +785,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         written = sum(1 for item in stats if item.rows_written > 0)
         skipped_existing = sum(1 for item in stats if item.rows_written == -1)
         print(f"binance vision cache done: written={written}, skipped_existing={skipped_existing}, out={config.out_dir}")
+        return 0
+
+    if args.command == "backfill-binance-vision-oi":
+        from anomaly_science.binance_vision_cache import DEFAULT_MARKET_CACHE_DIR
+        from anomaly_science.binance_vision_oi_backfill import OiBackfillConfig, backfill_binance_vision_open_interest
+
+        cache_dir = Path(args.cache_dir) if args.cache_dir else DEFAULT_MARKET_CACHE_DIR
+        symbols = tuple(symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip())
+        stats = backfill_binance_vision_open_interest(
+            OiBackfillConfig(
+                cache_dir=cache_dir,
+                symbols=symbols,
+                max_symbols=args.max_symbols,
+                workers=args.workers,
+                retries=args.retries,
+                timeout_seconds=args.timeout,
+                connect_timeout_seconds=args.connect_timeout,
+                max_staleness_minutes=args.max_staleness_minutes,
+                refresh=args.refresh,
+            )
+        )
+        print(
+            "binance vision OI backfill done: "
+            f"symbols={len(stats)}, archive_days={sum(item.archive_days for item in stats)}, "
+            f"oi_rows={sum(item.oi_rows_after for item in stats)}, out={cache_dir}"
+        )
         return 0
 
     if args.command == "export-cache-mvp1-csv":
