@@ -4,12 +4,20 @@ This is the canonical repository contract for the structural pump-fade
 research thread. It supersedes fixed-horizon and ATR-barrier targets for this
 strategy. The generic MVP1 pipeline remains available for other strategies.
 
-## Scientific question
+## Scientific questions and stage order
 
-At a closed one-minute candle that sets a new running high during a causally
-qualified pump, can information available at that close identify predictive phenotypes
-that will subsequently close back at the pre-ignition base before any later
-close exceeds the anchor high?
+The research is explicitly two-stage:
+
+1. **Event nature:** at the first causally eligible new-high snapshot, can we
+   predict whether the completed pump will fade from its eventual event peak
+   back to the pre-ignition base before that peak is invalidated?
+2. **Top timing:** only if event nature is predictably positive, can later
+   closed new-high snapshots identify when the event peak has probably been
+   reached?
+
+Nature has one immutable label per pump. Timing has one label per decision
+snapshot. A decision-level top-catching label must never again be presented as
+the pump's nature.
 
 Trade entry, stop buffers, costs, and exit optimization are separate later
 phases and cannot alter this label.
@@ -42,7 +50,29 @@ phases and cannot alter this label.
 An event is never admitted because of its final size, duration, ATR, peak, or
 any other full-period value.
 
-## Exact target
+## Exact targets
+
+### Stage 1: event nature
+
+The nature anchor is the first strict new-high decision at or after causal
+qualification. Let `B` be the fixed pre-ignition base and let `H*` be the
+eventual maximum high inside the registered pump period. Starting strictly
+after the candle that sets `H*`:
+
+- nature fade: first future close `<= B`;
+- nature invalidation: first future close `> H*`;
+- the earlier close wins.
+
+`H*` and the event end are label-only future information. They are never model
+features. If `H*` occurred before the nature anchor, the event is censored for
+nature research because its peak was already missed online. If neither barrier
+resolves before the next data gap or end of data, the nature label is censored.
+
+The nature schema is `pump_fade_event_peak_close_race_v1`. Nature discovery
+selects only `is_nature_anchor=true`, so every event contributes at most one
+row and one label.
+
+### Stage 2: top timing
 
 For base `B`, anchor high `H`, and future one-minute closes strictly after the
 decision snapshot:
@@ -59,9 +89,8 @@ before the first market-data gap or end of data, the row is censored
 the closed decision candle. `future_start_time_ms` is the availability time of
 the next closed candle. These fields are materialized by the builder; the
 registered config does not accept inferred timestamps or an attestation.
-The miner also requires the exact label schema value
-`pump_fade_close_race_horizon_free_v1`; a dataset with buffered or capped labels
-fails before model fitting.
+The decision schema remains `pump_fade_close_race_horizon_free_v1`. It is
+reserved for timing and later combined decision research, not nature discovery.
 
 ## Scientific claim boundary
 
@@ -92,8 +121,11 @@ Clock features used for nature discovery are anchored to ignition, not to the
 later decision snapshot. In particular, round-hour means distance of the
 ignition minute from `hh:00`.
 
-Timing variables may be stacked later after pump natures independently pass
-the predictability gate. Their incremental value must be reported separately.
+Timing variables may be fitted only after the full nature run passes its
+real-vs-null predictability and replication gates. Online combination will be
+`P(event fade nature) * P(peak now | fade nature, current state)`. Training may
+condition the second model on resolved fade-nature events, but online filtering
+may use only the first model's OOS probability, never the realized nature label.
 
 ## Validation and evidence language
 
@@ -123,8 +155,8 @@ or the future pristine holdout after protocol freeze.
 ## Controls and inference
 
 - Global blind is descriptive only.
-- Diagnostic real/shuffled AUC uses inverse-anomaly weights, so long pumps with
-  more new-high decisions do not dominate the metric.
+- Nature AUC has one row per anomaly. Decision/timing diagnostics use
+  inverse-anomaly weights so long pumps do not dominate.
 - The inferential blind is matched by calendar month, decision index, and
   remaining-distance-to-base quantile.
 - Confidence bounds resample ISO-week blocks and p-values use week-level wild
@@ -133,17 +165,17 @@ or the future pristine holdout after protocol freeze.
 - Benjamini-Yekutieli false-discovery correction is applied to frozen distinct
   candidates, remaining valid under arbitrary dependence between overlapping
   rule tests.
-- Shuffled labels are transplanted as complete within-anomaly label paths
-  between anomaly groups having the same calendar month and decision-row
-  count. Labels are aligned by causal decision order. This preserves
-  within-pump dependence while destroying the association between a pump's
-  features and its future label path. The moved-row fraction is reported; a
-  useful null must produce approximately 0.5 later-period AUC and no replicated
-  categories.
+- Nature labels are permuted between complete events within calendar-month
+  blocks. Timing controls transplant complete within-anomaly label paths between
+  events with the same month and decision-row count. The moved-row fraction is
+  reported.
+- Global real-vs-null evidence uses at least 19 registered permutations and the
+  finite-sample upper-tail p-value `(1 + null >= real) / (N + 1)`. An arbitrary
+  absolute shuffled-AUC ceiling is forbidden.
 - A real-label phenotype cannot receive a replicated/verified status unless
-  every shuffled run moves at least the registered row fraction, produces no
-  verified category, and remains below the registered later-period AUC ceiling.
-  Otherwise its status is `CONTROL_FAILED` and it receives no assignment.
+  the empirical AUC control passes and, when real verified categories exist,
+  the identical full rule search also beats the null distribution of verified
+  category counts. Otherwise its status is `CONTROL_FAILED`.
 - Rule regions are pruned by event-set Jaccard overlap and minimum unique event
   coverage. Different rule text alone does not establish a different nature.
 
@@ -160,8 +192,11 @@ or the future pristine holdout after protocol freeze.
   complete registered rule pool; models are not repeatedly refit for every
   selected category.
 - The production configuration uses three generators and three rolling
-  origins: nine real-label fits. Each shuffled control repeats the identical
-  search budget. The full-origin primary model is reused instead of refit.
+  origins: nine real-label fits. Every null always fits the registered primary
+  diagnostic model. The expensive full null rule search runs only when the real
+  search has a category to validate, and then matches the complete real budget.
+- `anomaly_archetype_candidate_funnel.csv` reports exactly which registered
+  gate removes candidates; an empty catalog without this funnel is incomplete.
 - This frozen rule-generation experiment is not a trading probability model.
   Any later probability model used for online decisions still requires weekly
   walk-forward training with frozen weights inside each OOS week.
@@ -174,10 +209,14 @@ or the future pristine holdout after protocol freeze.
   --out .output/results/pump_fade_decisions_30.parquet `
   --limit-symbols 30
 
-.venv/Scripts/python.exe main.py run-archetype-discovery `
+.venv/Scripts/python.exe main.py build-pump-fade-nature-dataset `
   --input .output/results/pump_fade_decisions_30.parquet `
-  --config research/pump_fade_archetype_discovery.json `
-  --out .output/results/pump_fade_archetypes_30
+  --out .output/results/pump_fade_nature_30.parquet
+
+.venv/Scripts/python.exe main.py run-archetype-discovery `
+  --input .output/results/pump_fade_nature_30.parquet `
+  --config research/pump_fade_nature_discovery.json `
+  --out .output/results/pump_fade_nature_archetypes_30
 ```
 
 The old scratchpad `trades.parquet` does not satisfy this protocol: it contains

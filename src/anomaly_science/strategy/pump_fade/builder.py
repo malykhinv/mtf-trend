@@ -13,6 +13,7 @@ from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
 
 
 PUMP_FADE_LABEL_SCHEMA_VERSION = "pump_fade_close_race_horizon_free_v1"
+PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION = "pump_fade_event_peak_close_race_v1"
 
 
 class PumpFadeBuildError(ValueError):
@@ -430,6 +431,8 @@ def build_pump_fade_symbol_result(
 
         previous_running_high = -np.inf
         new_high_index = 0
+        nature_anchor_index: int | None = None
+        nature_temporally_eligible = False
         for relative_index, anchor_high in enumerate(running_high):
             absolute_index = ignition_index + relative_index
             is_new_high = bool(high[absolute_index] > previous_running_high)
@@ -439,6 +442,10 @@ def build_pump_fade_symbol_result(
             new_high_index += 1
             if absolute_index < qualification_index:
                 continue
+            is_nature_anchor = nature_anchor_index is None
+            if is_nature_anchor:
+                nature_anchor_index = absolute_index
+                nature_temporally_eligible = peak_index >= nature_anchor_index
             snapshot_time = int(timestamps[absolute_index] + config.candle_interval_ms)
             future_start = snapshot_time + config.candle_interval_ms
             label, resolution_index = _race(
@@ -491,6 +498,7 @@ def build_pump_fade_symbol_result(
             output_rows.append(
                 {
                     "label_schema_version": PUMP_FADE_LABEL_SCHEMA_VERSION,
+                    "nature_label_schema_version": PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION,
                     "event_id": event_id,
                     "group": event_id,
                     "symbol": symbol,
@@ -503,6 +511,36 @@ def build_pump_fade_symbol_result(
                     "snapshot_time_ms": snapshot_time,
                     "feature_cutoff_time_ms": snapshot_time,
                     "future_start_time_ms": future_start,
+                    "is_nature_anchor": is_nature_anchor,
+                    "nature_future_start_time_ms": (
+                        pd.NA
+                        if not nature_temporally_eligible
+                        else int(
+                            timestamps[peak_index] + 2 * config.candle_interval_ms
+                        )
+                    ),
+                    "nature_resolution_time_ms": (
+                        pd.NA
+                        if not nature_temporally_eligible or peak_resolution is None
+                        else int(
+                            timestamps[peak_resolution] + config.candle_interval_ms
+                        )
+                    ),
+                    "nature_label_available": (
+                        nature_temporally_eligible and peak_resolution is not None
+                    ),
+                    "nature_y": (
+                        pd.NA
+                        if not nature_temporally_eligible or peak_resolution is None
+                        else int(peak_label)
+                    ),
+                    "event_peak_time_ms": int(
+                        timestamps[peak_index] + config.candle_interval_ms
+                    ),
+                    "event_end_time_ms": int(
+                        timestamps[end_index] + config.candle_interval_ms
+                    ),
+                    "is_event_peak_decision": absolute_index == peak_index,
                     "resolution_time_ms": (
                         pd.NA
                         if resolution_index is None
@@ -578,6 +616,13 @@ def build_pump_fade_symbol_result(
     if not result.empty:
         result["y"] = result["y"].astype("Int8")
         result["resolution_time_ms"] = result["resolution_time_ms"].astype("Int64")
+        result["nature_y"] = result["nature_y"].astype("Int8")
+        result["nature_future_start_time_ms"] = result[
+            "nature_future_start_time_ms"
+        ].astype("Int64")
+        result["nature_resolution_time_ms"] = result[
+            "nature_resolution_time_ms"
+        ].astype("Int64")
     return PumpFadeSymbolBuildResult(
         decisions=result,
         quality={

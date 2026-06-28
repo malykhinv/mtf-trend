@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,8 @@ class ArchetypeInputContract:
     future_start_time_column: str | None = None
     attest_feature_cutoff_equals_snapshot: bool = False
     future_start_offset_ms: int | None = None
+    row_filter_column: str | None = None
+    required_row_filter_value: str | int | bool | None = None
 
     def __post_init__(self) -> None:
         required = (
@@ -65,6 +68,10 @@ class ArchetypeInputContract:
         if (self.label_schema_column is None) != (self.required_label_schema_value is None):
             raise ArchetypeConfigError(
                 "label_schema_column and required_label_schema_value must be set together"
+            )
+        if (self.row_filter_column is None) != (self.required_row_filter_value is None):
+            raise ArchetypeConfigError(
+                "row_filter_column and required_row_filter_value must be set together"
             )
 
 
@@ -152,9 +159,29 @@ class ArchetypeDiscoveryConfig:
     min_inference_blocks: int = 8
     evidence_mode: str = "development"
     protocol_freeze_id: str = ""
-    shuffled_seeds: tuple[int, ...] = (11, 29, 47)
+    shuffled_seeds: tuple[int, ...] = (
+        11,
+        29,
+        47,
+        61,
+        79,
+        97,
+        113,
+        131,
+        149,
+        167,
+        181,
+        199,
+        223,
+        241,
+        263,
+        281,
+        307,
+        331,
+        353,
+    )
     min_shuffled_row_fraction: float = 0.70
-    max_shuffled_verification_auc: float = 0.60
+    control_empirical_alpha: float = 0.05
 
     def __post_init__(self) -> None:
         ds = parse_utc_timestamp_ms(self.discovery_start_utc, field_name="discovery_start_utc")
@@ -171,8 +198,12 @@ class ArchetypeDiscoveryConfig:
             raise ArchetypeConfigError("at least one shuffled seed is required")
         if not 0.0 < self.min_shuffled_row_fraction <= 1.0:
             raise ArchetypeConfigError("min_shuffled_row_fraction must be within (0, 1]")
-        if not 0.5 <= self.max_shuffled_verification_auc < 1.0:
-            raise ArchetypeConfigError("max_shuffled_verification_auc must be within [0.5, 1)")
+        if not 0.0 < self.control_empirical_alpha < 1.0:
+            raise ArchetypeConfigError("control_empirical_alpha must be within (0, 1)")
+        if len(self.shuffled_seeds) < math.ceil(1.0 / self.control_empirical_alpha) - 1:
+            raise ArchetypeConfigError(
+                "shuffled_seeds are too few for the registered empirical control alpha"
+            )
         if self.iterations <= 0 or self.depth <= 0 or self.depth > 8:
             raise ArchetypeConfigError("iterations must be positive and depth must be within [1, 8]")
         if self.learning_rate <= 0.0 or self.l2_leaf_reg < 0.0:
@@ -285,7 +316,30 @@ def load_archetype_discovery_config(path: Path) -> ArchetypeDiscoveryConfig:
     )
     if feature_raw:
         raise ArchetypeConfigError(f"unknown feature config keys: {sorted(feature_raw)}")
-    shuffled_seeds = raw.pop("shuffled_seeds", [11, 29, 47])
+    shuffled_seeds = raw.pop(
+        "shuffled_seeds",
+        [
+            11,
+            29,
+            47,
+            61,
+            79,
+            97,
+            113,
+            131,
+            149,
+            167,
+            181,
+            199,
+            223,
+            241,
+            263,
+            281,
+            307,
+            331,
+            353,
+        ],
+    )
     if not isinstance(shuffled_seeds, list) or any(not isinstance(seed, int) for seed in shuffled_seeds):
         raise ArchetypeConfigError("shuffled_seeds must be a JSON array of integers")
     matched_control_columns = _tuple_strings(

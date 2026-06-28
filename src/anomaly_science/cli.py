@@ -23,7 +23,10 @@ from anomaly_science.research import ResearchDatasetBuildConfig, ResearchRunConf
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
 from anomaly_science.strategy import run_mvp1_strategy_registry
-from anomaly_science.strategy.pump_fade import run_pump_fade_dataset_build
+from anomaly_science.strategy.pump_fade import (
+    run_pump_fade_dataset_build,
+    run_pump_fade_nature_projection,
+)
 from anomaly_science.strategy.registry import StrategyRegistryError, validate_strategy_horizon
 from anomaly_science.validation import run_mvp1_holdout_governance
 
@@ -481,6 +484,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--progress-every", type=int, default=10, help="Print progress every N symbols; zero disables it."
     )
 
+    pump_fade_nature = subparsers.add_parser(
+        "build-pump-fade-nature-dataset",
+        help="Project the causal decision dataset to one immutable event-nature row per pump.",
+    )
+    pump_fade_nature.add_argument("--input", required=True, help="Canonical decision parquet path.")
+    pump_fade_nature.add_argument("--out", required=True, help="Output event-nature parquet path.")
+
 
     return parser
 
@@ -511,6 +521,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress_every=args.progress_every,
         )
         print(f"pump-fade causal dataset written: {output_path}")
+        return 0
+
+    if args.command == "build-pump-fade-nature-dataset":
+        output_path = run_pump_fade_nature_projection(
+            input_path=Path(args.input),
+            output_path=Path(args.out),
+        )
+        print(f"pump-fade event-nature dataset written: {output_path}")
         return 0
 
     if args.command == "run-research":

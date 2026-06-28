@@ -70,6 +70,7 @@ def _config() -> ArchetypeDiscoveryConfig:
         block_bootstrap_iterations=200,
         evidence_mode="development",
         shuffled_seeds=(19,),
+        control_empirical_alpha=0.5,
     )
 
 
@@ -133,6 +134,8 @@ def test_archetype_discovery_finds_frozen_rule_and_defeats_controls() -> None:
     assert {row.split for row in result.coverage_rows} == {"discovery", "verification"}
     assert all(not row.search_truncated for row in result.coverage_rows)
     assert all(row.controls_passed for row in result.coverage_rows)
+    assert result.candidate_funnel_rows
+    assert result.candidate_funnel_rows[-1].stage == "later_verification_gate"
 
 
 def test_calendar_shuffle_transplants_whole_anomaly_label_paths() -> None:
@@ -184,6 +187,26 @@ def test_archetype_temporal_contract_rejects_future_feature_cutoff() -> None:
 
     with pytest.raises(TemporalContractError, match="feature_cutoff_time"):
         prepare_archetype_data(frame, _config())
+
+
+def test_registered_row_filter_is_applied_before_target_time_validation() -> None:
+    frame = _synthetic_rows()
+    frame["is_anchor"] = frame.groupby("group").cumcount().eq(0)
+    frame.loc[~frame["is_anchor"], "future_start_time_ms"] = pd.NA
+    base = _config()
+    config = replace(
+        base,
+        input=replace(
+            base.input,
+            row_filter_column="is_anchor",
+            required_row_filter_value=True,
+        ),
+    )
+
+    prepared = prepare_archetype_data(frame, config)
+
+    assert prepared.discovery.groupby("group").size().eq(1).all()
+    assert prepared.verification.groupby("group").size().eq(1).all()
 
 
 def test_archetype_feature_manifest_rejects_target_as_feature() -> None:
@@ -248,6 +271,8 @@ def test_archetype_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
     assert (out_dir / "strategy_archetype_controls.csv").is_file()
     assert (out_dir / "anomaly_archetype_coverage.csv").is_file()
     assert (out_dir / "strategy_archetype_coverage.csv").is_file()
+    assert (out_dir / "anomaly_archetype_candidate_funnel.csv").is_file()
+    assert (out_dir / "strategy_archetype_candidate_funnel.csv").is_file()
     assert (out_dir / "anomaly_archetype_assignments.parquet").is_file()
     assert (out_dir / "archetype_rule_generator.cbm").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()

@@ -173,6 +173,19 @@ class ArchetypeCoverageRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchetypeCandidateFunnelRow:
+    stage: str
+    candidate_count: int
+    notes: str
+
+    def __post_init__(self) -> None:
+        if not self.stage or not self.notes:
+            raise MarketDataContractError("candidate funnel stage and notes are required")
+        if self.candidate_count < 0:
+            raise MarketDataContractError("candidate_count must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
 class ArchetypeControlRow:
     control_name: str
     random_seed: int

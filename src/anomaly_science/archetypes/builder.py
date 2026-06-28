@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import tempfile
+from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from anomaly_science.archetypes.config import (
 )
 from anomaly_science.contracts.archetypes import (
     ArchetypeCategoryRow,
+    ArchetypeCandidateFunnelRow,
     ArchetypeControlRow,
     ArchetypeCoverageRow,
 )
@@ -106,6 +108,9 @@ class ArchetypeBuildResult:
     generator_fit_count: int
     search_truncated: bool
     controls_passed: bool
+    auc_control_empirical_p: float
+    category_count_control_empirical_p: float
+    candidate_funnel_rows: list[ArchetypeCandidateFunnelRow]
 
 
 def _required_input_columns(config: ArchetypeDiscoveryConfig) -> set[str]:
@@ -128,6 +133,8 @@ def _required_input_columns(config: ArchetypeDiscoveryConfig) -> set[str]:
         required.add(contract.label_available_column)
     if contract.label_schema_column:
         required.add(contract.label_schema_column)
+    if contract.row_filter_column:
+        required.add(contract.row_filter_column)
     if config.population.minimum_value_column:
         required.add(config.population.minimum_value_column)
     return required
@@ -146,6 +153,8 @@ def _validate_feature_boundary(config: ArchetypeDiscoveryConfig) -> None:
         forbidden.add(contract.feature_cutoff_time_column)
     if contract.future_start_time_column:
         forbidden.add(contract.future_start_time_column)
+    if contract.row_filter_column:
+        forbidden.add(contract.row_filter_column)
     selected = (
         set(config.features.numeric)
         | set(config.features.decision_timing_numeric)
@@ -293,11 +302,13 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
             )
     if work[contract.group_column].isna().any() or work[contract.symbol_column].isna().any():
         raise ArchetypeDiscoveryError("group and symbol columns cannot contain missing values")
-    snapshot, cutoff, future_start, resolution = _time_arrays(work, config)
-    work["__snapshot_ms"] = snapshot
-    work["__feature_cutoff_ms"] = cutoff
-    work["__future_start_ms"] = future_start
-    work["__resolution_ms"] = resolution
+    if contract.row_filter_column is not None:
+        work = work[
+            work[contract.row_filter_column] == contract.required_row_filter_value
+        ].copy()
+        if work.empty:
+            raise ArchetypeDiscoveryError("registered row filter removed every row")
+    work["__snapshot_ms"] = _coerce_int_time(work, contract.snapshot_time_column)
     if config.population.minimum_value_column is not None:
         population_values = pd.to_numeric(
             work[config.population.minimum_value_column], errors="raise"
@@ -310,7 +321,17 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
     if contract.label_available_column:
         work = work[work[contract.label_available_column].astype(bool)].copy()
     else:
-        work = work[np.isfinite(work["__resolution_ms"])].copy()
+        resolution_values = pd.to_numeric(
+            work[contract.resolution_time_column], errors="coerce"
+        )
+        work = work[np.isfinite(resolution_values)].copy()
+    if work.empty:
+        raise ArchetypeDiscoveryError("no registered rows have an available label")
+    snapshot, cutoff, future_start, resolution = _time_arrays(work, config)
+    work["__snapshot_ms"] = snapshot
+    work["__feature_cutoff_ms"] = cutoff
+    work["__future_start_ms"] = future_start
+    work["__resolution_ms"] = resolution
     labels = pd.to_numeric(work[contract.label_column], errors="raise")
     if not set(labels.unique()).issubset({0, 1}):
         raise ArchetypeDiscoveryError("available label rows must contain binary 0/1 targets")
@@ -644,6 +665,7 @@ def discover_candidates(
     config: ArchetypeDiscoveryConfig,
     discovery_labels: np.ndarray | None = None,
     matched_probability: np.ndarray | None = None,
+    funnel: Counter[str] | None = None,
 ) -> list[RuleCandidate]:
     frame = prepared.discovery
     labels = (
@@ -665,9 +687,13 @@ def discover_candidates(
             leaf_count=leaf_count,
         )
         for leaf_index, indices in first_by_leaf.items():
+            if funnel is not None:
+                funnel["tree_leaves"] += 1
             count = len(indices)
             if count < config.min_discovery_events:
                 continue
+            if funnel is not None:
+                funnel["minimum_event_support"] += 1
             fades = int(labels[indices].sum())
             rate = fades / count
             matched_indices = indices[np.isfinite(matched_probability[indices])]
@@ -676,11 +702,19 @@ def discover_candidates(
                 or len(matched_indices) / count < config.min_matched_signal_fraction
             ):
                 continue
+            if funnel is not None:
+                funnel["matched_control_coverage"] += 1
             matched_rate = float(matched_probability[matched_indices].mean())
             matched_signal_rate = float(labels[matched_indices].mean())
             lift = matched_signal_rate / matched_rate if matched_rate > 0.0 else math.inf
-            if rate < config.min_discovery_fade_rate or lift < config.min_discovery_lift:
+            if rate < config.min_discovery_fade_rate:
                 continue
+            if funnel is not None:
+                funnel["minimum_fade_rate"] += 1
+            if lift < config.min_discovery_lift:
+                continue
+            if funnel is not None:
+                funnel["minimum_lift"] += 1
             lower, edge_lower, _, inference_blocks = _cluster_bootstrap(
                 frame=frame,
                 indices=matched_indices,
@@ -689,8 +723,14 @@ def discover_candidates(
                 iterations=config.block_bootstrap_iterations,
                 seed=config.random_seed + tree_index * 257 + leaf_index,
             )
-            if edge_lower <= 0.0 or inference_blocks < config.min_inference_blocks:
+            if edge_lower <= 0.0:
                 continue
+            if funnel is not None:
+                funnel["positive_cluster_edge"] += 1
+            if inference_blocks < config.min_inference_blocks:
+                continue
+            if funnel is not None:
+                funnel["minimum_inference_blocks"] += 1
             rule, rule_text, feature_names = _canonical_rule(tree, leaf_index, model_json)
             if not rule:
                 continue
@@ -715,6 +755,8 @@ def discover_candidates(
                     discovery_inference_blocks=inference_blocks,
                 )
             )
+            if funnel is not None:
+                funnel["generated_rule"] += 1
     return candidates
 
 
@@ -954,6 +996,15 @@ def _safe_auc(
     )
 
 
+def _empirical_upper_tail_p(observed: float, null_values: list[float]) -> float:
+    if not null_values:
+        return 1.0
+    return float(
+        (1 + np.count_nonzero(np.asarray(null_values, dtype=float) >= observed))
+        / (len(null_values) + 1)
+    )
+
+
 def _generate_candidate_pool(
     *,
     prepared: PreparedArchetypeData,
@@ -962,13 +1013,14 @@ def _generate_candidate_pool(
     reusable_model: CatBoostClassifier | None = None,
     reusable_model_json: dict[str, Any] | None = None,
     reusable_generator: ArchetypeGeneratorSpec | None = None,
-) -> tuple[list[RuleCandidate], int]:
+) -> tuple[list[RuleCandidate], int, Counter[str]]:
     full_labels = (
         prepared.discovery[config.input.label_column].to_numpy(dtype=np.int8)
         if labels is None
         else np.asarray(labels, dtype=np.int8)
     )
     pool: list[RuleCandidate] = []
+    funnel: Counter[str] = Counter()
     fit_count = 0
     for fraction in config.rolling_origin_fractions:
         positions = _origin_positions(prepared, config, fraction)
@@ -1009,6 +1061,7 @@ def _generate_candidate_pool(
                 config=config,
                 discovery_labels=origin_labels,
                 matched_probability=origin_matched_probability,
+                funnel=funnel,
             )
             reference_rows_by_tree: dict[int, dict[int, np.ndarray]] = {}
             if generated:
@@ -1043,7 +1096,7 @@ def _generate_candidate_pool(
                     ]
                 )
             pool.extend(generated)
-    return pool, fit_count
+    return pool, fit_count, funnel
 
 
 def _build_category_outputs(
@@ -1252,7 +1305,7 @@ def build_archetype_discovery(
         depth=primary_generator.depth,
     )
     model_json = export_model_json(model)
-    candidates, fit_count = _generate_candidate_pool(
+    candidates, fit_count, candidate_funnel = _generate_candidate_pool(
         prepared=prepared,
         config=config,
         reusable_model=model,
@@ -1327,27 +1380,32 @@ def build_archetype_discovery(
             random_seed=shuffled_generator.random_seed,
             depth=shuffled_generator.depth,
         )
-        shuffled_json = export_model_json(shuffled_model)
-        shuffled_candidates, shuffled_fit_count = _generate_candidate_pool(
-            prepared=prepared,
-            config=config,
-            labels=shuffled_labels,
-            reusable_model=shuffled_model,
-            reusable_model_json=shuffled_json,
-            reusable_generator=shuffled_generator,
-        )
-        fit_count += shuffled_fit_count + 1
-        shuffled_consensus = _consensus_candidates(shuffled_candidates, config)
-        shuffled_selected = select_distinct_candidates(shuffled_consensus, config)
-        evaluate_candidates(
-            candidates=shuffled_selected,
-            prepared=prepared,
-            config=config,
-        )
-        shuffled_verified = sum(
-            _is_verified(item, config=config)
-            for item in shuffled_selected
-        )
+        fit_count += 1
+        if real_verified:
+            shuffled_json = export_model_json(shuffled_model)
+            shuffled_candidates, shuffled_fit_count, _ = _generate_candidate_pool(
+                prepared=prepared,
+                config=config,
+                labels=shuffled_labels,
+                reusable_model=shuffled_model,
+                reusable_model_json=shuffled_json,
+                reusable_generator=shuffled_generator,
+            )
+            fit_count += shuffled_fit_count
+            shuffled_consensus = _consensus_candidates(shuffled_candidates, config)
+            shuffled_selected = select_distinct_candidates(shuffled_consensus, config)
+            evaluate_candidates(
+                candidates=shuffled_selected,
+                prepared=prepared,
+                config=config,
+            )
+            shuffled_verified = sum(
+                _is_verified(item, config=config) for item in shuffled_selected
+            )
+        else:
+            shuffled_candidates = []
+            shuffled_selected = []
+            shuffled_verified = 0
         shuffled_probability = shuffled_model.predict_proba(prepared.x_verification)[:, 1]
         shuffled_auc = _safe_auc(
             y_verification,
@@ -1370,7 +1428,12 @@ def build_archetype_discovery(
                 shuffled_row_fraction=shuffled_fraction,
                 notes=(
                     "Complete within-anomaly label paths are transplanted between groups with the same "
-                    "calendar month and row count; rules are evaluated on real later outcomes."
+                    "calendar month and row count; rules are evaluated on real later outcomes. "
+                    + (
+                        "The full null rule search matches the real search budget."
+                        if real_verified
+                        else "The null rule search is skipped because the real search produced no verified category."
+                    )
                 ),
             )
         )
@@ -1378,23 +1441,60 @@ def build_archetype_discovery(
         fraction >= config.min_shuffled_row_fraction
         for fraction, _, _ in shuffled_results
     )
-    positive_null_pass = all(
-        verified == 0 and auc <= config.max_shuffled_verification_auc
-        for _, verified, auc in shuffled_results
+    null_aucs = [auc for _, _, auc in shuffled_results]
+    null_category_counts = [float(verified) for _, verified, _ in shuffled_results]
+    auc_control_p = _empirical_upper_tail_p(verification_auc, null_aucs)
+    category_control_p = _empirical_upper_tail_p(
+        float(real_verified), null_category_counts
     )
-    controls_passed = sufficient_shuffle and positive_null_pass
+    controls_passed = (
+        sufficient_shuffle
+        and auc_control_p <= config.control_empirical_alpha
+        and (
+            real_verified == 0
+            or category_control_p <= config.control_empirical_alpha
+        )
+    )
     controls[1] = replace(
         controls[1],
         verified_category_count=real_verified if controls_passed else 0,
         notes=(
             controls[1].notes
             + (
-                " All registered shuffled controls passed."
+                f" Empirical AUC-null p={auc_control_p:.6g}; "
+                f"category-count-null p={category_control_p:.6g}. "
+                "All registered shuffled controls passed."
                 if controls_passed
-                else " Registered shuffled controls failed; real candidates are blocked."
+                else f" Empirical AUC-null p={auc_control_p:.6g}; "
+                f"category-count-null p={category_control_p:.6g}. "
+                "Registered shuffled controls failed; real candidates are blocked."
             )
         ),
     )
+    candidate_funnel["origin_generator_consensus"] = len(consensus)
+    candidate_funnel["distinct_marginal_coverage"] = len(selected)
+    candidate_funnel["later_verification_gate"] = real_verified
+    funnel_notes = {
+        "tree_leaves": "all non-empty leaf memberships across registered real-label origin-generator fits",
+        "minimum_event_support": "discovery event count meets the registered minimum",
+        "matched_control_coverage": "matched blind exists for the registered fraction of signal events",
+        "minimum_fade_rate": "absolute discovery fade rate meets the registered high-probability floor",
+        "minimum_lift": "matched discovery lift meets the registered floor",
+        "positive_cluster_edge": "weekly block-bootstrap lower edge is positive",
+        "minimum_inference_blocks": "candidate spans the registered minimum ISO-week blocks",
+        "generated_rule": "rule passed every per-fit discovery gate",
+        "origin_generator_consensus": "membership-equivalent rule recurs across registered origins and generators",
+        "distinct_marginal_coverage": "rule adds sufficient events not covered by earlier selected rules",
+        "later_verification_gate": "frozen rule passes later support, lift, BY-FDR, edge, and stability gates",
+    }
+    candidate_funnel_rows = [
+        ArchetypeCandidateFunnelRow(
+            stage=stage,
+            candidate_count=int(candidate_funnel.get(stage, 0)),
+            notes=funnel_notes[stage],
+        )
+        for stage in funnel_notes
+    ]
     category_rows, assignments = _build_category_outputs(
         candidates=selected,
         prepared=prepared,
@@ -1424,4 +1524,7 @@ def build_archetype_discovery(
         generator_fit_count=fit_count + 1,
         search_truncated=search_truncated,
         controls_passed=controls_passed,
+        auc_control_empirical_p=auc_control_p,
+        category_count_control_empirical_p=category_control_p,
+        candidate_funnel_rows=candidate_funnel_rows,
     )

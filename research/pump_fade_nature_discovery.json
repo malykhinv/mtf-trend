@@ -6,16 +6,18 @@
   "input": {
     "group_column": "group",
     "symbol_column": "symbol",
-    "label_column": "y",
+    "label_column": "nature_y",
     "snapshot_time_column": "snapshot_time_ms",
-    "resolution_time_column": "resolution_time_ms",
-    "label_available_column": "label_available",
-    "label_schema_column": "label_schema_version",
-    "required_label_schema_value": "pump_fade_close_race_horizon_free_v1",
+    "resolution_time_column": "nature_resolution_time_ms",
+    "label_available_column": "nature_label_available",
+    "label_schema_column": "nature_label_schema_version",
+    "required_label_schema_value": "pump_fade_event_peak_close_race_v1",
     "feature_cutoff_time_column": "feature_cutoff_time_ms",
-    "future_start_time_column": "future_start_time_ms",
+    "future_start_time_column": "nature_future_start_time_ms",
     "attest_feature_cutoff_equals_snapshot": false,
-    "future_start_offset_ms": null
+    "future_start_offset_ms": null,
+    "row_filter_column": "is_nature_anchor",
+    "required_row_filter_value": true
   },
   "features": {
     "numeric": [
@@ -43,14 +45,7 @@
     ],
     "decision_timing_numeric": [
       "decision_index",
-      "remaining_to_base",
-      "close_drawdown_from_high",
-      "ext_vwap",
-      "upper_wick5",
-      "taker_decline",
-      "price_decel",
-      "range_contraction",
-      "candles_since_red"
+      "remaining_to_base"
     ],
     "include_decision_timing": false,
     "categorical": ["session"],
@@ -60,15 +55,15 @@
     "minimum_value_column": "remaining_to_base",
     "minimum_value": 0.03
   },
-  "random_seed": 20260627,
+  "random_seed": 20260628,
   "iterations": 96,
   "depth": 4,
   "learning_rate": 0.05,
   "l2_leaf_reg": 5.0,
   "generators": [
-    {"random_seed": 20260627, "depth": 4},
-    {"random_seed": 20260639, "depth": 3},
-    {"random_seed": 20260651, "depth": 5}
+    {"random_seed": 20260628, "depth": 4},
+    {"random_seed": 20260640, "depth": 3},
+    {"random_seed": 20260652, "depth": 5}
   ],
   "rolling_origin_fractions": [0.65, 0.82, 1.0],
   "min_origin_support_fraction": 0.66,
@@ -97,6 +92,6 @@
   "evidence_mode": "development",
   "protocol_freeze_id": "",
   "shuffled_seeds": [11, 29, 47, 61, 79, 97, 113, 131, 149, 167, 181, 199, 223, 241, 263, 281, 307, 331, 353],
-  "min_shuffled_row_fraction": 0.7,
+  "min_shuffled_row_fraction": 0.9,
   "control_empirical_alpha": 0.05
 }

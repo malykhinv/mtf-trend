@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,10 @@ from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
 from anomaly_science.strategy.pump_fade.run import (
     PumpFadeDataQualityPolicy,
     run_pump_fade_dataset_build,
+)
+from anomaly_science.strategy.pump_fade.nature import (
+    build_pump_fade_nature_rows,
+    run_pump_fade_nature_projection,
 )
 
 
@@ -99,6 +104,12 @@ def test_builder_emits_only_new_high_decisions_with_closed_bar_snapshot(tmp_path
     assert row["ignition_minutes_from_round_hour"] == 15
     assert row["y"] == 0
     assert row["resolution_time_ms"] == 23 * 60_000
+    assert bool(row["is_nature_anchor"])
+    assert bool(row["nature_label_available"])
+    assert row["nature_y"] == 0
+    assert row["nature_future_start_time_ms"] == 18 * 60_000
+    assert row["nature_resolution_time_ms"] == 23 * 60_000
+    assert bool(row["is_event_peak_decision"])
 
 
 def test_early_causal_qualification_is_not_removed_by_final_period_atr(tmp_path: Path) -> None:
@@ -130,6 +141,44 @@ def test_close_race_has_no_fixed_1440_minute_horizon() -> None:
     assert resolution == 1_500
 
 
+def test_nature_projection_uses_first_features_and_final_new_high_label(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "TEST.parquet"
+    _write_market(path)
+    decisions = build_pump_fade_symbol(
+        path,
+        config=replace(_config(), minimum_pump_size=0.01),
+    )
+
+    nature = build_pump_fade_nature_rows(decisions)
+
+    assert len(decisions) == 2
+    assert len(nature) == 1
+    assert nature.iloc[0]["snapshot_time_ms"] == decisions.iloc[0]["snapshot_time_ms"]
+    assert nature.iloc[0]["nature_y"] == decisions.iloc[-1]["y"]
+    assert (
+        nature.iloc[0]["nature_future_start_time_ms"]
+        == decisions.iloc[-1]["future_start_time_ms"]
+    )
+    assert nature.iloc[0]["event_peak_time_ms"] == decisions.iloc[-1]["snapshot_time_ms"]
+
+
+def test_nature_projection_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
+    market_path = tmp_path / "TEST.parquet"
+    _write_market(market_path)
+    decisions = build_pump_fade_symbol(market_path, config=_config())
+    input_path = tmp_path / "decisions.parquet"
+    output_path = tmp_path / "nature.parquet"
+    decisions.to_parquet(input_path, index=False)
+
+    run_pump_fade_nature_projection(input_path=input_path, output_path=output_path)
+
+    assert output_path.is_file()
+    assert (tmp_path / "nature.metadata.json").is_file()
+    assert (tmp_path / "nature.manifest.json").is_file()
+
+
 def test_close_race_invalidates_at_anchor_high_without_buffer() -> None:
     barriers = _BarrierIndex(np.asarray([105.0, 110.1, 99.0]))
 
@@ -158,6 +207,8 @@ def test_unresolved_row_is_censored_at_first_market_data_gap(tmp_path: Path) -> 
     assert not bool(result.iloc[0]["label_available"])
     assert pd.isna(result.iloc[0]["y"])
     assert pd.isna(result.iloc[0]["resolution_time_ms"])
+    assert not bool(result.iloc[0]["nature_label_available"])
+    assert pd.isna(result.iloc[0]["nature_y"])
 
 
 def test_pump_fade_cli_routes_progress_to_dataset_builder(

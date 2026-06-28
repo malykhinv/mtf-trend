@@ -998,6 +998,12 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         ),
         description="Coverage and explicit unclassified remainder for the registered predictive-phenotype search space.",
     ),
+    "anomaly_archetype_candidate_funnel.csv": ArtifactSchema(
+        name="anomaly_archetype_candidate_funnel.csv",
+        stage="archetype_discovery",
+        required_columns=("stage", "candidate_count", "notes"),
+        description="Real-label candidate counts remaining after each pre-registered discovery and verification gate.",
+    ),
     "artifact_manifest.json": ArtifactSchema(
         name="artifact_manifest.json",
         stage="all",
@@ -1037,6 +1043,7 @@ STRATEGY_ARTIFACT_ALIASES: dict[str, str] = {
     "anomaly_archetype_catalog.csv": "strategy_archetype_catalog.csv",
     "anomaly_archetype_controls.csv": "strategy_archetype_controls.csv",
     "anomaly_archetype_coverage.csv": "strategy_archetype_coverage.csv",
+    "anomaly_archetype_candidate_funnel.csv": "strategy_archetype_candidate_funnel.csv",
 }
 
 

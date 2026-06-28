@@ -58,6 +58,7 @@ def run_archetype_discovery(
     catalog_path = out_dir / "anomaly_archetype_catalog.csv"
     controls_path = out_dir / "anomaly_archetype_controls.csv"
     coverage_path = out_dir / "anomaly_archetype_coverage.csv"
+    funnel_path = out_dir / "anomaly_archetype_candidate_funnel.csv"
     assignments_path = out_dir / "anomaly_archetype_assignments.parquet"
     model_path = out_dir / "archetype_rule_generator.cbm"
     model_json_path = out_dir / "archetype_rule_generator.json"
@@ -76,6 +77,11 @@ def run_archetype_discovery(
         coverage_path,
         result.coverage_rows,
         get_artifact_schema(coverage_path.name),
+    )
+    funnel_paths = write_csv_artifact_with_aliases(
+        funnel_path,
+        result.candidate_funnel_rows,
+        get_artifact_schema(funnel_path.name),
     )
     result.assignments.to_parquet(assignments_path, index=False)
     result.model.save_model(str(model_path))
@@ -106,6 +112,8 @@ def run_archetype_discovery(
         "generator_fit_count_including_nulls": result.generator_fit_count,
         "search_truncated": result.search_truncated,
         "controls_passed": result.controls_passed,
+        "auc_control_empirical_p": result.auc_control_empirical_p,
+        "category_count_control_empirical_p": result.category_count_control_empirical_p,
         "verified_category_count": sum(
             row.status == "PRISTINE_VERIFIED" for row in result.category_rows
         ),
@@ -131,6 +139,7 @@ def run_archetype_discovery(
         *catalog_paths,
         *control_paths,
         *coverage_paths,
+        *funnel_paths,
         assignments_path,
         model_path,
         model_json_path,
