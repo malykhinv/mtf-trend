@@ -57,6 +57,7 @@ def run_archetype_discovery(
     out_dir.mkdir(parents=True, exist_ok=True)
     catalog_path = out_dir / "anomaly_archetype_catalog.csv"
     controls_path = out_dir / "anomaly_archetype_controls.csv"
+    coverage_path = out_dir / "anomaly_archetype_coverage.csv"
     assignments_path = out_dir / "anomaly_archetype_assignments.parquet"
     model_path = out_dir / "archetype_rule_generator.cbm"
     model_json_path = out_dir / "archetype_rule_generator.json"
@@ -70,6 +71,11 @@ def run_archetype_discovery(
         controls_path,
         result.control_rows,
         get_artifact_schema(controls_path.name),
+    )
+    coverage_paths = write_csv_artifact_with_aliases(
+        coverage_path,
+        result.coverage_rows,
+        get_artifact_schema(coverage_path.name),
     )
     result.assignments.to_parquet(assignments_path, index=False)
     result.model.save_model(str(model_path))
@@ -97,18 +103,26 @@ def run_archetype_discovery(
         ),
         "discovery_candidate_count": result.discovery_candidate_count,
         "distinct_candidate_count": result.distinct_candidate_count,
+        "generator_fit_count_including_nulls": result.generator_fit_count,
+        "search_truncated": result.search_truncated,
+        "controls_passed": result.controls_passed,
         "verified_category_count": sum(
             row.status == "PRISTINE_VERIFIED" for row in result.category_rows
         ),
         "development_replicated_category_count": sum(
             row.status == "DEVELOPMENT_REPLICATED" for row in result.category_rows
         ),
+        "control_failed_category_count": sum(
+            row.status == "CONTROL_FAILED" for row in result.category_rows
+        ),
         "verification_auc": result.verification_auc,
         "methodology": (
-            "A shallow CatBoost fit on the discovery interval generates interpretable rule paths. Rules and "
-            "overlap pruning are frozen before the later interval. Development evidence is never reported as "
+            "A registered ensemble of shallow CatBoost fits across expanding rolling origins generates "
+            "interpretable predictive-phenotype rules. Consensus and marginal-coverage pruning are frozen "
+            "before the later interval. Development evidence is never reported as "
             "blind verification; PRISTINE_VERIFIED requires a pre-registered freeze id and untouched forward "
-            "holdout. Weekly WFA remains required for any probability model subsequently used in trading."
+            "holdout. The search makes no claim about causal mechanisms or phenotypes outside the registered "
+            "feature/model/support space. Weekly WFA remains required for a probability model used in trading."
         ),
         "config": config_to_json_dict(config),
     }
@@ -116,6 +130,7 @@ def run_archetype_discovery(
     artifact_paths = [
         *catalog_paths,
         *control_paths,
+        *coverage_paths,
         assignments_path,
         model_path,
         model_json_path,

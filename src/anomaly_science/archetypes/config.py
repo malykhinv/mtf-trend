@@ -100,6 +100,18 @@ class ArchetypePopulationSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchetypeGeneratorSpec:
+    random_seed: int
+    depth: int
+
+    def __post_init__(self) -> None:
+        if self.random_seed < 0:
+            raise ArchetypeConfigError("generator random_seed must be non-negative")
+        if not 1 <= self.depth <= 8:
+            raise ArchetypeConfigError("generator depth must be within [1, 8]")
+
+
+@dataclass(frozen=True, slots=True)
 class ArchetypeDiscoveryConfig:
     discovery_start_utc: str
     discovery_end_utc: str
@@ -113,6 +125,11 @@ class ArchetypeDiscoveryConfig:
     depth: int = 4
     learning_rate: float = 0.05
     l2_leaf_reg: float = 5.0
+    generators: tuple[ArchetypeGeneratorSpec, ...] = ()
+    rolling_origin_fractions: tuple[float, ...] = (0.60, 0.80, 1.0)
+    min_origin_support_fraction: float = 0.67
+    min_generator_support_fraction: float = 0.50
+    consensus_membership_jaccard: float = 0.70
     min_discovery_events: int = 80
     min_verification_events: int = 50
     min_discovery_fade_rate: float = 0.58
@@ -121,7 +138,7 @@ class ArchetypeDiscoveryConfig:
     min_verification_lift: float = 1.15
     max_membership_jaccard: float = 0.80
     min_unique_event_fraction: float = 0.25
-    max_categories: int = 30
+    max_categories: int | None = None
     fdr_alpha: float = 0.05
     stability_frequency: str = "M"
     min_events_per_stability_period: int = 15
@@ -136,6 +153,8 @@ class ArchetypeDiscoveryConfig:
     evidence_mode: str = "development"
     protocol_freeze_id: str = ""
     shuffled_seeds: tuple[int, ...] = (11, 29, 47)
+    min_shuffled_row_fraction: float = 0.70
+    max_shuffled_verification_auc: float = 0.60
 
     def __post_init__(self) -> None:
         ds = parse_utc_timestamp_ms(self.discovery_start_utc, field_name="discovery_start_utc")
@@ -148,10 +167,31 @@ class ArchetypeDiscoveryConfig:
             )
         if self.random_seed < 0 or any(seed < 0 for seed in self.shuffled_seeds):
             raise ArchetypeConfigError("random seeds must be non-negative")
+        if not self.shuffled_seeds:
+            raise ArchetypeConfigError("at least one shuffled seed is required")
+        if not 0.0 < self.min_shuffled_row_fraction <= 1.0:
+            raise ArchetypeConfigError("min_shuffled_row_fraction must be within (0, 1]")
+        if not 0.5 <= self.max_shuffled_verification_auc < 1.0:
+            raise ArchetypeConfigError("max_shuffled_verification_auc must be within [0.5, 1)")
         if self.iterations <= 0 or self.depth <= 0 or self.depth > 8:
             raise ArchetypeConfigError("iterations must be positive and depth must be within [1, 8]")
         if self.learning_rate <= 0.0 or self.l2_leaf_reg < 0.0:
             raise ArchetypeConfigError("learning_rate must be positive and l2_leaf_reg non-negative")
+        if len(set(self.generators)) != len(self.generators):
+            raise ArchetypeConfigError("generators must be unique")
+        if not self.rolling_origin_fractions:
+            raise ArchetypeConfigError("at least one rolling_origin_fraction is required")
+        if tuple(sorted(set(self.rolling_origin_fractions))) != self.rolling_origin_fractions:
+            raise ArchetypeConfigError("rolling_origin_fractions must be unique and increasing")
+        if any(not 0.0 < value <= 1.0 for value in self.rolling_origin_fractions):
+            raise ArchetypeConfigError("rolling_origin_fractions must be within (0, 1]")
+        if self.rolling_origin_fractions[-1] != 1.0:
+            raise ArchetypeConfigError("rolling_origin_fractions must end at 1.0")
+        for name in ("min_origin_support_fraction", "min_generator_support_fraction"):
+            if not 0.0 < getattr(self, name) <= 1.0:
+                raise ArchetypeConfigError(f"{name} must be within (0, 1]")
+        if not 0.0 < self.consensus_membership_jaccard <= 1.0:
+            raise ArchetypeConfigError("consensus_membership_jaccard must be within (0, 1]")
         if self.min_discovery_events <= 0 or self.min_verification_events <= 0:
             raise ArchetypeConfigError("minimum event counts must be positive")
         for name in ("min_discovery_fade_rate", "min_verification_fade_rate", "fdr_alpha"):
@@ -164,8 +204,8 @@ class ArchetypeDiscoveryConfig:
             raise ArchetypeConfigError("max_membership_jaccard must be within [0, 1)")
         if not 0.0 < self.min_unique_event_fraction <= 1.0:
             raise ArchetypeConfigError("min_unique_event_fraction must be within (0, 1]")
-        if self.max_categories <= 0:
-            raise ArchetypeConfigError("max_categories must be positive")
+        if self.max_categories is not None and self.max_categories <= 0:
+            raise ArchetypeConfigError("max_categories must be positive or null")
         if self.min_events_per_stability_period <= 0:
             raise ArchetypeConfigError("min_events_per_stability_period must be positive")
         if not 0.0 <= self.min_positive_stability_fraction <= 1.0:
@@ -213,6 +253,12 @@ class ArchetypeDiscoveryConfig:
     def verification_end_ms(self) -> int:
         return parse_utc_timestamp_ms(self.verification_end_utc, field_name="verification_end_utc")
 
+    @property
+    def effective_generators(self) -> tuple[ArchetypeGeneratorSpec, ...]:
+        return self.generators or (
+            ArchetypeGeneratorSpec(random_seed=self.random_seed, depth=self.depth),
+        )
+
 
 def _tuple_strings(value: Any, *, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
@@ -249,11 +295,22 @@ def load_archetype_discovery_config(path: Path) -> ArchetypeDiscoveryConfig:
         raw.pop("matched_control_quantile_columns", []),
         field_name="matched_control_quantile_columns",
     )
+    generator_raw = raw.pop("generators", [])
+    if not isinstance(generator_raw, list) or any(not isinstance(item, dict) for item in generator_raw):
+        raise ArchetypeConfigError("generators must be a JSON array of objects")
+    generators = tuple(ArchetypeGeneratorSpec(**item) for item in generator_raw)
+    rolling_origin_raw = raw.pop("rolling_origin_fractions", [0.60, 0.80, 1.0])
+    if not isinstance(rolling_origin_raw, list) or any(
+        not isinstance(item, (int, float)) for item in rolling_origin_raw
+    ):
+        raise ArchetypeConfigError("rolling_origin_fractions must be a JSON array of numbers")
     return ArchetypeDiscoveryConfig(
         input=ArchetypeInputContract(**input_raw),
         features=feature_spec,
         population=ArchetypePopulationSpec(**population_raw),
         shuffled_seeds=tuple(shuffled_seeds),
+        generators=generators,
+        rolling_origin_fractions=tuple(float(item) for item in rolling_origin_raw),
         matched_control_columns=matched_control_columns,
         matched_control_quantile_columns=matched_control_quantile_columns,
         **raw,

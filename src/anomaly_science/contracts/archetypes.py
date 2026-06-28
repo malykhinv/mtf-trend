@@ -14,6 +14,13 @@ class ArchetypeCategoryRow:
     protocol_freeze_id: str
     tree_index: int
     leaf_index: int
+    generator_seed: int
+    generator_depth: int
+    origin_fraction: float
+    origin_support_count: int
+    origin_support_fraction: float
+    generator_support_count: int
+    generator_support_fraction: float
     rule_text: str
     rule_json: str
     feature_names: str
@@ -48,14 +55,23 @@ class ArchetypeCategoryRow:
     def __post_init__(self) -> None:
         if not self.category_id or not self.rule_text or not self.rule_json:
             raise MarketDataContractError("archetype category identity and rule are required")
-        if self.status not in {"PRISTINE_VERIFIED", "DEVELOPMENT_REPLICATED", "REJECTED"}:
+        if self.status not in {
+            "PRISTINE_VERIFIED",
+            "DEVELOPMENT_REPLICATED",
+            "CONTROL_FAILED",
+            "REJECTED",
+        }:
             raise MarketDataContractError("unknown archetype evidence status")
         if self.evidence_mode not in {"development", "pristine_holdout"}:
             raise MarketDataContractError("unknown archetype evidence_mode")
         if self.status == "PRISTINE_VERIFIED" and not self.protocol_freeze_id:
             raise MarketDataContractError("PRISTINE_VERIFIED requires protocol_freeze_id")
-        if self.tree_index < 0 or self.leaf_index < 0:
+        if self.tree_index < 0 or self.leaf_index < 0 or self.generator_seed < 0:
             raise MarketDataContractError("tree_index and leaf_index must be non-negative")
+        if not 1 <= self.generator_depth <= 8:
+            raise MarketDataContractError("generator_depth must be within [1, 8]")
+        if not 0.0 < self.origin_fraction <= 1.0:
+            raise MarketDataContractError("origin_fraction must be within (0, 1]")
         for count_name in (
             "discovery_event_count",
             "discovery_fade_count",
@@ -66,6 +82,8 @@ class ArchetypeCategoryRow:
             "verification_matched_event_count",
             "verification_inference_block_count",
             "verification_stability_periods",
+            "origin_support_count",
+            "generator_support_count",
         ):
             if getattr(self, count_name) < 0:
                 raise MarketDataContractError(f"{count_name} must be non-negative")
@@ -82,6 +100,8 @@ class ArchetypeCategoryRow:
             "verification_p_value",
             "verification_q_value",
             "verification_positive_period_fraction",
+            "origin_support_fraction",
+            "generator_support_fraction",
         ):
             value = getattr(self, probability_name)
             if not math.isfinite(value) or not 0.0 <= value <= 1.0:
@@ -99,6 +119,57 @@ class ArchetypeCategoryRow:
             raise MarketDataContractError("unknown archetype first-signal policy")
         if not self.temporal_contract:
             raise MarketDataContractError("archetype temporal_contract is required")
+
+
+@dataclass(frozen=True, slots=True)
+class ArchetypeCoverageRow:
+    split: str
+    total_event_count: int
+    first_signal_fade_event_count: int
+    covered_event_count: int
+    covered_first_signal_fade_event_count: int
+    overlapping_event_count: int
+    unclassified_event_count: int
+    covered_fraction: float
+    covered_first_signal_fade_fraction: float
+    unclassified_first_signal_fade_rate: float
+    accepted_category_count: int
+    generated_candidate_count: int
+    distinct_candidate_count: int
+    registered_generator_count: int
+    rolling_origin_count: int
+    search_truncated: bool
+    controls_passed: bool
+    claim_scope: str
+
+    def __post_init__(self) -> None:
+        if self.split not in {"discovery", "verification"}:
+            raise MarketDataContractError("coverage split must be discovery or verification")
+        for name in (
+            "total_event_count",
+            "first_signal_fade_event_count",
+            "covered_event_count",
+            "covered_first_signal_fade_event_count",
+            "overlapping_event_count",
+            "unclassified_event_count",
+            "accepted_category_count",
+            "generated_candidate_count",
+            "distinct_candidate_count",
+            "registered_generator_count",
+            "rolling_origin_count",
+        ):
+            if getattr(self, name) < 0:
+                raise MarketDataContractError(f"{name} must be non-negative")
+        for name in (
+            "covered_fraction",
+            "covered_first_signal_fade_fraction",
+            "unclassified_first_signal_fade_rate",
+        ):
+            value = getattr(self, name)
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise MarketDataContractError(f"{name} must be finite and within [0, 1]")
+        if not self.claim_scope:
+            raise MarketDataContractError("coverage claim_scope is required")
 
 
 @dataclass(frozen=True, slots=True)

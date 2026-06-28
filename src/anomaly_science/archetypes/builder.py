@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +12,15 @@ import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.metrics import roc_auc_score
 
-from anomaly_science.archetypes.config import ArchetypeDiscoveryConfig
-from anomaly_science.contracts.archetypes import ArchetypeCategoryRow, ArchetypeControlRow
+from anomaly_science.archetypes.config import (
+    ArchetypeDiscoveryConfig,
+    ArchetypeGeneratorSpec,
+)
+from anomaly_science.contracts.archetypes import (
+    ArchetypeCategoryRow,
+    ArchetypeControlRow,
+    ArchetypeCoverageRow,
+)
 from anomaly_science.contracts.time import TemporalContractError
 
 
@@ -72,12 +79,23 @@ class RuleCandidate:
     verification_q: float = 1.0
     stability_periods: int = 0
     positive_period_fraction: float = 0.0
+    generator_seed: int = 0
+    generator_depth: int = 0
+    origin_fraction: float = 1.0
+    origin_id: str = "origin_1.000"
+    reference_indices: np.ndarray | None = None
+    reference_groups: frozenset[str] = frozenset()
+    origin_support_count: int = 0
+    origin_support_fraction: float = 0.0
+    generator_support_count: int = 0
+    generator_support_fraction: float = 0.0
 
 
 @dataclass(slots=True)
 class ArchetypeBuildResult:
     category_rows: list[ArchetypeCategoryRow]
     control_rows: list[ArchetypeControlRow]
+    coverage_rows: list[ArchetypeCoverageRow]
     assignments: pd.DataFrame
     model: CatBoostClassifier
     model_json: dict[str, Any]
@@ -85,6 +103,9 @@ class ArchetypeBuildResult:
     discovery_candidate_count: int
     distinct_candidate_count: int
     verification_auc: float
+    generator_fit_count: int
+    search_truncated: bool
+    controls_passed: bool
 
 
 def _required_input_columns(config: ArchetypeDiscoveryConfig) -> set[str]:
@@ -345,6 +366,7 @@ def fit_rule_generator(
     *,
     labels: np.ndarray | None = None,
     random_seed: int | None = None,
+    depth: int | None = None,
 ) -> CatBoostClassifier:
     target = (
         prepared.discovery[config.input.label_column].to_numpy(dtype=np.int8)
@@ -355,7 +377,7 @@ def fit_rule_generator(
         raise ArchetypeDiscoveryError("CatBoost discovery target must contain both binary classes")
     model = CatBoostClassifier(
         iterations=config.iterations,
-        depth=config.depth,
+        depth=config.depth if depth is None else depth,
         learning_rate=config.learning_rate,
         l2_leaf_reg=config.l2_leaf_reg,
         loss_function="Logloss",
@@ -381,6 +403,81 @@ def export_model_json(model: CatBoostClassifier) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     finally:
         path.unlink(missing_ok=True)
+
+
+def _subset_prepared(
+    prepared: PreparedArchetypeData, positions: np.ndarray
+) -> PreparedArchetypeData:
+    return PreparedArchetypeData(
+        discovery=prepared.discovery.iloc[positions].reset_index(drop=True),
+        verification=prepared.verification,
+        x_discovery=prepared.x_discovery.iloc[positions].reset_index(drop=True),
+        x_verification=prepared.x_verification,
+        model_feature_names=prepared.model_feature_names,
+        dropped_constant_features=prepared.dropped_constant_features,
+        unknown_verification_categories=prepared.unknown_verification_categories,
+    )
+
+
+def _origin_positions(
+    prepared: PreparedArchetypeData,
+    config: ArchetypeDiscoveryConfig,
+    fraction: float,
+) -> np.ndarray:
+    frame = prepared.discovery
+    group_column = config.input.group_column
+    if fraction == 1.0:
+        return np.arange(len(frame), dtype=np.int64)
+    bounds = frame.groupby(group_column, sort=False).agg(
+        first_snapshot=("__snapshot_ms", "min"),
+        last_snapshot=("__snapshot_ms", "max"),
+        last_resolution=("__resolution_ms", "max"),
+    ).sort_values(["first_snapshot"], kind="mergesort")
+    requested = max(1, int(math.floor(len(bounds) * fraction)))
+    if requested >= len(bounds):
+        return np.arange(len(frame), dtype=np.int64)
+    cutoff = int(bounds.iloc[requested]["first_snapshot"])
+    eligible_groups = bounds.index[
+        (bounds["last_snapshot"] < cutoff) & (bounds["last_resolution"] < cutoff)
+    ]
+    mask = frame[group_column].isin(eligible_groups).to_numpy()
+    positions = np.flatnonzero(mask)
+    if not len(positions):
+        raise ArchetypeDiscoveryError(
+            f"rolling origin {fraction:.3f} has no resolution-purged groups"
+        )
+    return positions
+
+
+def _first_matching_rule_rows(
+    frame: pd.DataFrame,
+    matrix: pd.DataFrame,
+    rule: tuple[dict[str, Any], ...],
+    *,
+    group_column: str,
+) -> np.ndarray:
+    mask = np.ones(len(matrix), dtype=bool)
+    for condition in rule:
+        values = matrix[str(condition["feature"])].to_numpy(dtype=float)
+        threshold = float(condition["value"])
+        operator = str(condition["operator"])
+        if operator == ">":
+            mask &= values > threshold
+        elif operator == "<=":
+            mask &= values <= threshold
+        else:
+            raise ArchetypeDiscoveryError(f"unsupported rule operator: {operator}")
+    matching = np.flatnonzero(mask)
+    if not len(matching):
+        return np.array([], dtype=np.int64)
+    matched_frame = frame.iloc[matching]
+    first = ~matched_frame[group_column].astype(str).duplicated(keep="first")
+    return matching[first.to_numpy()]
+
+
+def _membership_jaccard(left: frozenset[str], right: frozenset[str]) -> float:
+    union = len(left | right)
+    return len(left & right) / union if union else 1.0
 
 
 def _canonical_rule(
@@ -546,6 +643,7 @@ def discover_candidates(
     prepared: PreparedArchetypeData,
     config: ArchetypeDiscoveryConfig,
     discovery_labels: np.ndarray | None = None,
+    matched_probability: np.ndarray | None = None,
 ) -> list[RuleCandidate]:
     frame = prepared.discovery
     labels = (
@@ -553,7 +651,8 @@ def discover_candidates(
         if discovery_labels is None
         else np.asarray(discovery_labels, dtype=np.int8)
     )
-    matched_probability = _matched_probabilities(frame, config, labels=labels)
+    if matched_probability is None:
+        matched_probability = _matched_probabilities(frame, config, labels=labels)
     leaf_matrix = np.asarray(model.calc_leaf_indexes(prepared.x_discovery))
     trees = model_json["oblivious_trees"]
     candidates: list[RuleCandidate] = []
@@ -630,23 +729,64 @@ def select_distinct_candidates(
     selected: list[RuleCandidate] = []
     covered: set[str] = set()
     for candidate in ranked:
+        membership = candidate.reference_groups or candidate.discovery_groups
         distinct = True
         for existing in selected:
-            union = len(candidate.discovery_groups | existing.discovery_groups)
-            overlap = len(candidate.discovery_groups & existing.discovery_groups) / union if union else 1.0
+            existing_membership = existing.reference_groups or existing.discovery_groups
+            overlap = _membership_jaccard(membership, existing_membership)
             if overlap > config.max_membership_jaccard:
                 distinct = False
                 break
-        unique_fraction = len(candidate.discovery_groups - covered) / len(candidate.discovery_groups)
+        unique_fraction = len(membership - covered) / len(membership) if membership else 0.0
         if unique_fraction < config.min_unique_event_fraction:
             distinct = False
         if distinct:
             candidate.discovery_unique_fraction = unique_fraction
             selected.append(candidate)
-            covered.update(candidate.discovery_groups)
-        if len(selected) >= config.max_categories:
+            covered.update(membership)
+        if config.max_categories is not None and len(selected) >= config.max_categories:
             break
     return selected
+
+
+def _consensus_candidates(
+    candidates: list[RuleCandidate], config: ArchetypeDiscoveryConfig
+) -> list[RuleCandidate]:
+    ranked = sorted(
+        candidates,
+        key=lambda item: (item.discovery_lower, item.discovery_rate, item.discovery_count),
+        reverse=True,
+    )
+    clusters: list[list[RuleCandidate]] = []
+    for candidate in ranked:
+        for cluster in clusters:
+            if _membership_jaccard(
+                candidate.reference_groups, cluster[0].reference_groups
+            ) >= config.consensus_membership_jaccard:
+                cluster.append(candidate)
+                break
+        else:
+            clusters.append([candidate])
+    generator_total = len(config.effective_generators)
+    origin_total = len(config.rolling_origin_fractions)
+    consensus: list[RuleCandidate] = []
+    for cluster in clusters:
+        origins = {item.origin_id for item in cluster}
+        generators = {(item.generator_seed, item.generator_depth) for item in cluster}
+        origin_fraction = len(origins) / origin_total
+        generator_fraction = len(generators) / generator_total
+        if (
+            origin_fraction < config.min_origin_support_fraction
+            or generator_fraction < config.min_generator_support_fraction
+        ):
+            continue
+        representative = cluster[0]
+        representative.origin_support_count = len(origins)
+        representative.origin_support_fraction = origin_fraction
+        representative.generator_support_count = len(generators)
+        representative.generator_support_fraction = generator_fraction
+        consensus.append(representative)
+    return consensus
 
 
 def _benjamini_yekutieli(p_values: list[float]) -> list[float]:
@@ -668,7 +808,6 @@ def _benjamini_yekutieli(p_values: list[float]) -> list[float]:
 def evaluate_candidates(
     *,
     candidates: list[RuleCandidate],
-    model: CatBoostClassifier,
     prepared: PreparedArchetypeData,
     config: ArchetypeDiscoveryConfig,
 ) -> None:
@@ -677,71 +816,75 @@ def evaluate_candidates(
     frame = prepared.verification
     labels_all = frame[config.input.label_column].to_numpy(dtype=np.int8)
     matched_probability = _matched_probabilities(frame, config)
-    leaf_matrix = np.asarray(model.calc_leaf_indexes(prepared.x_verification))
-    by_tree: dict[int, list[RuleCandidate]] = {}
-    for candidate in candidates:
-        by_tree.setdefault(candidate.tree_index, []).append(candidate)
     evaluated: list[RuleCandidate] = []
-    for tree_index, tree_candidates in by_tree.items():
-        leaf_count = int(2 ** config.depth)
-        first_by_leaf = _first_leaf_rows(
+    for candidate in candidates:
+        indices = _first_matching_rule_rows(
             frame,
-            leaf_matrix[:, tree_index],
+            prepared.x_verification,
+            candidate.rule,
             group_column=config.input.group_column,
-            leaf_count=leaf_count,
         )
-        for candidate in tree_candidates:
-            indices = first_by_leaf.get(candidate.leaf_index, np.array([], dtype=np.int64))
-            labels = frame.loc[indices, config.input.label_column].to_numpy(dtype=np.int8)
-            count = len(labels)
-            fades = int(labels.sum())
-            rate = fades / count if count else 0.0
-            candidate.verification_indices = indices
-            candidate.verification_count = count
-            candidate.verification_fades = fades
-            candidate.verification_rate = rate
-            matched_indices = indices[np.isfinite(matched_probability[indices])]
-            if (
-                count
-                and len(matched_indices) >= config.min_verification_events
-                and len(matched_indices) / count >= config.min_matched_signal_fraction
-            ):
-                candidate.verification_matched_count = len(matched_indices)
-                candidate.verification_matched_rate = float(matched_probability[matched_indices].mean())
-                matched_signal_rate = float(labels_all[matched_indices].mean())
-                candidate.verification_lift = (
-                    matched_signal_rate / candidate.verification_matched_rate
-                    if candidate.verification_matched_rate > 0.0
-                    else 0.0
-                )
-                (
-                    candidate.verification_lower,
-                    candidate.verification_edge_lower,
-                    candidate.verification_p,
-                    candidate.verification_inference_blocks,
-                ) = _cluster_bootstrap(
-                    frame=frame,
-                    indices=matched_indices,
-                    labels=labels_all,
-                    matched_probability=matched_probability,
-                    iterations=config.block_bootstrap_iterations,
-                    seed=config.random_seed + 1_000_003 + tree_index * 257 + candidate.leaf_index,
-                )
-                times = pd.to_datetime(frame.loc[matched_indices, "__snapshot_ms"], unit="ms", utc=True)
-                periods = times.dt.tz_localize(None).dt.to_period(config.stability_frequency)
-                summary = pd.DataFrame(
-                    {
-                        "period": periods.astype(str).to_numpy(),
-                        "label": labels_all[matched_indices],
-                        "matched": matched_probability[matched_indices],
-                    }
-                ).groupby("period").agg(count=("label", "count"), mean=("label", "mean"), matched=("matched", "mean"))
-                eligible = summary[summary["count"] >= config.min_events_per_stability_period]
-                candidate.stability_periods = len(eligible)
-                candidate.positive_period_fraction = (
-                    float((eligible["mean"] > eligible["matched"]).mean()) if len(eligible) else 0.0
-                )
-            evaluated.append(candidate)
+        labels = frame.loc[indices, config.input.label_column].to_numpy(dtype=np.int8)
+        count = len(labels)
+        fades = int(labels.sum())
+        candidate.verification_indices = indices
+        candidate.verification_count = count
+        candidate.verification_fades = fades
+        candidate.verification_rate = fades / count if count else 0.0
+        matched_indices = indices[np.isfinite(matched_probability[indices])]
+        if (
+            count
+            and len(matched_indices) >= config.min_verification_events
+            and len(matched_indices) / count >= config.min_matched_signal_fraction
+        ):
+            candidate.verification_matched_count = len(matched_indices)
+            candidate.verification_matched_rate = float(matched_probability[matched_indices].mean())
+            matched_signal_rate = float(labels_all[matched_indices].mean())
+            candidate.verification_lift = (
+                matched_signal_rate / candidate.verification_matched_rate
+                if candidate.verification_matched_rate > 0.0
+                else 0.0
+            )
+            (
+                candidate.verification_lower,
+                candidate.verification_edge_lower,
+                candidate.verification_p,
+                candidate.verification_inference_blocks,
+            ) = _cluster_bootstrap(
+                frame=frame,
+                indices=matched_indices,
+                labels=labels_all,
+                matched_probability=matched_probability,
+                iterations=config.block_bootstrap_iterations,
+                seed=(
+                    config.random_seed
+                    + 1_000_003
+                    + candidate.generator_seed * 17
+                    + candidate.tree_index * 257
+                    + candidate.leaf_index
+                ),
+            )
+            times = pd.to_datetime(frame.loc[matched_indices, "__snapshot_ms"], unit="ms", utc=True)
+            periods = times.dt.tz_localize(None).dt.to_period(config.stability_frequency)
+            summary = pd.DataFrame(
+                {
+                    "period": periods.astype(str).to_numpy(),
+                    "label": labels_all[matched_indices],
+                    "matched": matched_probability[matched_indices],
+                }
+            ).groupby("period").agg(
+                count=("label", "count"),
+                mean=("label", "mean"),
+                matched=("matched", "mean"),
+            )
+            eligible = summary[summary["count"] >= config.min_events_per_stability_period]
+            candidate.stability_periods = len(eligible)
+            candidate.positive_period_fraction = (
+                float((eligible["mean"] > eligible["matched"]).mean())
+                if len(eligible)
+                else 0.0
+            )
+        evaluated.append(candidate)
     p_values = [candidate.verification_p for candidate in evaluated]
     for candidate, q_value in zip(evaluated, _benjamini_yekutieli(p_values), strict=True):
         candidate.verification_q = q_value
@@ -769,22 +912,34 @@ def calendar_block_permute_labels(
     frame: pd.DataFrame, *, config: ArchetypeDiscoveryConfig, seed: int
 ) -> tuple[np.ndarray, float]:
     rng = np.random.default_rng(seed)
-    labels = frame[config.input.label_column].to_numpy(dtype=np.int8)
-    shuffled = labels.copy()
-    strata = pd.DataFrame(index=frame.index)
-    strata["calendar_month"] = pd.to_datetime(
-        frame["__snapshot_ms"], unit="ms", utc=True
+    group_column = config.input.group_column
+    label_column = config.input.label_column
+    shuffled = frame[label_column].to_numpy(dtype=np.int8).copy()
+    grouped = frame.groupby(group_column, sort=False)
+    group_positions = {
+        str(group): np.asarray(indices, dtype=np.int64)
+        for group, indices in grouped.indices.items()
+    }
+    groups = grouped.agg(snapshot_ms=("__snapshot_ms", "min"))
+    groups.index = groups.index.astype(str)
+    groups["row_count"] = [len(group_positions[group]) for group in groups.index]
+    groups["calendar_month"] = pd.to_datetime(
+        groups["snapshot_ms"], unit="ms", utc=True
     ).dt.strftime("%Y-%m")
-    stratum_key = pd.util.hash_pandas_object(strata, index=False).to_numpy(dtype=np.uint64)
     moved_rows = 0
-    for key in np.unique(stratum_key):
-        positions = np.flatnonzero(stratum_key == key)
-        if len(positions) < 2:
+    for _, stratum in groups.groupby(["calendar_month", "row_count"], sort=False):
+        recipient_groups = stratum.index.to_numpy(dtype=str)
+        if len(recipient_groups) < 2:
             continue
-        order = rng.permutation(positions)
-        donors = np.roll(order, 1)
-        shuffled[order] = labels[donors]
-        moved_rows += len(positions)
+        order = rng.permutation(recipient_groups)
+        donor_groups = np.roll(order, 1)
+        for recipient, donor in zip(order, donor_groups, strict=True):
+            recipient_positions = group_positions[recipient]
+            donor_positions = group_positions[donor]
+            shuffled[recipient_positions] = frame.iloc[donor_positions][label_column].to_numpy(
+                dtype=np.int8
+            )
+            moved_rows += len(recipient_positions)
     fraction = moved_rows / len(frame) if len(frame) else 0.0
     return shuffled, fraction
 
@@ -799,11 +954,104 @@ def _safe_auc(
     )
 
 
+def _generate_candidate_pool(
+    *,
+    prepared: PreparedArchetypeData,
+    config: ArchetypeDiscoveryConfig,
+    labels: np.ndarray | None = None,
+    reusable_model: CatBoostClassifier | None = None,
+    reusable_model_json: dict[str, Any] | None = None,
+    reusable_generator: ArchetypeGeneratorSpec | None = None,
+) -> tuple[list[RuleCandidate], int]:
+    full_labels = (
+        prepared.discovery[config.input.label_column].to_numpy(dtype=np.int8)
+        if labels is None
+        else np.asarray(labels, dtype=np.int8)
+    )
+    pool: list[RuleCandidate] = []
+    fit_count = 0
+    for fraction in config.rolling_origin_fractions:
+        positions = _origin_positions(prepared, config, fraction)
+        origin = _subset_prepared(prepared, positions)
+        origin_labels = full_labels[positions]
+        if len(np.unique(origin_labels)) != 2:
+            raise ArchetypeDiscoveryError(
+                f"rolling origin {fraction:.3f} does not contain both target classes"
+            )
+        origin_id = f"origin_{fraction:.3f}"
+        origin_matched_probability = _matched_probabilities(
+            origin.discovery, config, labels=origin_labels
+        )
+        for generator in config.effective_generators:
+            can_reuse = (
+                fraction == 1.0
+                and generator == reusable_generator
+                and reusable_model is not None
+                and reusable_model_json is not None
+            )
+            if can_reuse:
+                model = reusable_model
+                model_json = reusable_model_json
+            else:
+                model = fit_rule_generator(
+                    origin,
+                    config,
+                    labels=origin_labels,
+                    random_seed=generator.random_seed,
+                    depth=generator.depth,
+                )
+                model_json = export_model_json(model)
+                fit_count += 1
+            generated = discover_candidates(
+                model=model,
+                model_json=model_json,
+                prepared=origin,
+                config=config,
+                discovery_labels=origin_labels,
+                matched_probability=origin_matched_probability,
+            )
+            reference_rows_by_tree: dict[int, dict[int, np.ndarray]] = {}
+            if generated:
+                reference_leaf_matrix = np.asarray(
+                    model.calc_leaf_indexes(prepared.x_discovery)
+                )
+                for tree_index in {candidate.tree_index for candidate in generated}:
+                    leaf_count = len(
+                        model_json["oblivious_trees"][tree_index]["leaf_values"]
+                    )
+                    reference_rows_by_tree[tree_index] = _first_leaf_rows(
+                        prepared.discovery,
+                        reference_leaf_matrix[:, tree_index],
+                        group_column=config.input.group_column,
+                        leaf_count=leaf_count,
+                    )
+            for candidate in generated:
+                candidate.generator_seed = generator.random_seed
+                candidate.generator_depth = generator.depth
+                candidate.origin_fraction = fraction
+                candidate.origin_id = origin_id
+                candidate.discovery_indices = positions[candidate.discovery_indices]
+                reference_indices = reference_rows_by_tree[candidate.tree_index].get(
+                    candidate.leaf_index,
+                    np.array([], dtype=np.int64),
+                )
+                candidate.reference_indices = reference_indices
+                candidate.reference_groups = frozenset(
+                    str(value)
+                    for value in prepared.discovery.loc[
+                        reference_indices, config.input.group_column
+                    ]
+                )
+            pool.extend(generated)
+    return pool, fit_count
+
+
 def _build_category_outputs(
     *,
     candidates: list[RuleCandidate],
     prepared: PreparedArchetypeData,
     config: ArchetypeDiscoveryConfig,
+    controls_passed: bool,
 ) -> tuple[list[ArchetypeCategoryRow], pd.DataFrame]:
     discovery_events, discovery_blind = _blind_rate(prepared.discovery, config)
     verification_events, verification_blind = _blind_rate(prepared.verification, config)
@@ -817,6 +1065,8 @@ def _build_category_outputs(
         status = (
             "REJECTED"
             if not passed
+            else "CONTROL_FAILED"
+            if not controls_passed
             else "PRISTINE_VERIFIED"
             if config.evidence_mode == "pristine_holdout"
             else "DEVELOPMENT_REPLICATED"
@@ -829,6 +1079,13 @@ def _build_category_outputs(
                 protocol_freeze_id=config.protocol_freeze_id,
                 tree_index=candidate.tree_index,
                 leaf_index=candidate.leaf_index,
+                generator_seed=candidate.generator_seed,
+                generator_depth=candidate.generator_depth,
+                origin_fraction=candidate.origin_fraction,
+                origin_support_count=candidate.origin_support_count,
+                origin_support_fraction=candidate.origin_support_fraction,
+                generator_support_count=candidate.generator_support_count,
+                generator_support_fraction=candidate.generator_support_fraction,
                 rule_text=candidate.rule_text,
                 rule_json=json.dumps(candidate.rule, ensure_ascii=False, separators=(",", ":")),
                 feature_names=";".join(candidate.feature_names),
@@ -861,7 +1118,7 @@ def _build_category_outputs(
                 temporal_contract=ARCHETYPE_TEMPORAL_CONTRACT,
             )
         )
-        if not passed:
+        if not passed or not controls_passed:
             continue
         for split_name, frame, indices in (
             ("discovery", prepared.discovery, candidate.discovery_indices),
@@ -892,20 +1149,124 @@ def _build_category_outputs(
     return rows, assignment_frame
 
 
+def _coverage_outputs(
+    *,
+    candidates: list[RuleCandidate],
+    prepared: PreparedArchetypeData,
+    config: ArchetypeDiscoveryConfig,
+    generated_candidate_count: int,
+    search_truncated: bool,
+    controls_passed: bool,
+) -> tuple[list[ArchetypeCoverageRow], pd.DataFrame]:
+    accepted = (
+        [candidate for candidate in candidates if _is_verified(candidate, config=config)]
+        if controls_passed
+        else []
+    )
+    coverage_rows: list[ArchetypeCoverageRow] = []
+    unclassified_assignments: list[dict[str, Any]] = []
+    for split_name, frame, matrix in (
+        ("discovery", prepared.discovery, prepared.x_discovery),
+        ("verification", prepared.verification, prepared.x_verification),
+    ):
+        group_column = config.input.group_column
+        label_column = config.input.label_column
+        first = frame.drop_duplicates(group_column, keep="first")
+        all_groups = first[group_column].astype(str).to_numpy()
+        labels_by_group = dict(
+            zip(
+                all_groups,
+                (int(value) for value in first[label_column].to_numpy(dtype=np.int8)),
+                strict=True,
+            )
+        )
+        hit_counts = {group: 0 for group in all_groups}
+        for candidate in accepted:
+            indices = _first_matching_rule_rows(
+                frame, matrix, candidate.rule, group_column=group_column
+            )
+            for value in frame.loc[indices, group_column].astype(str):
+                hit_counts[value] += 1
+        covered = {group for group, count in hit_counts.items() if count > 0}
+        overlapping = sum(count > 1 for count in hit_counts.values())
+        unclassified = [group for group in all_groups if group not in covered]
+        fades = sum(labels_by_group.values())
+        covered_fades = sum(labels_by_group[group] for group in covered)
+        unclassified_fades = sum(labels_by_group[group] for group in unclassified)
+        total = len(all_groups)
+        coverage_rows.append(
+            ArchetypeCoverageRow(
+                split=split_name,
+                total_event_count=total,
+                first_signal_fade_event_count=fades,
+                covered_event_count=len(covered),
+                covered_first_signal_fade_event_count=covered_fades,
+                overlapping_event_count=overlapping,
+                unclassified_event_count=len(unclassified),
+                covered_fraction=len(covered) / total if total else 0.0,
+                covered_first_signal_fade_fraction=covered_fades / fades if fades else 0.0,
+                unclassified_first_signal_fade_rate=(
+                    unclassified_fades / len(unclassified) if unclassified else 0.0
+                ),
+                accepted_category_count=len(accepted),
+                generated_candidate_count=generated_candidate_count,
+                distinct_candidate_count=len(candidates),
+                registered_generator_count=len(config.effective_generators),
+                rolling_origin_count=len(config.rolling_origin_fractions),
+                search_truncated=search_truncated,
+                controls_passed=controls_passed,
+                claim_scope=(
+                    "registered causal features; registered CatBoost generators and rolling origins; "
+                    "minimum support/effect gates; predictive phenotypes, not causal mechanisms"
+                ),
+            )
+        )
+        first_by_group = first.set_index(first[group_column].astype(str), drop=False)
+        for group in unclassified:
+            row = first_by_group.loc[group]
+            unclassified_assignments.append(
+                {
+                    "category_id": "unclassified",
+                    "split": split_name,
+                    "group": group,
+                    "symbol": str(row[config.input.symbol_column]),
+                    "snapshot_time_ms": int(row["__snapshot_ms"]),
+                    "label": int(row[label_column]),
+                }
+            )
+    return coverage_rows, pd.DataFrame(
+        unclassified_assignments,
+        columns=["category_id", "split", "group", "symbol", "snapshot_time_ms", "label"],
+    )
+
+
 def build_archetype_discovery(
     frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
 ) -> ArchetypeBuildResult:
     prepared = prepare_archetype_data(frame, config)
-    model = fit_rule_generator(prepared, config)
+    primary_generator = config.effective_generators[0]
+    model = fit_rule_generator(
+        prepared,
+        config,
+        random_seed=primary_generator.random_seed,
+        depth=primary_generator.depth,
+    )
     model_json = export_model_json(model)
-    candidates = discover_candidates(
-        model=model, model_json=model_json, prepared=prepared, config=config
+    candidates, fit_count = _generate_candidate_pool(
+        prepared=prepared,
+        config=config,
+        reusable_model=model,
+        reusable_model_json=model_json,
+        reusable_generator=primary_generator,
     )
-    selected = select_distinct_candidates(candidates, config)
+    consensus = _consensus_candidates(candidates, config)
+    selected = select_distinct_candidates(consensus, config)
+    search_truncated = (
+        config.max_categories is not None
+        and len(selected) >= config.max_categories
+        and len(consensus) > len(selected)
+    )
     evaluate_candidates(
-        candidates=selected, model=model, prepared=prepared, config=config
-    )
-    category_rows, assignments = _build_category_outputs(
         candidates=selected, prepared=prepared, config=config
     )
     y_verification = prepared.verification[config.input.label_column].to_numpy(dtype=np.int8)
@@ -918,7 +1279,8 @@ def build_archetype_discovery(
     )
     discovery_event_count, discovery_blind = _blind_rate(prepared.discovery, config)
     verification_event_count, verification_blind = _blind_rate(prepared.verification, config)
-    real_verified = sum(row.status != "REJECTED" for row in category_rows)
+    real_verified = sum(_is_verified(item, config=config) for item in selected)
+    shuffled_results: list[tuple[float, int, float]] = []
     controls = [
         ArchetypeControlRow(
             control_name="blind",
@@ -936,7 +1298,7 @@ def build_archetype_discovery(
         ),
         ArchetypeControlRow(
             control_name="real_labels",
-            random_seed=config.random_seed,
+            random_seed=primary_generator.random_seed,
             discovery_event_count=discovery_event_count,
             verification_event_count=verification_event_count,
             discovery_blind_rate=discovery_blind,
@@ -948,6 +1310,7 @@ def build_archetype_discovery(
             shuffled_row_fraction=0.0,
             notes=(
                 "Rules generated on discovery labels and frozen before the later interval; "
+                "candidate consensus spans registered rolling origins and generators; "
                 "AUC uses inverse-group weights so each anomaly has unit total weight."
             ),
         ),
@@ -956,21 +1319,28 @@ def build_archetype_discovery(
         shuffled_labels, shuffled_fraction = calendar_block_permute_labels(
             prepared.discovery, config=config, seed=seed
         )
+        shuffled_generator = config.effective_generators[0]
         shuffled_model = fit_rule_generator(
-            prepared, config, labels=shuffled_labels, random_seed=seed
+            prepared,
+            config,
+            labels=shuffled_labels,
+            random_seed=shuffled_generator.random_seed,
+            depth=shuffled_generator.depth,
         )
         shuffled_json = export_model_json(shuffled_model)
-        shuffled_candidates = discover_candidates(
-            model=shuffled_model,
-            model_json=shuffled_json,
+        shuffled_candidates, shuffled_fit_count = _generate_candidate_pool(
             prepared=prepared,
             config=config,
-            discovery_labels=shuffled_labels,
+            labels=shuffled_labels,
+            reusable_model=shuffled_model,
+            reusable_model_json=shuffled_json,
+            reusable_generator=shuffled_generator,
         )
-        shuffled_selected = select_distinct_candidates(shuffled_candidates, config)
+        fit_count += shuffled_fit_count + 1
+        shuffled_consensus = _consensus_candidates(shuffled_candidates, config)
+        shuffled_selected = select_distinct_candidates(shuffled_consensus, config)
         evaluate_candidates(
             candidates=shuffled_selected,
-            model=shuffled_model,
             prepared=prepared,
             config=config,
         )
@@ -979,6 +1349,12 @@ def build_archetype_discovery(
             for item in shuffled_selected
         )
         shuffled_probability = shuffled_model.predict_proba(prepared.x_verification)[:, 1]
+        shuffled_auc = _safe_auc(
+            y_verification,
+            shuffled_probability,
+            sample_weight=verification_weight,
+        )
+        shuffled_results.append((shuffled_fraction, shuffled_verified, shuffled_auc))
         controls.append(
             ArchetypeControlRow(
                 control_name="calendar_block_shuffled_labels",
@@ -987,25 +1363,57 @@ def build_archetype_discovery(
                 verification_event_count=verification_event_count,
                 discovery_blind_rate=discovery_blind,
                 verification_blind_rate=verification_blind,
-                verification_auc=_safe_auc(
-                    y_verification,
-                    shuffled_probability,
-                    sample_weight=verification_weight,
-                ),
+                verification_auc=shuffled_auc,
                 discovery_candidate_count=len(shuffled_candidates),
                 distinct_candidate_count=len(shuffled_selected),
                 verified_category_count=shuffled_verified,
                 shuffled_row_fraction=shuffled_fraction,
                 notes=(
-                    "Labels are permuted across anomaly groups inside calendar-month blocks, "
-                    "destroying decision-position and feature association while preserving regime base rate; "
-                    "rules are evaluated on real later outcomes."
+                    "Complete within-anomaly label paths are transplanted between groups with the same "
+                    "calendar month and row count; rules are evaluated on real later outcomes."
                 ),
             )
         )
+    sufficient_shuffle = all(
+        fraction >= config.min_shuffled_row_fraction
+        for fraction, _, _ in shuffled_results
+    )
+    positive_null_pass = all(
+        verified == 0 and auc <= config.max_shuffled_verification_auc
+        for _, verified, auc in shuffled_results
+    )
+    controls_passed = sufficient_shuffle and positive_null_pass
+    controls[1] = replace(
+        controls[1],
+        verified_category_count=real_verified if controls_passed else 0,
+        notes=(
+            controls[1].notes
+            + (
+                " All registered shuffled controls passed."
+                if controls_passed
+                else " Registered shuffled controls failed; real candidates are blocked."
+            )
+        ),
+    )
+    category_rows, assignments = _build_category_outputs(
+        candidates=selected,
+        prepared=prepared,
+        config=config,
+        controls_passed=controls_passed,
+    )
+    coverage_rows, unclassified = _coverage_outputs(
+        candidates=selected,
+        prepared=prepared,
+        config=config,
+        generated_candidate_count=len(candidates),
+        search_truncated=search_truncated,
+        controls_passed=controls_passed,
+    )
+    assignments = pd.concat([assignments, unclassified], ignore_index=True)
     return ArchetypeBuildResult(
         category_rows=category_rows,
         control_rows=controls,
+        coverage_rows=coverage_rows,
         assignments=assignments,
         model=model,
         model_json=model_json,
@@ -1013,4 +1421,7 @@ def build_archetype_discovery(
         discovery_candidate_count=len(candidates),
         distinct_candidate_count=len(selected),
         verification_auc=verification_auc,
+        generator_fit_count=fit_count + 1,
+        search_truncated=search_truncated,
+        controls_passed=controls_passed,
     )

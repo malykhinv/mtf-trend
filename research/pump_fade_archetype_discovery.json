@@ -65,6 +65,15 @@
   "depth": 4,
   "learning_rate": 0.05,
   "l2_leaf_reg": 5.0,
+  "generators": [
+    {"random_seed": 20260627, "depth": 4},
+    {"random_seed": 20260639, "depth": 3},
+    {"random_seed": 20260651, "depth": 5}
+  ],
+  "rolling_origin_fractions": [0.65, 0.82, 1.0],
+  "min_origin_support_fraction": 0.66,
+  "min_generator_support_fraction": 0.66,
+  "consensus_membership_jaccard": 0.65,
   "min_discovery_events": 80,
   "min_verification_events": 50,
   "min_discovery_fade_rate": 0.58,
@@ -73,7 +82,7 @@
   "min_verification_lift": 1.15,
   "max_membership_jaccard": 0.5,
   "min_unique_event_fraction": 0.3,
-  "max_categories": 20,
+  "max_categories": null,
   "fdr_alpha": 0.05,
   "stability_frequency": "M",
   "min_events_per_stability_period": 15,
@@ -87,5 +96,7 @@
   "min_inference_blocks": 8,
   "evidence_mode": "development",
   "protocol_freeze_id": "",
-  "shuffled_seeds": [11, 29, 47]
+  "shuffled_seeds": [11, 29, 47],
+  "min_shuffled_row_fraction": 0.7,
+  "max_shuffled_verification_auc": 0.6
 }

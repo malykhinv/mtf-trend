@@ -19,6 +19,7 @@ from anomaly_science.archetypes import (
 from anomaly_science.archetypes.builder import (
     ArchetypeDiscoveryError,
     build_archetype_discovery,
+    calendar_block_permute_labels,
     prepare_archetype_data,
 )
 from anomaly_science.contracts.time import TemporalContractError
@@ -113,6 +114,14 @@ def test_archetype_discovery_finds_frozen_rule_and_defeats_controls() -> None:
     verified = [row for row in result.category_rows if row.status == "DEVELOPMENT_REPLICATED"]
     assert verified
     assert any("nature_signal" in row.feature_names for row in verified)
+    assert all(
+        row.origin_support_fraction >= _config().min_origin_support_fraction
+        for row in verified
+    )
+    assert all(
+        row.generator_support_fraction >= _config().min_generator_support_fraction
+        for row in verified
+    )
     assert all(row.verification_event_count <= 160 for row in result.category_rows)
     assert result.verification_auc > 0.95
     controls = {(row.control_name, row.random_seed): row for row in result.control_rows}
@@ -120,6 +129,53 @@ def test_archetype_discovery_finds_frozen_rule_and_defeats_controls() -> None:
     assert controls[("calendar_block_shuffled_labels", 19)].verification_auc < 0.65
     assert controls[("calendar_block_shuffled_labels", 19)].verified_category_count == 0
     assert set(result.assignments["split"]) == {"discovery", "verification"}
+    assert set(result.assignments["category_id"]) >= {"unclassified"}
+    assert {row.split for row in result.coverage_rows} == {"discovery", "verification"}
+    assert all(not row.search_truncated for row in result.coverage_rows)
+    assert all(row.controls_passed for row in result.coverage_rows)
+
+
+def test_calendar_shuffle_transplants_whole_anomaly_label_paths() -> None:
+    prepared = prepare_archetype_data(_synthetic_rows(), _config())
+    second_rows = prepared.discovery.groupby("group", sort=False).tail(1).index
+    prepared.discovery.loc[second_rows[::3], "y"] ^= 1
+    original_paths = {
+        tuple(values)
+        for values in prepared.discovery.groupby("group", sort=False)["y"]
+        .apply(lambda series: series.to_numpy(dtype=np.int8))
+    }
+
+    shuffled, moved_fraction = calendar_block_permute_labels(
+        prepared.discovery, config=_config(), seed=19
+    )
+
+    shuffled_frame = prepared.discovery.assign(shuffled=shuffled)
+    shuffled_paths = shuffled_frame.groupby("group", sort=False)["shuffled"].apply(
+        lambda series: tuple(series.to_numpy(dtype=np.int8))
+    )
+    assert set(shuffled_paths).issubset(original_paths)
+    assert moved_fraction == 1.0
+
+
+def test_real_phenotypes_are_blocked_when_shuffled_control_replicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import anomaly_science.archetypes.builder as builder
+
+    def identity_shuffle(frame, *, config, seed):
+        del seed
+        return frame[config.input.label_column].to_numpy(dtype=np.int8), 1.0
+
+    monkeypatch.setattr(builder, "calendar_block_permute_labels", identity_shuffle)
+
+    result = build_archetype_discovery(_synthetic_rows(), _config())
+
+    assert result.controls_passed is False
+    assert all(not row.controls_passed for row in result.coverage_rows)
+    assert any(row.status == "CONTROL_FAILED" for row in result.category_rows)
+    assert set(result.assignments["category_id"]) == {"unclassified"}
+    real_control = next(row for row in result.control_rows if row.control_name == "real_labels")
+    assert real_control.verified_category_count == 0
 
 
 def test_archetype_temporal_contract_rejects_future_feature_cutoff() -> None:
@@ -190,6 +246,8 @@ def test_archetype_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
     assert (out_dir / "anomaly_archetype_controls.csv").is_file()
     assert (out_dir / "strategy_archetype_catalog.csv").is_file()
     assert (out_dir / "strategy_archetype_controls.csv").is_file()
+    assert (out_dir / "anomaly_archetype_coverage.csv").is_file()
+    assert (out_dir / "strategy_archetype_coverage.csv").is_file()
     assert (out_dir / "anomaly_archetype_assignments.parquet").is_file()
     assert (out_dir / "archetype_rule_generator.cbm").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
@@ -197,3 +255,4 @@ def test_archetype_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
     assert run["verification_groups"] == 160
     assert run["verified_category_count"] == 0
     assert run["development_replicated_category_count"] > 0
+    assert run["search_truncated"] is False

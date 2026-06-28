@@ -22,6 +22,7 @@ from anomaly_science.contracts.artifacts import MVP1_ARTIFACT_SCHEMAS, STRATEGY_
 REQUIRED_MVP1 = {
     "anomaly_archetype_catalog.csv",
     "anomaly_archetype_controls.csv",
+    "anomaly_archetype_coverage.csv",
     "anomaly_events.csv",
     "anomaly_state_1m.csv",
     "anomaly_future_paths.csv",
@@ -63,6 +64,7 @@ REQUIRED_MVP1 = {
     "strategy_state_1m.csv",
     "strategy_archetype_catalog.csv",
     "strategy_archetype_controls.csv",
+    "strategy_archetype_coverage.csv",
     "strategy_future_paths.csv",
     "strategy_outcome_labels.csv",
     "strategy_oos_predictions.csv",
