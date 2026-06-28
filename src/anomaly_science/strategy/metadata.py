@@ -18,6 +18,14 @@ def format_horizons(horizons_minutes: Iterable[int]) -> str:
     return ";".join(str(horizon) for horizon in horizons_minutes)
 
 
+def format_execution_policy_ids(strategy: BaseStrategy) -> str:
+    policies = strategy.execution_policies
+    return ";".join(
+        policy.policy_id
+        for policy in (*policies.stop_policies, *policies.take_profit_policies)
+    )
+
+
 def active_strategy_h_max_minutes(strategy_names: Iterable[str]) -> int:
     names = tuple(strategy_names)
     if not names:
@@ -38,8 +46,8 @@ def strategy_metadata_run_config_rows(strategy: BaseStrategy | None = None, *, s
         RunConfigRow(key="strategy_horizon_minutes", value=str(metadata.horizon_minutes), source="strategy_registry"),
         RunConfigRow(key="strategy_allowed_horizons", value=format_horizons(metadata.allowed_horizons), source="strategy_registry"),
         RunConfigRow(key="strategy_default_horizon_minutes", value=str(metadata.default_horizon_minutes), source="strategy_registry"),
-        RunConfigRow(key="take_profit_atr_1440", value=str(metadata.take_profit_atr_1440), source="strategy_registry"),
-        RunConfigRow(key="stop_loss_atr_1440", value=str(metadata.stop_loss_atr_1440), source="strategy_registry"),
+        RunConfigRow(key="execution_policy_version", value=metadata.execution_policy_version, source="strategy_registry"),
+        RunConfigRow(key="execution_policy_ids", value=format_execution_policy_ids(strategy), source="strategy_registry"),
         RunConfigRow(key="feature_schema_version", value=metadata.feature_schema_version, source="strategy_registry"),
         RunConfigRow(key="label_schema_version", value=metadata.label_schema_version, source="strategy_registry"),
         RunConfigRow(

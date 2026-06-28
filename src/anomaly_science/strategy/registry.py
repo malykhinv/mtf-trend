@@ -81,7 +81,7 @@ def available_strategies() -> tuple[StrategyRegistryEntry, ...]:
             StrategyRegistryEntry(
                 strategy_name=strategy_name,
                 strategy_family="anomaly",
-                strategy_contract_version="base_strategy_v1",
+                strategy_contract_version="base_strategy_v2_structural_execution",
                 factory=lambda strategy_name=strategy_name: make_broad_anomaly_strategy(strategy_name=strategy_name),
             )
         )
@@ -90,7 +90,7 @@ def available_strategies() -> tuple[StrategyRegistryEntry, ...]:
             StrategyRegistryEntry(
                 strategy_name=strategy_name,
                 strategy_family="anomaly",
-                strategy_contract_version="base_strategy_v1",
+                strategy_contract_version="base_strategy_v2_structural_execution",
                 factory=lambda strategy_name=strategy_name: make_post_anomaly_extension_strategy(strategy_name=strategy_name),
             )
         )
@@ -99,7 +99,7 @@ def available_strategies() -> tuple[StrategyRegistryEntry, ...]:
             StrategyRegistryEntry(
                 strategy_name=strategy_name,
                 strategy_family="anomaly",
-                strategy_contract_version="base_strategy_v1",
+                strategy_contract_version="base_strategy_v2_structural_execution",
                 factory=lambda strategy_name=strategy_name: make_post_pump_distribution_strategy(strategy_name=strategy_name),
             )
         )
@@ -122,7 +122,7 @@ def strategy_implementation_statuses() -> tuple[StrategyImplementationStatus, ..
             StrategyImplementationStatus(
                 strategy_name=strategy_name,
                 strategy_family="anomaly",
-                strategy_contract_version="base_strategy_v1",
+                strategy_contract_version="base_strategy_v2_structural_execution",
                 horizon_minutes=int(defaults["horizon_minutes"]),
                 allowed_horizons=tuple(int(horizon) for horizon in defaults["allowed_horizons"]),
                 default_horizon_minutes=int(defaults["default_horizon_minutes"]),

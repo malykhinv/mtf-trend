@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from anomaly_science.strategy.pump_fade.nature import (
     build_pump_fade_nature_rows,
     run_pump_fade_nature_projection,
 )
+from anomaly_science.strategy.pump_fade.spec import PUMP_FADE_STRATEGY
 
 
 def _config() -> PumpFadeDecisionConfig:
@@ -37,6 +39,28 @@ def _config() -> PumpFadeDecisionConfig:
         minimum_atr_multiple=3.0,
         minimum_turnover=1_000.0,
     )
+
+
+@pytest.mark.parametrize(
+    "config_path",
+    (
+        Path("research/pump_fade_nature_discovery.json"),
+        Path("research/pump_fade_archetype_discovery.json"),
+    ),
+)
+def test_active_pump_fade_model_features_are_declared_by_strategy(config_path: Path) -> None:
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    configured = {
+        name
+        for group in ("numeric", "decision_timing_numeric", "categorical", "derived_time")
+        for name in payload["features"].get(group, [])
+    }
+    catalog = {spec.name: spec for spec in PUMP_FADE_STRATEGY.custom_feature_catalog}
+
+    assert len(catalog) == len(PUMP_FADE_STRATEGY.custom_feature_catalog)
+    assert configured <= set(catalog)
+    assert all(catalog[name].is_model_feature for name in configured)
+    assert catalog["oi_available"].is_model_feature is False
 
 
 def _write_market(path: Path) -> None:
@@ -110,6 +134,11 @@ def test_builder_emits_only_new_high_decisions_with_closed_bar_snapshot(tmp_path
     assert row["nature_future_start_time_ms"] == 18 * 60_000
     assert row["nature_resolution_time_ms"] == 23 * 60_000
     assert bool(row["is_event_peak_decision"])
+    assert row["max_1m_high_return"] == pytest.approx(106.0 / 102.0 - 1.0)
+    assert row["max_1m_close_return"] == pytest.approx(105.5 / 102.0 - 1.0)
+    assert 0.0 < row["event_path_efficiency"] <= 1.0
+    assert "retail_frenzy_proxy" in result.columns
+    assert "oi_change_60m" in result.columns
 
 
 def test_early_causal_qualification_is_not_removed_by_final_period_atr(tmp_path: Path) -> None:
@@ -276,6 +305,11 @@ def test_dataset_run_writes_data_quality_artifact(tmp_path: Path) -> None:
     assert quality.loc[0, "status"] == "OK"
     assert (tmp_path / "decisions.metadata.json").is_file()
     assert (tmp_path / "decisions.manifest.json").is_file()
+    metadata = json.loads((tmp_path / "decisions.metadata.json").read_text(encoding="utf-8"))
+    assert metadata["strategy"]["strategy_contract_version"] == "horizon_free_event_strategy_v1"
+    assert metadata["strategy"]["execution_policy_version"] == "pump_fade_structural_execution_v1"
+    assert metadata["strategy"]["target_policies"][0]["close_fraction_grid"] == [0.25, 0.5, 0.75, 1.0]
+    assert "max_1m_high_return" in metadata["strategy"]["custom_feature_names"]
 
 
 def test_dataset_run_fails_closed_when_dropped_rows_exceed_policy(tmp_path: Path) -> None:

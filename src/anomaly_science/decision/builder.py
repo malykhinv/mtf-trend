@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -20,7 +20,8 @@ from anomaly_science.decision.config import ExpectedValueConfig
 from anomaly_science.future import load_strategy_state_1m_csv
 from anomaly_science.labels import load_strategy_outcome_labels_csv
 from anomaly_science.prediction import load_anomaly_oos_predictions_csv
-from anomaly_science.strategy.base import StrategyMetadata
+from anomaly_science.strategy.base import BaseStrategy
+from anomaly_science.strategy.execution import PositionSide, StructuralAnchor
 from anomaly_science.strategy.registry import get_strategy
 
 
@@ -77,7 +78,7 @@ def build_expected_value_rows(
             label = label_by_key[key]
         except KeyError as exc:
             raise ExpectedValueInputError(f"prediction EV join key is missing from state or labels: {key}") from exc
-        rows.append(_build_row(state=state, label=label, prediction=prediction, config=cfg, strategy_metadata=strategy.metadata))
+        rows.append(_build_row(state=state, label=label, prediction=prediction, config=cfg, strategy=strategy))
     return tuple(rows)
 
 
@@ -160,30 +161,46 @@ def _build_row(
     label: StrategyOutcomeLabelRow,
     prediction: OosPredictionRow,
     config: ExpectedValueConfig,
-    strategy_metadata: StrategyMetadata,
+    strategy: BaseStrategy,
 ) -> ExpectedValueRow:
     _enforce_ev_input_temporal_contract(state=state, label=label, prediction=prediction)
     if label.core_atr_1440 is None:
         raise ExpectedValueInputError(f"core_atr_1440 is required for EV row {prediction.event_id}")
     entry_reference_price = state.current_close
-    stop_distance = strategy_metadata.stop_loss_atr_1440 * label.core_atr_1440
-    target_distance = strategy_metadata.take_profit_atr_1440 * label.core_atr_1440
+    long_geometry = _structural_geometry(state=state, strategy=strategy, side=PositionSide.LONG)
+    short_geometry = _structural_geometry(state=state, strategy=strategy, side=PositionSide.SHORT)
     cost_penalty = entry_reference_price * ((2.0 * config.fee_bps + config.slippage_bps) / 10_000.0)
     p_follow_long = prediction.p_long_continuation
     p_adverse_long = prediction.p_short_fade
     p_follow_short = prediction.p_short_fade
     p_adverse_short = prediction.p_long_continuation
-    rr_long = target_distance / stop_distance
-    rr_short = target_distance / stop_distance
-    ev_long = p_follow_long * target_distance - p_adverse_long * stop_distance - cost_penalty
-    ev_short = p_follow_short * target_distance - p_adverse_short * stop_distance - cost_penalty
+    rr_long = long_geometry.rr
+    rr_short = short_geometry.rr
+    ev_long = _structural_ev(
+        resolved=long_geometry.resolved,
+        follow_probability=p_follow_long,
+        adverse_probability=p_adverse_long,
+        target_distance=long_geometry.target_distance,
+        stop_distance=long_geometry.stop_distance,
+        cost_penalty=cost_penalty,
+    )
+    ev_short = _structural_ev(
+        resolved=short_geometry.resolved,
+        follow_probability=p_follow_short,
+        adverse_probability=p_adverse_short,
+        target_distance=short_geometry.target_distance,
+        stop_distance=short_geometry.stop_distance,
+        cost_penalty=cost_penalty,
+    )
     ev_wait = 0.0
     ev_no_trade = 0.0
     best_action = _best_action(EV_long=ev_long, EV_short=ev_short, EV_wait=ev_wait, EV_no_trade=ev_no_trade)
+    selected_geometry = long_geometry if best_action == "long" else short_geometry
+    metadata = strategy.metadata
     return ExpectedValueRow(
         ev_version=config.ev_version,
-        strategy_name=strategy_metadata.strategy_name,
-        strategy_version=strategy_metadata.strategy_version,
+        strategy_name=metadata.strategy_name,
+        strategy_version=metadata.strategy_version,
         event_id=prediction.event_id,
         symbol=prediction.symbol,
         state_time_ms=state.state_time_ms,
@@ -195,8 +212,18 @@ def _build_row(
         entry_price_basis=config.entry_price_basis,
         entry_reference_price=entry_reference_price,
         core_atr_1440=label.core_atr_1440,
-        stop_distance=stop_distance,
-        target_distance=target_distance,
+        execution_policy_version=metadata.execution_policy_version,
+        stop_policy_id=selected_geometry.stop_policy_id,
+        target_policy_id=selected_geometry.target_policy_id,
+        stop_anchor=selected_geometry.stop_anchor,
+        target_anchor=selected_geometry.target_anchor,
+        stop_trigger=selected_geometry.stop_trigger,
+        target_trigger=selected_geometry.target_trigger,
+        stop_reference_price=selected_geometry.stop_price if selected_geometry.resolved else None,
+        target_reference_price=selected_geometry.target_price if selected_geometry.resolved else None,
+        stop_distance=selected_geometry.stop_distance if selected_geometry.resolved else None,
+        target_distance=selected_geometry.target_distance if selected_geometry.resolved else None,
+        execution_policy_resolved=selected_geometry.resolved,
         fee_bps=config.fee_bps,
         slippage_bps=config.slippage_bps,
         cost_model=config.cost_model,
@@ -217,6 +244,93 @@ def _build_row(
         is_RR_still_acceptable=rr_long >= config.min_rr or rr_short >= config.min_rr,
         temporal_contract=EXPECTED_VALUE_TEMPORAL_CONTRACT,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _StructuralGeometry:
+    stop_policy_id: str
+    target_policy_id: str
+    stop_anchor: str
+    target_anchor: str
+    stop_trigger: str
+    target_trigger: str
+    stop_price: float | None
+    target_price: float | None
+    stop_distance: float | None
+    target_distance: float | None
+
+    @property
+    def resolved(self) -> bool:
+        return self.stop_distance is not None and self.target_distance is not None
+
+    @property
+    def rr(self) -> float:
+        if not self.resolved or self.stop_distance is None or self.target_distance is None:
+            return 0.0
+        return self.target_distance / self.stop_distance
+
+
+def _structural_geometry(*, state: StrategyState1mRow, strategy: BaseStrategy, side: PositionSide) -> _StructuralGeometry:
+    stop_policy = strategy.execution_policies.stop_for_side(side)
+    target_policies = strategy.execution_policies.take_profits_for_side(side)
+    if len(target_policies) != 1:
+        raise ExpectedValueInputError(
+            f"EV requires exactly one structural target policy for {side.value}; got {len(target_policies)}"
+        )
+    target_policy = target_policies[0]
+    stop_price = _resolve_anchor_price(state=state, anchor=stop_policy.initial_anchor)
+    target_price = _resolve_anchor_price(state=state, anchor=target_policy.anchor)
+    entry = state.current_close
+    if stop_price is None or target_price is None:
+        stop_distance = None
+        target_distance = None
+    elif side is PositionSide.LONG and stop_price < entry < target_price:
+        stop_distance = entry - stop_price
+        target_distance = target_price - entry
+    elif side is PositionSide.SHORT and target_price < entry < stop_price:
+        stop_distance = stop_price - entry
+        target_distance = entry - target_price
+    else:
+        stop_distance = None
+        target_distance = None
+    return _StructuralGeometry(
+        stop_policy_id=stop_policy.policy_id,
+        target_policy_id=target_policy.policy_id,
+        stop_anchor=stop_policy.initial_anchor.value,
+        target_anchor=target_policy.anchor.value,
+        stop_trigger=stop_policy.trigger.value,
+        target_trigger=target_policy.trigger.value,
+        stop_price=stop_price,
+        target_price=target_price,
+        stop_distance=stop_distance,
+        target_distance=target_distance,
+    )
+
+
+def _resolve_anchor_price(*, state: StrategyState1mRow, anchor: StructuralAnchor) -> float | None:
+    if anchor in {StructuralAnchor.RUNNING_HIGH, StructuralAnchor.EVENT_MAIN_HIGH}:
+        return state.running_high_asof_t
+    if anchor in {StructuralAnchor.RUNNING_LOW, StructuralAnchor.EVENT_BASE}:
+        return state.running_low_asof_t
+    if anchor is StructuralAnchor.CONFIRMED_SWING_HIGH:
+        return state.structural_high_asof_t
+    if anchor is StructuralAnchor.CONFIRMED_SWING_LOW:
+        return state.structural_low_asof_t
+    raise ExpectedValueInputError(f"unsupported structural anchor: {anchor.value}")
+
+
+def _structural_ev(
+    *,
+    resolved: bool,
+    follow_probability: float,
+    adverse_probability: float,
+    target_distance: float | None,
+    stop_distance: float | None,
+    cost_penalty: float,
+) -> float:
+    if not resolved or target_distance is None or stop_distance is None:
+        return -cost_penalty
+    return follow_probability * target_distance - adverse_probability * stop_distance - cost_penalty
 
 
 def _enforce_ev_input_temporal_contract(
@@ -314,8 +428,18 @@ def _expected_value_from_mapping(row: Mapping[str, object]) -> ExpectedValueRow:
         entry_price_basis=_required_str(row, "entry_price_basis"),
         entry_reference_price=_required_float(row, "entry_reference_price"),
         core_atr_1440=_required_float(row, "ATR_1d_asof_t"),
-        stop_distance=_required_float(row, "stop_distance"),
-        target_distance=_required_float(row, "target_distance"),
+        execution_policy_version=_required_str(row, "execution_policy_version"),
+        stop_policy_id=_required_str(row, "stop_policy_id"),
+        target_policy_id=_required_str(row, "target_policy_id"),
+        stop_anchor=_required_str(row, "stop_anchor"),
+        target_anchor=_required_str(row, "target_anchor"),
+        stop_trigger=_required_str(row, "stop_trigger"),
+        target_trigger=_required_str(row, "target_trigger"),
+        stop_reference_price=_optional_float(row, "stop_reference_price"),
+        target_reference_price=_optional_float(row, "target_reference_price"),
+        stop_distance=_optional_float(row, "stop_distance"),
+        target_distance=_optional_float(row, "target_distance"),
+        execution_policy_resolved=_required_bool(row, "execution_policy_resolved"),
         fee_bps=_required_float(row, "fee_bps"),
         slippage_bps=_required_float(row, "slippage_bps"),
         cost_model=_required_str(row, "cost_model"),
@@ -384,6 +508,11 @@ def _required_float(row: Mapping[str, object], name: str) -> float:
     if _is_missing(value):
         raise ValueError(f"{name} is required")
     return float(value)
+
+
+def _optional_float(row: Mapping[str, object], name: str) -> float | None:
+    value = row[name]
+    return None if _is_missing(value) else float(value)
 
 
 def _required_bool(row: Mapping[str, object], name: str) -> bool:

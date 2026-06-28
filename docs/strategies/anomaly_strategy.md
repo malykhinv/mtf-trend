@@ -12,7 +12,7 @@ Status:
 active_research_strategy = true
 live_trading_strategy = false
 primary_variant = broad_anomaly_v1_h30
-strategy_contract_version = base_strategy_v1
+strategy_contract_version = base_strategy_v2_structural_execution
 ```
 
 ## 0. Назначение
@@ -35,7 +35,7 @@ docs/research_methodology_core.md
 
 ```text
 strategy_family = anomaly
-strategy_contract_version = base_strategy_v1
+strategy_contract_version = base_strategy_v2_structural_execution
 ```
 
 Рекомендуемые конкретные strategy_name обязаны включать suffix горизонта `_h[minutes]`:
@@ -65,17 +65,17 @@ Horizon suffix не является свободным параметром: st
 
 `Strategy Spec` может описывать больше базовых variants, чем уже реализовано в registry. Это не permission на silent fallback.
 
-| Variant | Horizon | Registry status | Required streams | Simulation defaults |
+| Variant | Horizon | Registry status | Required streams | Declared structural execution |
 | :--- | ---: | :--- | :--- | :--- |
-| broad_anomaly_v1_h15 | 15 | implemented | OI optional, liquidations optional | TP 1.5 ATR / SL 1.0 ATR |
-| broad_anomaly_v1_h30 | 30 | implemented, primary MVP variant | OI optional, liquidations optional | TP 2.0 ATR / SL 1.1 ATR |
-| broad_anomaly_v1_h60 | 60 | implemented | OI optional, liquidations optional | TP 2.5 ATR / SL 1.2 ATR |
-| post_anomaly_extension_v1_h60 | 60 | implemented | OI required, liquidations required | TP 2.5 ATR / SL 1.3 ATR |
-| post_anomaly_extension_v1_h120 | 120 | implemented | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
-| post_anomaly_extension_v1_h180 | 180 | implemented | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
-| post_pump_distribution_v1_h60 | 60 | implemented | OI required, liquidations required | TP 2.0 ATR / SL 1.2 ATR |
-| post_pump_distribution_v1_h120 | 120 | implemented | OI required, liquidations required | TP 3.0 ATR / SL 1.5 ATR |
-| post_pump_distribution_v1_h180 | 180 | implemented | OI required, liquidations required | TP 4.0 ATR / SL 2.0 ATR |
+| broad_anomaly_v1_h15 | 15 | implemented | OI optional, liquidations optional | stop beyond causal running extreme, then confirmed swing trail; target at opposite causal running extreme |
+| broad_anomaly_v1_h30 | 30 | implemented, primary MVP variant | OI optional, liquidations optional | same structural policy |
+| broad_anomaly_v1_h60 | 60 | implemented | OI optional, liquidations optional | same structural policy |
+| post_anomaly_extension_v1_h60 | 60 | implemented | OI required, liquidations required | same structural policy |
+| post_anomaly_extension_v1_h120 | 120 | implemented | OI required, liquidations required | same structural policy |
+| post_anomaly_extension_v1_h180 | 180 | implemented | OI required, liquidations required | same structural policy |
+| post_pump_distribution_v1_h60 | 60 | implemented | OI optional, liquidations optional | same structural policy; canonical horizon-free pump fade remains a separate protocol |
+| post_pump_distribution_v1_h120 | 120 | implemented | OI optional, liquidations optional | same structural policy; canonical horizon-free pump fade remains a separate protocol |
+| post_pump_distribution_v1_h180 | 180 | implemented | OI optional, liquidations optional | same structural policy; canonical horizon-free pump fade remains a separate protocol |
 
 Semantic horizon metadata:
 
@@ -292,7 +292,7 @@ Executable implementation rule:
 daily_return_asof_t = current closed 1m close / first available open of the same UTC day - 1
 trade_count_market_percentile_asof_t = same-minute cross-sectional percentile from closed 1m trade_count only
 only the first trigger per symbol per UTC day is emitted
-open_interest and liquidations are required streams before trigger generation
+open_interest and liquidations are optional enrichment streams; missingness is recorded and never treated as alpha
 ```
 
 Правило:
@@ -507,9 +507,9 @@ post_anomaly_extension_v1_*:
   если stream отсутствует за symbol/day, Core делает explicit reject до генерации triggers
 
 post_pump_distribution_v1_*:
-  open_interest: required
-  liquidations: required
-  если stream отсутствует за symbol/day, Core делает explicit reject до генерации triggers
+  open_interest: optional
+  liquidations: optional
+  missing stream остаётся явным ограничением интерпретации; модель не получает missingness как alpha
 ```
 
 Ablation Runs:
@@ -594,21 +594,13 @@ post-extension / post-pump strategies не должны использовать
 
 H_max для purging/embargo рассчитывает Core как максимум horizons активных strategies run-а.
 
-## 8.1. Trading & Simulation Defaults
+## 8.1. Structural execution policies
 
-Параметры `take_profit_atr_1440` и `stop_loss_atr_1440` являются дефолтными настройками риск-менеджмента конкретных инстансов стратегий для модуля simplified trade simulation. Они определяют физические границы выхода из позиции в бэктестере и не должны смешиваться с общими математическими порогами разметки Core labels.
+Стратегия объявляет допустимые structural stop/target policies, но не реализует fills и не выбирает лучший вариант на тестовом периоде. Core simulation применяет policies причинно.
 
-| Имя инстанса стратегии | Horizon (m) | Default TP (в долях core_atr_1440) | Default SL (в долях core_atr_1440) |
-| :--- | :--- | :--- | :--- |
-| broad_anomaly_v1_h15 | 15 | 1.5 | 1.0 |
-| broad_anomaly_v1_h30 | 30 | 2.0 | 1.1 |
-| broad_anomaly_v1_h60 | 60 | 2.5 | 1.2 |
-| post_anomaly_extension_v1_h60 | 60 | 2.5 | 1.3 |
-| post_anomaly_extension_v1_h120 | 120 | 3.0 | 1.5 |
-| post_anomaly_extension_v1_h180 | 180 | 4.0 | 2.0 |
-| post_pump_distribution_v1_h60 | 60 | 2.0 | 1.2 |
-| post_pump_distribution_v1_h120 | 120 | 3.0 | 1.5 |
-| post_pump_distribution_v1_h180 | 180 | 4.0 | 2.0 |
+Для post-pump short основной контракт: initial stop за running/event main high, close-based invalidation, trailing по подтверждённым swing highs, target у causal event base/running low. Partial-close fractions `25/50/75/100%` являются зарегистрированной development grid. ATR используется в признаках, но не задаёт цену выхода.
+
+Полная карта наблюдаемой механики и границы participant inference описана в `docs/pump_fade_market_mechanics.md`.
 
 ## 9. Label semantics for anomaly family
 

@@ -87,7 +87,7 @@ def _prediction(state: AnomalyState1mRow, *, p_long: float, p_short: float) -> O
         prediction_version="mvp1_weekly_walk_forward_calibrated_baseline_v1",
         strategy_name="broad_anomaly_v1_h30",
         strategy_version="v1",
-        strategy_contract_version="base_strategy_v1",
+        strategy_contract_version="base_strategy_v2_structural_execution",
         target_label_column="scenario_30m",
         active_h_max_minutes=30,
         event_id=state.event_id,
@@ -117,7 +117,7 @@ def _prediction(state: AnomalyState1mRow, *, p_long: float, p_short: float) -> O
     )
 
 
-def test_expected_value_uses_oos_probabilities_atr_and_costs() -> None:
+def test_expected_value_uses_oos_probabilities_structural_levels_and_costs() -> None:
     state = _state("ev_long", price=100.0)
     rows = build_expected_value_rows(
         state_rows=[state],
@@ -128,14 +128,19 @@ def test_expected_value_uses_oos_probabilities_atr_and_costs() -> None:
 
     row = rows[0]
 
-    assert row.target_distance == 4.0
-    assert row.stop_distance == 2.2
+    assert row.target_distance == 3.0
+    assert row.stop_distance == 1.0
+    assert row.stop_reference_price == 99.0
+    assert row.target_reference_price == 103.0
+    assert row.stop_anchor == "running_low_asof_t"
+    assert row.target_anchor == "running_high_asof_t"
+    assert row.execution_policy_resolved is True
     assert row.cost_penalty == 0.1
     assert row.execution_reference_model == EV_EXECUTION_REFERENCE_MODEL
     assert row.entry_price_basis == EV_ENTRY_PRICE_BASIS
     assert row.cost_model == ROUND_TRIP_COST_MODEL
-    assert round(row.EV_long, 10) == 2.88
-    assert round(row.EV_short, 10) == -1.46
+    assert round(row.EV_long, 10) == 2.2
+    assert round(row.EV_short, 10) == -2.4
     assert row.best_action == "long"
     assert row.is_prediction_confident is True
     assert row.is_RR_still_acceptable is True
@@ -231,7 +236,8 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
     with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
-    assert run_config["take_profit_atr_1440"] == "2.0"
+    assert run_config["execution_policy_version"] == "generic_anomaly_structural_execution_v1"
+    assert "long_running_low_close_then_swing_low_trail" in run_config["execution_policy_ids"]
     assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
     assert run_config["entry_price_basis"] == EV_ENTRY_PRICE_BASIS
     assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL

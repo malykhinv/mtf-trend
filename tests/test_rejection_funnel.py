@@ -28,7 +28,7 @@ def _fixture_run(root: Path) -> None:
         [
             {"key": "strategy_name", "value": "broad_anomaly_v1_h30", "source": "fixture"},
             {"key": "strategy_version", "value": "v1", "source": "fixture"},
-            {"key": "strategy_contract_version", "value": "base_strategy_v1", "source": "fixture"},
+            {"key": "strategy_contract_version", "value": "base_strategy_v2_structural_execution", "source": "fixture"},
             {"key": "target_horizon_minutes", "value": "30", "source": "fixture"},
         ],
     )

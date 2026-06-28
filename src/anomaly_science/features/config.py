@@ -16,6 +16,7 @@ class FeatureMatrixConfig:
     """
 
     feature_matrix_version: str = "feature_matrix_v5_relaxed_geometry"
+    strategy_name: str = "broad_anomaly_v1_h30"
     atr_window_minutes: int = ATR_1D_WINDOW_MINUTES
     expected_event_lifetime_minutes: int = 60
     volume_baseline_window_minutes: int = 1440
@@ -30,6 +31,8 @@ class FeatureMatrixConfig:
     def __post_init__(self) -> None:
         if not self.feature_matrix_version:
             raise ValueError("feature_matrix_version is required")
+        if not self.strategy_name:
+            raise ValueError("strategy_name is required")
         if self.atr_window_minutes <= 0:
             raise ValueError("atr_window_minutes must be positive")
         if self.expected_event_lifetime_minutes <= 0:

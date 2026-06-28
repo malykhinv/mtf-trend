@@ -7,7 +7,7 @@ from pathlib import Path
 from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
-from anomaly_science.strategy.metadata import format_horizons, format_required_data_streams
+from anomaly_science.strategy.metadata import format_execution_policy_ids, format_horizons, format_required_data_streams
 from anomaly_science.strategy.reject_reasons import anomaly_reject_reasons
 from anomaly_science.strategy.registry import available_strategies, strategy_implementation_statuses
 
@@ -74,8 +74,8 @@ def _strategy_registry_rows() -> list[dict[str, object]]:
                 "horizon_minutes": metadata.horizon_minutes,
                 "allowed_horizons": format_horizons(metadata.allowed_horizons),
                 "default_horizon_minutes": metadata.default_horizon_minutes,
-                "take_profit_atr_1440": metadata.take_profit_atr_1440,
-                "stop_loss_atr_1440": metadata.stop_loss_atr_1440,
+                "execution_policy_version": metadata.execution_policy_version,
+                "execution_policy_ids": format_execution_policy_ids(strategy),
                 "feature_schema_version": metadata.feature_schema_version,
                 "label_schema_version": metadata.label_schema_version,
                 "required_data_streams": format_required_data_streams(strategy.required_data_streams),

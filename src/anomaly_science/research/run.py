@@ -28,7 +28,7 @@ from anomaly_science.controls import ControlsConfig, run_mvp1_controls
 from anomaly_science.data import run_mvp1_data_audit
 from anomaly_science.decision import ExpectedValueConfig, run_mvp1_expected_value
 from anomaly_science.events.run import run_mvp1_events
-from anomaly_science.features import run_mvp1_feature_matrix, run_mvp1_features
+from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
@@ -219,6 +219,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
                 input_dir=input_dir,
                 state_path=state_dir / "strategy_state_1m.csv",
                 out_dir=stages_dir / "feature_matrix",
+                config=FeatureMatrixConfig(strategy_name=config.strategy_name),
                 max_input_time_ms=input_view.max_input_time_ms,
                 progress_callback=timings.progress_callback("feature_matrix", unit="rows"),
             )

@@ -130,9 +130,9 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
             artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
-            check_name="stop_target_are_atr_normalized",
+            check_name="stop_target_are_structural",
             status=AuditStatus.PASS,
-            message="stop and target distances are read from decision timing rows derived from StrategyMetadata ATR defaults and core_atr_1440",
+            message="stop and target anchors come from the strategy execution-policy contract; Core applies close/touch triggers and causal swing trailing",
             artifact="strategy_trade_simulation.csv",
         ),
         ProtocolAuditRow(
@@ -191,7 +191,13 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
         ProtocolAuditRow(
             check_name="fixed_percent_stop_target_forbidden",
             status=AuditStatus.PASS,
-            message="simulation consumes EV stop/target distances derived from StrategyMetadata ATR defaults and core_atr_1440; no fixed-percent universal stop/target path exists",
+            message="simulation consumes only strategy-declared structural anchors; no ATR-multiple or fixed-percent stop/target path exists",
+            artifact="strategy_trade_simulation.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="partial_target_fraction_grid_declared_by_strategy",
+            status=AuditStatus.PASS,
+            message="Core enumerates only the strategy-declared partial-close fraction grid; policy selection must occur on development data before untouched verification",
             artifact="strategy_trade_simulation.csv",
         ),
     ]

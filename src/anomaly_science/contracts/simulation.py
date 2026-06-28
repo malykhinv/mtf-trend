@@ -8,8 +8,10 @@ from .horizons import is_supported_research_horizon, supported_research_horizon_
 from .market import MarketDataContractError
 from .time import validate_timestamp_ms
 
-TRADE_SIMULATION_TEMPORAL_CONTRACT = "features<=snapshot_time<entry_reference_time<=exit_time;pessimistic_stop_first"
-SIMULATION_EXIT_REASONS = frozenset(("target_hit", "stop_loss", "horizon_close"))
+TRADE_SIMULATION_TEMPORAL_CONTRACT = "features<=snapshot_time<entry_reference_time<=exit_time;structural_policy;pessimistic_stop_first"
+SIMULATION_EXIT_REASONS = frozenset(
+    ("target_hit", "stop_loss", "horizon_close", "partial_target_then_stop", "partial_target_then_horizon")
+)
 SIMULATION_SIDES = frozenset(("long", "short"))
 
 
@@ -31,10 +33,21 @@ class TradeSimulationRow:
     entry_reference_open: float
     entry_price: float
     core_atr_1440: float
+    execution_policy_version: str
+    stop_policy_id: str
+    target_policy_id: str
+    stop_anchor: str
+    target_anchor: str
+    stop_trigger: str
+    target_trigger: str
+    target_close_fraction: float
     stop_distance: float
     target_distance: float
     stop_price: float
+    final_stop_price: float
     target_price: float
+    target_was_hit: bool
+    target_hit_time_ms: int | None
     fee_bps: float
     slippage_bps: float
     cost_model: str
@@ -79,10 +92,30 @@ class TradeSimulationRow:
             "stop_distance",
             "target_distance",
             "stop_price",
+            "final_stop_price",
             "target_price",
             "exit_price",
         ):
             _require_positive_finite(getattr(self, field_name), field_name)
+        for field_name in (
+            "execution_policy_version",
+            "stop_policy_id",
+            "target_policy_id",
+            "stop_anchor",
+            "target_anchor",
+            "stop_trigger",
+            "target_trigger",
+        ):
+            if not getattr(self, field_name):
+                raise MarketDataContractError(f"{field_name} is required")
+        if not 0.0 < self.target_close_fraction <= 1.0:
+            raise MarketDataContractError("target_close_fraction must be inside (0, 1]")
+        if self.target_was_hit != (self.target_hit_time_ms is not None):
+            raise MarketDataContractError("target_was_hit and target_hit_time_ms must agree")
+        if self.target_hit_time_ms is not None:
+            validate_timestamp_ms(self.target_hit_time_ms, field_name="target_hit_time_ms")
+            if not self.entry_reference_time_ms <= self.target_hit_time_ms <= self.exit_time_ms:
+                raise MarketDataContractError("target_hit_time_ms must be inside the simulated hold")
         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
         if self.cost_model != ROUND_TRIP_COST_MODEL:
@@ -96,7 +129,13 @@ class TradeSimulationRow:
                 raise MarketDataContractError(f"{field_name} must be finite")
         if self.exit_reason not in SIMULATION_EXIT_REASONS:
             raise MarketDataContractError(f"exit_reason has unknown value: {self.exit_reason!r}")
-        if self.barrier_resolution not in {"single_barrier", "stop_loss_first", "horizon_close"}:
+        if self.barrier_resolution not in {
+            "single_barrier",
+            "stop_loss_first",
+            "horizon_close",
+            "partial_then_single_barrier",
+            "partial_then_horizon_close",
+        }:
             raise MarketDataContractError(f"barrier_resolution has unknown value: {self.barrier_resolution!r}")
         if self.temporal_contract != TRADE_SIMULATION_TEMPORAL_CONTRACT:
             raise MarketDataContractError("temporal_contract must document pessimistic simulation timing")
@@ -106,6 +145,10 @@ class TradeSimulationRow:
 class TradeSimulationMetricRow:
     simulation_version: str
     target_horizon_minutes: int
+    execution_variant_id: str
+    stop_policy_id: str
+    target_policy_id: str
+    target_close_fraction: float | None
     metric_name: str
     metric_value: str
     row_count: int
@@ -118,6 +161,13 @@ class TradeSimulationMetricRow:
             raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
         if not self.metric_name:
             raise MarketDataContractError("metric_name is required")
+        if not self.execution_variant_id:
+            raise MarketDataContractError("execution_variant_id is required")
+        if self.execution_variant_id != "all_declared_variants":
+            if not self.stop_policy_id or not self.target_policy_id:
+                raise MarketDataContractError("scoped simulation metrics require structural policy ids")
+            if self.target_close_fraction is None or not 0.0 < self.target_close_fraction <= 1.0:
+                raise MarketDataContractError("scoped simulation metrics require target_close_fraction inside (0, 1]")
         if self.row_count < 0:
             raise MarketDataContractError("row_count must be non-negative")
 

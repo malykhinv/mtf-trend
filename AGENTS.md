@@ -98,8 +98,17 @@ Strategy modules own:
 ```text
 trigger definition
 strategy horizon
-ATR-normalized TP/SL parameters
+admissible structural stop/target anchors and trigger policies
+admissible partial-close fraction grids
 strategy-specific relaxed geometry features
+```
+
+Execution rule:
+
+```text
+physical TP/SL levels must be anchored to point-in-time market structure
+fixed-percent and ATR-multiple TP/SL levels are forbidden
+Core simulation applies strategy-declared policies causally and evaluates variants separately
 ```
 
 Forbidden:

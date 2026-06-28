@@ -4,7 +4,11 @@ from datetime import date, datetime, timezone
 
 import polars as pl
 
-from anomaly_science.binance_vision_oi_backfill import merge_causal_open_interest, metrics_archive_url
+from anomaly_science.binance_vision_oi_backfill import (
+    _console_safe_symbol,
+    merge_causal_open_interest,
+    metrics_archive_url,
+)
 
 
 def test_metrics_archive_url_uses_daily_usd_m_contract() -> None:
@@ -12,6 +16,13 @@ def test_metrics_archive_url_uses_daily_usd_m_contract() -> None:
         "https://data.binance.vision/data/futures/um/daily/metrics/BTCUSDT/"
         "BTCUSDT-metrics-2025-01-02.zip"
     )
+
+
+def test_console_symbol_is_safe_for_windows_legacy_encoding() -> None:
+    rendered = _console_safe_symbol("币安人生USDT")
+
+    rendered.encode("cp1252")
+    assert rendered.startswith("\\u")
 
 
 def test_merge_causal_open_interest_never_uses_future_or_previous_day_sample() -> None:

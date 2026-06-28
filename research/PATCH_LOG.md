@@ -1345,6 +1345,11 @@ Changes:
 - Routes `run-mvp1-events` and `run-research` through the selected registry strategy instead of hard-coding broad anomaly.
 - Keeps OI and liquidations required for post-pump variants before trigger generation.
 
+Superseded by the structural-execution/market-mechanics patch: post-pump OI and
+liquidation streams are optional enrichment with explicit missingness. This
+historical bullet is not the current contract; post-anomaly extension streams
+remain required.
+
 Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
 - Full pytest still needs the project venv because this sandbox lacks `polars`.

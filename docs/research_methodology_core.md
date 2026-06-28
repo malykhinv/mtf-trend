@@ -77,8 +77,8 @@ strategy_contract_version
 strategy_family
 trigger definition
 event/state lifecycle semantics
-strategy horizon
-take_profit_atr_1440 / stop_loss_atr_1440 defaults
+strategy horizon or explicit horizon-free outcome protocol
+structural execution policy version and admissible stop/target anchors
 strategy-specific custom features
 strategy-specific artifact aliases, если нужны
 strategy-specific reject reasons
@@ -125,8 +125,7 @@ class StrategyMetadata:
     horizon_minutes: int  # selected target/run horizon
     allowed_horizons: tuple[int, ...]  # semantic strategy subset of Core-supported horizons
     default_horizon_minutes: int
-    take_profit_atr_1440: float
-    stop_loss_atr_1440: float
+    execution_policy_version: str
     feature_schema_version: str
     label_schema_version: str
 
@@ -135,7 +134,7 @@ class BaseStrategy(ABC):
     @property
     @abstractmethod
     def metadata(self) -> StrategyMetadata:
-        """Identity, selected/allowed/default horizons, schemas and simulation defaults."""
+        """Identity, selected/allowed/default horizons, schemas and structural policy version."""
 
     @property
     @abstractmethod
@@ -162,8 +161,13 @@ class BaseStrategy(ABC):
         it stores only columns declared by the artifact schema.
         """
 
+    @property
     @abstractmethod
-    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
+    def custom_feature_catalog(self) -> tuple[StrategyCustomFeatureSpec, ...]:
+        """Declare every strategy-owned feature, dtype, data dependencies and identifiability."""
+
+    @abstractmethod
+    def generate_custom_features(self, context: StrategyFeatureContext) -> Mapping[str, CustomFeatureValue]:
         """
         Возвращает только strategy-specific фичи.
         Фичи должны быть строго causal/as-of: каждая строка использует только данные <= state_time.
@@ -243,15 +247,15 @@ strategy_family
 horizon_minutes
 feature_schema_version
 label_schema_version
-take_profit_atr_1440
-stop_loss_atr_1440
+execution_policy_version
+execution_policy_ids
 required_data_streams
 ```
 
 Правило:
 
 ```text
-Одинаковая пара strategy_name + strategy_version не может иметь разные horizon_minutes, feature_schema_version, label_schema_version или simulation defaults.
+Одинаковая пара strategy_name + strategy_version не может иметь разные horizon_minutes, feature_schema_version, label_schema_version или execution policies.
 ```
 
 Strategy Registry обязан сохранять metadata variant-а в `strategy_run_config.csv` до запуска train/OOS/simulation. Если registry содержит variant, но factory ещё не реализована, Core должен явно завершаться ошибкой `strategy variant is specified but not implemented yet`, а не подменять его ближайшей реализованной стратегией.
@@ -357,7 +361,7 @@ future_start_time > snapshot_time
 
 ### 4.4. Causal strategy feature contract
 
-`generate_custom_features()` обязан быть детерминированной causal/as-of трансформацией входного `market_frame_asof`. Для каждой строки feature values должны совпадать с values, которые были бы получены, если бы Core передал стратегии только данные, доступные на момент этой строки.
+`generate_custom_features()` обязан быть детерминированной causal/as-of трансформацией одного `StrategyFeatureContext`. Core передаёт только закрытые market/event/OI/liquidation rows с timestamp `<= feature_cutoff_time <= snapshot_time`. Для каждой строки feature values должны совпадать с values, полученными из независимо усечённого point-in-time context.
 
 Разрешено:
 
@@ -382,9 +386,9 @@ rolling extrema, которые используют будущие строки
 Core имеет право запускать point-in-time equivalence audit:
 
 ```text
-features_full = strategy.generate_custom_features(full_frame)
-features_truncated_T = strategy.generate_custom_features(frame where timestamp <= T)
-Для всех rows с state_time <= T значения model features должны совпадать.
+features_full_context = strategy.generate_custom_features(context whose rows are already truncated at T)
+features_independent_context = strategy.generate_custom_features(independently rebuilt context at T)
+Оба mappings должны совпадать точно; NaN/inf и undeclared keys запрещены.
 ```
 
 Если audit FAIL, run получает protocol FAIL; PnL/metrics такого run-а нельзя интерпретировать.
@@ -1001,14 +1005,16 @@ probability of follow-through
 
 Trade simulation разрешена только после calibration и decision timing.
 
-`take_profit_atr_1440` и `stop_loss_atr_1440` являются simulation defaults конкретного strategy instance из `StrategyMetadata`. Они определяют физические границы simplified simulator и не являются label thresholds Core.
+Физические границы выхода задаются только структурными anchors, объявленными стратегией. ATR-multiple и fixed-percent stop/target запрещены. Стратегия определяет допустимые политики; Core причинно применяет их и перебирает заранее зарегистрированную сетку partial-close fractions.
 
 Обязательные правила:
 
 ```text
 entry_reference = next 1m open after signal
 entry_price must include pessimistic slippage penalty and toxic-entry ATR_1m penalty
-stop/target must be ATR-normalized or structure-based ATR-normalized
+stop/target must resolve to point-in-time structural price levels
+trailing structure becomes active only after causal swing confirmation
+partial target variants must be selected inside development/WFA and frozen before outer evaluation
 fees must be included at least roughly
 funding fees must be included when funding_rate stream is present; if absent, short-distribution conclusions are audit-limited
 intracandle double barrier resolves as stop_loss_first
@@ -1156,8 +1162,8 @@ label schema version
 strategy name/version/contract
 strategy_family
 horizon_minutes
-take_profit_atr_1440
-stop_loss_atr_1440
+execution_policy_version
+execution_policy_ids
 required_data_streams
 max_feature_lookback_minutes
 trigger_deduplication_policy

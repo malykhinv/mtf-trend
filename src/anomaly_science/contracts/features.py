@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 from dataclasses import dataclass
 from enum import Enum
 
@@ -161,6 +162,7 @@ class StrategyFeatureMatrixRow:
     cvd_change_during_sweep: float | None = None
     oi_change_during_sweep: float | None = None
     liq_intensity_during_sweep: float | None = None
+    custom_features_json: str = "{}"
 
     def __post_init__(self) -> None:
         if not self.feature_schema_version:
@@ -271,6 +273,12 @@ class StrategyFeatureMatrixRow:
             raise MarketDataContractError("alpha_decay_bucket must be a pre-registered bucket")
         if not self.feature_source_status:
             raise MarketDataContractError("feature_source_status is required")
+        try:
+            custom_features = json.loads(self.custom_features_json)
+        except json.JSONDecodeError as exc:
+            raise MarketDataContractError("custom_features_json must be valid JSON") from exc
+        if not isinstance(custom_features, dict):
+            raise MarketDataContractError("custom_features_json must contain an object")
         if self.liquidation_imbalance is not None and not -1.0 <= self.liquidation_imbalance <= 1.0:
             raise MarketDataContractError("liquidation_imbalance must be inside [-1, 1]")
         for field_name in (

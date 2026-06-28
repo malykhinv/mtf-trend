@@ -88,6 +88,7 @@ _FEATURE_MATRIX_NON_CATALOG_COLUMNS = frozenset(
         "snapshot_time_ms",
         "feature_cutoff_time_ms",
         "feature_source_status",
+        "custom_features_json",
     )
 )
 _ALLOWED_FEATURE_FAMILIES = frozenset(
@@ -867,6 +868,13 @@ def _simulation_decision_contract_alignment_row(found: Mapping[str, tuple[Path, 
                 ("cost_model", "cost_model"),
                 ("target_horizon_minutes", "target_horizon_minutes"),
                 ("decision_action", "best_action"),
+                ("execution_policy_version", "execution_policy_version"),
+                ("stop_policy_id", "stop_policy_id"),
+                ("target_policy_id", "target_policy_id"),
+                ("stop_anchor", "stop_anchor"),
+                ("target_anchor", "target_anchor"),
+                ("stop_trigger", "stop_trigger"),
+                ("target_trigger", "target_trigger"),
             )
             for simulation_field, decision_field in field_pairs:
                 if simulation.get(simulation_field) != decision.get(decision_field):
@@ -879,6 +887,8 @@ def _simulation_decision_contract_alignment_row(found: Mapping[str, tuple[Path, 
                 ("slippage_bps", "slippage_bps"),
                 ("stop_distance", "stop_distance"),
                 ("target_distance", "target_distance"),
+                ("stop_price", "stop_reference_price"),
+                ("target_price", "target_reference_price"),
                 ("ATR_1d_asof_t", "ATR_1d_asof_t"),
             )
             for simulation_field, decision_field in numeric_pairs:
@@ -907,7 +917,7 @@ def _simulation_decision_contract_alignment_row(found: Mapping[str, tuple[Path, 
     return _row(
         "forensic_simulation_decision_contract_alignment_verified",
         AuditStatus.PASS,
-        f"verified EV decision/simulation execution, cost, horizon, action, and distance contracts for {checked} row(s)",
+        f"verified EV decision/simulation structural policy, price, cost, horizon, and action contracts for {checked} row(s)",
         artifact="strategy_decision_timing.csv;strategy_trade_simulation.csv",
     )
 
@@ -937,7 +947,9 @@ def _simulation_pessimistic_prices_and_costs_row(found: Mapping[str, tuple[Path,
                     "stop_distance",
                     "target_distance",
                     "stop_price",
+                    "final_stop_price",
                     "target_price",
+                    "target_close_fraction",
                     "fee_bps",
                     "total_cost",
                     "exit_price",
@@ -951,7 +963,9 @@ def _simulation_pessimistic_prices_and_costs_row(found: Mapping[str, tuple[Path,
             stop_distance = values["stop_distance"]
             target_distance = values["target_distance"]
             stop_price = values["stop_price"]
+            final_stop_price = values["final_stop_price"]
             target_price = values["target_price"]
+            target_close_fraction = values["target_close_fraction"]
             fee_bps = values["fee_bps"]
             total_cost = values["total_cost"]
             exit_price = values["exit_price"]
@@ -960,7 +974,9 @@ def _simulation_pessimistic_prices_and_costs_row(found: Mapping[str, tuple[Path,
             assert stop_distance is not None
             assert target_distance is not None
             assert stop_price is not None
+            assert final_stop_price is not None
             assert target_price is not None
+            assert target_close_fraction is not None
             assert fee_bps is not None
             assert total_cost is not None
             assert exit_price is not None
@@ -972,21 +988,36 @@ def _simulation_pessimistic_prices_and_costs_row(found: Mapping[str, tuple[Path,
                 failures.append(f"{path}:{row_index} violates simulation entry/exit time ordering")
             if stop_distance <= 0.0 or target_distance <= 0.0:
                 failures.append(f"{path}:{row_index} has non-positive stop/target distance")
+            if not 0.0 < target_close_fraction <= 1.0:
+                failures.append(f"{path}:{row_index} target_close_fraction is outside (0, 1]")
             if side == "long":
                 if entry_price < entry_open:
                     failures.append(f"{path}:{row_index} long entry_price is below entry_reference_open")
                 if target_price <= entry_price or stop_price >= entry_price:
                     failures.append(f"{path}:{row_index} long stop/target geometry is invalid")
+                if final_stop_price < stop_price:
+                    failures.append(f"{path}:{row_index} long trailing stop loosened below its initial structural stop")
             else:
                 if entry_price > entry_open:
                     failures.append(f"{path}:{row_index} short entry_price is above entry_reference_open")
                 if target_price >= entry_price or stop_price <= entry_price:
                     failures.append(f"{path}:{row_index} short stop/target geometry is invalid")
+                if final_stop_price > stop_price:
+                    failures.append(f"{path}:{row_index} short trailing stop loosened above its initial structural stop")
 
             expected_total_cost = (entry_price + exit_price) * (fee_bps / 10_000.0)
             if not _float_equal(total_cost, expected_total_cost):
                 failures.append(f"{path}:{row_index} total_cost={total_cost} differs from fee model {expected_total_cost}")
-            _append_exit_resolution_failures(failures, path=path, row_index=row_index, row=row, side=side, exit_price=exit_price, stop_price=stop_price, target_price=target_price)
+            _append_exit_resolution_failures(
+                failures,
+                path=path,
+                row_index=row_index,
+                row=row,
+                side=side,
+                exit_price=exit_price,
+                stop_price=final_stop_price,
+                target_price=target_price,
+            )
     if failures:
         return _row(
             "forensic_simulation_pessimistic_prices_and_costs_verified",
@@ -1012,12 +1043,19 @@ def _simulation_pessimistic_prices_and_costs_row(found: Mapping[str, tuple[Path,
 def _simulation_no_parallel_symbol_positions_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
     checked = 0
     failures: list[str] = []
-    positions: dict[tuple[str, str, str], list[tuple[int, int, Path, int]]] = {}
+    positions: dict[tuple[str, str, str, str, str, str], list[tuple[int, int, Path, int]]] = {}
     for path in found.get("strategy_trade_simulation.csv", ()):
         for row_index, row in enumerate(_read_csv_rows(path), start=2):
             entry_time = _to_int(row.get("entry_reference_time_ms"))
             exit_time = _to_int(row.get("exit_time_ms"))
-            key = (row.get("strategy_name", ""), row.get("strategy_version", ""), row.get("symbol", ""))
+            key = (
+                row.get("strategy_name", ""),
+                row.get("strategy_version", ""),
+                row.get("symbol", ""),
+                row.get("stop_policy_id", ""),
+                row.get("target_policy_id", ""),
+                row.get("target_close_fraction", ""),
+            )
             if entry_time is None or exit_time is None or not all(key):
                 failures.append(f"{path}:{row_index} has incomplete position interval key")
                 continue
@@ -1049,7 +1087,7 @@ def _simulation_no_parallel_symbol_positions_row(found: Mapping[str, tuple[Path,
     return _row(
         "forensic_simulation_no_parallel_symbol_positions_verified",
         AuditStatus.PASS,
-        f"verified no overlapping positions per strategy/version/symbol across {checked} simulation row(s)",
+        f"verified no overlapping positions within each strategy/symbol/structural-policy/fraction variant across {checked} simulation row(s)",
         artifact="strategy_trade_simulation.csv",
     )
 
@@ -1169,6 +1207,16 @@ def _append_exit_resolution_failures(
     elif exit_reason == "horizon_close":
         if barrier_resolution != "horizon_close":
             failures.append(f"{path}:{row_index} horizon_close has invalid barrier_resolution={barrier_resolution!r}")
+    elif exit_reason == "partial_target_then_stop":
+        if barrier_resolution != "partial_then_single_barrier":
+            failures.append(f"{path}:{row_index} partial_target_then_stop has invalid barrier_resolution={barrier_resolution!r}")
+        if _to_bool(row.get("target_was_hit")) is not True:
+            failures.append(f"{path}:{row_index} partial_target_then_stop must record target_was_hit=true")
+    elif exit_reason == "partial_target_then_horizon":
+        if barrier_resolution != "partial_then_horizon_close":
+            failures.append(f"{path}:{row_index} partial_target_then_horizon has invalid barrier_resolution={barrier_resolution!r}")
+        if _to_bool(row.get("target_was_hit")) is not True:
+            failures.append(f"{path}:{row_index} partial_target_then_horizon must record target_was_hit=true")
     else:
         failures.append(f"{path}:{row_index} has invalid exit_reason={exit_reason!r}")
 
@@ -1309,6 +1357,7 @@ def _feature_catalog_full_coverage_row(found: Mapping[str, tuple[Path, ...]]) ->
 
     failures: list[str] = []
     catalog_by_name: dict[str, dict[str, str]] = {}
+    custom_catalog_by_name: dict[str, dict[str, str]] = {}
     for path in catalog_paths:
         seen_in_path: set[str] = set()
         for row_index, row in enumerate(_read_csv_rows(path), start=2):
@@ -1321,6 +1370,26 @@ def _feature_catalog_full_coverage_row(found: Mapping[str, tuple[Path, ...]]) ->
             seen_in_path.add(feature_name)
             catalog_by_name[feature_name] = row
             failures.extend(_feature_catalog_row_failures(path=path, row_index=row_index, row=row))
+
+    for path in found.get("strategy_custom_feature_schema.csv", ()):
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            feature_name = row.get("feature_name", "")
+            if not feature_name:
+                failures.append(f"{path}:{row_index} has empty custom feature_name")
+                continue
+            if feature_name in custom_catalog_by_name:
+                failures.append(f"{path}:{row_index} duplicate custom feature {feature_name!r}")
+            custom_catalog_by_name[feature_name] = row
+            for field_name in (
+                "strategy_name",
+                "feature_schema_version",
+                "feature_family",
+                "dtype",
+                "identifiability",
+                "description",
+            ):
+                if not row.get(field_name):
+                    failures.append(f"{path}:{row_index} custom feature {feature_name!r} missing {field_name}")
 
     for path in found.get("strategy_feature_matrix.csv", ()):
         header = _read_csv_header(path)
@@ -1341,6 +1410,16 @@ def _feature_catalog_full_coverage_row(found: Mapping[str, tuple[Path, ...]]) ->
         for row_index, row in enumerate(_read_csv_rows(path), start=2):
             for raw_name in _split_comma_list(row.get("model_feature_names", "")):
                 model_features_checked += 1
+                if raw_name.startswith("strategy_custom."):
+                    custom_name = raw_name.removeprefix("strategy_custom.")
+                    custom_row = custom_catalog_by_name.get(custom_name)
+                    if custom_row is None:
+                        failures.append(
+                            f"{path}:{row_index} custom model feature {raw_name!r} is missing from strategy_custom_feature_schema.csv"
+                        )
+                    elif _to_bool(custom_row.get("is_model_feature")) is not True:
+                        failures.append(f"{path}:{row_index} custom model feature {raw_name!r} is not marked is_model_feature=true")
+                    continue
                 feature_name = _normalize_model_feature_name(raw_name)
                 catalog_row = catalog_by_name.get(feature_name)
                 if catalog_row is None:

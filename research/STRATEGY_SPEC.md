@@ -6,7 +6,7 @@ Active research strategy:
 strategy_family = anomaly
 canonical_spec = docs/strategies/anomaly_strategy.md
 primary_variant = broad_anomaly_v1
-strategy_contract_version = base_strategy_v1
+strategy_contract_version = base_strategy_v2_structural_execution
 ```
 
 This is a research strategy, not a live trading strategy. It studies whether

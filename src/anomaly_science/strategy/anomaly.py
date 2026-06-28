@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -18,10 +19,17 @@ from anomaly_science.strategy.base import (
     BaseStrategy,
     INTERNAL_TIME_DTYPE,
     StrategyMetadata,
+    StrategyCustomFeatureSpec,
+    StrategyFeatureContext,
     utc_ms_to_internal_datetime,
     validate_required_data_streams,
     validate_trigger_frame,
 )
+from anomaly_science.strategy.execution import (
+    GENERIC_ANOMALY_EXECUTION_POLICIES,
+    StrategyExecutionPolicies,
+)
+from anomaly_science.strategy.pump_fade.spec import PUMP_MARKET_MECHANICS_FEATURES
 
 
 BROAD_ANOMALY_ALLOWED_HORIZONS: tuple[int, ...] = (15, 30, 60)
@@ -33,64 +41,46 @@ ANOMALY_STRATEGY_DEFAULTS: dict[str, dict[str, object]] = {
         "horizon_minutes": 15,
         "allowed_horizons": BROAD_ANOMALY_ALLOWED_HORIZONS,
         "default_horizon_minutes": 30,
-        "take_profit_atr_1440": 1.5,
-        "stop_loss_atr_1440": 1.0,
     },
     "broad_anomaly_v1_h30": {
         "horizon_minutes": 30,
         "allowed_horizons": BROAD_ANOMALY_ALLOWED_HORIZONS,
         "default_horizon_minutes": 30,
-        "take_profit_atr_1440": 2.0,
-        "stop_loss_atr_1440": 1.1,
     },
     "broad_anomaly_v1_h60": {
         "horizon_minutes": 60,
         "allowed_horizons": BROAD_ANOMALY_ALLOWED_HORIZONS,
         "default_horizon_minutes": 30,
-        "take_profit_atr_1440": 2.5,
-        "stop_loss_atr_1440": 1.2,
     },
     "post_anomaly_extension_v1_h60": {
         "horizon_minutes": 60,
         "allowed_horizons": POST_ANOMALY_EXTENSION_ALLOWED_HORIZONS,
         "default_horizon_minutes": 120,
-        "take_profit_atr_1440": 2.5,
-        "stop_loss_atr_1440": 1.3,
     },
     "post_anomaly_extension_v1_h120": {
         "horizon_minutes": 120,
         "allowed_horizons": POST_ANOMALY_EXTENSION_ALLOWED_HORIZONS,
         "default_horizon_minutes": 120,
-        "take_profit_atr_1440": 3.0,
-        "stop_loss_atr_1440": 1.5,
     },
     "post_anomaly_extension_v1_h180": {
         "horizon_minutes": 180,
         "allowed_horizons": POST_ANOMALY_EXTENSION_ALLOWED_HORIZONS,
         "default_horizon_minutes": 120,
-        "take_profit_atr_1440": 4.0,
-        "stop_loss_atr_1440": 2.0,
     },
     "post_pump_distribution_v1_h60": {
         "horizon_minutes": 60,
         "allowed_horizons": POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS,
         "default_horizon_minutes": 120,
-        "take_profit_atr_1440": 2.0,
-        "stop_loss_atr_1440": 1.2,
     },
     "post_pump_distribution_v1_h120": {
         "horizon_minutes": 120,
         "allowed_horizons": POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS,
         "default_horizon_minutes": 120,
-        "take_profit_atr_1440": 3.0,
-        "stop_loss_atr_1440": 1.5,
     },
     "post_pump_distribution_v1_h180": {
         "horizon_minutes": 180,
         "allowed_horizons": POST_PUMP_DISTRIBUTION_ALLOWED_HORIZONS,
         "default_horizon_minutes": 120,
-        "take_profit_atr_1440": 4.0,
-        "stop_loss_atr_1440": 2.0,
     },
 }
 
@@ -105,9 +95,10 @@ POST_ANOMALY_EXTENSION_REQUIRED_DATA_STREAMS: dict[str, bool] = {
 }
 
 POST_PUMP_REQUIRED_DATA_STREAMS: dict[str, bool] = {
-    "open_interest": True,
-    "liquidations": True,
+    "open_interest": False,
+    "liquidations": False,
 }
+
 
 _TRIGGER_FRAME_SCHEMA: dict[str, pl.DataType] = {
     "event_id": pl.String,
@@ -142,13 +133,12 @@ def anomaly_strategy_metadata(strategy_name: str) -> StrategyMetadata:
     return StrategyMetadata(
         strategy_name=strategy_name,
         strategy_version="1.0.0",
-        strategy_contract_version="base_strategy_v1",
+        strategy_contract_version="base_strategy_v2_structural_execution",
         strategy_family="anomaly",
         horizon_minutes=int(defaults["horizon_minutes"]),
         allowed_horizons=tuple(int(horizon) for horizon in defaults["allowed_horizons"]),
         default_horizon_minutes=int(defaults["default_horizon_minutes"]),
-        take_profit_atr_1440=float(defaults["take_profit_atr_1440"]),
-        stop_loss_atr_1440=float(defaults["stop_loss_atr_1440"]),
+        execution_policy_version=GENERIC_ANOMALY_EXECUTION_POLICIES.policy_version,
         feature_schema_version=FEATURE_SCHEMA_VERSION,
         label_schema_version=OutcomeLabelConfig().label_schema_version,
     )
@@ -202,6 +192,14 @@ class BroadAnomalyStrategy(BaseStrategy):
         validate_required_data_streams(BROAD_ANOMALY_REQUIRED_DATA_STREAMS)
         return BROAD_ANOMALY_REQUIRED_DATA_STREAMS
 
+    @property
+    def execution_policies(self) -> StrategyExecutionPolicies:
+        return GENERIC_ANOMALY_EXECUTION_POLICIES
+
+    @property
+    def custom_feature_catalog(self) -> tuple[StrategyCustomFeatureSpec, ...]:
+        return ()
+
     def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         if market_frame_asof.height == 0:
             return pl.DataFrame(schema=_TRIGGER_FRAME_SCHEMA)
@@ -221,8 +219,9 @@ class BroadAnomalyStrategy(BaseStrategy):
     def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
         return detect_broad_anomaly_events(candles_1m, config=self.config)
 
-    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
-        return pl.DataFrame()
+    def generate_custom_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
+        del context
+        return {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +237,14 @@ class PostAnomalyExtensionStrategy(BaseStrategy):
     def required_data_streams(self) -> Mapping[str, bool]:
         validate_required_data_streams(POST_ANOMALY_EXTENSION_REQUIRED_DATA_STREAMS)
         return POST_ANOMALY_EXTENSION_REQUIRED_DATA_STREAMS
+
+    @property
+    def execution_policies(self) -> StrategyExecutionPolicies:
+        return GENERIC_ANOMALY_EXECUTION_POLICIES
+
+    @property
+    def custom_feature_catalog(self) -> tuple[StrategyCustomFeatureSpec, ...]:
+        return PUMP_MARKET_MECHANICS_FEATURES
 
     def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         if market_frame_asof.height == 0:
@@ -257,8 +264,8 @@ class PostAnomalyExtensionStrategy(BaseStrategy):
     def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
         return detect_post_anomaly_extension_events(candles_1m, config=self.config)
 
-    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
-        return pl.DataFrame()
+    def generate_custom_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
+        return _pump_market_mechanics_features(context)
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +281,14 @@ class PostPumpDistributionStrategy(BaseStrategy):
     def required_data_streams(self) -> Mapping[str, bool]:
         validate_required_data_streams(POST_PUMP_REQUIRED_DATA_STREAMS)
         return POST_PUMP_REQUIRED_DATA_STREAMS
+
+    @property
+    def execution_policies(self) -> StrategyExecutionPolicies:
+        return GENERIC_ANOMALY_EXECUTION_POLICIES
+
+    @property
+    def custom_feature_catalog(self) -> tuple[StrategyCustomFeatureSpec, ...]:
+        return PUMP_MARKET_MECHANICS_FEATURES
 
     def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
         if market_frame_asof.height == 0:
@@ -293,8 +308,142 @@ class PostPumpDistributionStrategy(BaseStrategy):
     def generate_events(self, candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> tuple[StrategyEvent, ...]:
         return detect_post_pump_distribution_events(candles_1m, config=self.config)
 
-    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
-        return pl.DataFrame()
+    def generate_custom_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
+        return _pump_market_mechanics_features(context)
+
+
+def _pump_market_mechanics_features(context: StrategyFeatureContext) -> Mapping[str, object]:
+    market = tuple(context.market_rows_asof)
+    event = tuple(context.event_rows_asof)
+    if not market or not event:
+        return {spec.name: None for spec in PUMP_MARKET_MECHANICS_FEATURES}
+    first = event[0]
+    current = event[-1]
+    elapsed = max(len(event), 1)
+    event_high = max(row.high for row in event)
+    event_low = min(row.low for row in event)
+    path = sum(abs(row.close - (event[index - 1].close if index else first.open)) for index, row in enumerate(event))
+    ranges = [max(row.high - row.low, 1e-12) for row in event]
+    upper_wicks = [(row.high - max(row.open, row.close)) / ranges[index] for index, row in enumerate(event)]
+    current_range = ranges[-1]
+    turnover = sum(row.quote_volume for row in event)
+    trade_count = sum((row.number_of_trades or 0.0) for row in event)
+    market_turnover = sum(row.quote_volume for row in market)
+    market_trades = sum((row.number_of_trades or 0.0) for row in market)
+    event_avg_trade = turnover / max(trade_count, 1.0)
+    market_avg_trade = market_turnover / max(market_trades, 1.0)
+    event_activity = [row.quote_volume for row in event]
+    activity_mean = sum(event_activity) / elapsed
+    activity_variance = sum((value - activity_mean) ** 2 for value in event_activity) / elapsed
+    activity_cv = math.sqrt(activity_variance) / max(activity_mean, 1e-12)
+    taker_values = [row.taker_buy_quote_volume for row in event]
+    taker_available = all(value is not None for value in taker_values)
+    taker_share = (
+        sum(float(value) for value in taker_values if value is not None) / max(turnover, 1e-12)
+        if taker_available
+        else None
+    )
+    pullbacks = _event_pullbacks_between_highs(event)
+    ema_240 = _ema_values([row.close for row in market], span=240)
+    price_return_60 = _window_return(market, 60)
+    oi_15 = _oi_change(context.open_interest_rows_asof, 15)
+    oi_60 = _oi_change(context.open_interest_rows_asof, 60)
+    qv_multiple = event[-1].quote_volume / max(_median([row.quote_volume for row in market[:-1]]), 1e-12)
+    trade_multiple = (event[-1].number_of_trades or 0.0) / max(
+        _median([(row.number_of_trades or 0.0) for row in market[:-1]]), 1e-12
+    )
+    return {
+        "pump_verticality": (event_high / first.open - 1.0) / elapsed,
+        "max_1m_high_return": max(row.high / row.open - 1.0 for row in event),
+        "max_1m_close_return": max(row.close / row.open - 1.0 for row in event),
+        "path_efficiency": max(current.close - first.open, 0.0) / max(path, 1e-12),
+        "mean_pullback_between_highs": sum(pullbacks) / len(pullbacks) if pullbacks else 0.0,
+        "max_pullback_between_highs": max(pullbacks) if pullbacks else 0.0,
+        "rehigh_count": len(pullbacks),
+        "current_upper_wick_fraction": (current.high - max(current.open, current.close)) / current_range,
+        "current_lower_wick_fraction": (min(current.open, current.close) - current.low) / current_range,
+        "current_body_fraction": abs(current.close - current.open) / current_range,
+        "current_close_location": (current.close - current.low) / current_range,
+        "mean_upper_wick_fraction": sum(upper_wicks) / elapsed,
+        "max_upper_wick_fraction": max(upper_wicks),
+        "event_turnover": turnover,
+        "turnover_share_24h": turnover / max(market_turnover, 1e-12),
+        "event_trade_count": trade_count,
+        "average_trade_notional_vs_24h": event_avg_trade / max(market_avg_trade, 1e-12),
+        "turnover_top_candle_share": max(event_activity) / max(turnover, 1e-12),
+        "trade_count_top_candle_share": max((row.number_of_trades or 0.0) for row in event) / max(trade_count, 1e-12),
+        "retail_frenzy_proxy": trade_multiple / max(qv_multiple, 1e-12),
+        "large_print_proxy": qv_multiple / max(trade_multiple, 1e-12),
+        "algorithmic_persistence_proxy": 1.0 / (1.0 + activity_cv),
+        "taker_buy_share_event": taker_share,
+        "taker_imbalance_event": None if taker_share is None else 2.0 * taker_share - 1.0,
+        "pre_return_15m": _window_return(market, 15),
+        "pre_return_60m": price_return_60,
+        "pre_return_240m": _window_return(market, 240),
+        "pre_dump_depth_60m": current.close / max(row.high for row in market[-60:]) - 1.0 if len(market) >= 60 else 0.0,
+        "price_vs_ema_240": current.close / max(ema_240[-1], 1e-12) - 1.0,
+        "ema_240_slope_60m": ema_240[-1] / max(ema_240[-61], 1e-12) - 1.0 if len(ema_240) > 60 else 0.0,
+        "oi_change_15m": oi_15,
+        "oi_change_60m": oi_60,
+        "price_up_oi_up": bool(oi_60 is not None and price_return_60 > 0.0 and oi_60 > 0.0),
+        "price_up_oi_down": bool(oi_60 is not None and price_return_60 > 0.0 and oi_60 < 0.0),
+        "price_down_oi_up": bool(oi_60 is not None and price_return_60 < 0.0 and oi_60 > 0.0),
+        "price_down_oi_down": bool(oi_60 is not None and price_return_60 < 0.0 and oi_60 < 0.0),
+    }
+
+
+def _event_pullbacks_between_highs(event: Sequence[Candle1m]) -> list[float]:
+    pullbacks: list[float] = []
+    running_high = -math.inf
+    last_high_index: int | None = None
+    last_high = 0.0
+    for index, row in enumerate(event):
+        if row.high <= running_high:
+            continue
+        if last_high_index is not None and index > last_high_index + 1:
+            valley = min(item.low for item in event[last_high_index + 1 : index])
+            pullbacks.append(max(last_high - valley, 0.0) / max(last_high, 1e-12))
+        running_high = row.high
+        last_high = row.high
+        last_high_index = index
+    return pullbacks
+
+
+def _window_return(rows: Sequence[Candle1m], minutes: int) -> float:
+    if len(rows) <= minutes:
+        return 0.0
+    return rows[-1].close / rows[-minutes - 1].close - 1.0
+
+
+def _ema_values(values: Sequence[float], *, span: int) -> list[float]:
+    alpha = 2.0 / (span + 1.0)
+    output: list[float] = []
+    current = float(values[0])
+    for value in values:
+        current = alpha * float(value) + (1.0 - alpha) * current
+        output.append(current)
+    return output
+
+
+def _median(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _oi_change(rows: Sequence[object], minutes: int) -> float | None:
+    if len(rows) < 2:
+        return None
+    latest = rows[-1]
+    cutoff = latest.available_time_ms - minutes * 60_000
+    prior = next((row for row in reversed(rows[:-1]) if row.available_time_ms <= cutoff), None)
+    if prior is None or prior.open_interest <= 0.0:
+        return None
+    return latest.open_interest / prior.open_interest - 1.0
 
 
 def make_broad_anomaly_strategy(

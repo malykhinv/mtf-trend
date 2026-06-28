@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import math
 from typing import Any, Mapping, Sequence
 
 import polars as pl
@@ -27,6 +28,43 @@ REQUIRED_TRIGGER_FRAME_COLUMNS: tuple[str, ...] = (
     "event_start_time",
     "minutes_since_start",
 )
+from anomaly_science.strategy.execution import StrategyExecutionPolicies
+
+
+CustomFeatureValue = float | int | bool | str | None
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyCustomFeatureSpec:
+    name: str
+    family: str
+    dtype: str
+    description: str
+    is_model_feature: bool = True
+    required_streams: tuple[str, ...] = ()
+    identifiability: str = "observable"
+
+    def __post_init__(self) -> None:
+        if not self.name or not self.family or not self.dtype or not self.description:
+            raise StrategyContractError("custom feature name, family, dtype and description are required")
+        if self.identifiability not in {"observable", "proxy", "latent_hypothesis"}:
+            raise StrategyContractError("custom feature identifiability must be observable, proxy or latent_hypothesis")
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyFeatureContext:
+    """One causal event-state supplied by Core to a strategy feature builder."""
+
+    event_id: str
+    symbol: str
+    event_start_time_ms: int
+    snapshot_time_ms: int
+    feature_cutoff_time_ms: int
+    market_rows_asof: tuple[Any, ...]
+    event_rows_asof: tuple[Any, ...]
+    open_interest_rows_asof: tuple[Any, ...]
+    liquidation_rows_asof: tuple[Any, ...]
+    core_features: Mapping[str, CustomFeatureValue]
 
 _INTERNAL_DATETIME_COLUMNS: tuple[str, ...] = (
     "state_time",
@@ -45,8 +83,7 @@ class StrategyMetadata:
     horizon_minutes: int
     allowed_horizons: tuple[int, ...]
     default_horizon_minutes: int
-    take_profit_atr_1440: float
-    stop_loss_atr_1440: float
+    execution_policy_version: str
     feature_schema_version: str
     label_schema_version: str
 
@@ -77,17 +114,34 @@ class StrategyMetadata:
                 "default_horizon_minutes must be one of the strategy allowed_horizons; "
                 f"got {self.default_horizon_minutes}, allowed={self.allowed_horizons}"
             )
-        if self.take_profit_atr_1440 <= 0:
-            raise StrategyContractError("take_profit_atr_1440 must be positive")
-        if self.stop_loss_atr_1440 <= 0:
-            raise StrategyContractError("stop_loss_atr_1440 must be positive")
+        if not self.execution_policy_version:
+            raise StrategyContractError("execution_policy_version is required")
         if not self.feature_schema_version:
             raise StrategyContractError("feature_schema_version is required")
         if not self.label_schema_version:
             raise StrategyContractError("label_schema_version is required")
 
 
-class BaseStrategy(ABC):
+class BaseResearchStrategy(ABC):
+    """Strategy-owned semantics shared by fixed- and horizon-free protocols."""
+
+    @property
+    @abstractmethod
+    def required_data_streams(self) -> Mapping[str, bool]:
+        """Declare required versus optional external streams."""
+
+    @property
+    @abstractmethod
+    def execution_policies(self) -> StrategyExecutionPolicies:
+        """Declare admissible structural execution policies."""
+
+    @property
+    @abstractmethod
+    def custom_feature_catalog(self) -> tuple[StrategyCustomFeatureSpec, ...]:
+        """Declare strategy-owned causal features and their identifiability."""
+
+
+class BaseStrategy(BaseResearchStrategy):
     """Stable strategy boundary used by Core without strategy-specific branching.
 
     One concrete strategy instance represents exactly one trading hypothesis version
@@ -104,16 +158,7 @@ class BaseStrategy(ABC):
     @property
     @abstractmethod
     def metadata(self) -> StrategyMetadata:
-        """Return immutable strategy identity, selected/allowed horizons, schemas and ATR-1440 simulation defaults."""
-
-    @property
-    @abstractmethod
-    def required_data_streams(self) -> Mapping[str, bool]:
-        """Declare which optional data streams are mandatory for this strategy.
-
-        Core data-quality gates use this matrix before trigger generation. Missing
-        required streams must become explicit rejects, never model features or edge.
-        """
+        """Return immutable strategy identity, horizons, schemas and execution-policy version."""
 
     @abstractmethod
     def generate_triggers(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
@@ -134,8 +179,8 @@ class BaseStrategy(ABC):
         return self.generate_triggers(pl.from_pandas(market_frame_asof))
 
     @abstractmethod
-    def generate_custom_features(self, market_frame_asof: pl.DataFrame) -> pl.DataFrame:
-        """Return strictly causal strategy-specific as-of features.
+    def generate_custom_features(self, context: StrategyFeatureContext) -> Mapping[str, CustomFeatureValue]:
+        """Return strictly causal strategy-specific features for one event-state.
 
         Forbidden inside strategy implementations: negative shifts, centered/future
         rolling windows, backward fill, full-period normalizations, or future extrema.
@@ -191,9 +236,8 @@ def validate_trigger_frame(trigger_frame: pl.DataFrame) -> None:
 def validate_point_in_time_feature_equivalence(
     strategy: BaseStrategy,
     *,
-    full_market_frame: pl.DataFrame,
-    point_in_time_market_frame: pl.DataFrame,
-    join_columns: Sequence[str] = ("symbol", "state_time"),
+    full_context: StrategyFeatureContext,
+    point_in_time_context: StrategyFeatureContext,
 ) -> None:
     """Audit custom feature causality by comparing full-frame vs PIT-slice output.
 
@@ -201,31 +245,39 @@ def validate_point_in_time_feature_equivalence(
     non-key feature value must be identical. A mismatch means the strategy feature
     calculation read future rows or used non-causal whole-period normalization.
     """
-    full_features = strategy.generate_custom_features(full_market_frame)
-    pit_features = strategy.generate_custom_features(point_in_time_market_frame)
-    if full_features.height == 0 and pit_features.height == 0:
-        return
-    missing_full = [name for name in join_columns if name not in full_features.columns]
-    missing_pit = [name for name in join_columns if name not in pit_features.columns]
-    if missing_full or missing_pit:
-        raise StrategyContractError(
-            "custom feature causality audit requires join columns in both outputs: "
-            f"missing_full={missing_full}, missing_pit={missing_pit}"
+    full_features = dict(strategy.generate_custom_features(full_context))
+    pit_features = dict(strategy.generate_custom_features(point_in_time_context))
+    if full_features != pit_features:
+        differing = sorted(
+            name for name in set(full_features) | set(pit_features)
+            if full_features.get(name) != pit_features.get(name)
         )
-    comparable_columns = [name for name in pit_features.columns if name not in join_columns]
-    full_prefixed = full_features.select([*join_columns, *comparable_columns]).rename(
-        {name: f"full__{name}" for name in comparable_columns}
-    )
-    pit_prefixed = pit_features.select([*join_columns, *comparable_columns]).rename(
-        {name: f"pit__{name}" for name in comparable_columns}
-    )
-    joined = pit_prefixed.join(full_prefixed, on=list(join_columns), how="left")
-    for name in comparable_columns:
-        mismatch = joined.filter(pl.col(f"pit__{name}") != pl.col(f"full__{name}"))
-        if mismatch.height:
-            raise StrategyContractError(
-                f"custom feature {name!r} is not point-in-time stable; non-causal feature calculation suspected"
-            )
+        raise StrategyContractError(
+            "custom features are not point-in-time stable; differing=" + ",".join(differing)
+        )
+
+
+def validate_custom_feature_values(strategy: BaseStrategy, values: Mapping[str, CustomFeatureValue]) -> None:
+    declared = {spec.name: spec for spec in strategy.custom_feature_catalog}
+    unknown = sorted(set(values) - set(declared))
+    missing = sorted(set(declared) - set(values))
+    if unknown or missing:
+        raise StrategyContractError(f"custom feature contract mismatch: unknown={unknown}, missing={missing}")
+    for name, value in values.items():
+        if value is None:
+            continue
+        if declared[name].dtype in {"float", "int"} and isinstance(value, bool):
+            raise StrategyContractError(f"custom feature {name!r} has boolean value for numeric dtype")
+        if declared[name].dtype == "float" and not isinstance(value, (int, float)):
+            raise StrategyContractError(f"custom feature {name!r} must be numeric")
+        if declared[name].dtype == "int" and not isinstance(value, int):
+            raise StrategyContractError(f"custom feature {name!r} must be int")
+        if declared[name].dtype == "bool" and not isinstance(value, bool):
+            raise StrategyContractError(f"custom feature {name!r} must be bool")
+        if declared[name].dtype == "str" and not isinstance(value, str):
+            raise StrategyContractError(f"custom feature {name!r} must be str")
+        if declared[name].dtype in {"float", "int"} and not math.isfinite(float(value)):
+            raise StrategyContractError(f"custom feature {name!r} must be finite")
 
 
 def utc_ms_to_internal_datetime(value_ms: int) -> datetime:

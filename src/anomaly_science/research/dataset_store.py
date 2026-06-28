@@ -328,7 +328,10 @@ def build_research_dataset(config: ResearchDatasetBuildConfig) -> Path:
             input_dir=input_dir,
             state_path=state_dir / "strategy_state_1m.csv",
             out_dir=stages_dir / "feature_matrix",
-            config=FeatureMatrixConfig(expected_event_lifetime_minutes=config.expected_event_lifetime_minutes),
+            config=FeatureMatrixConfig(
+                strategy_name=config.strategy_name,
+                expected_event_lifetime_minutes=config.expected_event_lifetime_minutes,
+            ),
             max_input_time_ms=input_view.max_input_time_ms,
             progress_callback=make_stderr_progress_callback(stage_name="dataset feature_matrix", unit="rows"),
         )

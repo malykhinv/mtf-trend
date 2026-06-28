@@ -66,14 +66,16 @@ def test_run_mvp1_strategy_registry_cli_writes_registry_artifact(tmp_path: Path)
         "post_pump_distribution_v1_h120",
         "post_pump_distribution_v1_h180",
     ]
-    assert rows[0]["strategy_contract_version"] == "base_strategy_v1"
+    assert rows[0]["strategy_contract_version"] == "base_strategy_v2_structural_execution"
+    assert rows[0]["execution_policy_version"] == "generic_anomaly_structural_execution_v1"
+    assert "long_running_low_close_then_swing_low_trail" in rows[0]["execution_policy_ids"]
     assert rows[0]["allowed_horizons"] == "15;30;60"
     assert rows[0]["default_horizon_minutes"] == "30"
     assert {row["horizon_minutes"] for row in rows} == {"15", "30", "60", "120", "180"}
     assert {row["allowed_horizons"] for row in rows} == {"15;30;60", "60;120;180"}
     assert {row["default_horizon_minutes"] for row in rows} == {"30", "120"}
     assert rows[0]["required_data_streams"] == "liquidations=false;open_interest=false"
-    assert rows[-1]["required_data_streams"] == "liquidations=true;open_interest=true"
+    assert rows[-1]["required_data_streams"] == "liquidations=false;open_interest=false"
     assert rows[0]["live_trading_strategy"] == "False"
 
     with (out_dir / "strategy_implementation_status.csv").open(encoding="utf-8-sig", newline="") as file_obj:

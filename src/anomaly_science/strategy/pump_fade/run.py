@@ -12,6 +12,7 @@ from anomaly_science.strategy.pump_fade.builder import (
     build_pump_fade_decisions_with_quality,
 )
 from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
+from anomaly_science.strategy.pump_fade.spec import PumpFadeStrategyDefinition
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,11 +32,15 @@ def run_pump_fade_dataset_build(
     cache_dir: Path,
     output_path: Path,
     config: PumpFadeDecisionConfig | None = None,
+    strategy: PumpFadeStrategyDefinition | None = None,
     quality_policy: PumpFadeDataQualityPolicy | None = None,
     limit_symbols: int | None = None,
     progress_every: int = 10,
 ) -> Path:
-    config = config or PumpFadeDecisionConfig()
+    if strategy is not None and config is not None and strategy.detector_config != config:
+        raise ValueError("config and strategy.detector_config disagree")
+    strategy = strategy or PumpFadeStrategyDefinition(detector_config=config or PumpFadeDecisionConfig())
+    config = strategy.detector_config
     quality_policy = quality_policy or PumpFadeDataQualityPolicy()
     def report(done: int, total: int, symbol: str, rows: int) -> None:
         del symbol
@@ -103,6 +108,25 @@ def run_pump_fade_dataset_build(
         "quality_dropped_market_row_fraction": dropped_market_row_fraction,
         "quality_policy": asdict(quality_policy),
         "config": asdict(config),
+        "strategy": {
+            "strategy_name": strategy.strategy_name,
+            "strategy_version": strategy.strategy_version,
+            "strategy_contract_version": strategy.strategy_contract_version,
+            "feature_schema_version": strategy.feature_schema_version,
+            "label_schema_version": strategy.label_schema_version,
+            "outcome_protocol": strategy.outcome_protocol,
+            "required_data_streams": dict(strategy.required_data_streams),
+            "custom_feature_names": [spec.name for spec in strategy.custom_feature_catalog],
+            "execution_policy_version": strategy.execution_policies.policy_version,
+            "stop_policy_ids": [policy.policy_id for policy in strategy.execution_policies.stop_policies],
+            "target_policies": [
+                {
+                    "policy_id": policy.policy_id,
+                    "close_fraction_grid": list(policy.close_fraction_grid),
+                }
+                for policy in strategy.execution_policies.take_profit_policies
+            ],
+        },
     }
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     manifest = build_manifest(

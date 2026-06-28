@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence, TypeVar, get_args, get_origin, get_type_hints
 
-from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact_with_aliases, write_manifest
+from anomaly_science.artifacts import build_manifest, runtime_reproducibility_rows, write_csv_artifact, write_csv_artifact_with_aliases, write_manifest
 from anomaly_science.artifacts.manifest import sha256_file
 from anomaly_science.artifacts.writer import ArtifactWriteError, link_or_copy_identical_artifact
 from anomaly_science.contracts.artifacts import (
@@ -1480,6 +1480,9 @@ def _iter_feature_matrix_value_rows_from_grouped_csv(
     config: FeatureMatrixConfig,
     max_input_time_ms: int | None = None,
 ) -> Iterable[tuple[object, ...]]:
+    from anomaly_science.strategy.registry import get_strategy
+
+    strategy = get_strategy(config.strategy_name)
     btc_candles = _load_symbol_candle_series(candles_path, config.btc_symbol, max_input_time_ms=max_input_time_ms)
     candle_groups = _symbol_groups(
         iter_candles_1m_csv(candles_path, max_open_time_ms=max_input_time_ms),
@@ -1536,6 +1539,7 @@ def _iter_feature_matrix_value_rows_from_grouped_csv(
                 ),
                 config=config,
                 symbol_feature_index=symbol_feature_index,
+                strategy=strategy,
             )
 
 
@@ -2109,6 +2113,7 @@ def _feature_matrix_row_from_csv(row: Mapping[str, object]) -> StrategyFeatureMa
         cvd_change_during_sweep=_optional_float(row, "cvd_change_during_sweep"),
         oi_change_during_sweep=_optional_float(row, "oi_change_during_sweep"),
         liq_intensity_during_sweep=_optional_float(row, "liq_intensity_during_sweep"),
+        custom_features_json=_required_str(row, "custom_features_json"),
     )
 
 
@@ -2121,6 +2126,8 @@ def run_mvp1_feature_matrix(
     max_input_time_ms: int | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> Path:
+    from anomaly_science.strategy.registry import get_strategy
+
     input_path = Path(input_dir)
     state_artifact_path = Path(state_path)
     output_path = Path(out_dir)
@@ -2221,6 +2228,27 @@ def run_mvp1_feature_matrix(
             output_path / "strategy_feature_catalog.csv",
             feature_rows_to_artifact(build_default_feature_catalog()),
             get_artifact_schema("strategy_feature_catalog.csv"),
+        )
+    )
+    strategy = get_strategy(cfg.strategy_name)
+    written.append(
+        write_csv_artifact(
+            output_path / "strategy_custom_feature_schema.csv",
+            [
+                {
+                    "strategy_name": strategy.metadata.strategy_name,
+                    "feature_schema_version": strategy.metadata.feature_schema_version,
+                    "feature_name": spec.name,
+                    "feature_family": spec.family,
+                    "dtype": spec.dtype,
+                    "is_model_feature": spec.is_model_feature,
+                    "required_streams": ";".join(spec.required_streams),
+                    "identifiability": spec.identifiability,
+                    "description": spec.description,
+                }
+                for spec in strategy.custom_feature_catalog
+            ],
+            get_artifact_schema("strategy_custom_feature_schema.csv"),
         )
     )
     written.extend(
@@ -2460,6 +2488,7 @@ def _build_state_feature_row(
     config: FeatureMatrixConfig,
     cross_section_features: _CrossSectionFeatures | None = None,
     symbol_feature_index: _SymbolFeatureIndex | None = None,
+    strategy=None,
 ) -> StrategyFeatureMatrixRow:
     return StrategyFeatureMatrixRow(
         *_build_state_feature_row_raw_values(
@@ -2475,6 +2504,7 @@ def _build_state_feature_row(
             config=config,
             cross_section_features=cross_section_features,
             symbol_feature_index=symbol_feature_index,
+            strategy=strategy,
         )
     )
 
@@ -2493,7 +2523,10 @@ def _build_state_feature_row_raw_values(
     config: FeatureMatrixConfig,
     cross_section_features: _CrossSectionFeatures | None = None,
     symbol_feature_index: _SymbolFeatureIndex | None = None,
+    strategy=None,
 ) -> tuple[object, ...]:
+    from anomaly_science.strategy.registry import get_strategy
+
     atr_value: float | None = None
     atr_pct_value: float | None = None
     range_since_start_atr: float | None = None
@@ -2596,6 +2629,23 @@ def _build_state_feature_row_raw_values(
     time_to_running_high = max(state.minutes_since_event_start - state.time_since_running_high_minutes, 0)
     clock_maturity = state.time_since_running_high_minutes / max(time_to_running_high, 1)
     event_age_ratio = state.minutes_since_detection / max(config.expected_event_lifetime_minutes, 1)
+    strategy = strategy or get_strategy(config.strategy_name)
+    custom_features_json = _strategy_custom_features_json(
+        strategy=strategy,
+        state=state,
+        candles=candles,
+        open_interest_rows=open_interest_rows,
+        liquidation_rows=liquidation_rows,
+        core_features={
+            "core_atr_1440": atr_value,
+            "atr_pct": atr_pct_value,
+            "range_since_start_atr": range_since_start_atr,
+            "price_speed_atr": price_speed_atr,
+            "oi_change_5m_pct": oi_features.oi_change_5m_pct_of_oi,
+            "cvd_since_event": cvd_features.cvd_quote_since_event_start,
+            "systemic_cluster_regime": market_context_features.systemic_cluster_regime,
+        },
+    )
 
     return (
         FEATURE_SCHEMA_VERSION,
@@ -2675,7 +2725,60 @@ def _build_state_feature_row_raw_values(
         geometry_features.cvd_change_during_sweep,
         geometry_features.oi_change_during_sweep,
         geometry_features.liq_intensity_during_sweep,
+        custom_features_json,
     )
+
+
+def _strategy_custom_features_json(
+    *,
+    strategy,
+    state: StrategyState1mRow,
+    candles: Sequence[Candle1m],
+    open_interest_rows: Sequence[OpenInterest5m] | _OpenInterestSeries | None,
+    liquidation_rows: Sequence[LiquidationEvent] | _LiquidationSeries | None,
+    core_features: Mapping[str, object],
+) -> str:
+    from anomaly_science.strategy.base import StrategyFeatureContext, validate_custom_feature_values
+
+    if not strategy.custom_feature_catalog:
+        return "{}"
+    event_start_time_ms = _event_start_time_ms(state)
+    if isinstance(candles, _CandleSeries):
+        market_rows = candles.trailing_asof(state.snapshot_time_ms, 1440)
+        event_rows = candles.event_window(
+            event_start_time_ms=event_start_time_ms,
+            snapshot_time_ms=state.snapshot_time_ms,
+        )
+    else:
+        market_rows = tuple(row for row in candles if row.available_time_ms <= state.snapshot_time_ms)[-1440:]
+        event_rows = tuple(row for row in market_rows if row.open_time_ms >= event_start_time_ms)
+    context = StrategyFeatureContext(
+        event_id=state.event_id,
+        symbol=state.symbol,
+        event_start_time_ms=event_start_time_ms,
+        snapshot_time_ms=state.snapshot_time_ms,
+        feature_cutoff_time_ms=state.feature_cutoff_time_ms,
+        market_rows_asof=tuple(market_rows),
+        event_rows_asof=tuple(event_rows),
+        open_interest_rows_asof=_rows_available_asof(open_interest_rows, state.snapshot_time_ms),
+        liquidation_rows_asof=_rows_available_asof(liquidation_rows, state.snapshot_time_ms),
+        core_features=core_features,
+    )
+    values = dict(strategy.generate_custom_features(context))
+    validate_custom_feature_values(strategy, values)
+    return json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _rows_available_asof(rows, snapshot_time_ms: int) -> tuple[object, ...]:
+    if rows is None:
+        return ()
+    source_rows = getattr(rows, "_rows", rows)
+    result = []
+    for row in source_rows:
+        available_time = getattr(row, "available_time_ms", getattr(row, "timestamp_ms", None))
+        if available_time is not None and available_time <= snapshot_time_ms:
+            result.append(row)
+    return tuple(result)
 
 
 def alpha_decay_bucket(minutes_since_trigger: int) -> str:

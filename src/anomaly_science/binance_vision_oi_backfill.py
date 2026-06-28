@@ -134,7 +134,7 @@ def backfill_binance_vision_open_interest(config: OiBackfillConfig) -> tuple[OiB
     with _MetricsDownloadPool(config) as pool:
         for index, path in enumerate(paths, start=1):
             symbol = path.stem.upper()
-            print(f"OI backfill [{index}/{len(paths)}] {symbol}", flush=True)
+            print(f"OI backfill [{index}/{len(paths)}] {_console_safe_symbol(symbol)}", flush=True)
             completed = _read_completed_if_current(path=path, config=config)
             if completed is not None:
                 results.append(completed)
@@ -144,6 +144,11 @@ def backfill_binance_vision_open_interest(config: OiBackfillConfig) -> tuple[OiB
             results.append(stats)
     _write_manifest(config=config, stats=results)
     return tuple(results)
+
+
+def _console_safe_symbol(symbol: str) -> str:
+    """Preserve progress identity without depending on the Windows console codec."""
+    return symbol.encode("ascii", errors="backslashreplace").decode("ascii")
 
 
 def _resolve_symbol_paths(config: OiBackfillConfig) -> tuple[Path, ...]:

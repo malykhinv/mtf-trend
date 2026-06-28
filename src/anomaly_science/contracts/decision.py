@@ -28,8 +28,18 @@ class ExpectedValueRow:
     entry_price_basis: str
     entry_reference_price: float
     core_atr_1440: float
-    stop_distance: float
-    target_distance: float
+    execution_policy_version: str
+    stop_policy_id: str
+    target_policy_id: str
+    stop_anchor: str
+    target_anchor: str
+    stop_trigger: str
+    target_trigger: str
+    stop_reference_price: float | None
+    target_reference_price: float | None
+    stop_distance: float | None
+    target_distance: float | None
+    execution_policy_resolved: bool
     fee_bps: float
     slippage_bps: float
     cost_model: str
@@ -80,8 +90,32 @@ class ExpectedValueRow:
             raise MarketDataContractError("entry_price_basis must document the EV entry proxy")
         _require_positive_finite(self.entry_reference_price, "entry_reference_price")
         _require_positive_finite(self.core_atr_1440, "core_atr_1440")
-        _require_positive_finite(self.stop_distance, "stop_distance")
-        _require_positive_finite(self.target_distance, "target_distance")
+        for field_name in (
+            "execution_policy_version",
+            "stop_policy_id",
+            "target_policy_id",
+            "stop_anchor",
+            "target_anchor",
+            "stop_trigger",
+            "target_trigger",
+        ):
+            if not getattr(self, field_name):
+                raise MarketDataContractError(f"{field_name} is required")
+        structural_values = (
+            self.stop_reference_price,
+            self.target_reference_price,
+            self.stop_distance,
+            self.target_distance,
+        )
+        if self.execution_policy_resolved:
+            if any(value is None for value in structural_values):
+                raise MarketDataContractError("resolved execution policy requires structural prices and distances")
+            for field_name in ("stop_reference_price", "target_reference_price", "stop_distance", "target_distance"):
+                _require_positive_finite(getattr(self, field_name), field_name)  # type: ignore[arg-type]
+        elif any(value is not None for value in structural_values):
+            raise MarketDataContractError("unresolved execution policy must not expose structural prices or distances")
+        if self.best_action in {"long", "short"} and not self.execution_policy_resolved:
+            raise MarketDataContractError("actionable EV row requires a resolved structural execution policy")
         if self.fee_bps < 0.0 or self.slippage_bps < 0.0:
             raise MarketDataContractError("fee_bps and slippage_bps must be non-negative")
         if self.cost_model != ROUND_TRIP_COST_MODEL:

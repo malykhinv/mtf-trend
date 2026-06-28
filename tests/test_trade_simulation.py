@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from anomaly_science.simulation import (
     TradeSimulationConfig,
     TradeSimulationInputError,
     build_random_entry_time_control_rows,
+    build_trade_simulation_metric_rows,
     build_trade_simulation_rows,
     load_anomaly_trade_simulation_csv,
     run_mvp1_trade_simulation,
@@ -62,8 +64,18 @@ def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
         entry_price_basis=EV_ENTRY_PRICE_BASIS,
         entry_reference_price=100.0,
         core_atr_1440=2.0,
-        stop_distance=2.0,
+        execution_policy_version="generic_anomaly_structural_execution_v1",
+        stop_policy_id="long_running_low_close_then_swing_low_trail",
+        target_policy_id="long_partial_at_running_high",
+        stop_anchor="running_low_asof_t",
+        target_anchor="running_high_asof_t",
+        stop_trigger="close_beyond",
+        target_trigger="touch",
+        stop_reference_price=99.0,
+        target_reference_price=103.0,
+        stop_distance=1.0,
         target_distance=3.0,
+        execution_policy_resolved=True,
         fee_bps=4.0,
         slippage_bps=2.0,
         cost_model=ROUND_TRIP_COST_MODEL,
@@ -91,7 +103,7 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
     rows = build_trade_simulation_rows(
         candles_1m=[
             _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
-            _candle(1, open_price=101.0, high=105.0, low=98.0, close=102.0),
+            _candle(1, open_price=101.0, high=105.0, low=98.0, close=98.0),
         ],
         decision_rows=[decision],
         config=TradeSimulationConfig(target_horizon_minutes=30),
@@ -107,6 +119,9 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
     assert row.exit_reason == "stop_loss"
     assert row.barrier_resolution == "stop_loss_first"
     assert row.net_pnl < 0.0
+    assert row.stop_price == 99.0
+    assert row.target_price == 103.0
+    assert row.target_close_fraction == 0.25
     assert row.temporal_contract == TRADE_SIMULATION_TEMPORAL_CONTRACT
 
 
@@ -130,6 +145,40 @@ def test_trade_simulation_debits_funding_inside_hold() -> None:
     row = rows[0]
     assert row.funding_cost > 0.0
     assert row.net_pnl == row.gross_pnl - row.total_cost - row.funding_cost
+
+
+def test_short_partial_target_keeps_remainder_and_trails_confirmed_swing_high() -> None:
+    decision = replace(
+        _decision("short_partial"),
+        best_action="short",
+        stop_policy_id="short_running_high_close_then_swing_high_trail",
+        target_policy_id="short_partial_at_running_low",
+        stop_anchor="running_high_asof_t",
+        target_anchor="running_low_asof_t",
+        stop_reference_price=120.0,
+        target_reference_price=100.0,
+        stop_distance=10.0,
+        target_distance=10.0,
+        EV_long=-1.0,
+        EV_short=1.0,
+    )
+    candles = [
+        _candle(0, open_price=110.0, high=111.0, low=109.0, close=110.0),
+        _candle(1, open_price=110.0, high=111.0, low=99.0, close=104.0),
+        _candle(2, open_price=104.0, high=108.0, low=102.0, close=103.0),
+        _candle(3, open_price=103.0, high=114.0, low=102.0, close=105.0),
+        _candle(4, open_price=105.0, high=109.0, low=103.0, close=104.0),
+        _candle(5, open_price=104.0, high=108.0, low=102.0, close=103.0),
+        _candle(6, open_price=103.0, high=116.0, low=102.0, close=115.0),
+    ]
+
+    rows = build_trade_simulation_rows(candles_1m=candles, decision_rows=[decision])
+    half = next(row for row in rows if row.target_close_fraction == 0.5)
+
+    assert half.target_was_hit is True
+    assert half.exit_reason == "partial_target_then_stop"
+    assert half.final_stop_price == 114.0
+    assert half.exit_time_ms == BASE_MS + 6 * ONE_MINUTE_MS
 
 
 def test_random_entry_time_control_rows_are_deterministic() -> None:
@@ -175,7 +224,31 @@ def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant(
         config=TradeSimulationConfig(target_horizon_minutes=30),
     )
 
-    assert [row.event_id for row in rows] == ["first"]
+    assert [row.event_id for row in rows] == ["first"] * 4
+    assert [row.target_close_fraction for row in rows] == [0.25, 0.5, 0.75, 1.0]
+
+
+def test_trade_simulation_metrics_never_pool_partial_close_variants() -> None:
+    decision = _decision("variant_metrics")
+    trades = build_trade_simulation_rows(
+        candles_1m=[
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=104.5, low=100.5, close=103.0),
+        ],
+        decision_rows=[decision],
+    )
+
+    metrics = build_trade_simulation_metric_rows(decision_rows=[decision], simulation_rows=trades)
+    pnl_metrics = [row for row in metrics if row.metric_name == "total_net_pnl"]
+
+    assert len(pnl_metrics) == 4
+    assert {row.target_close_fraction for row in pnl_metrics} == {0.25, 0.5, 0.75, 1.0}
+    assert all(row.execution_variant_id != "all_declared_variants" for row in pnl_metrics)
+    assert not any(
+        row.metric_name in {"total_net_pnl", "mean_net_pnl", "win_rate"}
+        and row.execution_variant_id == "all_declared_variants"
+        for row in metrics
+    )
 
 
 def test_trade_simulation_rejects_strategy_horizon_mismatch() -> None:
@@ -282,6 +355,7 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["execution_reference_model_aligned_between_ev_and_simulation"]["status"] == "PASS"
     assert audit_by_name["pessimistic_entry_price_includes_slippage_penalty"]["status"] == "PASS"
     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
+    assert audit_by_name["partial_target_fraction_grid_declared_by_strategy"]["status"] == "PASS"
     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
     assert audit_by_name["funding_rate_boundary"]["status"] == "WARN"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
@@ -296,7 +370,7 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
-    assert run_config["stop_loss_atr_1440"] == "1.1"
+    assert run_config["execution_policy_version"] == "generic_anomaly_structural_execution_v1"
     assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
     assert run_config["entry_price_basis"] == SIMULATION_ENTRY_PRICE_BASIS
     assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL

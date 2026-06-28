@@ -182,7 +182,7 @@ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
         ProtocolAuditRow(
             check_name="expected_value_computed_before_trade_simulation",
             status=AuditStatus.PASS,
-            message="decision stage computes EV from OOS probabilities, ATR-normalized distances, fees, and slippage before any trade simulation exists",
+            message="decision stage computes EV from OOS probabilities, point-in-time structural distances, fees, and slippage before any trade simulation exists",
             artifact="anomaly_decision_timing.csv",
         ),
         ProtocolAuditRow(
@@ -194,7 +194,7 @@ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
         ProtocolAuditRow(
             check_name="fixed_percent_stop_target_forbidden",
             status=AuditStatus.PASS,
-            message="EV stop/target distances are StrategyMetadata take_profit_atr_1440/stop_loss_atr_1440 multiplied by core_atr_1440; no fixed-percent universal stop/target path exists",
+            message="EV resolves stop/target prices only from strategy-declared point-in-time structural anchors; ATR and fixed-percent exits are forbidden",
             artifact="anomaly_decision_timing.csv",
         ),
     ]

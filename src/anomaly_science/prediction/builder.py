@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from itertools import zip_longest
@@ -1018,7 +1019,13 @@ def _sample_weight_sum(rows: Sequence[PredictionInputRow], *, config: WalkForwar
 
 
 def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> tuple[str, ...]:
-    names = (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES)
+    strategy = get_strategy(config.strategy_name)
+    custom_names = tuple(
+        f"strategy_custom.{spec.name}"
+        for spec in strategy.custom_feature_catalog
+        if spec.is_model_feature and spec.dtype != "str"
+    )
+    names = (*STATE_MODEL_FEATURE_NAMES, *FEATURE_MATRIX_MODEL_FEATURE_NAMES, *custom_names)
     if config.excluded_model_feature_prefixes:
         names = tuple(
             name
@@ -1027,7 +1034,9 @@ def _input_feature_names(rows: Sequence[PredictionInputRow], *, config: WalkForw
         )
     if not names:
         raise PredictionInputError("model feature set is empty after exclusions")
-    validate_model_feature_catalog_membership(names)
+    validate_model_feature_catalog_membership(
+        name for name in names if not name.startswith("strategy_custom.")
+    )
     return names
 
 
@@ -1042,9 +1051,13 @@ def _feature_vector(row: PredictionInputRow, *, feature_names: tuple[str, ...]) 
         if name in state_values:
             values.append(state_values[name])
             continue
-        if not name.startswith("feature_matrix."):
-            raise PredictionInputError(f"unknown model feature name: {name}")
-        values.append(_feature_matrix_value(row.features, name.removeprefix("feature_matrix.")))
+        if name.startswith("feature_matrix."):
+            values.append(_feature_matrix_value(row.features, name.removeprefix("feature_matrix.")))
+            continue
+        if name.startswith("strategy_custom."):
+            values.append(_custom_feature_matrix_value(row.features, name.removeprefix("strategy_custom.")))
+            continue
+        raise PredictionInputError(f"unknown model feature name: {name}")
     return values
 
 
@@ -1073,6 +1086,21 @@ def _feature_matrix_value(row: StrategyFeatureMatrixRow, field_name: str) -> flo
     if isinstance(value, (int, float)):
         return float(value)
     raise PredictionInputError(f"feature matrix model feature must be numeric or bool, got {field_name!r}")
+
+
+def _custom_feature_matrix_value(row: StrategyFeatureMatrixRow, field_name: str) -> float:
+    try:
+        values = json.loads(row.custom_features_json)
+    except json.JSONDecodeError as exc:
+        raise PredictionInputError("invalid custom_features_json in feature matrix") from exc
+    value = values.get(field_name)
+    if value is None:
+        return math.nan
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    raise PredictionInputError(f"custom model feature must be numeric or bool, got {field_name!r}")
 
 
 def _raw_probability_matrix(model: CatBoostClassifier, rows: Sequence[PredictionInputRow], *, feature_names: tuple[str, ...]) -> np.ndarray:
