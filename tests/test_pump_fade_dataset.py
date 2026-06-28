@@ -263,3 +263,28 @@ def test_dataset_builder_rejects_empty_cache(tmp_path: Path) -> None:
             config=_config(),
             progress_every=0,
         )
+
+
+def test_dataset_progress_is_console_encoding_safe_for_unicode_symbol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_market(cache_dir / "币安人生USDT.parquet")
+    messages: list[str] = []
+
+    def ascii_only_print(message: str, *, flush: bool) -> None:
+        del flush
+        message.encode("cp1252")
+        messages.append(message)
+
+    monkeypatch.setattr("builtins.print", ascii_only_print)
+
+    run_pump_fade_dataset_build(
+        cache_dir=cache_dir,
+        output_path=tmp_path / "decisions.parquet",
+        config=_config(),
+        progress_every=1,
+    )
+
+    assert messages == ["pump-fade dataset: 1/1 symbols; rows=1"]

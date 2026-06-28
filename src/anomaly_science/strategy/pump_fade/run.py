@@ -38,9 +38,10 @@ def run_pump_fade_dataset_build(
     config = config or PumpFadeDecisionConfig()
     quality_policy = quality_policy or PumpFadeDataQualityPolicy()
     def report(done: int, total: int, symbol: str, rows: int) -> None:
+        del symbol
         if progress_every > 0 and (done % progress_every == 0 or done == total):
             print(
-                f"pump-fade dataset: {done}/{total} symbols; last={symbol}; rows={rows}",
+                f"pump-fade dataset: {done}/{total} symbols; rows={rows}",
                 flush=True,
             )
 
