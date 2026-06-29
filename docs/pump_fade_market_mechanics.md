@@ -1,8 +1,13 @@
 # Pump-fade market mechanics and participant inference
 
+This document is explanatory and non-normative. The only canonical Strategy Spec
+for the current pump-fade research thread is `docs/pump_fade_archetype_protocol.md`.
+If this document appears to conflict with that spec, the canonical spec wins and
+this document must be corrected.
+
 ## Purpose
 
-The pump-fade strategy must describe the auction and the observable actions of participants, not collect decorative indicators. Every feature must answer one of these questions:
+The pump-fade feature set should describe the auction and the observable actions of participants, not collect decorative indicators. Every feature should answer one of these questions:
 
 1. How was price moved?
 2. Who appears to be demanding immediacy and who appears to be absorbing it?
@@ -15,26 +20,9 @@ Features are point-in-time observables or explicitly named proxies. A proxy must
 
 ## Structural execution policy
 
-ATR multiples and fixed percentages are forbidden as physical stop-loss or take-profit levels.
-
-For the fade-after-pump hypothesis the admissible policy is:
-
-```text
-side: short
-initial stop anchor: event main high known as-of entry
-stop trigger: 1m close beyond the structural high
-trailing stop: monotonically lower confirmed swing highs
-target anchor: event base
-target trigger: touch, with pessimistic fill/slippage assumptions
-partial close grid: 25%, 50%, 75%, 100%
-remainder after a partial target: remains open under the structural trailing stop
-```
-
-The Strategy owns admissible anchors and policies. Core simulation owns causal swing confirmation, fill assumptions, fees, funding, same-candle pessimism, partial-close enumeration, and position overlap.
-
-The best close fraction must not be selected on the same OOS block used to report its performance. Selection belongs to an inner development/WFA loop; the selected policy is then frozen for an outer test block or pristine forward holdout.
-
-ATR remains useful for dimensionless feature normalization and comparability across symbols. It is not an execution anchor.
+The normative structural execution policy lives in
+`docs/pump_fade_archetype_protocol.md`. This explanatory note must not redefine
+stop anchors, target anchors, partial-close grids, or selection/evaluation rules.
 
 ## Strategy/Core implementation boundary
 
@@ -46,7 +34,7 @@ structural execution policies
 the complete custom-feature catalog and identifiability class
 ```
 
-`PumpFadeStrategyDefinition` additionally freezes the detector, horizon-free close-race label protocol, feature schema and strategy identity. The optimized per-symbol pump builder consumes this definition and writes it into dataset metadata. It is intentionally not forced through the fixed-horizon `BaseStrategy` label API: doing that would silently replace the canonical no-horizon race with a different scientific target.
+`PumpFadeStrategyDefinition` additionally freezes the detector, horizon-free close-race label protocol, feature schema and strategy identity as declared by the canonical Strategy Spec. The optimized per-symbol pump builder consumes this definition and writes it into dataset metadata. It is intentionally not forced through the fixed-horizon `BaseStrategy` label API: doing that would silently replace the canonical no-horizon race with a different scientific target.
 
 Core's standard feature-matrix pipeline now calls `generate_custom_features(StrategyFeatureContext)` for fixed-horizon strategy rows and persists the returned mapping plus a custom-feature schema. The canonical pump builder uses its optimized vectorized path but the same declared catalog. In both paths, model code sees only declared causal features; unknown, missing, non-finite or future-dependent values fail the contract.
 

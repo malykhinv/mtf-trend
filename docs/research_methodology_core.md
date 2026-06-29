@@ -6,12 +6,12 @@
 
 Core отвечает за честность данных, временные контракты, walk-forward, calibration, EV, simulation, audit и воспроизводимость.
 
-Для rule/archetype discovery универсальная реализация Core находится в
-`anomaly_science.archetypes`. Evidence status, matched controls, clustered
-inference и pristine-holdout governance описаны в
-[`pump_fade_archetype_protocol.md`](pump_fade_archetype_protocol.md) на
-конкретной зарегистрированной стратегии. Эти статистические механизмы остаются
-strategy-neutral; стратегия задаёт только causal feature manifest и target.
+Rule/archetype discovery является универсальной Core-возможностью. Core задаёт
+evidence statuses, matched controls, clustered inference, multiple-testing
+correction, coverage accounting и pristine-holdout governance без ссылок на
+конкретную стратегию. Strategy Spec задаёт только causal feature manifest,
+target semantics, admissible lifecycle states and strategy-owned artifact
+aliases.
 
 Core не должен знать, является ли стратегия anomaly, post-pump, mean-reversion, trend-following, liquidity sweep, basis/funding, market-making или чем-то ещё.
 
@@ -1016,7 +1016,7 @@ stop/target must resolve to point-in-time structural price levels
 trailing structure becomes active only after causal swing confirmation
 partial target variants must be selected inside development/WFA and frozen before outer evaluation
 fees must be included at least roughly
-funding fees must be included when funding_rate stream is present; if absent, short-distribution conclusions are audit-limited
+funding fees must be included when funding_rate stream is present; if absent, short-biased conclusions are audit-limited
 intracandle double barrier resolves as stop_loss_first
 one open simulated position per symbol/strategy variant unless an explicit pyramiding experiment is registered
 entry toxic penalty = 0.2 * last closed 1m high-low proxy by default, added against the trade direction
@@ -1026,7 +1026,7 @@ Funding / systemic-risk boundary:
 
 ```text
 Если funding_rate stream доступен, simulation обязана списывать funding при пересечении funding cut-off во время hold.
-Если funding_rate stream отсутствует, post_pump_distribution short conclusions нельзя считать final EV proof; это audit limitation, а не zero-cost assumption.
+Если funding_rate stream отсутствует, short-biased strategy conclusions нельзя считать final EV proof; это audit limitation, а не zero-cost assumption.
 Systemic Regime Emergency Exit допускается только от Core market-context stream, рассчитанного as-of-t: simultaneous_anomalies_count_1m и BTC volatility impulse. Strategy не имеет права локально выключать этот risk layer.
 ```
 

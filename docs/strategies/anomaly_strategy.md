@@ -1,17 +1,17 @@
 # Strategy Spec: anomaly family
 
-> Scope boundary: this file documents the older `broad_anomaly_v1_h*`
-> fixed-horizon strategy variants. It is not the contract for the structural
-> pump-fade/new-high research target. That target is defined in
-> [../pump_fade_archetype_protocol.md](../pump_fade_archetype_protocol.md),
-> which explicitly forbids ATR outcome barriers and fixed label horizons.
+> Scope boundary: this file documents older fixed-horizon MVP1 registry
+> variants and compatibility/smoke paths. It is not the contract for the current
+> structural pump-fade/new-high research target. The current Strategy Spec is
+> `docs/pump_fade_archetype_protocol.md`.
 
 Status:
 
 ```text
-active_research_strategy = true
+current_primary_research_strategy = false
+compatibility_registry_spec = true
 live_trading_strategy = false
-primary_variant = broad_anomaly_v1_h30
+default_compatibility_variant = broad_anomaly_v1_h30
 strategy_contract_version = base_strategy_v2_structural_execution
 ```
 
@@ -100,7 +100,7 @@ post_pump_distribution_v1:
 Если variant specified but not implemented, CLI/registry должен падать явной ошибкой.
 Запрещено запускать specified-only variant через broad/default factory.
 `strategy_registry.csv` содержит только executable variants; `strategy_implementation_status.csv` является truth table для implemented/specified-only variants.
-Текущие anomaly variants из таблицы выше являются executable.
+Anomaly variants из таблицы выше являются executable compatibility variants, но не являются текущей primary strategy truth.
 ```
 
 ## 2. Что именно исследует anomaly strategy

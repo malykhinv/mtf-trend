@@ -1,5 +1,10 @@
 # Commands
 
+The current strategy source of truth is `docs/pump_fade_archetype_protocol.md`.
+This command list is operational reference only; it must not define or override
+strategy semantics. Fixed-horizon MVP1 commands below are compatibility/debug
+paths, not the current structural pump-fade contract.
+
 Bootstrap check:
 
 ```bash
@@ -44,7 +49,7 @@ MVP1 strategy registry truth table:
 python main.py run-mvp1-strategy-registry --out tmp/mvp1_strategy_registry
 ```
 
-`strategy_registry.csv` contains executable variants only. `strategy_implementation_status.csv` is the generated truth table for all declared variants. The current anomaly spec has no remaining specified-only variants: broad anomaly h15/h30/h60, post-anomaly extension h60/h120/h180, and post-pump distribution h60/h120/h180 are executable.
+`strategy_registry.csv` contains executable fixed-horizon compatibility variants only. `strategy_implementation_status.csv` is the generated truth table for those declared variants: broad anomaly h15/h30/h60, post-anomaly extension h60/h120/h180, and post-pump distribution h60/h120/h180 are executable. This registry matrix does not redefine the current pump-fade Strategy Spec.
 
 MVP1 as-of feature matrix:
 

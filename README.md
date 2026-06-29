@@ -12,16 +12,21 @@ MVP 2 atlas slice — descriptive anomaly nature atlas over MVP1 state/future ar
 MVP 3+ research slice — descriptive labels, weekly CatBoost+Isotonic walk-forward prediction, controls, decision timing, EV, pessimistic simulation, and holdout governance.
 ```
 
-The project has active executable anomaly research strategies documented in `docs/strategies/anomaly_strategy.md`. It does not currently define a live trading strategy. Live execution comes only after calibrated prediction, decision timing, EV, simulation checks, and a separate shadow-live phase.
+The project does not currently define a live trading strategy. Live execution comes only after calibrated prediction, decision timing, EV, simulation checks, and a separate shadow-live phase.
 
 Methodology completion is tracked explicitly in `research/METHODOLOGY_GAP_LEDGER.md`. That ledger is the source of truth for what is implemented, partial, missing, or intentionally out of scope for the offline research phase.
 
 ## Current executable stage
 
-The structural pump-fade archetype thread follows the separate canonical
-protocol in [docs/pump_fade_archetype_protocol.md](docs/pump_fade_archetype_protocol.md).
-It uses a horizon-free close race at causally qualified new running highs and
-must not consume the historical scratchpad `trades.parquet` prototype.
+The active strategy source of truth is
+[docs/pump_fade_archetype_protocol.md](docs/pump_fade_archetype_protocol.md).
+It defines the structural pump-fade horizon-free close race at causally
+qualified new running highs and must not be redefined by README, command notes,
+research scratchpads, or compatibility strategy docs.
+
+`docs/strategies/anomaly_strategy.md` remains documentation for older
+fixed-horizon MVP1 registry variants and compatibility/smoke paths only. It is
+not the current structural pump-fade Strategy Spec.
 
 Primary offline research commands:
 
@@ -35,7 +40,7 @@ python main.py run-research broad_anomaly_v1_h30 --research-mode frozen_holdout 
 
 `run-research` uses the local Binance Vision enriched 1m cache under `.output/market/binance_vision/um_futures/enriched_1m`, creates its output directory automatically under `.output/results/research_runs/`, exports the cache into the MVP1 CSV boundary, writes holdout governance/freeze artifacts from the exported cache period, applies the holdout lock, runs the full research pipeline through simulation, then writes root reproducibility manifests and an independent forensic protocol audit; the run fails if that audit emits any `FAIL` row. Root outputs include `strategy_run_config.csv`, `anomaly_run_config.csv`, `artifact_manifest.json`, and `research_run_summary.csv`. Input-boundary outputs include `cache_export_coverage.csv` and `cache_export_manifest.json`, so the actual exported symbols, excluded delivery-contract symbols, period, missing UTC days, row count, lifecycle gaps, and file hashes are inspectable for every run. Default `--research-mode is` excludes the final holdout from downstream research stages; for short exported windows, IS mode records `requested_holdout_days` and auto-scales `effective_holdout_days` to preserve the final holdout while keeping up to 8 non-holdout research days for weekly WFA proof when the window allows it. `--research-mode frozen_holdout` requires `--protocol-freeze-id` and records explicit approved holdout access. If `--days` is omitted, it uses the full available cache period. The current full-cache proof is recorded in `research/validation/cache_export_380d_validation.json` and validates 2025-06-03..2026-06-17, 796 perpetual symbols, 344,895,197 1m rows, no missing UTC days, no duplicate 1m rows, and no unclassified 1m gaps; 3,570 missing 1m rows are explicitly classified as settlement-transition gaps with `{symbol}SETTLED` evidence.
 
-Low-level MVP1 stage commands remain available for debugging:
+Low-level MVP1 fixed-horizon commands remain available for debugging and compatibility; they are not the current pump-fade strategy contract:
 
 ```bash
 python main.py run-mvp1-data-audit --input tests/fixtures/minimal_market_data --out tmp/mvp1_audit

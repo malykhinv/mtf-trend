@@ -1,29 +1,32 @@
-# Strategy spec
+# Current strategy source of truth
 
-Active research strategy:
+The current active research strategy has exactly one canonical Strategy Spec:
 
 ```text
-strategy_family = anomaly
-canonical_spec = docs/strategies/anomaly_strategy.md
-primary_variant = broad_anomaly_v1
-strategy_contract_version = base_strategy_v2_structural_execution
+canonical_spec = docs/pump_fade_archetype_protocol.md
+strategy_name = pump_fade_close_race_v1
+strategy_family = pump_fade
+strategy_contract_version = horizon_free_event_strategy_v1
+feature_schema_version = pump_fade_market_mechanics_v2
+nature_label_schema_version = pump_fade_event_peak_close_race_v1
+decision_label_schema_version = pump_fade_close_race_horizon_free_v1
+live_trading_strategy = false
 ```
 
-This is a research strategy, not a live trading strategy. It studies whether
-future anomaly nature is predictable online from point-in-time state and feature
-artifacts. Decision timing, EV, and simplified pessimistic simulation are
-research artifacts only. Shadow live and production live remain intentionally
-absent until prediction calibration, timing, EV, simulation, and governance pass
-audits.
+This file is only a research-state pointer. It must not duplicate trigger
+semantics, labels, feature admissibility, evidence language, execution policy,
+or lifecycle rules from the canonical spec.
 
-Current scientific sequence:
-1. detect broad anomalies;
-2. build online 1m state;
-3. build future paths;
-4. audit temporal correctness;
-5. study calibrated prediction and negative controls;
-6. study decision timing and EV;
-7. study simplified pessimistic simulation;
-8. only then consider shadow live or production execution realism.
+Compatibility note:
 
-Legacy trading rules are reference-only and must not be imported into the new core.
+```text
+docs/strategies/anomaly_strategy.md documents older fixed-horizon MVP1 registry
+variants and compatibility smoke paths. It is not the source of truth for the
+current structural pump-fade research target.
+```
+
+Shadow live and production live remain intentionally absent until calibrated
+prediction, timing, EV, pessimistic simulation, and governance pass their audits.
+
+Legacy trading rules are reference-only and must not be imported into the new
+core.

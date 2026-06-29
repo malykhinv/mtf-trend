@@ -1,8 +1,26 @@
 # Pump-fade predictive-phenotype discovery protocol
 
-This is the canonical repository contract for the structural pump-fade
-research thread. It supersedes fixed-horizon and ATR-barrier targets for this
-strategy. The generic MVP1 pipeline remains available for other strategies.
+This file is the single canonical Strategy Spec for the current structural
+pump-fade research thread. Other Markdown files may explain implementation
+details or market intuition, but they must not redefine trigger semantics,
+target semantics, lifecycle states, feature admissibility, evidence language,
+or execution-policy boundaries for this strategy.
+
+Canonical identity:
+
+```text
+strategy_name = pump_fade_close_race_v1
+strategy_family = pump_fade
+strategy_contract_version = horizon_free_event_strategy_v1
+feature_schema_version = pump_fade_market_mechanics_v2
+nature_label_schema_version = pump_fade_event_peak_close_race_v1
+decision_label_schema_version = pump_fade_close_race_horizon_free_v1
+live_trading_strategy = false
+```
+
+It supersedes fixed-horizon and ATR-barrier targets for this strategy. The
+generic MVP1 pipeline remains available for other strategies and compatibility
+smoke tests, but it is not the current pump-fade source of truth.
 
 ## Scientific questions and stage order
 
@@ -21,6 +39,34 @@ the pump's nature.
 
 Trade entry, stop buffers, costs, and exit optimization are separate later
 phases and cannot alter this label.
+
+## Structural execution policy boundary
+
+The current research output is not a live trading rule. When the strategy later
+reaches EV and simulation phases, physical exits must be anchored to
+point-in-time market structure declared here, not to fixed-percent or
+ATR-multiple price levels. ATR remains allowed for normalization and
+comparability only.
+
+Admissible fade-after-pump execution policy:
+
+```text
+side: short
+initial stop anchor: event main high known as-of entry
+stop trigger: 1m close beyond the structural high
+trailing stop: monotonically lower confirmed swing highs
+target anchor: event base
+target trigger: touch, with pessimistic fill/slippage assumptions
+partial close grid: 25%, 50%, 75%, 100%
+remainder after a partial target: remains open under the structural trailing stop
+```
+
+Core simulation owns causal swing confirmation, fill assumptions, fees, funding,
+same-candle pessimism, partial-close enumeration, and position-overlap rules.
+The best close fraction must not be selected on the same OOS block used to
+report performance; selection belongs to an inner development/WFA loop and the
+selected policy must then be frozen for an outer test block or pristine forward
+holdout.
 
 ## Online anomaly and decision contract
 
