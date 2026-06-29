@@ -1,92 +1,224 @@
 # Research state
 
-Current phase: anomaly_science rebirth.
+Last updated: 2026-06-29.
 
-Active rule:
-- `legacy_quarantine` is reference-only.
-- New code must not import legacy modules.
-- Active research strategy is the anomaly family documented in `docs/strategies/anomaly_strategy.md`.
-- First target is MVP 1: honest research pipeline through calibrated prediction, decision timing, EV, pessimistic simulation, controls, and holdout governance; not live trading.
-- Current execution contract is structural: strategies declare causal anchors, close/touch semantics, swing-trailing rules, and partial-close grids; ATR/fixed-percent physical exits are forbidden. Simulation and forensic anti-overlap/metrics are scoped per policy/fraction variant, so research variants are never pooled as one portfolio.
-- `BaseResearchStrategy` now owns the common stream, feature-catalog, and execution-policy boundary. Fixed-horizon strategies use `BaseStrategy`; the canonical pump fade uses the typed `PumpFadeStrategyDefinition` because its close-to-base versus close-above-running-high label is horizon-free. The optimized pump dataset records the full strategy definition in metadata.
-- Core feature-matrix construction now calls strategy `generate_custom_features(StrategyFeatureContext)`, writes `strategy_custom_feature_schema.csv`, and exposes declared custom numeric/bool values to walk-forward CatBoost. Pump mechanics cover exact 1m expansion, path/pullback geometry, candle rejection, participation concentration, taker flow, preconditioning/regime, causal OI states, and explicitly qualified participant proxies.
-- Pump-fade OI is now evaluated as a paired incremental experiment on identical `oi_available=true` rows. `oi_available` is a population/audit gate and cannot be a model feature. Both no-OI and with-OI arms independently retain blind and 19 calendar-block shuffled-label controls; verification predictions are persisted for paired group-bootstrap inference.
-- The 30-symbol OI smoke built 4,382 decision rows / 1,093 event-nature rows with 100% causal OI coverage. On 714 discovery and 324 later-verification groups, AUC moved from 0.6050 without OI to 0.6351 with OI. The paired 2,000-draw group bootstrap was inconclusive: mean delta +0.0298, 95% interval -0.0038..+0.0632. No replicated archetype category survived. This is a pipeline-positive smoke result, not OI evidence; the full 796-symbol paired run is in progress under `.output/results/pump_fade_oi_full_v3`. The builder now excludes dated delivery contracts explicitly and records them in dataset metadata.
-- Current implemented slice: data source boundary with cache export coverage/manifest proof artifacts, data quality, hardened data-inferred point-in-time universe with first/last seen timestamps, confidence fields, explicit missing-day rows, cross-section eligibility, strategy-neutral Core contracts/builders with anomaly compatibility aliases, broad anomaly with complete causal trigger-family component accounting, executable post-anomaly extension, and executable post-pump distribution events via BaseStrategy `generate_triggers`, online 1m anomaly state with causal confirmed structural levels, raw future paths through 180m, feature catalog/matrix with relaxed shelf/sweep/consolidation geometry and independently audited full feature-catalog plus market-context coverage, prediction-time catalog membership hard gate for all numeric/bool model features, multi-horizon descriptive strategy nature atlas with relaxed geometry/session/market-context slices, descriptive future-nature outcome labels for Core-supported 15/30/60/120/180m horizons, Core horizon whitelist/validators, StrategyMetadata selected/allowed/default horizon semantics, registry-enforced strategy/horizon compatibility, CLI-level horizon whitelist/strategy-pair validation, self-describing prediction/model horizon artifacts, explicit prediction sample-weight policy `uniform_v1`, horizon-consistency protocol audit rows, an independent artifact-driven forensic audit module wired as a `run-research` hard gate on forensic FAIL, weekly frozen walk-forward prediction with active-strategy `H_max` purge, calibration artifacts with required context breakdowns and forensic completeness checks, placebo/control tests with forensic required-control completeness checks, decision timing with EV aligned to the shared EV/simulation execution-reference contract, simplified pessimistic trade simulation with independent forensic checks for execution/cost alignment, pessimistic prices, no same-symbol overlap, always-no-trade, and random-entry controls, run-research holdout freeze/governance with enforced `is`/`frozen_holdout` access modes, root research run manifests with data/config/dependency hashes and artifact manifests, artifact-driven rejection funnel with explicit per-stage exclusion reason codes, shared pre-trigger `DataQualityMask` enforcement for maskable bad 1m candles and post-gap warm-up rows with independent forensic proof, forensic point-in-time universe proof, and canonical `strategy_*` artifacts with `anomaly_*` compatibility aliases.
-- Future paths remain raw outcomes.
-- Atlas outcome bins are descriptive discovery bins only, not decision rules, EV, PnL, or trade simulation.
-- Outcome labels are descriptive scenario targets for walk-forward prediction calibration, not trading labels.
-- Placebo/control rows are negative scientific controls; passing or failing them does not create a trade signal.
-- Decision timing and EV are research decision artifacts, not live trade commands.
-- Trade simulation is simplified and pessimistic; it is not shadow live or production execution.
-- Shadow live and production live are still intentionally absent.
-- Methodology/strategy completion is tracked in `research/METHODOLOGY_GAP_LEDGER.md`; do not claim research completeness while that ledger has in-scope `MISSING` rows or unaudited `PARTIAL` rows.
-- Data-source boundary is now implemented for the offline research scope. Full local 380d Binance Vision cache/export proof is recorded in `research/validation/cache_export_380d_validation.json`: 2025-06-03..2026-06-17, 796 exported perpetual symbols, 344,895,197 1m rows, 0 missing UTC days, 0 duplicate 1m rows, and 0 unclassified 1m gaps. The remaining 3,570 missing 1m rows are explicitly classified as settlement-transition lifecycle gaps with `{symbol}SETTLED` sibling evidence.
-- Point-in-time universe construction now uses vectorized dataset-date and per-symbol bound aggregation, preserving the conservative data-inferred contract while avoiding per-row scans during all-symbol data audit.
-- Compact `run-research <strategy> --days N` now matches the documented target for the offline smoke path: output is automatic, omitted `--days` still means full cache period, short default IS windows record requested/effective holdout days, preserve the final holdout, and keep up to 8 non-holdout research days when available for weekly WFA proof. State windows use active strategy `H_max`, and `python main.py run-research broad_anomaly_v1_h30 --days 2` completed on all symbols. The completed run wrote `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30`, reached forensic audit with `0` FAIL rows and `8` expected WARN rows from the intentionally tiny smoke window, and reduced atlas from `1582.80s` to about `8m47s` inside the full run.
-- State and future writers now stream multi-million-row artifacts through strict canonical schemas instead of materializing full row lists before writing. The state CLI reads `candles_1m.csv` and `strategy_events.csv` through strict CSV iterators, processes grouped candle input one symbol at a time, and streams state rows out of each event builder instead of accumulating per-event lists. The state, future, and labels canonical writers serialize dataclass slots directly after one schema validation instead of per-row deep dataclass conversion and schema-set checks. The future CLI also streams grouped state/candle CSV boundaries one symbol at a time instead of building a full-market future candle index. The 9d all-symbol h30 proof wrote `7,308,031` `strategy_future_paths.csv` rows with future-stage audit `11` PASS / `0` FAIL rows. Zero as-of ATR from flat history is represented as explicit missing ATR fields, not fallback and not a crash.
-- Future path row construction now scans per-symbol candle tuples by start/end indexes and uses fixed-position tuple metrics instead of allocating a fresh future-candle slice plus multiple horizon dictionaries for every state row, reducing allocation pressure on large all-symbol runs while preserving raw future-path semantics.
-- Future horizon metrics now use per-symbol range indexes for high/low, exact horizon close lookup, first new-high lookup, and double-barrier existence checks instead of scanning up to 180 future candles for every state row. This targets the remaining traced 9d `future` bottleneck after direct CSV generation.
-- The direct grouped-CSV future path now parses state rows through a typed future-only projection with exact schema validation and explicit temporal/price checks, avoiding full 23-field `StrategyState1mRow` reconstruction for every multi-million-row state record. Future candle CSV parsing also avoids `pandas.isna` in the hot path. A stopped 9d diagnostic after range indexing showed `future` still running too slowly, so a replacement timing proof is still required before claiming the bottleneck closed.
-- Future double-barrier range indexes are now lazy: the future builder first uses horizon high/low range prechecks and builds the heavier same-candle barrier index only if a hit is possible. Future high/low sparse tables also use specialized max/min builders and query functions instead of generic callbacks. Synthetic one-symbol profiling improved the hot path by about 2x, and the replacement 9d diagnostic reached `future` PASS in `1370.058049s` before the run was stopped after `feature_catalog` and deleted.
-- `run-mvp1-future` now uses a direct grouped-CSV value generator that writes canonical future-path CSV rows without constructing `FuturePathRow` objects on the multi-million-row CLI path. The typed `FuturePathRow` API remains available for in-memory builders/loaders, and tests prove direct values match typed serialization.
-- Future artifact writing now uses `csv.writer` with direct `FuturePathRow` slot value lists instead of `csv.DictWriter` plus per-row dictionaries. The 9d traced run before this writer patch measured `future` at about `3092s`, making it the active bottleneck.
-- Future-path writer now serializes `FuturePathRow` directly from dataclass slots after one schema validation, avoiding per-row deep dataclass conversion and schema-set checks on multi-million-row `strategy_future_paths.csv` writes. A stopped 9d diagnostic run showed `future` was the current time bottleneck before `feature_matrix`; the partial run was deleted after diagnosis.
-- Feature-matrix artifact writing now streams rows through the canonical schema and creates identical compatibility aliases hardlink-first after validation.
-- Feature-matrix CLI now preserves `strategy_state_1m.csv` row order in final `strategy_feature_matrix.csv` for downstream row-alignment, while cross-section ranks are held in a temporary SQLite lookup instead of an unbounded in-memory dict. The CLI feature writer streams grouped symbol CSV boundaries, holding only the current symbol candle series plus BTC context instead of the full all-symbol 1m market in Python objects, and serializes rows directly from dataclass slots after one schema validation instead of per-row `asdict()`/set checks. Temporary lookup files are removed before stage exit. A stopped 9d diagnostic run exposed the old feature-matrix memory pressure at about `9.3GB` RSS and was cleaned from `.output\results`, restoring local C: free space to about `91.3GB`. The post-fix 2d all-symbol `run-research broad_anomaly_v1_h30 --days 2` proof completed with forensic `11` PASS / `8` WARN / `0` FAIL rows and its local artifacts were deleted after validation; the replacement 9d proof is still pending.
-- Feature-matrix indexed candle access now avoids copying full as-of candle history for `price_speed_atr` and uses quote-volume prefix sums for liquidation cumulative intensity denominators.
-- Feature-matrix market-context hot paths now use indexed `_CandleSeries` window-return and one-minute-return helpers for BTC-relative return/correlation features, avoiding per-row dict/set/sorted alignment when both symbol and BTC candle series are already indexed. A replacement 9d feature-matrix timing proof is still pending.
-- Feature-matrix CVD and BTC-correlation hot paths now use `_CandleSeries` prefix indexes for event/window CVD and one-minute return correlations. A synthetic `_build_state_feature_row` profile with BTC context improved from about `8.1s` to `2.9s` for `9059` rows. A replacement 9d diagnostic still had `feature_matrix` running after more than `1800s` after `feature_catalog`; the remaining bottleneck is likely outside those per-row helpers, such as cross-section materialization, CSV parsing, or artifact writing.
-- Feature-matrix cross-section materialization now streams one ordered SQLite cursor grouped by `snapshot_time_ms` instead of issuing one `SELECT` per snapshot.
-- Feature-matrix hot paths now use explicit as-of Open Interest indexing and exact prefix-sum rolling moments for volume/quote-volume z-scores. A 9d probe for the first `100,000` rows improved from about `954.64s` total elapsed to about `716.42s`, including unchanged startup state/candle indexing.
-- Exact rolling quote-volume median caching removed the remaining per-row 1440-candle median scan. The 9d all-symbol h30 feature-matrix proof completed at `tmp\feature_matrix_9d_hotpath_median_final`, writing `7,308,031` `strategy_feature_matrix.csv` rows in about `2h05m` with feature-stage audit `13` PASS / `0` FAIL rows.
-- Feature-matrix liquidation features now use indexed causal event windows for per-row intensity, event cumulative intensity, and cross-section liquidation percentiles instead of scanning every liquidation row for each state row.
-- Outcome labels now stream row-aligned state/future artifacts through the strict labels boundary, parse only labels-owned fields, and write canonical labels incrementally before creating the compatibility alias hardlink-first. The 9d all-symbol h30 labels proof completed at `tmp\labels_9d_hotpath_final`, writing `7,308,031` `strategy_outcome_labels.csv` rows in about `25m23s` with label-stage audit `12` PASS / `0` FAIL rows.
-- Stage protocol audits and default audit row contracts now name canonical `strategy_*` artifacts as the primary schema/input/output boundary. `anomaly_*` files remain compatibility aliases, not the documented primary artifact names.
-- Same-schema compatibility aliases are hardlink-first and copy-only fallback, so large `strategy_*` / `anomaly_*` artifact pairs no longer duplicate bytes on filesystems with hardlink support.
-- Runtime artifacts from previous local proofs were cleaned from `.output\results` and `tmp`; the source cache `.output\market` was preserved. Local C: free space after cleanup was about `93.2GB`.
-- Rejection funnel now stays compact for large runs: included rows from state/future/labels/prediction/decision/simulation are represented by auditable stage summary rows with `row_count`, while excluded rows keep explicit aggregate `reason_code`. This preserves forensic stage coverage without duplicating multi-million-row artifacts.
-- Independent forensic alias comparison now uses a same-file hardlink fast path and streaming CSV comparison, so canonical/compatibility alias checks no longer materialize both sides of large artifact pairs.
-- Feature-matrix CLI no longer materializes full `strategy_state_1m.csv` as a tuple before writing. It builds a compact per-snapshot state summary for cross-section fields and then streams state rows from the canonical CSV boundary.
-- `run-research` now releases stage-local memory between major stages with an explicit garbage-collection barrier, reducing retained memory pressure in the single-command offline pipeline.
-- `run-research` now writes incremental root `strategy_stage_timings.csv` / `anomaly_stage_timings.csv` rows for cache export, governance, state, future, feature matrix, atlas, labels, prediction, controls, EV, simulation, rejection funnel, forensic audit, and summary. FAIL rows are recorded before exceptions propagate, so the next long proof can identify the actual time bottleneck without ad hoc probing.
-- Large state, future, feature-matrix, labels, and EV decision-timing writers now use `csv.writer` with direct dataclass slot value lists instead of `csv.DictWriter` plus per-row dictionaries, preserving strict schema validation and hardlink-first aliases while reducing Python allocation overhead across multi-million-row artifacts.
-- EV and simulation artifact loaders now read strict CSV boundaries with streaming `csv.DictReader` instead of `pandas.read_csv` plus `iterrows()`, reducing avoidable memory and parsing overhead on large decision/simulation artifacts without changing EV or simulation semantics.
-- EV now writes large `strategy_decision_timing.csv` rows directly from `ExpectedValueRow` slots after one schema-field validation, avoiding a second full `asdict()` payload list while preserving the hardlink-first compatibility alias.
-- The simulation runner now loads and normalizes candles, optional funding, and decision timing once, then reuses the typed inputs for both base simulation and random-entry control. This removes duplicate candles reads and repeated decision CSV parsing inside the single-command pipeline.
-- Atlas now reads strict state/future/feature CSV inputs in bounded chunks with per-chunk row-alignment checks. This reduces the old full input merge pressure, but the 9d atlas/prediction/EV/simulation proof is still not claimed after cleanup.
-- Horizon ownership is documented, code-side supported horizon constants live in `anomaly_science.contracts.horizons`, and StrategyMetadata now validates selected `horizon_minutes`, semantic `allowed_horizons`, and `default_horizon_minutes`. Registry-level compatibility validation now rejects arbitrary, mismatched, unknown, and specified-but-not-implemented strategy/horizon pairs before prediction, controls, EV, and simulation configs are accepted; low-level CLI target-horizon commands use the same Core whitelist and validate the resolved strategy/horizon pair before file IO. Strategy registry output now exposes executable broad anomaly, post-anomaly extension, and post-pump distribution variants in `strategy_registry.csv`; the current anomaly spec has no remaining specified-only registry variants.
-- Horizon ownership is explicit in methodology docs: Core supports the fixed research horizon set, Strategy selects semantic variants from that set, and Registry must enforce the selected strategy/horizon pair before train/OOS/controls/EV/simulation.
+Current phase: structural pump-fade archetype research inside `anomaly_science`.
+This is offline research only. It is not live, shadow-live, production execution,
+or a complete trading system.
 
-Current Git head before the active hardlink-alias and chunked-atlas patch: `fd6f0be4`.
-- Verified with `git rev-parse --short HEAD` in the local repository.
-- Do not treat old patch-queue notes in previous chats as current state unless they match the checked-out Git head.
+## Source of truth
 
-Last known local validation before this compact-run performance patch:
-- `.venv\Scripts\python.exe -m pytest tests\test_data_audit.py -q`
-- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
-- `.venv\Scripts\python.exe main.py run-mvp1-data-audit --input .output\results\research_runs\20260620T032748623164Z_broad_anomaly_v1_h30\input --out tmp\data_audit_2d_perf` completed in 577.49s
-- `.venv\Scripts\python.exe -m compileall -q main.py src tests zip_project.py`
-- `.venv\Scripts\python.exe -m pytest -q`
-- `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --cache-dir tmp\codex_smoke_cache --research-mode frozen_holdout --protocol-freeze-id smoke_20260620_fixture`
-- `.venv\Scripts\python.exe -m pytest tests\test_forensic_audit.py tests\test_feature_catalog.py tests\test_feature_matrix.py tests\test_research_run.py tests\test_prediction.py tests\test_contracts.py tests\test_rejection_funnel.py`
-- `.venv\Scripts\python.exe -m pytest tests\test_forensic_audit.py tests\test_controls.py tests\test_trade_simulation.py tests\test_research_run.py`
-- `.venv\Scripts\python.exe -m pytest tests\test_decision_expected_value.py tests\test_trade_simulation.py tests\test_artifact_schemas.py tests\test_research_run.py tests\test_forensic_audit.py`
-- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_artifact_schemas.py`
-- `.venv\Scripts\python.exe -m pytest tests\test_prediction.py tests\test_feature_catalog.py tests\test_horizon_contract.py`
-- `.venv\Scripts\python.exe -m pytest tests\test_research_run.py tests\test_holdout_governance.py tests\test_artifact_schemas.py`
-- `.venv\Scripts\python.exe -m compileall src main.py tests zip_project.py`
-- `.venv\Scripts\python.exe -m pytest`
-- `.venv\Scripts\python.exe -m pytest tests\test_future_paths.py tests\test_feature_matrix.py tests\test_labels.py tests\test_atlas.py tests\test_artifact_schemas.py -q`
-- `.venv\Scripts\python.exe -m compileall -q src\anomaly_science\future\builder.py src\anomaly_science\future\run.py src\anomaly_science\features\matrix.py src\anomaly_science\labels\builder.py src\anomaly_science\atlas\builder.py src\anomaly_science\artifacts\writer.py`
-- `.venv\Scripts\python.exe main.py run-mvp1-feature-matrix --input <2d all-symbol input> --state <2d all-symbol strategy_state_1m.csv> --out tmp\feature_matrix_2d_perf4` completed in `710.30s`
-- `.venv\Scripts\python.exe main.py run-mvp1-labels --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --out tmp\labels_2d_perf` completed in `221.16s`
-- `.venv\Scripts\python.exe main.py run-mvp1-atlas --state <2d all-symbol strategy_state_1m.csv> --future <2d all-symbol strategy_future_paths.csv> --features <2d all-symbol strategy_feature_matrix.csv> --out tmp\atlas_2d_perf` completed in `1582.80s`
-- `.venv\Scripts\python.exe main.py run-research broad_anomaly_v1_h30 --days 2` completed at `.output\results\research_runs\20260620T115928580603Z_broad_anomaly_v1_h30` with forensic `FAIL=0`, `WARN=8`
+Active strategy source of truth:
 
-Current documentation sync status:
-- README and COMMANDS must list broad anomaly, post-anomaly extension, and post-pump distribution as executable offline research variants.
-- `strategy_registry.csv` remains executable-only.
-- `strategy_implementation_status.csv` remains the generated truth table; as of the current anomaly spec there are no specified-only variants.
-- 120m/180m research is valid only through explicit executable post-anomaly/post-pump strategy names, not through the backward-compatible omitted `--strategy-name` broad-anomaly default.
-- Full 380d all-symbol Binance Vision cache/export validation is recorded with `cache_export_coverage.csv`, `cache_export_manifest.json`, and `research/validation/cache_export_380d_validation.json`.
+```text
+docs/pump_fade_archetype_protocol.md
+```
+
+That file is the only normative Strategy Spec for the current structural
+pump-fade thread.
+
+Non-normative / secondary files:
+
+```text
+README.md                                operational overview only
+COMMANDS.md                              command reference only
+research/STRATEGY_SPEC.md                pointer to the canonical Strategy Spec
+docs/pump_fade_market_mechanics.md       explanatory market-mechanics notes only
+docs/strategies/anomaly_strategy.md      fixed-horizon compatibility strategy only
+```
+
+Core methodology source of truth:
+
+```text
+docs/research_methodology_core.md
+```
+
+Core methodology must remain strategy-independent. It must not point to
+`docs/pump_fade_archetype_protocol.md`, `docs/strategies/anomaly_strategy.md`,
+or any other strategy-specific protocol as part of its normative contract.
+Concrete strategies may point to Core; Core must not depend on concrete
+strategies.
+
+## Active strategy contract
+
+Current active strategy family:
+
+```text
+structural pump-fade
+```
+
+Current implementation contract:
+
+```text
+PumpFadeStrategyDefinition
+strategy_contract_version = horizon_free_event_strategy_v1
+```
+
+The active pump-fade target is a horizon-free structural close race at causally
+qualified new running highs:
+
+```text
+fade      = close-to-base happens before close-above-running-high confirmation
+non-fade  = close-above-running-high confirmation happens first
+```
+
+Fixed-horizon `BaseStrategy` variants remain compatibility and smoke-test paths.
+They do not define the active structural pump-fade strategy.
+
+## Current implemented scope
+
+Implemented and usable for the offline research scope:
+
+```text
+legacy quarantine boundary
+Binance Vision enriched 1m cache/export boundary
+cache export coverage and manifest proof artifacts
+data quality gates
+point-in-time universe from historical data availability
+strategy-neutral canonical strategy_* artifacts with anomaly_* compatibility aliases
+fixed-horizon MVP1 research pipeline for compatibility/smoke usage
+structural pump-fade decision dataset builder
+structural pump-fade nature dataset builder
+archetype discovery and controls for pump-fade nature
+paired OI incremental experiment runner, subject to the OI limitations below
+```
+
+Still intentionally absent:
+
+```text
+live trading
+shadow live
+production execution
+exchange-order simulation
+position sizing
+final deployable entry/stop/target policy for pump-fade
+```
+
+## Latest pump-fade readout
+
+The full pump-fade nature artifacts produced a useful directional research
+signal, but not a tradeable system:
+
+```text
+pump-fade event-nature rows: 39,283
+overall fade rate: approximately 48.6%
+replicated fade archetypes: present, selective, narrow coverage
+trade PnL proof: absent
+live-readiness: absent
+```
+
+Interpretation:
+
+```text
+The edge candidate is not "short every pump".
+It is a selective late-stage overheated pump regime where fade probability
+appears materially higher than the matched baseline.
+```
+
+The exact discovered thresholds, for example `rel_vol_phase > 241.8`, are
+machine discovery cutpoints. They are not economic constants. They must be
+validated through pre-registered coarse bins, rounded-threshold sensitivity, or
+continuous-model walk-forward evidence before becoming decision policy.
+
+## OI experiment status
+
+The 30-symbol OI smoke was pipeline-positive but not OI evidence:
+
+```text
+decision rows: 4,382
+event-nature rows: 1,093
+discovery groups: 714
+later-verification groups: 324
+AUC no-OI: 0.6050
+AUC with-OI: 0.6351
+paired bootstrap mean delta: +0.0298
+95% interval: -0.0038 .. +0.0632
+status: inconclusive smoke
+```
+
+The full OI run under `.output/results/pump_fade_oi_full_v3` must be treated as
+failed partial output, not as completed OI evidence:
+
+```text
+completed arm: baseline_same_oi_population
+failed arm: with_open_interest
+failure: numeric feature `oi_change_5m` contains missing values
+paired summary: not produced / not valid
+```
+
+The important contract bug is:
+
+```text
+`oi_available=true` currently does not guarantee that every registered OI model
+feature is finite.
+```
+
+Required fix before interpreting OI:
+
+```text
+separate raw/current OI stream availability from OI model-feature availability
+filter paired OI arms on the exact registered OI feature set, or add an explicit
+causal imputation + missing-flag protocol
+write FAILED_PARTIAL experiment status when one arm fails
+never treat baseline_same_oi_population as incremental OI evidence
+```
+
+## Cache/export validation status
+
+The full local Binance Vision cache/export proof remains the current data-source
+boundary validation:
+
+```text
+validation artifact: research/validation/cache_export_380d_validation.json
+period: 2025-06-03 .. 2026-06-17
+exported perpetual symbols: 796
+1m rows: 344,895,197
+missing UTC days: 0
+duplicate 1m rows: 0
+unclassified 1m gaps: 0
+classified settlement-transition missing rows: 3,570
+```
+
+## Current Git state note
+
+Checked-out archive head observed while preparing this update:
+
+```text
+d5dc75b
+```
+
+Do not treat older notes that mention `fd6f0be4` as current. After applying this
+patch and committing, update this section to the actual repository head from:
+
+```bash
+git rev-parse --short HEAD
+```
+
+If the current repository head cannot be checked, write `UNKNOWN` instead of
+inventing a commit.
+
+## Next priorities
+
+Priority 1:
+
+```text
+Fix OI feature availability contract and FAILED_PARTIAL experiment reporting.
+```
+
+Priority 2:
+
+```text
+Add threshold stability audit for discovered archetype rules:
+- rounded thresholds
+- coarse pre-registered bins
+- nearby cutoff sensitivity
+- discovery-only quantile bins
+```
+
+Priority 3:
+
+```text
+Only after OI and threshold-stability cleanup, move promising pump-fade regimes
+into walk-forward calibrated probability, decision timing, EV, and pessimistic
+trade simulation.
+```
