@@ -194,3 +194,8 @@ outer-fold execution-policy evaluation
 ```
 
 Every report must preserve an `unclassified` remainder. The system searches for supported categories; it does not claim that the finite observed feature space contains every real pump nature.
+
+
+## Runtime note
+
+Full-universe pump-fade dataset builds must keep the symbol worker queue bounded (`bounded_inflight_symbol_pool_v1`). The builder may process symbols concurrently, but it must not submit the entire universe as in-flight futures at once on the target i5 / 16 GB RAM machine.

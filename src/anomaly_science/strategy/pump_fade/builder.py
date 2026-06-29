@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
-from concurrent.futures import ProcessPoolExecutor
-from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -923,6 +923,7 @@ def build_pump_fade_decisions(
     config: PumpFadeDecisionConfig | None = None,
     limit_symbols: int | None = None,
     workers: int = 1,
+    max_inflight_symbols: int | None = None,
     progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> pd.DataFrame:
     decisions, _ = build_pump_fade_decisions_with_quality(
@@ -930,9 +931,66 @@ def build_pump_fade_decisions(
         config=config,
         limit_symbols=limit_symbols,
         workers=workers,
+        max_inflight_symbols=max_inflight_symbols,
         progress_callback=progress_callback,
     )
     return decisions
+
+
+def _resolve_max_inflight_symbols(*, workers: int, max_inflight_symbols: int | None) -> int:
+    if max_inflight_symbols is None:
+        return max(1, workers * 2)
+    if max_inflight_symbols <= 0:
+        raise PumpFadeBuildError("max_inflight_symbols must be positive")
+    if max_inflight_symbols < workers:
+        raise PumpFadeBuildError("max_inflight_symbols must be greater than or equal to workers")
+    return max_inflight_symbols
+
+
+def _iter_bounded_symbol_builds(
+    *,
+    paths: list[Path],
+    config: PumpFadeDecisionConfig,
+    workers: int,
+    max_inflight_symbols: int,
+) -> Iterator[tuple[Path, PumpFadeSymbolBuildResult | str]]:
+    if workers == 1:
+        for path in paths:
+            yield path, _build_symbol_or_error(path, config)
+        return
+
+    executor = ProcessPoolExecutor(max_workers=workers)
+    pending: dict[Future[PumpFadeSymbolBuildResult | str], tuple[int, Path]] = {}
+    completed: dict[int, tuple[Path, PumpFadeSymbolBuildResult | str]] = {}
+    next_submit = 0
+    next_emit = 0
+
+    def submit_until_capacity() -> None:
+        nonlocal next_submit
+        while (
+            next_submit < len(paths)
+            and len(pending) + len(completed) < max_inflight_symbols
+        ):
+            path = paths[next_submit]
+            future = executor.submit(_build_symbol_or_error, path, config)
+            pending[future] = (next_submit, path)
+            next_submit += 1
+
+    try:
+        submit_until_capacity()
+        while next_emit < len(paths):
+            while next_emit not in completed:
+                if not pending:
+                    raise PumpFadeBuildError("internal error: bounded pump-fade worker pool stalled")
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    index, path = pending.pop(future)
+                    completed[index] = (path, future.result())
+                submit_until_capacity()
+            yield completed.pop(next_emit)
+            next_emit += 1
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def build_pump_fade_decisions_with_quality(
@@ -941,11 +999,15 @@ def build_pump_fade_decisions_with_quality(
     config: PumpFadeDecisionConfig | None = None,
     limit_symbols: int | None = None,
     workers: int = 1,
+    max_inflight_symbols: int | None = None,
     progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     config = config or PumpFadeDecisionConfig()
     if not 1 <= workers <= 16:
         raise PumpFadeBuildError("workers must be between 1 and 16")
+    resolved_max_inflight = _resolve_max_inflight_symbols(
+        workers=workers, max_inflight_symbols=max_inflight_symbols
+    )
     paths = list(resolve_pump_fade_cache_universe(cache_dir).perpetual_paths)
     if limit_symbols is not None:
         if limit_symbols <= 0:
@@ -955,28 +1017,23 @@ def build_pump_fade_decisions_with_quality(
         raise PumpFadeBuildError(f"no parquet symbol caches found in {cache_dir}")
     frames: list[pd.DataFrame] = []
     quality_rows: list[dict[str, object]] = []
-    if workers == 1:
-        built = ((path, _build_symbol_or_error(path, config)) for path in paths)
-        executor = None
-    else:
-        executor = ProcessPoolExecutor(max_workers=workers)
-        futures = tuple(executor.submit(_build_symbol_or_error, path, config) for path in paths)
-        built = ((path, future.result()) for path, future in zip(paths, futures, strict=True))
-    try:
-        for index, (path, outcome) in enumerate(built, start=1):
-            if isinstance(outcome, PumpFadeSymbolBuildResult):
-                frame = outcome.decisions
-                quality_rows.append(outcome.quality)
-            else:
-                frame = pd.DataFrame()
-                quality_rows.append(_rejected_quality_row(path=path, reason=outcome))
-            if not frame.empty:
-                frames.append(frame)
-            if progress_callback is not None:
-                progress_callback(index, len(paths), path.stem, len(frame))
-    finally:
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=False)
+    built = _iter_bounded_symbol_builds(
+        paths=paths,
+        config=config,
+        workers=workers,
+        max_inflight_symbols=resolved_max_inflight,
+    )
+    for index, (path, outcome) in enumerate(built, start=1):
+        if isinstance(outcome, PumpFadeSymbolBuildResult):
+            frame = outcome.decisions
+            quality_rows.append(outcome.quality)
+        else:
+            frame = pd.DataFrame()
+            quality_rows.append(_rejected_quality_row(path=path, reason=outcome))
+        if not frame.empty:
+            frames.append(frame)
+        if progress_callback is not None:
+            progress_callback(index, len(paths), path.stem, len(frame))
     decisions = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     quality = pd.DataFrame(quality_rows)
     return decisions, quality

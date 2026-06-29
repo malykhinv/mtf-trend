@@ -555,6 +555,12 @@ def build_parser() -> argparse.ArgumentParser:
     pump_fade_dataset.add_argument(
         "--workers", type=int, default=4, help="Independent symbol builder processes; valid range 1..16."
     )
+    pump_fade_dataset.add_argument(
+        "--max-inflight-symbols",
+        type=int,
+        default=None,
+        help="Bound queued/in-flight symbol build tasks; defaults to workers*2.",
+    )
 
     pump_fade_nature = subparsers.add_parser(
         "build-pump-fade-nature-dataset",
@@ -609,6 +615,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit_symbols=args.limit_symbols,
             progress_every=args.progress_every,
             workers=args.workers,
+            max_inflight_symbols=args.max_inflight_symbols,
         )
         print(f"pump-fade causal dataset written: {output_path}")
         return 0

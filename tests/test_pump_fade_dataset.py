@@ -267,12 +267,15 @@ def test_pump_fade_cli_routes_progress_to_dataset_builder(
             "30",
             "--progress-every",
             "5",
+            "--max-inflight-symbols",
+            "8",
         ]
     )
 
     assert result == 0
     assert captured["limit_symbols"] == 30
     assert captured["progress_every"] == 5
+    assert captured["max_inflight_symbols"] == 8
 
 
 def test_builder_materializes_invalid_market_rows_as_audited_gaps(tmp_path: Path) -> None:
@@ -315,6 +318,8 @@ def test_dataset_run_writes_data_quality_artifact(tmp_path: Path) -> None:
     assert "max_1m_high_return" in metadata["strategy"]["custom_feature_names"]
     assert metadata["oi_covered_row_count"] == 0
     assert metadata["oi_covered_row_fraction"] == 0.0
+    assert metadata["max_inflight_symbols"] == 2
+    assert metadata["worker_scheduling_contract"] == "bounded_inflight_symbol_pool_v1"
 
 
 def test_parallel_symbol_builder_is_deterministic(tmp_path: Path) -> None:
@@ -327,11 +332,36 @@ def test_parallel_symbol_builder_is_deterministic(tmp_path: Path) -> None:
         cache_dir=cache_dir, config=_config(), workers=1
     )
     parallel = build_pump_fade_decisions_with_quality(
-        cache_dir=cache_dir, config=_config(), workers=2
+        cache_dir=cache_dir, config=_config(), workers=2, max_inflight_symbols=2
     )
 
     pd.testing.assert_frame_equal(parallel[0], sequential[0])
     pd.testing.assert_frame_equal(parallel[1], sequential[1])
+
+
+def test_parallel_symbol_builder_rejects_unbounded_or_underfilled_inflight_pool(
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_market(cache_dir / "AAA.parquet")
+    _write_market(cache_dir / "BBB.parquet")
+
+    with pytest.raises(PumpFadeBuildError, match="max_inflight_symbols must be positive"):
+        build_pump_fade_decisions_with_quality(
+            cache_dir=cache_dir,
+            config=_config(),
+            workers=2,
+            max_inflight_symbols=0,
+        )
+
+    with pytest.raises(PumpFadeBuildError, match="greater than or equal to workers"):
+        build_pump_fade_decisions_with_quality(
+            cache_dir=cache_dir,
+            config=_config(),
+            workers=2,
+            max_inflight_symbols=1,
+        )
 
 
 def test_dataset_builder_excludes_delivery_contracts_from_perpetual_universe(tmp_path: Path) -> None:

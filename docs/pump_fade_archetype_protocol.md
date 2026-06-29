@@ -252,13 +252,19 @@ or the future pristine holdout after protocol freeze.
   Any later probability model used for online decisions still requires weekly
   walk-forward training with frozen weights inside each OOS week.
 
+## Runtime discipline
+
+The canonical pump-fade builder uses `bounded_inflight_symbol_pool_v1`: with `workers > 1`, it submits at most `--max-inflight-symbols` symbol jobs at a time, defaulting to `workers*2`. This keeps full-universe runs from queueing hundreds of pandas/pyarrow symbol tasks at once on a 16 GB laptop while preserving deterministic symbol-order output.
+
 ## Commands
 
 ```powershell
 .venv/Scripts/python.exe main.py build-pump-fade-dataset `
   --cache-dir .output/market/binance_vision/um_futures/enriched_1m `
   --out .output/results/pump_fade_decisions_30.parquet `
-  --limit-symbols 30
+  --limit-symbols 30 `
+  --workers 4 `
+  --max-inflight-symbols 8
 
 .venv/Scripts/python.exe main.py build-pump-fade-nature-dataset `
   --input .output/results/pump_fade_decisions_30.parquet `

@@ -38,6 +38,7 @@ def run_pump_fade_dataset_build(
     limit_symbols: int | None = None,
     progress_every: int = 10,
     workers: int = 1,
+    max_inflight_symbols: int | None = None,
 ) -> Path:
     if strategy is not None and config is not None and strategy.detector_config != config:
         raise ValueError("config and strategy.detector_config disagree")
@@ -46,10 +47,9 @@ def run_pump_fade_dataset_build(
     quality_policy = quality_policy or PumpFadeDataQualityPolicy()
     cache_universe = resolve_pump_fade_cache_universe(cache_dir)
     def report(done: int, total: int, symbol: str, rows: int) -> None:
-        del symbol
         if progress_every > 0 and (done % progress_every == 0 or done == total):
             print(
-                f"pump-fade dataset: {done}/{total} symbols; rows={rows}",
+                f"pump-fade dataset: {done}/{total} symbols; symbol={symbol}; rows={rows}",
                 flush=True,
             )
 
@@ -58,6 +58,7 @@ def run_pump_fade_dataset_build(
         config=config,
         limit_symbols=limit_symbols,
         workers=workers,
+        max_inflight_symbols=max_inflight_symbols,
         progress_callback=report,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +104,8 @@ def run_pump_fade_dataset_build(
         "cache_dir": str(cache_dir.resolve()),
         "limit_symbols": limit_symbols,
         "workers": workers,
+        "max_inflight_symbols": max_inflight_symbols if max_inflight_symbols is not None else workers * 2,
+        "worker_scheduling_contract": "bounded_inflight_symbol_pool_v1",
         "cache_perpetual_symbol_count": len(cache_universe.perpetual_paths),
         "selected_perpetual_symbol_count": min(
             len(cache_universe.perpetual_paths),
