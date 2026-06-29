@@ -66,9 +66,20 @@ def _is_patch_store_path(path: str, patch_dir: str) -> bool:
 def _status_lines(repo_root: Path) -> list[str]:
     output = _git(
         repo_root,
-        ["status", "--porcelain=v1", "--untracked-files=all"],
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )
-    return [line for line in output.splitlines() if line.strip()]
+    entries = [entry for entry in output.split("\0") if entry]
+    lines: list[str] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        lines.append(entry)
+        status = entry[:2]
+        if ("R" in status or "C" in status) and index + 1 < len(entries):
+            index += 2
+        else:
+            index += 1
+    return lines
 
 
 def _assert_clean_except_patch_store(repo_root: Path, patch_dir: str) -> None:
@@ -166,7 +177,34 @@ def _parse_args(argv: Iterable[str]) -> argparse.Namespace:
         action="store_true",
         help="Check that the newest patch applies cleanly, but do not apply or commit it.",
     )
+    parser.add_argument(
+        "--pause-on-error",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help=(
+            "Keep an interactive console open after an apply error. "
+            "auto pauses only when stdin is interactive; always forces a pause; "
+            "never disables it. Default: auto"
+        ),
+    )
     return parser.parse_args(list(argv))
+
+
+def _should_pause_on_error(mode: str) -> bool:
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return sys.stdin.isatty()
+
+
+def _pause_on_error(mode: str) -> None:
+    if not _should_pause_on_error(mode):
+        return
+    try:
+        input("\nPatch application failed. Press Enter to close this window...")
+    except (EOFError, OSError):
+        pass
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -179,6 +217,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
     except PatchApplyError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        _pause_on_error(args.pause_on_error)
         return 1
     return 0
 

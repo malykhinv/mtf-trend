@@ -182,4 +182,10 @@ Dry-run patch application without modifying the working tree:
 python apply_latest_patch.py --dry-run
 ```
 
-Patch files are read from `.patches/*.patch`. The commit message is the patch filename without `.patch`, so use filenames like `Add technical noise shock gate for raw 1m timestamp gaps.patch`.
+When launching the script from a short-lived console, keep the error visible after a failed patch check/apply:
+
+```bash
+python apply_latest_patch.py --pause-on-error always
+```
+
+Patch files are read from `.patches/*.patch`. The commit message is the patch filename without `.patch`, so use filenames like `Add technical noise shock gate for raw 1m timestamp gaps.patch`. By default, failed patch application pauses only when stdin is interactive; use `--pause-on-error never` for automation.
