@@ -1420,3 +1420,17 @@ Validation in this environment:
 - `pytest -q tests/test_atlas.py tests/test_artifact_schemas.py -k 'not cli'`
 
 Full CLI pytest still needs the project venv because this sandbox lacks `polars`.
+## research: paired pump-fade OI incremental protocol
+
+Status: APPLIED; full development run in progress.
+
+Changes:
+- Adds an explicit population equality gate so `oi_available=true` can define the experiment population without becoming a model feature.
+- Runs no-OI and with-OI archetype discovery on identical event rows, with blind and calendar-block shuffled-label controls in both arms.
+- Persists later-period OOS probabilities and applies a 2,000-draw paired group bootstrap to the AUC delta.
+- Parallelizes the independent per-symbol pump builder deterministically and excludes dated delivery contracts from the perpetual universe.
+- Records OI coverage and excluded delivery symbols in dataset metadata.
+
+Validation:
+- 30-symbol smoke: 1,093 event rows, 100% OI coverage; AUC 0.6050 -> 0.6351; paired 95% interval -0.0038..+0.0632; no accepted archetype categories.
+- `.venv\Scripts\python.exe -m pytest -q`: 288 passed before the final delivery-universe regression, followed by focused delivery/parallel tests: 2 passed.

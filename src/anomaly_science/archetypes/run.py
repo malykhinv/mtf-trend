@@ -60,6 +60,7 @@ def run_archetype_discovery(
     coverage_path = out_dir / "anomaly_archetype_coverage.csv"
     funnel_path = out_dir / "anomaly_archetype_candidate_funnel.csv"
     assignments_path = out_dir / "anomaly_archetype_assignments.parquet"
+    predictions_path = out_dir / "anomaly_archetype_verification_predictions.parquet"
     model_path = out_dir / "archetype_rule_generator.cbm"
     model_json_path = out_dir / "archetype_rule_generator.json"
     run_path = out_dir / "archetype_run.json"
@@ -84,6 +85,7 @@ def run_archetype_discovery(
         get_artifact_schema(funnel_path.name),
     )
     result.assignments.to_parquet(assignments_path, index=False)
+    result.verification_predictions.to_parquet(predictions_path, index=False)
     result.model.save_model(str(model_path))
     _atomic_json(model_json_path, result.model_json)
     run_id = f"archetype-discovery-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
@@ -141,6 +143,7 @@ def run_archetype_discovery(
         *coverage_paths,
         *funnel_paths,
         assignments_path,
+        predictions_path,
         model_path,
         model_json_path,
         run_path,

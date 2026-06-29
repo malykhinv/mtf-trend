@@ -99,6 +99,7 @@ class ArchetypeBuildResult:
     control_rows: list[ArchetypeControlRow]
     coverage_rows: list[ArchetypeCoverageRow]
     assignments: pd.DataFrame
+    verification_predictions: pd.DataFrame
     model: CatBoostClassifier
     model_json: dict[str, Any]
     prepared: PreparedArchetypeData
@@ -137,6 +138,7 @@ def _required_input_columns(config: ArchetypeDiscoveryConfig) -> set[str]:
         required.add(contract.row_filter_column)
     if config.population.minimum_value_column:
         required.add(config.population.minimum_value_column)
+    required.update(item.column for item in config.population.required_values)
     return required
 
 
@@ -155,6 +157,7 @@ def _validate_feature_boundary(config: ArchetypeDiscoveryConfig) -> None:
         forbidden.add(contract.future_start_time_column)
     if contract.row_filter_column:
         forbidden.add(contract.row_filter_column)
+    forbidden.update(item.column for item in config.population.required_values)
     selected = (
         set(config.features.numeric)
         | set(config.features.decision_timing_numeric)
@@ -314,6 +317,8 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
             work[config.population.minimum_value_column], errors="raise"
         )
         work = work[population_values >= float(config.population.minimum_value)].copy()
+    for required in config.population.required_values:
+        work = work[work[required.column] == required.value].copy()
     if work.empty:
         raise ArchetypeDiscoveryError("population filter removed every row")
 
@@ -1510,11 +1515,25 @@ def build_archetype_discovery(
         controls_passed=controls_passed,
     )
     assignments = pd.concat([assignments, unclassified], ignore_index=True)
+    verification_predictions = pd.DataFrame(
+        {
+            "group": prepared.verification[config.input.group_column].astype(str).to_numpy(),
+            "symbol": prepared.verification[config.input.symbol_column].astype(str).to_numpy(),
+            "snapshot_time_ms": prepared.verification["__snapshot_ms"].to_numpy(dtype=np.int64),
+            "feature_cutoff_time_ms": prepared.verification["__feature_cutoff_ms"].to_numpy(dtype=np.int64),
+            "future_start_time_ms": prepared.verification["__future_start_ms"].to_numpy(dtype=np.int64),
+            "resolution_time_ms": prepared.verification["__resolution_ms"].to_numpy(dtype=np.int64),
+            "label": y_verification,
+            "probability": verification_probability,
+            "group_inverse_weight": verification_weight,
+        }
+    )
     return ArchetypeBuildResult(
         category_rows=category_rows,
         control_rows=controls,
         coverage_rows=coverage_rows,
         assignments=assignments,
+        verification_predictions=verification_predictions,
         model=model,
         model_json=model_json,
         prepared=prepared,

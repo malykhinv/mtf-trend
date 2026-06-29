@@ -10,6 +10,7 @@ from anomaly_science.artifacts.manifest import build_manifest, write_manifest
 from anomaly_science.strategy.pump_fade.builder import (
     PumpFadeBuildError,
     build_pump_fade_decisions_with_quality,
+    resolve_pump_fade_cache_universe,
 )
 from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
 from anomaly_science.strategy.pump_fade.spec import PumpFadeStrategyDefinition
@@ -36,12 +37,14 @@ def run_pump_fade_dataset_build(
     quality_policy: PumpFadeDataQualityPolicy | None = None,
     limit_symbols: int | None = None,
     progress_every: int = 10,
+    workers: int = 1,
 ) -> Path:
     if strategy is not None and config is not None and strategy.detector_config != config:
         raise ValueError("config and strategy.detector_config disagree")
     strategy = strategy or PumpFadeStrategyDefinition(detector_config=config or PumpFadeDecisionConfig())
     config = strategy.detector_config
     quality_policy = quality_policy or PumpFadeDataQualityPolicy()
+    cache_universe = resolve_pump_fade_cache_universe(cache_dir)
     def report(done: int, total: int, symbol: str, rows: int) -> None:
         del symbol
         if progress_every > 0 and (done % progress_every == 0 or done == total):
@@ -54,6 +57,7 @@ def run_pump_fade_dataset_build(
         cache_dir=cache_dir,
         config=config,
         limit_symbols=limit_symbols,
+        workers=workers,
         progress_callback=report,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,9 +102,18 @@ def run_pump_fade_dataset_build(
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "cache_dir": str(cache_dir.resolve()),
         "limit_symbols": limit_symbols,
+        "workers": workers,
+        "cache_perpetual_symbol_count": len(cache_universe.perpetual_paths),
+        "selected_perpetual_symbol_count": min(
+            len(cache_universe.perpetual_paths),
+            limit_symbols if limit_symbols is not None else len(cache_universe.perpetual_paths),
+        ),
+        "excluded_delivery_symbols": list(cache_universe.excluded_delivery_symbols),
         "row_count": len(frame),
         "event_count": int(frame["event_id"].nunique()) if not frame.empty else 0,
         "resolved_row_count": int(frame["label_available"].sum()) if not frame.empty else 0,
+        "oi_covered_row_count": int(frame["oi_available"].sum()) if not frame.empty else 0,
+        "oi_covered_row_fraction": float(frame["oi_available"].mean()) if not frame.empty else 0.0,
         "quality_symbol_count": len(quality),
         "quality_rejected_symbol_count": rejected_symbol_count,
         "quality_rejected_symbol_fraction": rejected_symbol_fraction,

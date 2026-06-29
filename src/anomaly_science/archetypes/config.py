@@ -95,15 +95,31 @@ class ArchetypeFeatureSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchetypeRequiredValue:
+    column: str
+    value: str | int | float | bool
+
+    def __post_init__(self) -> None:
+        if not self.column:
+            raise ArchetypeConfigError("population required-value column must be non-empty")
+        if not isinstance(self.value, (str, int, float, bool)):
+            raise ArchetypeConfigError("population required value must be a JSON scalar")
+
+
+@dataclass(frozen=True, slots=True)
 class ArchetypePopulationSpec:
     minimum_value_column: str | None = None
     minimum_value: float | None = None
+    required_values: tuple[ArchetypeRequiredValue, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.minimum_value_column is None) != (self.minimum_value is None):
             raise ArchetypeConfigError(
                 "minimum_value_column and minimum_value must either both be set or both be omitted"
             )
+        columns = tuple(item.column for item in self.required_values)
+        if len(columns) != len(set(columns)):
+            raise ArchetypeConfigError("population required-value columns must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,10 +374,16 @@ def load_archetype_discovery_config(path: Path) -> ArchetypeDiscoveryConfig:
         not isinstance(item, (int, float)) for item in rolling_origin_raw
     ):
         raise ArchetypeConfigError("rolling_origin_fractions must be a JSON array of numbers")
+    required_values_raw = population_raw.pop("required_values", [])
+    if not isinstance(required_values_raw, list) or any(
+        not isinstance(item, dict) for item in required_values_raw
+    ):
+        raise ArchetypeConfigError("population.required_values must be a JSON array of objects")
+    required_values = tuple(ArchetypeRequiredValue(**item) for item in required_values_raw)
     return ArchetypeDiscoveryConfig(
         input=ArchetypeInputContract(**input_raw),
         features=feature_spec,
-        population=ArchetypePopulationSpec(**population_raw),
+        population=ArchetypePopulationSpec(required_values=required_values, **population_raw),
         shuffled_seeds=tuple(shuffled_seeds),
         generators=generators,
         rolling_origin_fractions=tuple(float(item) for item in rolling_origin_raw),

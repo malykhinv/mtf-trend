@@ -26,6 +26,7 @@ from anomaly_science.strategy import run_mvp1_strategy_registry
 from anomaly_science.strategy.pump_fade import (
     run_pump_fade_dataset_build,
     run_pump_fade_nature_projection,
+    run_pump_fade_oi_incremental_experiment,
 )
 from anomaly_science.strategy.registry import StrategyRegistryError, validate_strategy_horizon
 from anomaly_science.validation import run_mvp1_holdout_governance
@@ -502,6 +503,9 @@ def build_parser() -> argparse.ArgumentParser:
     pump_fade_dataset.add_argument(
         "--progress-every", type=int, default=10, help="Print progress every N symbols; zero disables it."
     )
+    pump_fade_dataset.add_argument(
+        "--workers", type=int, default=4, help="Independent symbol builder processes; valid range 1..16."
+    )
 
     pump_fade_nature = subparsers.add_parser(
         "build-pump-fade-nature-dataset",
@@ -509,6 +513,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pump_fade_nature.add_argument("--input", required=True, help="Canonical decision parquet path.")
     pump_fade_nature.add_argument("--out", required=True, help="Output event-nature parquet path.")
+
+    pump_fade_oi = subparsers.add_parser(
+        "run-pump-fade-oi-incremental",
+        help="Compare no-OI and with-OI archetype discovery on identical OI-covered event rows.",
+    )
+    pump_fade_oi.add_argument("--input", required=True, help="Canonical pump-fade nature parquet path.")
+    pump_fade_oi.add_argument("--config", required=True, help="Registered no-OI archetype config used as the paired baseline.")
+    pump_fade_oi.add_argument("--out", required=True, help="Output directory for both paired runs and summary.")
+    pump_fade_oi.add_argument("--limit-symbols", type=int, default=None, help="Deterministic smoke limit; omit for the full registered run.")
 
 
     return parser
@@ -538,6 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path=Path(args.out),
             limit_symbols=args.limit_symbols,
             progress_every=args.progress_every,
+            workers=args.workers,
         )
         print(f"pump-fade causal dataset written: {output_path}")
         return 0
@@ -548,6 +562,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path=Path(args.out),
         )
         print(f"pump-fade event-nature dataset written: {output_path}")
+        return 0
+
+    if args.command == "run-pump-fade-oi-incremental":
+        output_dir = run_pump_fade_oi_incremental_experiment(
+            input_path=Path(args.input),
+            out_dir=Path(args.out),
+            base_config=load_archetype_discovery_config(Path(args.config)),
+            limit_symbols=args.limit_symbols,
+        )
+        print(f"pump-fade paired OI experiment artifacts written: {output_dir}")
         return 0
 
     if args.command == "run-research":

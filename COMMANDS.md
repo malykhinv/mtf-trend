@@ -137,6 +137,16 @@ python main.py validate-cache-export-proof --manifest tmp/mvp1_input_380d/cache_
 
 This proof gate requires the global 380d span, no missing UTC days, no duplicate 1m rows, and no unclassified 1m gaps. Gaps are accepted only when explicitly classified as settlement transitions with `{symbol}SETTLED` sibling evidence.
 
+Canonical pump-fade nature and paired OI incremental experiment:
+
+```bash
+python main.py build-pump-fade-dataset --cache-dir .output/market/binance_vision/um_futures/enriched_1m --out .output/results/pump_fade/decisions.parquet --limit-symbols 30
+python main.py build-pump-fade-nature-dataset --input .output/results/pump_fade/decisions.parquet --out .output/results/pump_fade/nature.parquet
+python main.py run-pump-fade-oi-incremental --input .output/results/pump_fade/nature.parquet --config research/pump_fade_nature_discovery.json --out .output/results/pump_fade/oi_incremental_smoke
+```
+
+The paired runner applies `oi_available=true` to both arms, keeps `oi_available` out of model features, and changes only the registered OI feature family. A symbol-limited run validates the pipeline only; it is not incremental-OI evidence.
+
 Smoke test on a small subset:
 
 ```bash

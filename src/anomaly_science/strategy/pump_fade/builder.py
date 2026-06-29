@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from concurrent.futures import ProcessPoolExecutor
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 
+from anomaly_science.binance_vision_cache import is_delivery_contract_symbol
 from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
 
 
@@ -38,6 +40,24 @@ class _EventRecord:
 class PumpFadeSymbolBuildResult:
     decisions: pd.DataFrame
     quality: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class PumpFadeCacheUniverse:
+    perpetual_paths: tuple[Path, ...]
+    excluded_delivery_symbols: tuple[str, ...]
+
+
+def resolve_pump_fade_cache_universe(cache_dir: Path) -> PumpFadeCacheUniverse:
+    all_paths = tuple(sorted(cache_dir.glob("*.parquet"), key=lambda item: item.stem))
+    return PumpFadeCacheUniverse(
+        perpetual_paths=tuple(
+            path for path in all_paths if not is_delivery_contract_symbol(path.stem)
+        ),
+        excluded_delivery_symbols=tuple(
+            path.stem for path in all_paths if is_delivery_contract_symbol(path.stem)
+        ),
+    )
 
 
 class _BarrierIndex:
@@ -876,6 +896,8 @@ def build_pump_fade_symbol_result(
             **quality_counts,
             "decision_row_count": len(result),
             "event_count": int(result["event_id"].nunique()) if not result.empty else 0,
+            "oi_covered_decision_row_count": int(result["oi_available"].sum()) if not result.empty else 0,
+            "oi_covered_decision_row_fraction": float(result["oi_available"].mean()) if not result.empty else 0.0,
             "status": "OK_WITH_DROPPED_ROWS" if quality_counts["dropped_row_count"] else "OK",
             "reason": (
                 "invalid required market rows were removed and became explicit time gaps"
@@ -900,12 +922,14 @@ def build_pump_fade_decisions(
     cache_dir: Path,
     config: PumpFadeDecisionConfig | None = None,
     limit_symbols: int | None = None,
+    workers: int = 1,
     progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> pd.DataFrame:
     decisions, _ = build_pump_fade_decisions_with_quality(
         cache_dir=cache_dir,
         config=config,
         limit_symbols=limit_symbols,
+        workers=workers,
         progress_callback=progress_callback,
     )
     return decisions
@@ -916,10 +940,13 @@ def build_pump_fade_decisions_with_quality(
     cache_dir: Path,
     config: PumpFadeDecisionConfig | None = None,
     limit_symbols: int | None = None,
+    workers: int = 1,
     progress_callback: Callable[[int, int, str, int], None] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     config = config or PumpFadeDecisionConfig()
-    paths = sorted(cache_dir.glob("*.parquet"), key=lambda item: item.stem)
+    if not 1 <= workers <= 16:
+        raise PumpFadeBuildError("workers must be between 1 and 16")
+    paths = list(resolve_pump_fade_cache_universe(cache_dir).perpetual_paths)
     if limit_symbols is not None:
         if limit_symbols <= 0:
             raise PumpFadeBuildError("limit_symbols must be positive")
@@ -928,34 +955,56 @@ def build_pump_fade_decisions_with_quality(
         raise PumpFadeBuildError(f"no parquet symbol caches found in {cache_dir}")
     frames: list[pd.DataFrame] = []
     quality_rows: list[dict[str, object]] = []
-    for index, path in enumerate(paths, start=1):
-        try:
-            symbol_result = build_pump_fade_symbol_result(
-                path, symbol=path.stem, config=config
-            )
-            frame = symbol_result.decisions
-            quality_rows.append(symbol_result.quality)
-        except PumpFadeBuildError as exc:
-            frame = pd.DataFrame()
-            quality_rows.append(
-                {
-                    "symbol": path.stem,
-                    "source_row_count": 0,
-                    "valid_row_count": 0,
-                    "dropped_row_count": 0,
-                    "non_finite_row_count": 0,
-                    "invalid_ohlc_row_count": 0,
-                    "negative_activity_row_count": 0,
-                    "decision_row_count": 0,
-                    "event_count": 0,
-                    "status": "REJECTED",
-                    "reason": str(exc),
-                }
-            )
-        if not frame.empty:
-            frames.append(frame)
-        if progress_callback is not None:
-            progress_callback(index, len(paths), path.stem, len(frame))
+    if workers == 1:
+        built = ((path, _build_symbol_or_error(path, config)) for path in paths)
+        executor = None
+    else:
+        executor = ProcessPoolExecutor(max_workers=workers)
+        futures = tuple(executor.submit(_build_symbol_or_error, path, config) for path in paths)
+        built = ((path, future.result()) for path, future in zip(paths, futures, strict=True))
+    try:
+        for index, (path, outcome) in enumerate(built, start=1):
+            if isinstance(outcome, PumpFadeSymbolBuildResult):
+                frame = outcome.decisions
+                quality_rows.append(outcome.quality)
+            else:
+                frame = pd.DataFrame()
+                quality_rows.append(_rejected_quality_row(path=path, reason=outcome))
+            if not frame.empty:
+                frames.append(frame)
+            if progress_callback is not None:
+                progress_callback(index, len(paths), path.stem, len(frame))
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=False)
     decisions = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     quality = pd.DataFrame(quality_rows)
     return decisions, quality
+
+
+def _build_symbol_or_error(
+    path: Path,
+    config: PumpFadeDecisionConfig,
+) -> PumpFadeSymbolBuildResult | str:
+    try:
+        return build_pump_fade_symbol_result(path, symbol=path.stem, config=config)
+    except PumpFadeBuildError as exc:
+        return str(exc)
+
+
+def _rejected_quality_row(*, path: Path, reason: str) -> dict[str, object]:
+    return {
+        "symbol": path.stem,
+        "source_row_count": 0,
+        "valid_row_count": 0,
+        "dropped_row_count": 0,
+        "non_finite_row_count": 0,
+        "invalid_ohlc_row_count": 0,
+        "negative_activity_row_count": 0,
+        "decision_row_count": 0,
+        "event_count": 0,
+        "oi_covered_decision_row_count": 0,
+        "oi_covered_decision_row_fraction": 0.0,
+        "status": "REJECTED",
+        "reason": reason,
+    }

@@ -120,6 +120,8 @@ Interpretation must remain conditional:
 
 OI samples are joined only after their availability time and never carried across unbounded gaps.
 
+OI is evaluated through a paired ablation, not by adding nullable columns to the old population. Both arms use exactly the same rows satisfying `oi_available=true`; the baseline excludes all OI values, while the second arm adds the registered price/OI state family. The availability flag is a population/audit gate and is forbidden as a model feature. A smoke run checks contracts and runtime only. Incremental evidence requires the full paired run, blind and calendar-block shuffled controls in both arms, followed by group-block paired inference on the performance difference.
+
 ### Preconditioning and regime
 
 - returns over 15m, 60m, 4h and 24h;

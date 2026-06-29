@@ -14,6 +14,7 @@ from anomaly_science.archetypes import (
     ArchetypeFeatureSpec,
     ArchetypeInputContract,
     ArchetypePopulationSpec,
+    ArchetypeRequiredValue,
     run_archetype_discovery,
 )
 from anomaly_science.archetypes.builder import (
@@ -23,6 +24,10 @@ from anomaly_science.archetypes.builder import (
     prepare_archetype_data,
 )
 from anomaly_science.contracts.time import TemporalContractError
+from anomaly_science.strategy.pump_fade.oi_experiment import (
+    run_pump_fade_oi_incremental_experiment,
+)
+from anomaly_science.strategy.pump_fade.spec import PUMP_FADE_OI_MODEL_FEATURES
 
 
 def _config() -> ArchetypeDiscoveryConfig:
@@ -207,6 +212,69 @@ def test_registered_row_filter_is_applied_before_target_time_validation() -> Non
 
     assert prepared.discovery.groupby("group").size().eq(1).all()
     assert prepared.verification.groupby("group").size().eq(1).all()
+
+
+def test_population_required_value_excludes_missing_oi_without_modeling_missingness() -> None:
+    frame = _synthetic_rows()
+    frame["oi_available"] = frame.groupby("group").ngroup().mod(2).eq(0)
+    base = _config()
+    config = replace(
+        base,
+        population=replace(
+            base.population,
+            required_values=(ArchetypeRequiredValue(column="oi_available", value=True),),
+        ),
+    )
+
+    prepared = prepare_archetype_data(frame, config)
+
+    assert prepared.discovery["oi_available"].eq(True).all()  # noqa: E712
+    assert prepared.verification["oi_available"].eq(True).all()  # noqa: E712
+    assert "oi_available" not in prepared.model_feature_names
+
+
+def test_population_filter_column_cannot_also_be_a_model_feature() -> None:
+    frame = _synthetic_rows()
+    frame["oi_available"] = True
+    base = _config()
+    config = replace(
+        base,
+        features=replace(base.features, numeric=(*base.features.numeric, "oi_available")),
+        population=replace(
+            base.population,
+            required_values=(ArchetypeRequiredValue(column="oi_available", value=True),),
+        ),
+    )
+
+    with pytest.raises(ArchetypeDiscoveryError, match="cannot be model features"):
+        prepare_archetype_data(frame, config)
+
+
+def test_paired_oi_experiment_uses_identical_covered_population(tmp_path: Path) -> None:
+    frame = _synthetic_rows()
+    frame["oi_available"] = True
+    for index, name in enumerate(PUMP_FADE_OI_MODEL_FEATURES):
+        frame[name] = frame["nature_signal"] if index == 0 else float(index)
+    input_path = tmp_path / "nature.parquet"
+    frame.to_parquet(input_path, index=False)
+
+    out_dir = run_pump_fade_oi_incremental_experiment(
+        input_path=input_path,
+        out_dir=tmp_path / "oi_experiment",
+        base_config=_config(),
+        limit_symbols=12,
+    )
+
+    summary = json.loads((out_dir / "oi_incremental_summary.json").read_text(encoding="utf-8"))
+    assert summary["population_contract"].startswith("identical rows with oi_available=true")
+    assert summary["baseline"]["verification_auc"] <= summary["with_open_interest"]["verification_auc"]
+    assert "oi_change_5m" not in summary["baseline"]["model_feature_names"]
+    assert "oi_change_5m" in summary["with_open_interest"]["model_feature_names"]
+    assert summary["incremental_evidence_status"] == "SMOKE_ONLY"
+    assert summary["paired_group_bootstrap"]["verification_group_count"] == 160
+    assert summary["paired_group_bootstrap"]["valid_iterations"] == 2000
+    assert summary["paired_group_bootstrap"]["auc_delta_lower_95"] >= -1e-12
+    assert (out_dir / "artifact_manifest.json").is_file()
 
 
 def test_archetype_feature_manifest_rejects_target_as_feature() -> None:

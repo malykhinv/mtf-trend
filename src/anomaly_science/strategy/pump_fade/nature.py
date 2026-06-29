@@ -111,6 +111,8 @@ def run_pump_fade_nature_projection(*, input_path: Path, output_path: Path) -> P
         "input_decision_row_count": len(decisions),
         "nature_event_row_count": len(nature),
         "available_nature_label_count": int(nature["nature_label_available"].sum()),
+        "oi_covered_nature_row_count": int(nature["oi_available"].sum()) if "oi_available" in nature else 0,
+        "oi_covered_nature_row_fraction": float(nature["oi_available"].mean()) if "oi_available" in nature else 0.0,
         "decision_label_schema": PUMP_FADE_LABEL_SCHEMA_VERSION,
         "nature_label_schema": PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION,
         "projection_contract": (

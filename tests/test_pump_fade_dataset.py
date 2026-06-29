@@ -12,8 +12,10 @@ from anomaly_science.strategy.pump_fade.builder import (
     _BarrierIndex,
     _race,
     PumpFadeBuildError,
+    build_pump_fade_decisions_with_quality,
     build_pump_fade_symbol,
     build_pump_fade_symbol_result,
+    resolve_pump_fade_cache_universe,
 )
 from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
 from anomaly_science.strategy.pump_fade.run import (
@@ -303,6 +305,7 @@ def test_dataset_run_writes_data_quality_artifact(tmp_path: Path) -> None:
     quality = pd.read_csv(tmp_path / "decisions.data_quality.csv")
     assert quality.loc[0, "symbol"] == "TEST"
     assert quality.loc[0, "status"] == "OK"
+    assert quality.loc[0, "oi_covered_decision_row_count"] == 0
     assert (tmp_path / "decisions.metadata.json").is_file()
     assert (tmp_path / "decisions.manifest.json").is_file()
     metadata = json.loads((tmp_path / "decisions.metadata.json").read_text(encoding="utf-8"))
@@ -310,6 +313,41 @@ def test_dataset_run_writes_data_quality_artifact(tmp_path: Path) -> None:
     assert metadata["strategy"]["execution_policy_version"] == "pump_fade_structural_execution_v1"
     assert metadata["strategy"]["target_policies"][0]["close_fraction_grid"] == [0.25, 0.5, 0.75, 1.0]
     assert "max_1m_high_return" in metadata["strategy"]["custom_feature_names"]
+    assert metadata["oi_covered_row_count"] == 0
+    assert metadata["oi_covered_row_fraction"] == 0.0
+
+
+def test_parallel_symbol_builder_is_deterministic(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_market(cache_dir / "AAA.parquet")
+    _write_market(cache_dir / "BBB.parquet")
+
+    sequential = build_pump_fade_decisions_with_quality(
+        cache_dir=cache_dir, config=_config(), workers=1
+    )
+    parallel = build_pump_fade_decisions_with_quality(
+        cache_dir=cache_dir, config=_config(), workers=2
+    )
+
+    pd.testing.assert_frame_equal(parallel[0], sequential[0])
+    pd.testing.assert_frame_equal(parallel[1], sequential[1])
+
+
+def test_dataset_builder_excludes_delivery_contracts_from_perpetual_universe(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _write_market(cache_dir / "AAAUSDT.parquet")
+    _write_market(cache_dir / "BTCUSDT_250627.parquet")
+
+    decisions, quality = build_pump_fade_decisions_with_quality(
+        cache_dir=cache_dir, config=_config()
+    )
+    universe = resolve_pump_fade_cache_universe(cache_dir)
+
+    assert set(decisions["symbol"]) == {"AAAUSDT"}
+    assert quality["symbol"].tolist() == ["AAAUSDT"]
+    assert universe.excluded_delivery_symbols == ("BTCUSDT_250627",)
 
 
 def test_dataset_run_fails_closed_when_dropped_rows_exceed_policy(tmp_path: Path) -> None:

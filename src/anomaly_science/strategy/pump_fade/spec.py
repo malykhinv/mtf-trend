@@ -94,7 +94,7 @@ _PUMP_FADE_DATASET_FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
     "decision_timing": ("decision_index",),
 }
 
-_PUMP_FADE_OPTIONAL_OI_FEATURES: tuple[str, ...] = (
+PUMP_FADE_OI_MODEL_FEATURES: tuple[str, ...] = (
     "oi_change_5m", "oi_change_15m", "oi_change_60m", "oi_change_240m",
     "oi_change_since_ignition", "price_up_oi_up_60m", "price_up_oi_down_60m",
     "price_down_oi_up_60m", "price_down_oi_down_60m",
@@ -134,7 +134,7 @@ def _dataset_feature_catalog() -> tuple[StrategyCustomFeatureSpec, ...]:
             required_streams=("open_interest",),
             identifiability="latent_hypothesis" if name.startswith("price_") else "observable",
         )
-        for name in _PUMP_FADE_OPTIONAL_OI_FEATURES
+        for name in PUMP_FADE_OI_MODEL_FEATURES
     )
     specs.append(
         StrategyCustomFeatureSpec(
@@ -185,6 +185,7 @@ __all__ = [
     "PUMP_FADE_STRATEGY",
     "PUMP_FADE_STRATEGY_CONTRACT_VERSION",
     "PUMP_FADE_DATASET_FEATURES",
+    "PUMP_FADE_OI_MODEL_FEATURES",
     "PUMP_MARKET_MECHANICS_FEATURES",
     "PumpFadeStrategyDefinition",
 ]
