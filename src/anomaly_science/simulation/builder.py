@@ -225,6 +225,7 @@ def _reanchor_random_control(
         stop_distance, target_distance = structural_high - current, current - structural_low
     if stop_distance <= 0.0 or target_distance <= 0.0:
         return None
+    selected_rr = target_distance / stop_distance
     return replace(
         decision,
         entry_reference_price=current,
@@ -232,8 +233,13 @@ def _reanchor_random_control(
         target_reference_price=target_price,
         stop_distance=stop_distance,
         target_distance=target_distance,
-        RR_long_proxy=target_distance / stop_distance,
-        RR_short_proxy=target_distance / stop_distance,
+        RR_long_proxy=selected_rr if decision.best_action == "long" else 0.0,
+        RR_short_proxy=selected_rr if decision.best_action == "short" else 0.0,
+        RR_long_acceptable=decision.selected_RR_acceptable if decision.best_action == "long" else False,
+        RR_short_acceptable=decision.selected_RR_acceptable if decision.best_action == "short" else False,
+        selected_RR=selected_rr,
+        selected_RR_acceptable=decision.selected_RR_acceptable,
+        is_RR_still_acceptable=decision.selected_RR_acceptable,
         execution_policy_resolved=True,
     )
 
@@ -378,9 +384,17 @@ def _is_simulatable_decision(decision: ExpectedValueRow, *, config: TradeSimulat
         return False
     if config.require_prediction_confident and not decision.is_prediction_confident:
         return False
-    if config.require_rr_acceptable and not decision.is_RR_still_acceptable:
+    if config.require_rr_acceptable and not _selected_side_rr_acceptable(decision):
         return False
     return True
+
+
+def _selected_side_rr_acceptable(decision: ExpectedValueRow) -> bool:
+    if decision.best_action == "long":
+        return decision.RR_long_acceptable
+    if decision.best_action == "short":
+        return decision.RR_short_acceptable
+    return False
 
 
 def _validate_strategy_horizon(*, config: TradeSimulationConfig) -> None:

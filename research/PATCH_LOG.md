@@ -1,3 +1,18 @@
+## decision: make RR acceptability side-specific
+
+Status: PROPOSED.
+
+Changes:
+- Adds side-specific decision timing fields: `RR_long_acceptable`, `RR_short_acceptable`, `selected_RR`, and `selected_RR_acceptable`.
+- Keeps `is_RR_still_acceptable` only as a legacy alias for any side passing min RR, not as the simulation gate.
+- Makes trade simulation require the RR gate for the selected side: long trades require `RR_long_acceptable`, short trades require `RR_short_acceptable`.
+- Adds regression tests proving that opposite-side RR cannot make a selected long/short trade simulatable.
+- Updates the Core methodology to document the side-specific RR invariant.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- Focused pytest collection still needs the project venv because this sandbox lacks `polars`.
+
 # Patch log
 
 ## audit: separate smoke and evidence forensic gates

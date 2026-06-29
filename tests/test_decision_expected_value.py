@@ -143,6 +143,10 @@ def test_expected_value_uses_oos_probabilities_structural_levels_and_costs() -> 
     assert round(row.EV_short, 10) == -2.4
     assert row.best_action == "long"
     assert row.is_prediction_confident is True
+    assert row.RR_long_acceptable is True
+    assert row.RR_short_acceptable is False
+    assert row.selected_RR == 3.0
+    assert row.selected_RR_acceptable is True
     assert row.is_RR_still_acceptable is True
     assert row.strategy_name == "broad_anomaly_v1_h30"
     assert row.strategy_version == "1.0.0"

@@ -105,7 +105,8 @@ def build_expected_value_metric_rows(
 
     add("ev_rows", len(rows), len(rows), "expected-value rows computed from OOS predictions")
     add("confident_rows", sum(1 for row in rows if row.is_prediction_confident), len(rows), "rows meeting min_prediction_confidence")
-    add("rr_acceptable_rows", sum(1 for row in rows if row.is_RR_still_acceptable), len(rows), "rows meeting min_rr proxy")
+    add("rr_acceptable_rows", sum(1 for row in rows if row.is_RR_still_acceptable), len(rows), "rows where either side meets min_rr proxy")
+    add("selected_rr_acceptable_rows", sum(1 for row in rows if row.selected_RR_acceptable), len(rows), "rows where selected long/short action meets its own side-specific min_rr proxy")
     add("positive_long_ev_rows", sum(1 for row in rows if row.EV_long > 0.0), len(rows), "rows with positive long EV proxy")
     add("positive_short_ev_rows", sum(1 for row in rows if row.EV_short > 0.0), len(rows), "rows with positive short EV proxy")
     add("actionable_positive_ev_rows", sum(1 for row in rows if row.best_action in {"long", "short"}), len(rows), "rows where long/short beats wait and no_trade")
@@ -195,6 +196,14 @@ def _build_row(
     ev_wait = 0.0
     ev_no_trade = 0.0
     best_action = _best_action(EV_long=ev_long, EV_short=ev_short, EV_wait=ev_wait, EV_no_trade=ev_no_trade)
+    rr_long_acceptable = rr_long >= config.min_rr
+    rr_short_acceptable = rr_short >= config.min_rr
+    selected_rr = _selected_rr(best_action=best_action, rr_long=rr_long, rr_short=rr_short)
+    selected_rr_acceptable = _selected_rr_acceptable(
+        best_action=best_action,
+        rr_long_acceptable=rr_long_acceptable,
+        rr_short_acceptable=rr_short_acceptable,
+    )
     selected_geometry = long_geometry if best_action == "long" else short_geometry
     metadata = strategy.metadata
     return ExpectedValueRow(
@@ -235,13 +244,17 @@ def _build_row(
         confidence_calibrated=prediction.prediction_confidence,
         RR_long_proxy=rr_long,
         RR_short_proxy=rr_short,
+        RR_long_acceptable=rr_long_acceptable,
+        RR_short_acceptable=rr_short_acceptable,
+        selected_RR=selected_rr,
+        selected_RR_acceptable=selected_rr_acceptable,
         EV_long=ev_long,
         EV_short=ev_short,
         EV_wait=ev_wait,
         EV_no_trade=ev_no_trade,
         best_action=best_action,
         is_prediction_confident=prediction.prediction_confidence >= config.min_prediction_confidence,
-        is_RR_still_acceptable=rr_long >= config.min_rr or rr_short >= config.min_rr,
+        is_RR_still_acceptable=rr_long_acceptable or rr_short_acceptable,
         temporal_contract=EXPECTED_VALUE_TEMPORAL_CONTRACT,
     )
 
@@ -363,6 +376,22 @@ def _target_for_horizon(label: StrategyOutcomeLabelRow, horizon_minutes: int) ->
     raise ExpectedValueInputError(f"unsupported EV target horizon: {horizon_minutes}")
 
 
+def _selected_rr(*, best_action: str, rr_long: float, rr_short: float) -> float:
+    if best_action == "long":
+        return rr_long
+    if best_action == "short":
+        return rr_short
+    return 0.0
+
+
+def _selected_rr_acceptable(*, best_action: str, rr_long_acceptable: bool, rr_short_acceptable: bool) -> bool:
+    if best_action == "long":
+        return rr_long_acceptable
+    if best_action == "short":
+        return rr_short_acceptable
+    return False
+
+
 def _best_action(*, EV_long: float, EV_short: float, EV_wait: float, EV_no_trade: float) -> str:
     passive_ev = max(EV_wait, EV_no_trade)
     if EV_long > passive_ev and EV_long >= EV_short:
@@ -451,6 +480,10 @@ def _expected_value_from_mapping(row: Mapping[str, object]) -> ExpectedValueRow:
         confidence_calibrated=_required_float(row, "confidence_calibrated"),
         RR_long_proxy=_required_float(row, "RR_long_proxy"),
         RR_short_proxy=_required_float(row, "RR_short_proxy"),
+        RR_long_acceptable=_required_bool(row, "RR_long_acceptable"),
+        RR_short_acceptable=_required_bool(row, "RR_short_acceptable"),
+        selected_RR=_required_float(row, "selected_RR"),
+        selected_RR_acceptable=_required_bool(row, "selected_RR_acceptable"),
         EV_long=_required_float(row, "EV_long"),
         EV_short=_required_float(row, "EV_short"),
         EV_wait=_required_float(row, "EV_wait"),

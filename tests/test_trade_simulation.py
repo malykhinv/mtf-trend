@@ -87,6 +87,10 @@ def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
         confidence_calibrated=0.8,
         RR_long_proxy=1.5,
         RR_short_proxy=1.5,
+        RR_long_acceptable=True,
+        RR_short_acceptable=True,
+        selected_RR=1.5,
+        selected_RR_acceptable=True,
         EV_long=2.1,
         EV_short=-1.4,
         EV_wait=0.0,
@@ -123,6 +127,51 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
     assert row.target_price == 103.0
     assert row.target_close_fraction == 0.25
     assert row.temporal_contract == TRADE_SIMULATION_TEMPORAL_CONTRACT
+
+
+def test_trade_simulation_requires_rr_acceptability_for_selected_long_side() -> None:
+    decision = replace(
+        _decision("long_bad_selected_rr"),
+        RR_long_proxy=0.5,
+        RR_short_proxy=2.0,
+        RR_long_acceptable=False,
+        RR_short_acceptable=True,
+        selected_RR=0.5,
+        selected_RR_acceptable=False,
+        is_RR_still_acceptable=True,
+    )
+
+    rows = build_trade_simulation_rows(
+        candles_1m=[],
+        decision_rows=[decision],
+        config=TradeSimulationConfig(target_horizon_minutes=30),
+    )
+
+    assert rows == ()
+
+
+def test_trade_simulation_requires_rr_acceptability_for_selected_short_side() -> None:
+    decision = replace(
+        _decision("short_bad_selected_rr"),
+        best_action="short",
+        RR_long_proxy=2.0,
+        RR_short_proxy=0.5,
+        RR_long_acceptable=True,
+        RR_short_acceptable=False,
+        selected_RR=0.5,
+        selected_RR_acceptable=False,
+        EV_long=-1.0,
+        EV_short=1.0,
+        is_RR_still_acceptable=True,
+    )
+
+    rows = build_trade_simulation_rows(
+        candles_1m=[],
+        decision_rows=[decision],
+        config=TradeSimulationConfig(target_horizon_minutes=30),
+    )
+
+    assert rows == ()
 
 
 def test_trade_simulation_debits_funding_inside_hold() -> None:

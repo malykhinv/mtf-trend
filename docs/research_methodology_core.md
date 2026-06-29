@@ -962,6 +962,10 @@ snapshot_time
 confidence_calibrated
 RR_long_proxy
 RR_short_proxy
+RR_long_acceptable
+RR_short_acceptable
+selected_RR
+selected_RR_acceptable
 EV_long
 EV_short
 EV_wait
@@ -974,6 +978,15 @@ is_RR_still_acceptable
 
 ```text
 Prediction имеет торговую ценность только если confidence появляется до деградации RR.
+```
+
+Правило:
+
+```text
+RR gate должен быть side-specific.
+Если best_action=long, simulation может использовать только RR_long_acceptable.
+Если best_action=short, simulation может использовать только RR_short_acceptable.
+Общий is_RR_still_acceptable допускается только как compatibility/audit alias и не может сам по себе разрешать сделку.
 ```
 
 ## 18. Expected Utility
@@ -1019,6 +1032,7 @@ fees must be included at least roughly
 funding fees must be included when funding_rate stream is present; if absent, short-biased conclusions are audit-limited
 intracandle double barrier resolves as stop_loss_first
 one open simulated position per symbol/strategy variant unless an explicit pyramiding experiment is registered
+selected trade side must pass its own RR gate; opposite-side RR cannot make a trade simulatable
 entry toxic penalty = 0.2 * last closed 1m high-low proxy by default, added against the trade direction
 ```
 

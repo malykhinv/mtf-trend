@@ -51,6 +51,10 @@ class ExpectedValueRow:
     confidence_calibrated: float
     RR_long_proxy: float
     RR_short_proxy: float
+    RR_long_acceptable: bool
+    RR_short_acceptable: bool
+    selected_RR: float
+    selected_RR_acceptable: bool
     EV_long: float
     EV_short: float
     EV_wait: float
@@ -132,11 +136,30 @@ class ExpectedValueRow:
             value = getattr(self, field_name)
             if not math.isfinite(value) or value < 0.0 or value > 1.0:
                 raise MarketDataContractError(f"{field_name} must be within [0, 1]")
-        for field_name in ("RR_long_proxy", "RR_short_proxy", "EV_long", "EV_short", "EV_wait", "EV_no_trade"):
+        for field_name in ("RR_long_proxy", "RR_short_proxy", "selected_RR", "EV_long", "EV_short", "EV_wait", "EV_no_trade"):
             if not math.isfinite(getattr(self, field_name)):
                 raise MarketDataContractError(f"{field_name} must be finite")
+        if self.selected_RR < 0.0:
+            raise MarketDataContractError("selected_RR must be non-negative")
         if self.best_action not in DECISION_ACTIONS:
             raise MarketDataContractError(f"best_action has unknown value: {self.best_action!r}")
+        if self.best_action == "long":
+            if self.selected_RR != self.RR_long_proxy:
+                raise MarketDataContractError("selected_RR must equal RR_long_proxy when best_action is long")
+            if self.selected_RR_acceptable != self.RR_long_acceptable:
+                raise MarketDataContractError("selected_RR_acceptable must equal RR_long_acceptable when best_action is long")
+        elif self.best_action == "short":
+            if self.selected_RR != self.RR_short_proxy:
+                raise MarketDataContractError("selected_RR must equal RR_short_proxy when best_action is short")
+            if self.selected_RR_acceptable != self.RR_short_acceptable:
+                raise MarketDataContractError("selected_RR_acceptable must equal RR_short_acceptable when best_action is short")
+        else:
+            if self.selected_RR != 0.0:
+                raise MarketDataContractError("selected_RR must be 0.0 for wait/no_trade actions")
+            if self.selected_RR_acceptable:
+                raise MarketDataContractError("selected_RR_acceptable must be false for wait/no_trade actions")
+        if self.is_RR_still_acceptable != (self.RR_long_acceptable or self.RR_short_acceptable):
+            raise MarketDataContractError("is_RR_still_acceptable must remain a legacy alias for any side RR acceptability")
         if self.temporal_contract != EXPECTED_VALUE_TEMPORAL_CONTRACT:
             raise MarketDataContractError("temporal_contract must document the EV time boundary")
 
