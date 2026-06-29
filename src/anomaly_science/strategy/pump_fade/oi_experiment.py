@@ -13,7 +13,14 @@ from sklearn.metrics import roc_auc_score
 from anomaly_science.archetypes import (
     ArchetypeDiscoveryConfig,
     ArchetypeRequiredValue,
-    run_archetype_discovery,
+    limit_archetype_symbols,
+    read_archetype_input_frame,
+    run_prepared_archetype_discovery,
+)
+from anomaly_science.archetypes.builder import (
+    PreparedArchetypeData,
+    prepare_archetype_data_from_rows,
+    prepare_archetype_rows,
 )
 from anomaly_science.artifacts.manifest import build_manifest, sha256_file, write_manifest
 from anomaly_science.strategy.pump_fade.spec import PUMP_FADE_OI_MODEL_FEATURES
@@ -68,42 +75,78 @@ def run_pump_fade_oi_incremental_experiment(
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    input_sha256 = sha256_file(input_path)
     try:
-        baseline_dir = run_archetype_discovery(
-            input_path=input_path,
-            out_dir=out_dir / "baseline_same_oi_population",
-            config=baseline_config,
-            limit_symbols=limit_symbols,
-        )
+        source_frame = read_archetype_input_frame(input_path)
+        limited_frame = limit_archetype_symbols(source_frame, baseline_config, limit_symbols)
+        shared_rows = prepare_archetype_rows(limited_frame, baseline_config)
+        baseline_prepared = prepare_archetype_data_from_rows(shared_rows, baseline_config)
+        oi_prepared = prepare_archetype_data_from_rows(shared_rows, oi_config)
+        _assert_prepared_row_identity(baseline_prepared, oi_prepared, baseline_config)
     except Exception as exc:
         summary_path = _write_failed_summary(
             input_path=input_path,
+            input_sha256=input_sha256,
             out_dir=out_dir,
             limit_symbols=limit_symbols,
             baseline_dir=None,
             oi_dir=None,
             baseline_error=exc,
             oi_error=None,
+            preparation_contract="shared_population_preparation_failed",
+        )
+        raise PumpFadeOiExperimentError(
+            f"paired OI experiment failed during shared population preparation; summary written: {summary_path}"
+        ) from exc
+    input_rows_after_limit = len(limited_frame)
+    try:
+        baseline_dir = run_prepared_archetype_discovery(
+            prepared=baseline_prepared,
+            input_path=input_path,
+            input_sha256=input_sha256,
+            out_dir=out_dir / "baseline_same_oi_population",
+            config=baseline_config,
+            limit_symbols=limit_symbols,
+            input_rows_after_limit=input_rows_after_limit,
+            input_reuse_contract="paired_oi_shared_population_split_v1",
+        )
+    except Exception as exc:
+        summary_path = _write_failed_summary(
+            input_path=input_path,
+            input_sha256=input_sha256,
+            out_dir=out_dir,
+            limit_symbols=limit_symbols,
+            baseline_dir=None,
+            oi_dir=None,
+            baseline_error=exc,
+            oi_error=None,
+            preparation_contract="paired_oi_shared_population_split_v1",
         )
         raise PumpFadeOiExperimentError(
             f"paired OI experiment failed before the baseline arm completed; summary written: {summary_path}"
         ) from exc
     try:
-        oi_dir = run_archetype_discovery(
+        oi_dir = run_prepared_archetype_discovery(
+            prepared=oi_prepared,
             input_path=input_path,
+            input_sha256=input_sha256,
             out_dir=out_dir / "with_open_interest",
             config=oi_config,
             limit_symbols=limit_symbols,
+            input_rows_after_limit=input_rows_after_limit,
+            input_reuse_contract="paired_oi_shared_population_split_v1",
         )
     except Exception as exc:
         summary_path = _write_failed_summary(
             input_path=input_path,
+            input_sha256=input_sha256,
             out_dir=out_dir,
             limit_symbols=limit_symbols,
             baseline_dir=baseline_dir,
             oi_dir=None,
             baseline_error=None,
             oi_error=exc,
+            preparation_contract="paired_oi_shared_population_split_v1",
         )
         raise PumpFadeOiExperimentError(
             f"paired OI experiment failed after the baseline arm completed; summary written: {summary_path}"
@@ -134,8 +177,12 @@ def run_pump_fade_oi_incremental_experiment(
     payload = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_path": str(input_path.resolve()),
-        "input_sha256": sha256_file(input_path),
+        "input_sha256": input_sha256,
         "limit_symbols": limit_symbols,
+        "preparation_contract": "paired_oi_shared_population_split_v1",
+        "input_rows_after_limit": input_rows_after_limit,
+        "shared_discovery_rows": len(shared_rows.discovery),
+        "shared_verification_rows": len(shared_rows.verification),
         "population_contract": (
             "identical rows with oi_available=true and finite registered OI model features; "
             "oi_available is never a model feature"
@@ -173,15 +220,50 @@ def run_pump_fade_oi_incremental_experiment(
     return out_dir
 
 
+
+def _assert_prepared_row_identity(
+    baseline: PreparedArchetypeData,
+    with_oi: PreparedArchetypeData,
+    config: ArchetypeDiscoveryConfig,
+) -> None:
+    key_columns = [
+        config.input.group_column,
+        config.input.symbol_column,
+        "__snapshot_ms",
+        config.input.label_column,
+    ]
+    for split_name, left, right in (
+        ("discovery", baseline.discovery, with_oi.discovery),
+        ("verification", baseline.verification, with_oi.verification),
+    ):
+        if len(left) != len(right):
+            raise PumpFadeOiExperimentError(
+                f"paired OI experiment {split_name} row-count mismatch after shared preparation: "
+                f"baseline={len(left)} with_oi={len(right)}"
+            )
+        missing = [column for column in key_columns if column not in left or column not in right]
+        if missing:
+            raise PumpFadeOiExperimentError(
+                f"paired OI experiment {split_name} prepared rows are missing identity columns: {missing}"
+            )
+        left_keys = left[key_columns].astype(str).reset_index(drop=True)
+        right_keys = right[key_columns].astype(str).reset_index(drop=True)
+        if not left_keys.equals(right_keys):
+            raise PumpFadeOiExperimentError(
+                f"paired OI experiment {split_name} prepared rows are not row-identical"
+            )
+
 def _write_failed_summary(
     *,
     input_path: Path,
+    input_sha256: str,
     out_dir: Path,
     limit_symbols: int | None,
     baseline_dir: Path | None,
     oi_dir: Path | None,
     baseline_error: BaseException | None,
     oi_error: BaseException | None,
+    preparation_contract: str,
 ) -> Path:
     summary_path = out_dir / "oi_incremental_summary.json"
     baseline = _read_optional_run(baseline_dir)
@@ -189,8 +271,9 @@ def _write_failed_summary(
     payload = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_path": str(input_path.resolve()),
-        "input_sha256": sha256_file(input_path),
+        "input_sha256": input_sha256,
         "limit_symbols": limit_symbols,
+        "preparation_contract": preparation_contract,
         "population_contract": (
             "identical rows with oi_available=true and finite registered OI model features; "
             "oi_available is never a model feature"
@@ -249,6 +332,8 @@ def _summary_fields(payload: dict[str, object]) -> dict[str, object]:
         for name in (
             "run_id",
             "controls_passed",
+            "discovery_rows",
+            "verification_rows",
             "verification_auc",
             "development_replicated_category_count",
             "control_failed_category_count",

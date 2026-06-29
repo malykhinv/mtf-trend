@@ -108,7 +108,7 @@ Interpretation must remain conditional:
 
 OI samples are joined only after their availability time and never carried across unbounded gaps.
 
-OI is evaluated through a paired ablation, not by adding nullable columns to the old population. Both arms use exactly the same rows satisfying `oi_available=true`; the baseline excludes all OI values, while the second arm adds the registered price/OI state family. The availability flag is a population/audit gate and is forbidden as a model feature. A smoke run checks contracts and runtime only. Incremental evidence requires the full paired run, blind and calendar-block shuffled controls in both arms, followed by group-block paired inference on the performance difference.
+OI is evaluated through a paired ablation, not by adding nullable columns to the old population. Both arms use one shared prepared row population satisfying `oi_available=true` plus finite values for every registered OI model feature; the baseline excludes all OI values, while the second arm adds the registered price/OI state family. The availability flag is a population/audit gate and is forbidden as a model feature. A smoke run checks contracts and runtime only. Incremental evidence requires the full paired run, blind and calendar-block shuffled controls in both arms, followed by group-block paired inference on the performance difference. The paired runner reads/limits the input once, prepares the OI-covered population/split once, and then builds two separate feature matrices so performance work is not duplicated on i5-class hardware.
 
 ### Preconditioning and regime
 

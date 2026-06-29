@@ -39,6 +39,12 @@ class ArchetypeDiscoveryError(ValueError):
 
 
 @dataclass(slots=True)
+class PreparedArchetypeRows:
+    discovery: pd.DataFrame
+    verification: pd.DataFrame
+
+
+@dataclass(slots=True)
 class PreparedArchetypeData:
     discovery: pd.DataFrame
     verification: pd.DataFrame
@@ -290,7 +296,7 @@ def _make_model_matrices(
     return x_discovery[keep], x_verification[keep], tuple(dropped), tuple(unknown_categories)
 
 
-def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig) -> PreparedArchetypeData:
+def prepare_archetype_rows(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig) -> PreparedArchetypeRows:
     _validate_feature_boundary(config)
     missing = sorted(_required_input_columns(config) - set(frame.columns))
     if missing:
@@ -376,6 +382,20 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
     sort_columns = ["__snapshot_ms", contract.group_column]
     discovery = discovery.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
     verification = verification.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
+    return PreparedArchetypeRows(discovery=discovery, verification=verification)
+
+
+def prepare_archetype_data_from_rows(
+    rows: PreparedArchetypeRows, config: ArchetypeDiscoveryConfig
+) -> PreparedArchetypeData:
+    _validate_feature_boundary(config)
+    required = _required_input_columns(config)
+    available = set(rows.discovery.columns) | set(rows.verification.columns)
+    missing = sorted(required - available)
+    if missing:
+        raise ArchetypeDiscoveryError(f"prepared archetype rows are missing required columns: {missing}")
+    discovery = rows.discovery.copy()
+    verification = rows.verification.copy()
     x_discovery, x_verification, dropped, unknown = _make_model_matrices(
         discovery, verification, config
     )
@@ -388,6 +408,10 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
         dropped_constant_features=dropped,
         unknown_verification_categories=unknown,
     )
+
+
+def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig) -> PreparedArchetypeData:
+    return prepare_archetype_data_from_rows(prepare_archetype_rows(frame, config), config)
 
 
 def _group_inverse_weights(frame: pd.DataFrame, group_column: str) -> np.ndarray:
@@ -1572,10 +1596,9 @@ def _coverage_outputs(
     )
 
 
-def build_archetype_discovery(
-    frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
+def build_archetype_discovery_from_prepared(
+    prepared: PreparedArchetypeData, config: ArchetypeDiscoveryConfig
 ) -> ArchetypeBuildResult:
-    prepared = prepare_archetype_data(frame, config)
     primary_generator = config.effective_generators[0]
     model = fit_rule_generator(
         prepared,
@@ -1828,3 +1851,10 @@ def build_archetype_discovery(
         candidate_funnel_rows=candidate_funnel_rows,
         threshold_stability_rows=threshold_stability_rows,
     )
+
+
+def build_archetype_discovery(
+    frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
+) -> ArchetypeBuildResult:
+    prepared = prepare_archetype_data(frame, config)
+    return build_archetype_discovery_from_prepared(prepared, config)

@@ -9,7 +9,9 @@ import pandas as pd
 
 from anomaly_science.archetypes.builder import (
     ArchetypeDiscoveryError,
+    PreparedArchetypeData,
     build_archetype_discovery,
+    build_archetype_discovery_from_prepared,
 )
 from anomaly_science.archetypes.config import (
     ArchetypeDiscoveryConfig,
@@ -20,13 +22,27 @@ from anomaly_science.artifacts.writer import write_csv_artifact_with_aliases
 from anomaly_science.contracts.artifacts import get_artifact_schema
 
 
-def _read_dataset(path: Path) -> pd.DataFrame:
+def read_archetype_input_frame(path: Path) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if suffix in {".parquet", ".pq"}:
         return pd.read_parquet(path)
     if suffix == ".csv":
         return pd.read_csv(path)
     raise ArchetypeDiscoveryError("archetype input must be parquet or CSV")
+
+
+def limit_archetype_symbols(
+    frame: pd.DataFrame, config: ArchetypeDiscoveryConfig, limit_symbols: int | None
+) -> pd.DataFrame:
+    if limit_symbols is None:
+        return frame
+    if limit_symbols <= 0:
+        raise ArchetypeDiscoveryError("limit_symbols must be positive when provided")
+    symbol_column = config.input.symbol_column
+    if symbol_column not in frame:
+        raise ArchetypeDiscoveryError(f"symbol column {symbol_column!r} is missing")
+    symbols = sorted(str(value) for value in frame[symbol_column].dropna().unique())[:limit_symbols]
+    return frame[frame[symbol_column].astype(str).isin(symbols)].copy()
 
 
 def _atomic_json(path: Path, payload: object) -> Path:
@@ -37,23 +53,17 @@ def _atomic_json(path: Path, payload: object) -> Path:
     return path
 
 
-def run_archetype_discovery(
+def _write_archetype_discovery_outputs(
     *,
+    result,
     input_path: Path,
+    input_sha256: str,
     out_dir: Path,
     config: ArchetypeDiscoveryConfig,
-    limit_symbols: int | None = None,
+    limit_symbols: int | None,
+    input_rows_after_limit: int,
+    input_reuse_contract: str,
 ) -> Path:
-    if limit_symbols is not None and limit_symbols <= 0:
-        raise ArchetypeDiscoveryError("limit_symbols must be positive when provided")
-    frame = _read_dataset(input_path)
-    if limit_symbols is not None:
-        symbol_column = config.input.symbol_column
-        if symbol_column not in frame:
-            raise ArchetypeDiscoveryError(f"symbol column {symbol_column!r} is missing")
-        symbols = sorted(str(value) for value in frame[symbol_column].dropna().unique())[:limit_symbols]
-        frame = frame[frame[symbol_column].astype(str).isin(symbols)].copy()
-    result = build_archetype_discovery(frame, config)
     out_dir.mkdir(parents=True, exist_ok=True)
     catalog_path = out_dir / "anomaly_archetype_catalog.csv"
     controls_path = out_dir / "anomaly_archetype_controls.csv"
@@ -99,9 +109,10 @@ def run_archetype_discovery(
         "run_id": run_id,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_path": str(input_path.resolve()),
-        "input_sha256": sha256_file(input_path),
+        "input_sha256": input_sha256,
         "limit_symbols": limit_symbols,
-        "input_rows_after_limit": len(frame),
+        "input_rows_after_limit": input_rows_after_limit,
+        "input_reuse_contract": input_reuse_contract,
         "discovery_rows": len(result.prepared.discovery),
         "verification_rows": len(result.prepared.verification),
         "discovery_groups": int(
@@ -166,4 +177,60 @@ def run_archetype_discovery(
     return out_dir
 
 
-__all__ = ["ArchetypeDiscoveryError", "run_archetype_discovery"]
+def run_prepared_archetype_discovery(
+    *,
+    prepared: PreparedArchetypeData,
+    input_path: Path,
+    input_sha256: str,
+    out_dir: Path,
+    config: ArchetypeDiscoveryConfig,
+    limit_symbols: int | None = None,
+    input_rows_after_limit: int | None = None,
+    input_reuse_contract: str = "prepared_once_by_caller",
+) -> Path:
+    result = build_archetype_discovery_from_prepared(prepared, config)
+    return _write_archetype_discovery_outputs(
+        result=result,
+        input_path=input_path,
+        input_sha256=input_sha256,
+        out_dir=out_dir,
+        config=config,
+        limit_symbols=limit_symbols,
+        input_rows_after_limit=(
+            len(prepared.discovery) + len(prepared.verification)
+            if input_rows_after_limit is None
+            else input_rows_after_limit
+        ),
+        input_reuse_contract=input_reuse_contract,
+    )
+
+
+def run_archetype_discovery(
+    *,
+    input_path: Path,
+    out_dir: Path,
+    config: ArchetypeDiscoveryConfig,
+    limit_symbols: int | None = None,
+) -> Path:
+    frame = read_archetype_input_frame(input_path)
+    frame = limit_archetype_symbols(frame, config, limit_symbols)
+    result = build_archetype_discovery(frame, config)
+    return _write_archetype_discovery_outputs(
+        result=result,
+        input_path=input_path,
+        input_sha256=sha256_file(input_path),
+        out_dir=out_dir,
+        config=config,
+        limit_symbols=limit_symbols,
+        input_rows_after_limit=len(frame),
+        input_reuse_contract="standalone_read_filter_split_v1",
+    )
+
+
+__all__ = [
+    "ArchetypeDiscoveryError",
+    "limit_archetype_symbols",
+    "read_archetype_input_frame",
+    "run_archetype_discovery",
+    "run_prepared_archetype_discovery",
+]

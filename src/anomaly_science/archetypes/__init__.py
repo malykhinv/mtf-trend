@@ -10,7 +10,13 @@ from anomaly_science.archetypes.config import (
     ArchetypeRequiredValue,
     load_archetype_discovery_config,
 )
-from anomaly_science.archetypes.run import ArchetypeDiscoveryError, run_archetype_discovery
+from anomaly_science.archetypes.run import (
+    ArchetypeDiscoveryError,
+    limit_archetype_symbols,
+    read_archetype_input_frame,
+    run_archetype_discovery,
+    run_prepared_archetype_discovery,
+)
 
 __all__ = [
     "ArchetypeConfigError",
@@ -21,6 +27,9 @@ __all__ = [
     "ArchetypeInputContract",
     "ArchetypePopulationSpec",
     "ArchetypeRequiredValue",
+    "limit_archetype_symbols",
     "load_archetype_discovery_config",
+    "read_archetype_input_frame",
     "run_archetype_discovery",
+    "run_prepared_archetype_discovery",
 ]

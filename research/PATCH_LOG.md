@@ -1568,3 +1568,19 @@ Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest tests/test_artifact_schemas.py::test_mvp1_artifact_schemas_are_fixed -q`
 - Full prediction pytest collection still needs the project venv because this sandbox lacks `polars`.
+
+## perf: reuse prepared population in paired OI experiment
+
+Status: PROPOSED.
+
+Changes:
+- Splits archetype preparation into reusable row/split preparation and feature-matrix preparation.
+- Lets paired pump-fade OI experiments read and symbol-limit the input once, enforce the finite-OI population gate once, and share the prepared discovery/verification rows across both arms.
+- Keeps model behavior separate: the baseline arm still excludes all OI model features, while the OI arm builds its own feature matrix with the registered OI features.
+- Records `input_reuse_contract=paired_oi_shared_population_split_v1` in child run metadata and `preparation_contract` plus shared row counts in `oi_incremental_summary.json`.
+- Preserves the paired row-identity assertions and FAILED_PARTIAL behavior when preparation or one arm fails.
+
+Validation in this environment:
+- `git apply --check` against the Patch 1-9v3 working tree.
+- `python -m compileall -q main.py src tests zip_project.py`
+- Focused archetype pytest still needs the project venv because this sandbox lacks `polars`.

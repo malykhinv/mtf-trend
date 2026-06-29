@@ -300,11 +300,23 @@ def test_paired_oi_experiment_uses_identical_covered_population(tmp_path: Path) 
 
     summary = json.loads((out_dir / "oi_incremental_summary.json").read_text(encoding="utf-8"))
     assert summary["population_contract"].startswith("identical rows with oi_available=true")
+    assert summary["preparation_contract"] == "paired_oi_shared_population_split_v1"
+    assert summary["input_rows_after_limit"] > summary["shared_discovery_rows"]
+    assert summary["shared_discovery_rows"] == summary["baseline"]["discovery_rows"]
+    assert summary["shared_verification_rows"] == summary["with_open_interest"]["verification_rows"]
     assert summary["required_finite_oi_feature_names"] == list(PUMP_FADE_OI_MODEL_FEATURES)
     assert summary["baseline"]["verification_auc"] <= summary["with_open_interest"]["verification_auc"]
     assert "oi_change_5m" not in summary["baseline"]["model_feature_names"]
     assert "oi_change_5m" in summary["with_open_interest"]["model_feature_names"]
     assert summary["incremental_evidence_status"] == "SMOKE_ONLY"
+    baseline_run = json.loads(
+        (out_dir / "baseline_same_oi_population" / "archetype_run.json").read_text(encoding="utf-8")
+    )
+    oi_run = json.loads(
+        (out_dir / "with_open_interest" / "archetype_run.json").read_text(encoding="utf-8")
+    )
+    assert baseline_run["input_reuse_contract"] == "paired_oi_shared_population_split_v1"
+    assert oi_run["input_reuse_contract"] == "paired_oi_shared_population_split_v1"
     assert summary["paired_group_bootstrap"]["verification_group_count"] == 160
     assert summary["paired_group_bootstrap"]["valid_iterations"] == 2000
     assert summary["paired_group_bootstrap"]["auc_delta_lower_95"] >= -1e-12

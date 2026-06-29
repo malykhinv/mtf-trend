@@ -90,7 +90,7 @@ fixed-horizon MVP1 research pipeline for compatibility/smoke usage
 structural pump-fade decision dataset builder
 structural pump-fade nature dataset builder
 archetype discovery and controls for pump-fade nature
-paired OI incremental experiment runner, subject to the OI limitations below
+paired OI incremental experiment runner with finite-OI-feature population gating and shared prepared population/split reuse
 ```
 
 Still intentionally absent:
@@ -156,21 +156,15 @@ failure: numeric feature `oi_change_5m` contains missing values
 paired summary: not produced / not valid
 ```
 
-The important contract bug is:
+The contract bug found by the failed full run is now represented as a hard population gate in code: `oi_available=true` is only raw stream availability; paired OI runs additionally require finite values for every registered OI model feature. Patch 10 keeps the same scientific contract but reuses the prepared OI-covered population/split for both arms so the full 796-symbol development run does not pay for two full input reads and two row-preparation passes.
+
+Still required before interpreting OI:
 
 ```text
-`oi_available=true` currently does not guarantee that every registered OI model
-feature is finite.
-```
-
-Required fix before interpreting OI:
-
-```text
-separate raw/current OI stream availability from OI model-feature availability
-filter paired OI arms on the exact registered OI feature set, or add an explicit
-causal imputation + missing-flag protocol
-write FAILED_PARTIAL experiment status when one arm fails
-never treat baseline_same_oi_population as incremental OI evidence
+rerun the full paired experiment from the fixed code
+require both arms to complete and pass controls
+require the paired group-bootstrap interval to exclude zero for development evidence
+never treat historical baseline_same_oi_population partial output as incremental OI evidence
 ```
 
 ## Cache/export validation status
