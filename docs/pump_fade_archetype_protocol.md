@@ -110,9 +110,13 @@ after the candle that sets `H*`:
 - the earlier close wins.
 
 `H*` and the event end are label-only future information. They are never model
-features. If `H*` occurred before the nature anchor, the event is censored for
-nature research because its peak was already missed online. If neither barrier
-resolves before the next data gap or end of data, the nature label is censored.
+features. Registered archetype configs must declare future-only columns in
+`input.label_only_columns`; the feature-boundary validator rejects any attempt to
+use those columns, label availability flags, label schema IDs, or row-filter
+columns as model features. If `H*` occurred before the nature anchor, the event
+is censored for nature research because its peak was already missed online. If
+neither barrier resolves before the next data gap or end of data, the nature
+label is censored.
 
 The nature schema is `pump_fade_event_peak_close_race_v1`. Nature discovery
 selects only `is_nature_anchor=true`, so every event contributes at most one
@@ -137,6 +141,11 @@ the next closed candle. These fields are materialized by the builder; the
 registered config does not accept inferred timestamps or an attestation.
 The decision schema remains `pump_fade_close_race_horizon_free_v1`. It is
 reserved for timing and later combined decision research, not nature discovery.
+
+Missing market/context values are data conditions, not neutral values. The
+builder must emit `NaN` plus explicit availability/context flags for optional or
+not-yet-available inputs instead of hiding missingness behind magic numbers such
+as `0`, `0.5`, or `1_000_000`.
 
 ## Scientific claim boundary
 

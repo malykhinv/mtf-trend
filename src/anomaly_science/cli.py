@@ -334,6 +334,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=",".join(str(value) for value in REGISTERED_STATE_LATTICE_ANCHORS_MINUTES),
         help="Comma-separated minutes_since_detection offsets for registered_state_lattice_v1.",
     )
+    prediction.add_argument(
+        "--catboost-thread-count",
+        type=int,
+        default=None,
+        help="Override prediction CatBoost thread_count. Omit to use the single bounded runtime default.",
+    )
     _add_strategy_horizon_arguments(prediction, verb="predict")
 
     controls = subparsers.add_parser(
@@ -381,6 +387,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-low-rr",
         action="store_true",
         help="Simulate long/short best_action rows even if RR flag is false.",
+    )
+    simulation.add_argument(
+        "--min-rr",
+        type=float,
+        default=1.0,
+        help="Minimum RR proxy used when re-anchoring random controls. Must match expected-value --min-rr. Default: 1.0.",
     )
 
     governance = subparsers.add_parser(
@@ -762,6 +774,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_horizon_minutes=args.horizon_minutes,
             supervised_anchor_policy_id=args.supervised_anchor_policy,
             supervised_anchor_offsets_minutes_since_detection=_parse_anchor_offsets(args.supervised_anchor_offsets),
+            **({"catboost_thread_count": args.catboost_thread_count} if args.catboost_thread_count is not None else {}),
         )
         output_dir = run_mvp1_prediction(
             state_path=Path(args.state),
@@ -825,6 +838,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_horizon_minutes=args.horizon_minutes,
             require_prediction_confident=not bool(args.allow_unconfident),
             require_rr_acceptable=not bool(args.allow_low_rr),
+            min_rr=args.min_rr,
         )
         output_dir = run_mvp1_trade_simulation(
             input_dir=Path(args.input),

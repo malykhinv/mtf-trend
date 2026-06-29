@@ -12,6 +12,7 @@ class TradeSimulationConfig:
     target_horizon_minutes: int = 30
     require_prediction_confident: bool = True
     require_rr_acceptable: bool = True
+    min_rr: float = 1.0
     execution_reference_model: str = EV_EXECUTION_REFERENCE_MODEL
     entry_price_basis: str = SIMULATION_ENTRY_PRICE_BASIS
     cost_model: str = ROUND_TRIP_COST_MODEL
@@ -36,6 +37,8 @@ class TradeSimulationConfig:
             raise ValueError("entry_price_basis must match SIMULATION_ENTRY_PRICE_BASIS")
         if self.cost_model != ROUND_TRIP_COST_MODEL:
             raise ValueError("cost_model must match ROUND_TRIP_COST_MODEL")
+        if self.min_rr <= 0.0:
+            raise ValueError("min_rr must be positive")
         if self.toxic_entry_atr_1m_fraction < 0.0:
             raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")
         if self.random_seed < 0:

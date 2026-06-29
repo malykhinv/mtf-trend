@@ -1,6 +1,27 @@
-## decision: make RR acceptability side-specific
+# Patch log
+
+## science: harden pump-fade evidence protocol
 
 Status: PROPOSED.
+
+Intent:
+- Make research evidence governance explicit: `EXPERIMENT_LOG.md` is evidence, `RESEARCH_STATE.md` is summary, `METHODOLOGY_GAP_LEDGER.md` is platform capability, and `PATCH_LOG.md` is patch state.
+- Treat future-only pump-fade fields as registered `label_only_columns` and forbid label/schema/filter/label-only columns as archetype model features.
+- Replace pump-fade magic missing sentinels with `NaN` plus explicit availability/context flags.
+- Split prediction train/validation/calibration by whole `(symbol,event_id)` groups, not rows.
+- Use one bounded runtime thread-count source for CatBoost.
+- Make OI paired runs write non-evidential `FAILED_PARTIAL` summaries instead of crashing after partial artifacts.
+- Recompute random/matched-control RR acceptability after re-anchoring.
+- Limit simulation candle/funding grouping to eligible decision symbols for i5/16GB memory discipline.
+- Add class-wise calibrated probability Brier/ECE metrics.
+
+Validation in this environment:
+- `python -m compileall -q main.py src tests zip_project.py`
+- Focused pytest collection still cannot run here because this sandbox lacks `polars`.
+
+## decision: make RR acceptability side-specific
+
+Status: APPLIED_IN_CURRENT_TREE.
 
 Changes:
 - Adds side-specific decision timing fields: `RR_long_acceptable`, `RR_short_acceptable`, `selected_RR`, and `selected_RR_acceptable`.
@@ -12,8 +33,6 @@ Changes:
 Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
 - Focused pytest collection still needs the project venv because this sandbox lacks `polars`.
-
-# Patch log
 
 ## audit: separate smoke and evidence forensic gates
 
@@ -31,7 +50,7 @@ Validation:
 
 ## pump-fade: require finite registered OI model features
 
-Status: PROPOSED.
+Status: APPLIED_IN_CURRENT_TREE.
 
 Intent:
 - Split raw OI stream availability from registered OI model-feature availability in paired pump-fade OI experiments.
@@ -44,7 +63,7 @@ Validation:
 
 ## research: make experiment ledger the evidence source of truth
 
-Status: PROPOSED.
+Status: APPLIED_IN_CURRENT_TREE.
 
 Intent:
 - Replace the stale empty experiment log with explicit development/smoke/failed-partial records for the current pump-fade and OI work.
@@ -921,9 +940,6 @@ Changes:
 Validation:
 - `git apply --check --whitespace=error methodology_cleanup_strategy_executable_horizon_status.patch`
 - `python -m compileall -q main.py src tests zip_project.py`
-
-# Patch log
-
 
 ## methodology: audit horizon consistency
 

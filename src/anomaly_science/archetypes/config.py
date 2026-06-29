@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from anomaly_science.runtime import DEFAULT_BOUNDED_CPU_THREAD_COUNT, validate_bounded_thread_count
+
 
 class ArchetypeConfigError(ValueError):
     """Raised when an archetype-discovery specification is incomplete or unsafe."""
@@ -44,6 +46,7 @@ class ArchetypeInputContract:
     future_start_offset_ms: int | None = None
     row_filter_column: str | None = None
     required_row_filter_value: str | int | bool | None = None
+    label_only_columns: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         required = (
@@ -73,6 +76,10 @@ class ArchetypeInputContract:
             raise ArchetypeConfigError(
                 "row_filter_column and required_row_filter_value must be set together"
             )
+        if any(not column for column in self.label_only_columns):
+            raise ArchetypeConfigError("label_only_columns must contain non-empty column names")
+        if len(set(self.label_only_columns)) != len(self.label_only_columns):
+            raise ArchetypeConfigError("label_only_columns must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +160,7 @@ class ArchetypeDiscoveryConfig:
     depth: int = 4
     learning_rate: float = 0.05
     l2_leaf_reg: float = 5.0
-    catboost_thread_count: int = 4
+    catboost_thread_count: int = DEFAULT_BOUNDED_CPU_THREAD_COUNT
     generators: tuple[ArchetypeGeneratorSpec, ...] = ()
     rolling_origin_fractions: tuple[float, ...] = (0.60, 0.80, 1.0)
     min_origin_support_fraction: float = 0.67
@@ -239,8 +246,10 @@ class ArchetypeDiscoveryConfig:
             raise ArchetypeConfigError("iterations must be positive and depth must be within [1, 8]")
         if self.learning_rate <= 0.0 or self.l2_leaf_reg < 0.0:
             raise ArchetypeConfigError("learning_rate must be positive and l2_leaf_reg non-negative")
-        if self.catboost_thread_count <= 0:
-            raise ArchetypeConfigError("catboost_thread_count must be positive; use an explicit bounded value")
+        try:
+            validate_bounded_thread_count(self.catboost_thread_count, field_name="catboost_thread_count")
+        except ValueError as exc:
+            raise ArchetypeConfigError(str(exc)) from exc
         if len(set(self.generators)) != len(self.generators):
             raise ArchetypeConfigError("generators must be unique")
         if not self.rolling_origin_fractions:
@@ -335,6 +344,10 @@ def load_archetype_discovery_config(path: Path) -> ArchetypeDiscoveryConfig:
     if not isinstance(raw, dict):
         raise ArchetypeConfigError("archetype config root must be a JSON object")
     input_raw = dict(raw.pop("input"))
+    if "label_only_columns" in input_raw:
+        input_raw["label_only_columns"] = _tuple_strings(
+            input_raw["label_only_columns"], field_name="input.label_only_columns"
+        )
     feature_raw = dict(raw.pop("features"))
     population_raw = dict(raw.pop("population", {}))
     feature_spec = ArchetypeFeatureSpec(

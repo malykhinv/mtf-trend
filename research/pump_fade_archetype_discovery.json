@@ -15,7 +15,21 @@
     "feature_cutoff_time_column": "feature_cutoff_time_ms",
     "future_start_time_column": "future_start_time_ms",
     "attest_feature_cutoff_equals_snapshot": false,
-    "future_start_offset_ms": null
+    "future_start_offset_ms": null,
+    "label_only_columns": [
+      "label_available",
+      "label_schema_version",
+      "resolution_time_ms",
+      "future_start_time_ms",
+      "nature_label_available",
+      "nature_label_schema_version",
+      "nature_y",
+      "nature_future_start_time_ms",
+      "nature_resolution_time_ms",
+      "event_peak_time_ms",
+      "event_end_time_ms",
+      "is_event_peak_decision"
+    ]
   },
   "features": {
     "numeric": [
@@ -80,7 +94,18 @@
       "ignition_hour_utc",
       "ignition_minute_of_hour",
       "ignition_minutes_from_round_hour",
-      "ignition_day_of_week_utc"
+      "ignition_day_of_week_utc",
+      "has_quote_volume_24h",
+      "has_average_trade_notional_baseline",
+      "has_taker_buy_quote_data",
+      "has_rel_vol_phase",
+      "has_prior_event",
+      "has_resolved_prior_48h",
+      "has_last_resolved_prior",
+      "has_trade_activity_1h_vs_4h",
+      "has_quote_activity_1h_vs_4h",
+      "has_atr_activity_1h_vs_4h",
+      "has_prior_higher_price"
     ],
     "decision_timing_numeric": [
       "decision_index",
@@ -94,7 +119,9 @@
       "candles_since_red"
     ],
     "include_decision_timing": false,
-    "categorical": ["session"],
+    "categorical": [
+      "session"
+    ],
     "derived_time": []
   },
   "population": {
@@ -107,11 +134,24 @@
   "learning_rate": 0.05,
   "l2_leaf_reg": 5.0,
   "generators": [
-    {"random_seed": 20260627, "depth": 4},
-    {"random_seed": 20260639, "depth": 3},
-    {"random_seed": 20260651, "depth": 5}
+    {
+      "random_seed": 20260627,
+      "depth": 4
+    },
+    {
+      "random_seed": 20260639,
+      "depth": 3
+    },
+    {
+      "random_seed": 20260651,
+      "depth": 5
+    }
   ],
-  "rolling_origin_fractions": [0.65, 0.82, 1.0],
+  "rolling_origin_fractions": [
+    0.65,
+    0.82,
+    1.0
+  ],
   "min_origin_support_fraction": 0.66,
   "min_generator_support_fraction": 0.66,
   "consensus_membership_jaccard": 0.65,
@@ -128,8 +168,12 @@
   "stability_frequency": "M",
   "min_events_per_stability_period": 15,
   "min_positive_stability_fraction": 0.6,
-  "matched_control_columns": ["decision_index"],
-  "matched_control_quantile_columns": ["remaining_to_base"],
+  "matched_control_columns": [
+    "decision_index"
+  ],
+  "matched_control_quantile_columns": [
+    "remaining_to_base"
+  ],
   "matched_control_quantiles": 5,
   "min_matched_control_rows": 30,
   "min_matched_signal_fraction": 0.8,
@@ -137,7 +181,27 @@
   "min_inference_blocks": 8,
   "evidence_mode": "development",
   "protocol_freeze_id": "",
-  "shuffled_seeds": [11, 29, 47, 61, 79, 97, 113, 131, 149, 167, 181, 199, 223, 241, 263, 281, 307, 331, 353],
+  "shuffled_seeds": [
+    11,
+    29,
+    47,
+    61,
+    79,
+    97,
+    113,
+    131,
+    149,
+    167,
+    181,
+    199,
+    223,
+    241,
+    263,
+    281,
+    307,
+    331,
+    353
+  ],
   "min_shuffled_row_fraction": 0.7,
   "control_empirical_alpha": 0.05
 }

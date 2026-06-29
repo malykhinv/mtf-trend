@@ -677,13 +677,14 @@ def build_pump_fade_symbol_result(
             event_trade_count = float(np.sum(event_trades))
             event_avg_trade_notional = event_turnover / max(event_trade_count, 1.0)
             baseline_trade_notional = baseline_average_trade_notional[ignition_index]
+            has_taker_buy_quote_data = bool(np.isfinite(event_taker).any())
             taker_buy_share_event = (
                 float(np.nansum(event_taker) / max(event_turnover, 1e-12))
-                if np.isfinite(event_taker).any()
-                else 0.5
+                if has_taker_buy_quote_data
+                else float("nan")
             )
-            q_mult = float(np.nan_to_num(quote_multiple[absolute_index], nan=0.0))
-            t_mult = float(np.nan_to_num(trade_multiple[absolute_index], nan=0.0))
+            q_mult = float(quote_multiple[absolute_index]) if math.isfinite(quote_multiple[absolute_index]) else float("nan")
+            t_mult = float(trade_multiple[absolute_index]) if math.isfinite(trade_multiple[absolute_index]) else float("nan")
             pre_ignition_index = max(ignition_index - 1, int(block_starts[ignition_index]))
             return_15m = _causal_return(close, timestamps, pre_ignition_index, 15, config.candle_interval_ms)
             return_60m = _causal_return(close, timestamps, pre_ignition_index, 60, config.candle_interval_ms)
@@ -706,6 +707,44 @@ def build_pump_fade_symbol_result(
             event_activity_cv = float(np.std(event_activity) / max(event_activity_mean, 1e-12))
             price_change_60 = _causal_return(close, timestamps, absolute_index, 60, config.candle_interval_ms)
             oi_available = math.isfinite(oi_change_60m)
+            quote_volume_24h_value = float(quote_24h[absolute_index]) if math.isfinite(quote_24h[absolute_index]) else float("nan")
+            has_quote_volume_24h = math.isfinite(quote_volume_24h_value)
+            has_average_trade_notional_baseline = math.isfinite(baseline_trade_notional) and baseline_trade_notional > 0.0
+            average_trade_notional_vs_24h = (
+                event_avg_trade_notional / baseline_trade_notional
+                if has_average_trade_notional_baseline
+                else float("nan")
+            )
+            act_now_value = float(activity_segment[relative_index]) if math.isfinite(activity_segment[relative_index]) else float("nan")
+            act_now_over_peak_value = (
+                act_now_value / activity_peak[relative_index]
+                if math.isfinite(act_now_value) and activity_peak[relative_index] > 0.0
+                else float("nan")
+            )
+            rel_vol_phase_value = (
+                float(relative_volume_phase[absolute_index])
+                if math.isfinite(relative_volume_phase[absolute_index])
+                else float("nan")
+            )
+            trade_activity_1h_vs_4h = (
+                float(trades_60m[absolute_index] / max(trades_240m[absolute_index] / 4.0, 1e-12))
+                if math.isfinite(trades_60m[absolute_index]) and math.isfinite(trades_240m[absolute_index])
+                else float("nan")
+            )
+            quote_activity_1h_vs_4h = (
+                float(quote_60m[absolute_index] / max(quote_240m[absolute_index] / 4.0, 1e-12))
+                if math.isfinite(quote_60m[absolute_index]) and math.isfinite(quote_240m[absolute_index])
+                else float("nan")
+            )
+            atr_activity_1h_vs_4h = (
+                float(true_range_60m[absolute_index] / max(true_range_240m[absolute_index] / 4.0, 1e-12))
+                if math.isfinite(true_range_60m[absolute_index]) and math.isfinite(true_range_240m[absolute_index])
+                else float("nan")
+            )
+            has_prior_event = last_prior is not None
+            has_resolved_prior_48h = bool(resolved_prior_48h)
+            has_last_resolved_prior = last_resolved is not None
+            has_prior_higher_price = prior_higher_index is not None
             output_rows.append(
                 {
                     "label_schema_version": PUMP_FADE_LABEL_SCHEMA_VERSION,
@@ -791,37 +830,31 @@ def build_pump_fade_symbol_result(
                     "turnover_top_candle_share": float(np.max(event_quote) / max(event_turnover, 1e-12)),
                     "trade_count_top_candle_share": float(np.max(event_trades) / max(event_trade_count, 1e-12)),
                     "turnover": float(cumulative_turnover[relative_index]),
-                    "quote_volume_24h": float(np.nan_to_num(quote_24h[absolute_index], nan=0.0)),
+                    "quote_volume_24h": quote_volume_24h_value,
+                    "has_quote_volume_24h": has_quote_volume_24h,
                     "event_trade_count": event_trade_count,
                     "event_average_trade_notional": event_avg_trade_notional,
-                    "average_trade_notional_vs_24h": (
-                        event_avg_trade_notional / baseline_trade_notional
-                        if math.isfinite(baseline_trade_notional) and baseline_trade_notional > 0.0
-                        else 0.0
-                    ),
+                    "average_trade_notional_vs_24h": average_trade_notional_vs_24h,
+                    "has_average_trade_notional_baseline": has_average_trade_notional_baseline,
                     "taker_buy_share_event": taker_buy_share_event,
-                    "taker_imbalance_event": 2.0 * taker_buy_share_event - 1.0,
-                    "retail_frenzy_proxy": t_mult / max(q_mult, 1e-12),
-                    "large_print_proxy": q_mult / max(t_mult, 1e-12),
+                    "has_taker_buy_quote_data": has_taker_buy_quote_data,
+                    "taker_imbalance_event": (2.0 * taker_buy_share_event - 1.0 if has_taker_buy_quote_data else float("nan")),
+                    "retail_frenzy_proxy": (t_mult / max(q_mult, 1e-12) if math.isfinite(t_mult) and math.isfinite(q_mult) and q_mult > 0.0 else float("nan")),
+                    "large_print_proxy": (q_mult / max(t_mult, 1e-12) if math.isfinite(t_mult) and math.isfinite(q_mult) and t_mult > 0.0 else float("nan")),
                     "algorithmic_persistence_proxy": 1.0 / (1.0 + event_activity_cv),
                     "activity_above_10x_fraction": float(np.mean(event_activity >= 10.0)),
                     "atr_mult": running_atr_multiple,
-                    "act_now": float(np.nan_to_num(activity_segment[relative_index], nan=0.0)),
-                    "act_now_over_peak": float(
-                        np.nan_to_num(activity_segment[relative_index], nan=0.0)
-                        / max(activity_peak[relative_index], 1e-12)
-                    ),
-                    "rel_vol_phase": float(
-                        relative_volume_phase[absolute_index]
-                        if math.isfinite(relative_volume_phase[absolute_index])
-                        else 0.0
-                    ),
+                    "act_now": act_now_value,
+                    "act_now_over_peak": act_now_over_peak_value,
+                    "rel_vol_phase": rel_vol_phase_value,
+                    "has_rel_vol_phase": math.isfinite(rel_vol_phase_value),
                     "session": _session(int((timestamps[ignition_index] // 3_600_000) % 24)),
                     "min_since_ign": relative_index,
                     "n_prior_24h": len(prior_24h),
                     "n_prior_48h": len(prior_48h),
+                    "has_prior_event": has_prior_event,
                     "min_since_last_prior": (
-                        1_000_000.0
+                        float("nan")
                         if last_prior is None
                         else (
                             snapshot_time
@@ -829,13 +862,15 @@ def build_pump_fade_symbol_result(
                         )
                         / config.candle_interval_ms
                     ),
+                    "has_resolved_prior_48h": has_resolved_prior_48h,
                     "frac_prior_faded_48h": (
-                        0.5
+                        float("nan")
                         if not resolved_prior_48h
                         else float(np.mean([prior.faded for prior in resolved_prior_48h]))
                     ),
-                    "last_prior_faded": 0.5 if last_resolved is None else float(last_resolved.faded),
-                    "last_prior_size": 0.0 if last_prior is None else float(last_prior.size),
+                    "has_last_resolved_prior": has_last_resolved_prior,
+                    "last_prior_faded": float("nan") if last_resolved is None else float(last_resolved.faded),
+                    "last_prior_size": float("nan") if last_prior is None else float(last_prior.size),
                     "cluster_idx_day": sum(
                         1
                         for prior in qualified_prior
@@ -862,10 +897,14 @@ def build_pump_fade_symbol_result(
                     "price_vs_ema_240": current_close / max(ema_240[absolute_index], 1e-12) - 1.0,
                     "price_vs_ema_1440": current_close / max(ema_1440[absolute_index], 1e-12) - 1.0,
                     "ema_240_slope_60m": _causal_fractional_change(ema_240, timestamps, absolute_index, 60, config.candle_interval_ms),
-                    "trade_activity_1h_vs_4h": float(trades_60m[absolute_index] / max(trades_240m[absolute_index] / 4.0, 1e-12)) if math.isfinite(trades_60m[absolute_index]) and math.isfinite(trades_240m[absolute_index]) else 0.0,
-                    "quote_activity_1h_vs_4h": float(quote_60m[absolute_index] / max(quote_240m[absolute_index] / 4.0, 1e-12)) if math.isfinite(quote_60m[absolute_index]) and math.isfinite(quote_240m[absolute_index]) else 0.0,
-                    "atr_activity_1h_vs_4h": float(true_range_60m[absolute_index] / max(true_range_240m[absolute_index] / 4.0, 1e-12)) if math.isfinite(true_range_60m[absolute_index]) and math.isfinite(true_range_240m[absolute_index]) else 0.0,
-                    "minutes_since_prior_higher_price": 1_000_000.0 if prior_higher_index is None else float(ignition_index - prior_higher_index),
+                    "trade_activity_1h_vs_4h": trade_activity_1h_vs_4h,
+                    "has_trade_activity_1h_vs_4h": math.isfinite(trade_activity_1h_vs_4h),
+                    "quote_activity_1h_vs_4h": quote_activity_1h_vs_4h,
+                    "has_quote_activity_1h_vs_4h": math.isfinite(quote_activity_1h_vs_4h),
+                    "atr_activity_1h_vs_4h": atr_activity_1h_vs_4h,
+                    "has_atr_activity_1h_vs_4h": math.isfinite(atr_activity_1h_vs_4h),
+                    "has_prior_higher_price": has_prior_higher_price,
+                    "minutes_since_prior_higher_price": float("nan") if prior_higher_index is None else float(ignition_index - prior_higher_index),
                     "oi_available": oi_available,
                     "oi_change_5m": oi_change_5m,
                     "oi_change_15m": oi_change_15m,

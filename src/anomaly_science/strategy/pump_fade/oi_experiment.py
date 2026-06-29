@@ -38,7 +38,13 @@ def run_pump_fade_oi_incremental_experiment(
     limit_symbols: int | None = None,
     bootstrap_iterations: int = 2000,
 ) -> Path:
-    """Run no-OI and with-OI discovery on the exact same OI-covered rows."""
+    """Run no-OI and with-OI discovery on the exact same OI-covered rows.
+
+    Any incomplete OI evidence writes ``oi_incremental_summary.json`` with
+    ``incremental_evidence_status=FAILED_PARTIAL`` and returns the output
+    directory instead of crashing after partial artifacts. FAILED_PARTIAL remains
+    non-evidential by contract.
+    """
     selected = {
         *base_config.features.numeric,
         *base_config.features.decision_timing_numeric,
@@ -84,7 +90,7 @@ def run_pump_fade_oi_incremental_experiment(
         oi_prepared = prepare_archetype_data_from_rows(shared_rows, oi_config)
         _assert_prepared_row_identity(baseline_prepared, oi_prepared, baseline_config)
     except Exception as exc:
-        summary_path = _write_failed_summary(
+        _write_failed_summary(
             input_path=input_path,
             input_sha256=input_sha256,
             out_dir=out_dir,
@@ -96,9 +102,7 @@ def run_pump_fade_oi_incremental_experiment(
             preparation_contract="shared_population_preparation_failed",
             catboost_thread_count=baseline_config.catboost_thread_count,
         )
-        raise PumpFadeOiExperimentError(
-            f"paired OI experiment failed during shared population preparation; summary written: {summary_path}"
-        ) from exc
+        return out_dir
     input_rows_after_limit = len(limited_frame)
     try:
         baseline_dir = run_prepared_archetype_discovery(
@@ -112,7 +116,7 @@ def run_pump_fade_oi_incremental_experiment(
             input_reuse_contract="paired_oi_shared_population_split_v1",
         )
     except Exception as exc:
-        summary_path = _write_failed_summary(
+        _write_failed_summary(
             input_path=input_path,
             input_sha256=input_sha256,
             out_dir=out_dir,
@@ -124,9 +128,7 @@ def run_pump_fade_oi_incremental_experiment(
             preparation_contract="paired_oi_shared_population_split_v1",
             catboost_thread_count=baseline_config.catboost_thread_count,
         )
-        raise PumpFadeOiExperimentError(
-            f"paired OI experiment failed before the baseline arm completed; summary written: {summary_path}"
-        ) from exc
+        return out_dir
     try:
         oi_dir = run_prepared_archetype_discovery(
             prepared=oi_prepared,
@@ -139,7 +141,7 @@ def run_pump_fade_oi_incremental_experiment(
             input_reuse_contract="paired_oi_shared_population_split_v1",
         )
     except Exception as exc:
-        summary_path = _write_failed_summary(
+        _write_failed_summary(
             input_path=input_path,
             input_sha256=input_sha256,
             out_dir=out_dir,
@@ -151,9 +153,7 @@ def run_pump_fade_oi_incremental_experiment(
             preparation_contract="paired_oi_shared_population_split_v1",
             catboost_thread_count=baseline_config.catboost_thread_count,
         )
-        raise PumpFadeOiExperimentError(
-            f"paired OI experiment failed after the baseline arm completed; summary written: {summary_path}"
-        ) from exc
+        return out_dir
     baseline = _read_run(baseline_dir / "archetype_run.json")
     with_oi = _read_run(oi_dir / "archetype_run.json")
     for field in ("input_rows_after_limit", "discovery_rows", "verification_rows", "discovery_groups", "verification_groups"):

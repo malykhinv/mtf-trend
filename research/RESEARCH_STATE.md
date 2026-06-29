@@ -91,6 +91,11 @@ structural pump-fade decision dataset builder
 structural pump-fade nature dataset builder
 archetype discovery and controls for pump-fade nature
 paired OI incremental experiment runner with finite-OI-feature population gating and shared prepared population/split reuse
+strict missingness flags for pump-fade optional/context features
+label-only feature-boundary guard for pump-fade archetype configs
+whole-event train/validation/calibration split for generic prediction
+bounded CatBoost thread count from one runtime source of truth
+symbol-filtered simulation grouping for i5/16GB memory discipline
 ```
 
 Still intentionally absent:
@@ -156,7 +161,16 @@ failure: numeric feature `oi_change_5m` contains missing values
 paired summary: not produced / not valid
 ```
 
-The contract bug found by the failed full run is now represented as a hard population gate in code: `oi_available=true` is only raw stream availability; paired OI runs additionally require finite values for every registered OI model feature. Patch 10 keeps the same scientific contract but reuses the prepared OI-covered population/split for both arms so the full 796-symbol development run does not pay for two full input reads and two row-preparation passes.
+The contract bug found by the failed full run is now represented as a hard population gate in code: `oi_available=true` is only raw stream availability; paired OI runs additionally require finite values for every registered OI model feature. The OI runner now writes `oi_incremental_summary.json` with `FAILED_PARTIAL` and returns the output directory instead of crashing after partial artifacts; `FAILED_PARTIAL` remains non-evidential and must not be interpreted as OI value.
+
+Current evidence governance:
+
+```text
+EXPERIMENT_LOG.md is the evidence source of truth.
+RESEARCH_STATE.md is a status summary.
+METHODOLOGY_GAP_LEDGER.md tracks platform capability only, not active-strategy proof.
+PATCH_LOG.md tracks proposed/applied code changes only.
+```
 
 Still required before interpreting OI:
 
@@ -234,4 +248,4 @@ pump-fade regimes into stronger controls, state-lattice prediction, realized
 barrier outcomes, and pessimistic trade simulation.
 ```
 
-- Patch 11 proposed: archetype CatBoost thread usage is made explicit and bounded (`catboost_thread_count`, default 4) for i5/16GB runs; run metadata and paired OI summaries record the value.
+- Runtime thread-count source is now centralized in `src/anomaly_science/runtime.py`; archetype and prediction CatBoost configs use the same bounded default for i5/16GB runs.

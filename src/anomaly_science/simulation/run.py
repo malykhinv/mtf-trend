@@ -22,6 +22,7 @@ from anomaly_science.simulation.builder import (
 )
 from anomaly_science.simulation.config import TradeSimulationConfig
 from anomaly_science.strategy.metadata import strategy_metadata_run_config_rows
+from anomaly_science.strategy.registry import get_strategy
 
 
 def run_mvp1_trade_simulation(
@@ -39,14 +40,25 @@ def run_mvp1_trade_simulation(
     cfg = config or TradeSimulationConfig()
     funding_rate_present = _funding_rate_stream_present(input_path)
 
+    decision_rows = load_anomaly_decision_timing_csv(decision_artifact_path)
+    strategy = get_strategy(cfg.strategy_name)
+    decision_symbols = {
+        row.symbol
+        for row in decision_rows
+        if row.target_horizon_minutes == cfg.target_horizon_minutes
+        and row.strategy_name == strategy.metadata.strategy_name
+        and row.strategy_version == strategy.metadata.strategy_version
+    }
+
     source = CsvDirectoryDataSource(input_path, max_time_ms=max_input_time_ms)
     candles_frame = source.read_frame("candles_1m", required=True)
     if candles_frame is None:
         raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    candles_frame = _filter_frame_to_symbols(candles_frame, decision_symbols)
     funding_frame = source.read_frame("funding_rate", required=False)
+    funding_frame = _filter_frame_to_symbols(funding_frame, decision_symbols)
     candles_1m = normalize_candles_1m(candles_frame)
     funding_rates = normalize_funding_rates(funding_frame)
-    decision_rows = load_anomaly_decision_timing_csv(decision_artifact_path)
     simulation_rows = build_trade_simulation_rows(
         candles_1m=candles_1m,
         funding_rates=funding_rates,
@@ -253,6 +265,13 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, barrie
     ]
     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_simulation", implemented=implemented_methodology_rows)
 
+
+
+
+def _filter_frame_to_symbols(frame, symbols: set[str]):
+    if frame is None or not symbols or "symbol" not in frame.columns:
+        return frame
+    return frame.loc[frame["symbol"].isin(symbols)].copy()
 
 def _funding_rate_stream_present(input_path: Path) -> bool:
     return (input_path / "funding_rate.csv").is_file()

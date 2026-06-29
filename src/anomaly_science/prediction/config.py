@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from anomaly_science.contracts.horizons import research_horizon_label_column
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
 from anomaly_science.strategy.registry import validate_strategy_horizon
+from anomaly_science.runtime import DEFAULT_BOUNDED_CPU_THREAD_COUNT, validate_bounded_thread_count
 
 
 SUPERVISED_ANCHOR_POLICY_T0_ONLY = "t0_only_v1"
@@ -36,6 +37,7 @@ class WalkForwardPredictionConfig:
     catboost_iterations: int = 80
     catboost_depth: int = 4
     catboost_learning_rate: float = 0.05
+    catboost_thread_count: int = DEFAULT_BOUNDED_CPU_THREAD_COUNT
     random_seed: int = 20260618
     excluded_model_feature_prefixes: tuple[str, ...] = ()
     sample_weight_policy: str = SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED
@@ -73,6 +75,7 @@ class WalkForwardPredictionConfig:
             raise ValueError("catboost_depth must be positive")
         if self.catboost_learning_rate <= 0.0:
             raise ValueError("catboost_learning_rate must be positive")
+        validate_bounded_thread_count(self.catboost_thread_count, field_name="catboost_thread_count")
         if any(not item for item in self.excluded_model_feature_prefixes):
             raise ValueError("excluded_model_feature_prefixes must not contain empty values")
         if self.sample_weight_policy not in SUPPORTED_SAMPLE_WEIGHT_POLICIES:

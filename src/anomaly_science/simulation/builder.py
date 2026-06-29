@@ -115,19 +115,22 @@ def build_trade_simulation_rows(
 ) -> tuple[TradeSimulationRow, ...]:
     cfg = config or TradeSimulationConfig()
     _validate_strategy_horizon(config=cfg)
-    candles_by_symbol = _candles_by_symbol(candles_1m)
-    funding_by_symbol = _funding_by_symbol(funding_rates)
+    strategy = get_strategy(cfg.strategy_name)
+    eligible_decisions = [
+        decision
+        for decision in decision_rows
+        if decision.target_horizon_minutes == cfg.target_horizon_minutes
+        and decision.strategy_name == strategy.metadata.strategy_name
+        and decision.strategy_version == strategy.metadata.strategy_version
+        and _is_simulatable_decision(decision, config=cfg)
+    ]
+    eligible_symbols = {decision.symbol for decision in eligible_decisions}
+    candles_by_symbol = _candles_by_symbol(candles_1m, symbols=eligible_symbols)
+    funding_by_symbol = _funding_by_symbol(funding_rates, symbols=eligible_symbols)
 
     rows: list[TradeSimulationRow] = []
     active_until_by_variant: dict[tuple[str, str, str, str, str, float], int] = {}
-    strategy = get_strategy(cfg.strategy_name)
-    for decision in sorted(decision_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
-        if decision.target_horizon_minutes != cfg.target_horizon_minutes:
-            continue
-        if decision.strategy_name != strategy.metadata.strategy_name or decision.strategy_version != strategy.metadata.strategy_version:
-            continue
-        if not _is_simulatable_decision(decision, config=cfg):
-            continue
+    for decision in sorted(eligible_decisions, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
         symbol_candles = candles_by_symbol.get(decision.symbol, [])
         for close_fraction in _target_close_fraction_grid(strategy=strategy, decision=decision):
             key = (
@@ -153,18 +156,30 @@ def build_trade_simulation_rows(
     return tuple(rows)
 
 
-def _candles_by_symbol(candles_1m: Sequence[Candle1m] | Iterable[Candle1m]) -> dict[str, list[Candle1m]]:
+def _candles_by_symbol(
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    *,
+    symbols: set[str] | None = None,
+) -> dict[str, list[Candle1m]]:
     candles_by_symbol: dict[str, list[Candle1m]] = {}
     for candle in candles_1m:
+        if symbols is not None and candle.symbol not in symbols:
+            continue
         candles_by_symbol.setdefault(candle.symbol, []).append(candle)
     for candles in candles_by_symbol.values():
         candles.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
     return candles_by_symbol
 
 
-def _funding_by_symbol(funding_rates: Sequence[FundingRate] | Iterable[FundingRate]) -> dict[str, list[FundingRate]]:
+def _funding_by_symbol(
+    funding_rates: Sequence[FundingRate] | Iterable[FundingRate],
+    *,
+    symbols: set[str] | None = None,
+) -> dict[str, list[FundingRate]]:
     funding_by_symbol: dict[str, list[FundingRate]] = {}
     for funding_rate in funding_rates:
+        if symbols is not None and funding_rate.symbol not in symbols:
+            continue
         funding_by_symbol.setdefault(funding_rate.symbol, []).append(funding_rate)
     for rates in funding_by_symbol.values():
         rates.sort(key=lambda item: item.timestamp_ms)
@@ -187,16 +202,18 @@ def build_barrier_outcome_rows(
     """
     cfg = config or TradeSimulationConfig()
     _validate_strategy_horizon(config=cfg)
-    candles_by_symbol = _candles_by_symbol(candles_1m)
     strategy = get_strategy(cfg.strategy_name)
+    eligible_decisions = [
+        decision
+        for decision in decision_rows
+        if decision.target_horizon_minutes == cfg.target_horizon_minutes
+        and decision.strategy_name == strategy.metadata.strategy_name
+        and decision.strategy_version == strategy.metadata.strategy_version
+        and _has_static_barrier_decision(decision)
+    ]
+    candles_by_symbol = _candles_by_symbol(candles_1m, symbols={decision.symbol for decision in eligible_decisions})
     rows: list[BarrierOutcomeRow] = []
-    for decision in sorted(decision_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
-        if decision.target_horizon_minutes != cfg.target_horizon_minutes:
-            continue
-        if decision.strategy_name != strategy.metadata.strategy_name or decision.strategy_version != strategy.metadata.strategy_version:
-            continue
-        if not _has_static_barrier_decision(decision):
-            continue
+    for decision in sorted(eligible_decisions, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
         try:
             rows.append(_realized_barrier_outcome(decision=decision, candles=candles_by_symbol.get(decision.symbol, []), config=cfg))
         except TradeSimulationInputError:
@@ -213,8 +230,6 @@ def build_random_entry_time_control_rows(
 ) -> tuple[TradeSimulationRow, ...]:
     cfg = config or TradeSimulationConfig()
     _validate_strategy_horizon(config=cfg)
-    candles_by_symbol = _candles_by_symbol(candles_1m)
-    funding_by_symbol = _funding_by_symbol(funding_rates)
     candidates_by_symbol: dict[str, list[ExpectedValueRow]] = {}
     strategy = get_strategy(cfg.strategy_name)
     for decision in decision_rows:
@@ -225,6 +240,10 @@ def build_random_entry_time_control_rows(
         if not _is_simulatable_decision(decision, config=cfg):
             continue
         candidates_by_symbol.setdefault(decision.symbol, []).append(decision)
+
+    eligible_symbols = set(candidates_by_symbol)
+    candles_by_symbol = _candles_by_symbol(candles_1m, symbols=eligible_symbols)
+    funding_by_symbol = _funding_by_symbol(funding_rates, symbols=eligible_symbols)
 
     rng = random.Random(cfg.random_seed)
     rows: list[TradeSimulationRow] = []
@@ -245,6 +264,7 @@ def build_random_entry_time_control_rows(
             control_decision = _reanchor_random_control(
                 decision=control_decision,
                 candles=candles_by_symbol.get(control_decision.symbol, []),
+                config=cfg,
             )
             if control_decision is None:
                 continue
@@ -303,8 +323,18 @@ def build_matched_market_time_control_rows(
     if not cfg.matched_market_time_control_enabled:
         return ()
     _validate_strategy_horizon(config=cfg)
-    candles_by_symbol = _candles_by_symbol(candles_1m)
-    funding_by_symbol = _funding_by_symbol(funding_rates)
+    strategy = get_strategy(cfg.strategy_name)
+    decisions = tuple(
+        decision
+        for decision in decision_rows
+        if decision.target_horizon_minutes == cfg.target_horizon_minutes
+        and decision.strategy_name == strategy.metadata.strategy_name
+        and decision.strategy_version == strategy.metadata.strategy_version
+        and _is_simulatable_decision(decision, config=cfg)
+    )
+    eligible_symbols = {decision.symbol for decision in decisions}
+    candles_by_symbol = _candles_by_symbol(candles_1m, symbols=eligible_symbols)
+    funding_by_symbol = _funding_by_symbol(funding_rates, symbols=eligible_symbols)
     candidate_index_by_symbol = {
         symbol: _market_time_candidate_index(candles=candles, config=cfg)
         for symbol, candles in candles_by_symbol.items()
@@ -318,15 +348,6 @@ def build_matched_market_time_control_rows(
         for candidate in candidates:
             candidates_by_symbol_bucket.setdefault((symbol, candidate.session_bucket, candidate.volatility_bucket), []).append(candidate)
 
-    strategy = get_strategy(cfg.strategy_name)
-    decisions = tuple(
-        decision
-        for decision in decision_rows
-        if decision.target_horizon_minutes == cfg.target_horizon_minutes
-        and decision.strategy_name == strategy.metadata.strategy_name
-        and decision.strategy_version == strategy.metadata.strategy_version
-        and _is_simulatable_decision(decision, config=cfg)
-    )
     signal_times_by_symbol: dict[str, set[int]] = {}
     for decision in decisions:
         signal_times_by_symbol.setdefault(decision.symbol, set()).add(decision.snapshot_time_ms)
@@ -363,6 +384,7 @@ def build_matched_market_time_control_rows(
         control_decision = _reanchor_random_control(
             decision=control_decision,
             candles=candles_by_symbol.get(control_decision.symbol, []),
+            config=cfg,
         )
         if control_decision is None:
             continue
@@ -486,6 +508,7 @@ def _reanchor_random_control(
     *,
     decision: ExpectedValueRow,
     candles: Sequence[Candle1m],
+    config: TradeSimulationConfig,
 ) -> ExpectedValueRow | None:
     asof = [candle for candle in candles if candle.available_time_ms <= decision.snapshot_time_ms]
     window = asof[-decision.target_horizon_minutes :]
@@ -503,6 +526,7 @@ def _reanchor_random_control(
     if stop_distance <= 0.0 or target_distance <= 0.0:
         return None
     selected_rr = target_distance / stop_distance
+    selected_rr_acceptable = selected_rr >= config.min_rr
     return replace(
         decision,
         entry_reference_price=current,
@@ -512,11 +536,11 @@ def _reanchor_random_control(
         target_distance=target_distance,
         RR_long_proxy=selected_rr if decision.best_action == "long" else 0.0,
         RR_short_proxy=selected_rr if decision.best_action == "short" else 0.0,
-        RR_long_acceptable=decision.selected_RR_acceptable if decision.best_action == "long" else False,
-        RR_short_acceptable=decision.selected_RR_acceptable if decision.best_action == "short" else False,
+        RR_long_acceptable=selected_rr_acceptable if decision.best_action == "long" else False,
+        RR_short_acceptable=selected_rr_acceptable if decision.best_action == "short" else False,
         selected_RR=selected_rr,
-        selected_RR_acceptable=decision.selected_RR_acceptable,
-        is_RR_still_acceptable=decision.selected_RR_acceptable,
+        selected_RR_acceptable=selected_rr_acceptable,
+        is_RR_still_acceptable=selected_rr_acceptable,
         execution_policy_resolved=True,
     )
 

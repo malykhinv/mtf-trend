@@ -560,6 +560,18 @@ def build_prediction_metric_rows(
                 len(prediction_rows),
                 "OOS target class share for selected horizon",
             )
+            add(
+                f"class_brier_{scenario}",
+                _mean(_binary_brier_score(row, scenario) for row in prediction_rows),
+                len(prediction_rows),
+                "one-vs-rest Brier score for calibrated class probability after probability-vector normalization",
+            )
+            add(
+                f"class_expected_calibration_error_{scenario}",
+                _class_expected_calibration_error(prediction_rows, scenario),
+                len(prediction_rows),
+                "one-vs-rest confidence-bucket ECE for calibrated class probability after probability-vector normalization",
+            )
     return tuple(metrics)
 
 
@@ -718,6 +730,7 @@ class _CatBoostIsotonicModel:
             random_seed=config.random_seed,
             verbose=False,
             allow_writing_files=False,
+            thread_count=config.catboost_thread_count,
         )
         eval_set = (_feature_matrix(validation_rows, feature_names=feature_names), validation_targets)
         model.fit(
@@ -993,10 +1006,55 @@ def _state_bins(state: StrategyState1mRow) -> dict[str, str]:
 def _train_validation_calibration_split(
     rows: Sequence[PredictionInputRow],
 ) -> tuple[tuple[PredictionInputRow, ...], tuple[PredictionInputRow, ...], tuple[PredictionInputRow, ...]]:
-    first_cut = max(1, int(len(rows) * 0.60))
-    second_cut = max(first_cut + 1, int(len(rows) * 0.80))
-    second_cut = min(second_cut, len(rows) - 1)
-    return tuple(rows[:first_cut]), tuple(rows[first_cut:second_cut]), tuple(rows[second_cut:])
+    groups: dict[tuple[str, str], list[PredictionInputRow]] = defaultdict(list)
+    for row in rows:
+        groups[_event_group_key(row)].append(row)
+    ordered_group_keys = sorted(
+        groups,
+        key=lambda key: (
+            min(item.state.snapshot_time_ms for item in groups[key]),
+            key[0],
+            key[1],
+        ),
+    )
+    group_count = len(ordered_group_keys)
+    if group_count < 3:
+        return tuple(rows), (), ()
+    first_cut = min(max(1, int(group_count * 0.60)), group_count - 2)
+    second_cut = min(max(first_cut + 1, int(group_count * 0.80)), group_count - 1)
+    fit_keys = set(ordered_group_keys[:first_cut])
+    validation_keys = set(ordered_group_keys[first_cut:second_cut])
+    calibration_keys = set(ordered_group_keys[second_cut:])
+    _validate_split_group_exclusivity(
+        fit_keys=fit_keys,
+        validation_keys=validation_keys,
+        calibration_keys=calibration_keys,
+    )
+    fit_rows = tuple(row for row in rows if _event_group_key(row) in fit_keys)
+    validation_rows = tuple(row for row in rows if _event_group_key(row) in validation_keys)
+    calibration_rows = tuple(row for row in rows if _event_group_key(row) in calibration_keys)
+    return fit_rows, validation_rows, calibration_rows
+
+
+def _event_group_key(row: PredictionInputRow) -> tuple[str, str]:
+    return row.state.symbol, row.state.event_id
+
+
+def _validate_split_group_exclusivity(
+    *,
+    fit_keys: set[tuple[str, str]],
+    validation_keys: set[tuple[str, str]],
+    calibration_keys: set[tuple[str, str]],
+) -> None:
+    overlaps = {
+        "fit_validation": fit_keys & validation_keys,
+        "fit_calibration": fit_keys & calibration_keys,
+        "validation_calibration": validation_keys & calibration_keys,
+    }
+    non_empty = {name: keys for name, keys in overlaps.items() if keys}
+    if non_empty:
+        details = "; ".join(f"{name}={len(keys)}" for name, keys in sorted(non_empty.items()))
+        raise PredictionInputError(f"train/validation/calibration split must be event-exclusive: {details}")
 
 
 def _weekly_training_diagnostic(
@@ -1239,6 +1297,12 @@ def _brier_score(row: OosPredictionRow) -> float:
     return sum((_probability_for_scenario(row, scenario) - (1.0 if row.target_scenario == scenario else 0.0)) ** 2 for scenario in PREDICTED_SCENARIOS)
 
 
+def _binary_brier_score(row: OosPredictionRow, scenario: str) -> float:
+    probability = _probability_for_scenario(row, scenario)
+    target = 1.0 if row.target_scenario == scenario else 0.0
+    return (probability - target) ** 2
+
+
 def _log_loss(row: OosPredictionRow) -> float:
     return -math.log(max(_probability_for_scenario(row, row.target_scenario), _EPS))
 
@@ -1338,6 +1402,23 @@ def _expected_calibration_error(rows: Sequence[OosPredictionRow]) -> float:
         * abs(
             _mean(item.prediction_confidence for item in group)
             - _mean(1.0 if item.predicted_scenario == item.target_scenario else 0.0 for item in group)
+        )
+        for group in grouped.values()
+    )
+
+
+def _class_expected_calibration_error(rows: Sequence[OosPredictionRow], scenario: str) -> float:
+    if not rows:
+        return 0.0
+    grouped: dict[str, list[OosPredictionRow]] = defaultdict(list)
+    for row in rows:
+        grouped[_confidence_bucket(_probability_for_scenario(row, scenario))].append(row)
+    total = float(len(rows))
+    return sum(
+        (len(group) / total)
+        * abs(
+            _mean(_probability_for_scenario(item, scenario) for item in group)
+            - _mean(1.0 if item.target_scenario == scenario else 0.0 for item in group)
         )
         for group in grouped.values()
     )
