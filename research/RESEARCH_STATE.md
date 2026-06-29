@@ -33,6 +33,16 @@ Core methodology source of truth:
 docs/research_methodology_core.md
 ```
 
+Experiment evidence source of truth:
+
+```text
+research/EXPERIMENT_LOG.md
+```
+
+`RESEARCH_STATE.md` is a current-state summary. It must not upgrade or soften
+experiment statuses from `EXPERIMENT_LOG.md`. If the two files conflict, the
+experiment ledger wins until both are reconciled in the same patch.
+
 Core methodology must remain strategy-independent. It must not point to
 `docs/pump_fade_archetype_protocol.md`, `docs/strategies/anomaly_strategy.md`,
 or any other strategy-specific protocol as part of its normative contract.

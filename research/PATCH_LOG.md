@@ -1,5 +1,17 @@
 # Patch log
 
+## research: make experiment ledger the evidence source of truth
+
+Status: PROPOSED.
+
+Intent:
+- Replace the stale empty experiment log with explicit development/smoke/failed-partial records for the current pump-fade and OI work.
+- Make `research/EXPERIMENT_LOG.md` authoritative for evidence status, with `research/RESEARCH_STATE.md` limited to summary.
+- Prevent the 30-symbol OI smoke, full failed-partial OI run, and discovered archetype thresholds from being read as tradeable edge evidence.
+
+Validation:
+- `python -m compileall -q main.py src tests zip_project.py`
+
 ## architecture: add dataset store phase cache v1
 
 Status: PROPOSED.
