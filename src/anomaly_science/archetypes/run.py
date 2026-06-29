@@ -113,6 +113,8 @@ def _write_archetype_discovery_outputs(
         "limit_symbols": limit_symbols,
         "input_rows_after_limit": input_rows_after_limit,
         "input_reuse_contract": input_reuse_contract,
+        "catboost_thread_count": config.catboost_thread_count,
+        "catboost_threading_contract": "explicit_bounded_thread_count_v1",
         "discovery_rows": len(result.prepared.discovery),
         "verification_rows": len(result.prepared.verification),
         "discovery_groups": int(

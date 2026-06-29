@@ -94,6 +94,7 @@ def run_pump_fade_oi_incremental_experiment(
             baseline_error=exc,
             oi_error=None,
             preparation_contract="shared_population_preparation_failed",
+            catboost_thread_count=baseline_config.catboost_thread_count,
         )
         raise PumpFadeOiExperimentError(
             f"paired OI experiment failed during shared population preparation; summary written: {summary_path}"
@@ -121,6 +122,7 @@ def run_pump_fade_oi_incremental_experiment(
             baseline_error=exc,
             oi_error=None,
             preparation_contract="paired_oi_shared_population_split_v1",
+            catboost_thread_count=baseline_config.catboost_thread_count,
         )
         raise PumpFadeOiExperimentError(
             f"paired OI experiment failed before the baseline arm completed; summary written: {summary_path}"
@@ -147,6 +149,7 @@ def run_pump_fade_oi_incremental_experiment(
             baseline_error=None,
             oi_error=exc,
             preparation_contract="paired_oi_shared_population_split_v1",
+            catboost_thread_count=baseline_config.catboost_thread_count,
         )
         raise PumpFadeOiExperimentError(
             f"paired OI experiment failed after the baseline arm completed; summary written: {summary_path}"
@@ -180,6 +183,8 @@ def run_pump_fade_oi_incremental_experiment(
         "input_sha256": input_sha256,
         "limit_symbols": limit_symbols,
         "preparation_contract": "paired_oi_shared_population_split_v1",
+        "catboost_thread_count": baseline_config.catboost_thread_count,
+        "catboost_threading_contract": "explicit_bounded_thread_count_v1",
         "input_rows_after_limit": input_rows_after_limit,
         "shared_discovery_rows": len(shared_rows.discovery),
         "shared_verification_rows": len(shared_rows.verification),
@@ -264,6 +269,7 @@ def _write_failed_summary(
     baseline_error: BaseException | None,
     oi_error: BaseException | None,
     preparation_contract: str,
+    catboost_thread_count: int,
 ) -> Path:
     summary_path = out_dir / "oi_incremental_summary.json"
     baseline = _read_optional_run(baseline_dir)
@@ -274,6 +280,8 @@ def _write_failed_summary(
         "input_sha256": input_sha256,
         "limit_symbols": limit_symbols,
         "preparation_contract": preparation_contract,
+        "catboost_thread_count": catboost_thread_count,
+        "catboost_threading_contract": "explicit_bounded_thread_count_v1",
         "population_contract": (
             "identical rows with oi_available=true and finite registered OI model features; "
             "oi_available is never a model feature"
@@ -331,6 +339,8 @@ def _summary_fields(payload: dict[str, object]) -> dict[str, object]:
         name: payload[name]
         for name in (
             "run_id",
+            "catboost_thread_count",
+            "catboost_threading_contract",
             "controls_passed",
             "discovery_rows",
             "verification_rows",

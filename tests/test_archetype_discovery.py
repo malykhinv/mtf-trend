@@ -79,6 +79,12 @@ def _config() -> ArchetypeDiscoveryConfig:
     )
 
 
+
+def test_archetype_config_requires_bounded_catboost_thread_count() -> None:
+    with pytest.raises(ArchetypeConfigError, match="catboost_thread_count"):
+        replace(_config(), catboost_thread_count=0)
+    assert replace(_config(), catboost_thread_count=3).catboost_thread_count == 3
+
 def _synthetic_rows() -> pd.DataFrame:
     rng = np.random.default_rng(123)
     rows: list[dict[str, object]] = []

@@ -153,6 +153,7 @@ class ArchetypeDiscoveryConfig:
     depth: int = 4
     learning_rate: float = 0.05
     l2_leaf_reg: float = 5.0
+    catboost_thread_count: int = 4
     generators: tuple[ArchetypeGeneratorSpec, ...] = ()
     rolling_origin_fractions: tuple[float, ...] = (0.60, 0.80, 1.0)
     min_origin_support_fraction: float = 0.67
@@ -238,6 +239,8 @@ class ArchetypeDiscoveryConfig:
             raise ArchetypeConfigError("iterations must be positive and depth must be within [1, 8]")
         if self.learning_rate <= 0.0 or self.l2_leaf_reg < 0.0:
             raise ArchetypeConfigError("learning_rate must be positive and l2_leaf_reg non-negative")
+        if self.catboost_thread_count <= 0:
+            raise ArchetypeConfigError("catboost_thread_count must be positive; use an explicit bounded value")
         if len(set(self.generators)) != len(self.generators):
             raise ArchetypeConfigError("generators must be unique")
         if not self.rolling_origin_fractions:

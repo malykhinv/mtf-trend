@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +54,12 @@ def _parse_anchor_offsets(value: str) -> tuple[int, ...]:
     if not offsets:
         raise ValueError("--supervised-anchor-offsets must contain at least one integer offset")
     return offsets
+
+def _with_archetype_catboost_thread_count(config, value: int | None):
+    if value is None:
+        return config
+    return replace(config, catboost_thread_count=value)
+
 
 def _add_strategy_horizon_arguments(parser: argparse.ArgumentParser, *, verb: str) -> None:
     parser.add_argument(
@@ -521,6 +528,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Deterministic sorted-symbol limit for a smoke run. Omit for the registered full run.",
     )
+    archetypes.add_argument(
+        "--catboost-thread-count",
+        type=int,
+        default=None,
+        help="Override archetype CatBoost thread_count. Omit to use the registered config/default bounded value.",
+    )
 
     pump_fade_dataset = subparsers.add_parser(
         "build-pump-fade-dataset",
@@ -558,6 +571,12 @@ def build_parser() -> argparse.ArgumentParser:
     pump_fade_oi.add_argument("--config", required=True, help="Registered no-OI archetype config used as the paired baseline.")
     pump_fade_oi.add_argument("--out", required=True, help="Output directory for both paired runs and summary.")
     pump_fade_oi.add_argument("--limit-symbols", type=int, default=None, help="Deterministic smoke limit; omit for the full registered run.")
+    pump_fade_oi.add_argument(
+        "--catboost-thread-count",
+        type=int,
+        default=None,
+        help="Override paired-archetype CatBoost thread_count. Omit to use the registered config/default bounded value.",
+    )
 
 
     return parser
@@ -575,7 +594,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_archetype_discovery(
             input_path=Path(args.input),
             out_dir=Path(args.out),
-            config=load_archetype_discovery_config(Path(args.config)),
+            config=_with_archetype_catboost_thread_count(
+                load_archetype_discovery_config(Path(args.config)), args.catboost_thread_count
+            ),
             limit_symbols=args.limit_symbols,
         )
         print(f"archetype discovery artifacts written: {output_dir}")
@@ -604,7 +625,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_pump_fade_oi_incremental_experiment(
             input_path=Path(args.input),
             out_dir=Path(args.out),
-            base_config=load_archetype_discovery_config(Path(args.config)),
+            base_config=_with_archetype_catboost_thread_count(
+                load_archetype_discovery_config(Path(args.config)), args.catboost_thread_count
+            ),
             limit_symbols=args.limit_symbols,
         )
         print(f"pump-fade paired OI experiment artifacts written: {output_dir}")

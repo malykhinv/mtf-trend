@@ -444,7 +444,7 @@ def fit_rule_generator(
         random_seed=config.random_seed if random_seed is None else random_seed,
         verbose=False,
         allow_writing_files=False,
-        thread_count=-1,
+        thread_count=config.catboost_thread_count,
     )
     model.fit(
         prepared.x_discovery,

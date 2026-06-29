@@ -233,3 +233,5 @@ Only after OI, RR, proxy-EV, and threshold-stability cleanup, move promising
 pump-fade regimes into stronger controls, state-lattice prediction, realized
 barrier outcomes, and pessimistic trade simulation.
 ```
+
+- Patch 11 proposed: archetype CatBoost thread usage is made explicit and bounded (`catboost_thread_count`, default 4) for i5/16GB runs; run metadata and paired OI summaries record the value.
