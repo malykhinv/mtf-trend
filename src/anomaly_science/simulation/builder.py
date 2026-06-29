@@ -13,7 +13,10 @@ from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.decision import ExpectedValueRow
 from anomaly_science.contracts.market import Candle1m, FundingRate, MarketDataContractError, ONE_MINUTE_MS
 from anomaly_science.contracts.simulation import (
+    BARRIER_OUTCOME_TEMPORAL_CONTRACT,
+    BARRIER_OUTCOME_VERSION,
     TRADE_SIMULATION_TEMPORAL_CONTRACT,
+    BarrierOutcomeRow,
     TradeSimulationMetricRow,
     TradeSimulationRow,
 )
@@ -87,6 +90,22 @@ def build_matched_market_time_control_from_source(
         config=config,
     )
 
+def build_barrier_outcomes_from_source(
+    *,
+    source: MarketDataSource,
+    decision_timing_path: str | Path,
+    config: TradeSimulationConfig | None = None,
+) -> tuple[BarrierOutcomeRow, ...]:
+    frame = source.read_frame("candles_1m", required=True)
+    if frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    return build_barrier_outcome_rows(
+        candles_1m=normalize_candles_1m(frame),
+        decision_rows=load_anomaly_decision_timing_csv(decision_timing_path),
+        config=config,
+    )
+
+
 def build_trade_simulation_rows(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
@@ -150,6 +169,39 @@ def _funding_by_symbol(funding_rates: Sequence[FundingRate] | Iterable[FundingRa
     for rates in funding_by_symbol.values():
         rates.sort(key=lambda item: item.timestamp_ms)
     return funding_by_symbol
+
+
+def build_barrier_outcome_rows(
+    *,
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    decision_rows: Sequence[ExpectedValueRow] | Iterable[ExpectedValueRow],
+    config: TradeSimulationConfig | None = None,
+) -> tuple[BarrierOutcomeRow, ...]:
+    """Build static realized barrier outcomes for future utility modeling.
+
+    This is a labels-only artifact. It intentionally does not change decision
+    selection or trade simulation PnL. It records what would have happened after
+    the next 1m open if the selected structural side used its registered stop and
+    target references, with same-candle target/stop collisions resolved
+    pessimistically as stop_loss_first.
+    """
+    cfg = config or TradeSimulationConfig()
+    _validate_strategy_horizon(config=cfg)
+    candles_by_symbol = _candles_by_symbol(candles_1m)
+    strategy = get_strategy(cfg.strategy_name)
+    rows: list[BarrierOutcomeRow] = []
+    for decision in sorted(decision_rows, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
+        if decision.target_horizon_minutes != cfg.target_horizon_minutes:
+            continue
+        if decision.strategy_name != strategy.metadata.strategy_name or decision.strategy_version != strategy.metadata.strategy_version:
+            continue
+        if not _has_static_barrier_decision(decision):
+            continue
+        try:
+            rows.append(_realized_barrier_outcome(decision=decision, candles=candles_by_symbol.get(decision.symbol, []), config=cfg))
+        except TradeSimulationInputError:
+            continue
+    return tuple(rows)
 
 
 def build_random_entry_time_control_rows(
@@ -629,6 +681,167 @@ def load_anomaly_trade_simulation_csv(path: str | Path) -> tuple[TradeSimulation
             schema_name="anomaly_trade_simulation.csv",
             row_builder=_simulation_from_mapping,
         )
+    )
+
+
+def barrier_outcome_rows_to_artifact(rows: Sequence[BarrierOutcomeRow]) -> list[dict[str, object]]:
+    return [asdict(row) for row in rows]
+
+
+def _has_static_barrier_decision(decision: ExpectedValueRow) -> bool:
+    if decision.best_action not in {"long", "short"}:
+        return False
+    if not decision.execution_policy_resolved:
+        return False
+    return (
+        decision.stop_reference_price is not None
+        and decision.target_reference_price is not None
+        and decision.stop_distance is not None
+        and decision.target_distance is not None
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _StaticBarrierOutcome:
+    target_hit: bool
+    stop_hit: bool
+    timeout: bool
+    first_resolution: str
+    first_hit_candle: Candle1m | None
+    target_hit_candle: Candle1m | None
+    stop_hit_candle: Candle1m | None
+    intracandle_collision: bool
+    exit_price_before_costs: float
+
+
+def _realized_barrier_outcome(
+    *,
+    decision: ExpectedValueRow,
+    candles: Sequence[Candle1m],
+    config: TradeSimulationConfig,
+) -> BarrierOutcomeRow:
+    if decision.execution_reference_model != config.execution_reference_model:
+        raise TradeSimulationInputError(
+            f"decision execution_reference_model={decision.execution_reference_model!r} does not match barrier outcome config {config.execution_reference_model!r}"
+        )
+    if not _has_static_barrier_decision(decision):
+        raise TradeSimulationInputError(f"missing static barrier inputs for decision {decision.event_id}")
+    entry_candle = _entry_candle(decision=decision, candles=candles)
+    exit_candles = [
+        candle
+        for candle in candles
+        if candle.available_time_ms >= entry_candle.available_time_ms
+        and candle.available_time_ms <= decision.snapshot_time_ms + decision.target_horizon_minutes * ONE_MINUTE_MS
+    ]
+    if not exit_candles:
+        raise TradeSimulationInputError(f"no barrier outcome candles for decision {decision.event_id}")
+    assert decision.stop_reference_price is not None
+    assert decision.target_reference_price is not None
+    assert decision.stop_distance is not None
+    assert decision.target_distance is not None
+    side = decision.best_action
+    outcome = _resolve_static_barrier_outcome(
+        side=side,
+        candles=exit_candles,
+        target_price=decision.target_reference_price,
+        stop_price=decision.stop_reference_price,
+        stop_trigger=BarrierTrigger(decision.stop_trigger),
+        target_trigger=BarrierTrigger(decision.target_trigger),
+    )
+    return BarrierOutcomeRow(
+        barrier_outcome_version=BARRIER_OUTCOME_VERSION,
+        strategy_name=decision.strategy_name,
+        strategy_version=decision.strategy_version,
+        event_id=decision.event_id,
+        symbol=decision.symbol,
+        snapshot_time_ms=decision.snapshot_time_ms,
+        feature_cutoff_time_ms=decision.feature_cutoff_time_ms,
+        target_horizon_minutes=decision.target_horizon_minutes,
+        execution_reference_model=config.execution_reference_model,
+        entry_price_basis=config.entry_price_basis,
+        side=side,
+        entry_reference_time_ms=entry_candle.open_time_ms,
+        entry_reference_price=entry_candle.open,
+        stop_reference_price=decision.stop_reference_price,
+        target_reference_price=decision.target_reference_price,
+        stop_distance=decision.stop_distance,
+        target_distance=decision.target_distance,
+        stop_policy_id=decision.stop_policy_id,
+        target_policy_id=decision.target_policy_id,
+        stop_trigger=decision.stop_trigger,
+        target_trigger=decision.target_trigger,
+        target_hit=outcome.target_hit,
+        stop_hit=outcome.stop_hit,
+        timeout=outcome.timeout,
+        first_resolution=outcome.first_resolution,
+        first_hit_time_ms=None if outcome.first_hit_candle is None else outcome.first_hit_candle.open_time_ms,
+        target_hit_time_ms=None if outcome.target_hit_candle is None else outcome.target_hit_candle.open_time_ms,
+        stop_hit_time_ms=None if outcome.stop_hit_candle is None else outcome.stop_hit_candle.open_time_ms,
+        intracandle_collision=outcome.intracandle_collision,
+        barrier_resolution=outcome.first_resolution,
+        net_pnl_before_model=_side_pnl(side, entry_candle.open, outcome.exit_price_before_costs),
+        temporal_contract=BARRIER_OUTCOME_TEMPORAL_CONTRACT,
+    )
+
+
+def _resolve_static_barrier_outcome(
+    *,
+    side: str,
+    candles: Sequence[Candle1m],
+    target_price: float,
+    stop_price: float,
+    stop_trigger: BarrierTrigger,
+    target_trigger: BarrierTrigger,
+) -> _StaticBarrierOutcome:
+    for candle in candles:
+        target_hit = _barrier_hit(side=side, candle=candle, price=target_price, trigger=target_trigger, is_target=True)
+        stop_hit = _barrier_hit(side=side, candle=candle, price=stop_price, trigger=stop_trigger, is_target=False)
+        if target_hit and stop_hit:
+            return _StaticBarrierOutcome(
+                target_hit=True,
+                stop_hit=True,
+                timeout=False,
+                first_resolution="stop_loss_first",
+                first_hit_candle=candle,
+                target_hit_candle=candle,
+                stop_hit_candle=candle,
+                intracandle_collision=True,
+                exit_price_before_costs=stop_price if stop_trigger is BarrierTrigger.TOUCH else candle.close,
+            )
+        if stop_hit:
+            return _StaticBarrierOutcome(
+                target_hit=False,
+                stop_hit=True,
+                timeout=False,
+                first_resolution="stop_loss_first",
+                first_hit_candle=candle,
+                target_hit_candle=None,
+                stop_hit_candle=candle,
+                intracandle_collision=False,
+                exit_price_before_costs=stop_price if stop_trigger is BarrierTrigger.TOUCH else candle.close,
+            )
+        if target_hit:
+            return _StaticBarrierOutcome(
+                target_hit=True,
+                stop_hit=False,
+                timeout=False,
+                first_resolution="target_first",
+                first_hit_candle=candle,
+                target_hit_candle=candle,
+                stop_hit_candle=None,
+                intracandle_collision=False,
+                exit_price_before_costs=target_price,
+            )
+    return _StaticBarrierOutcome(
+        target_hit=False,
+        stop_hit=False,
+        timeout=True,
+        first_resolution="horizon_close",
+        first_hit_candle=None,
+        target_hit_candle=None,
+        stop_hit_candle=None,
+        intracandle_collision=False,
+        exit_price_before_costs=candles[-1].close,
     )
 
 

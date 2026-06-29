@@ -9,6 +9,8 @@ from .market import MarketDataContractError
 from .time import validate_timestamp_ms
 
 TRADE_SIMULATION_TEMPORAL_CONTRACT = "features<=snapshot_time<entry_reference_time<=exit_time;structural_policy;pessimistic_stop_first"
+BARRIER_OUTCOME_TEMPORAL_CONTRACT = "features<=snapshot_time<entry_reference_time<=barrier_outcome_time;labels_only;not_model_feature"
+BARRIER_OUTCOME_VERSION = "mvp1_realized_barrier_outcome_v1"
 SIMULATION_EXIT_REASONS = frozenset(
     ("target_hit", "stop_loss", "horizon_close", "partial_target_then_stop", "partial_target_then_horizon")
 )
@@ -139,6 +141,109 @@ class TradeSimulationRow:
             raise MarketDataContractError(f"barrier_resolution has unknown value: {self.barrier_resolution!r}")
         if self.temporal_contract != TRADE_SIMULATION_TEMPORAL_CONTRACT:
             raise MarketDataContractError("temporal_contract must document pessimistic simulation timing")
+
+
+@dataclass(frozen=True, slots=True)
+class BarrierOutcomeRow:
+    barrier_outcome_version: str
+    strategy_name: str
+    strategy_version: str
+    event_id: str
+    symbol: str
+    snapshot_time_ms: int
+    feature_cutoff_time_ms: int
+    target_horizon_minutes: int
+    execution_reference_model: str
+    entry_price_basis: str
+    side: str
+    entry_reference_time_ms: int
+    entry_reference_price: float
+    stop_reference_price: float
+    target_reference_price: float
+    stop_distance: float
+    target_distance: float
+    stop_policy_id: str
+    target_policy_id: str
+    stop_trigger: str
+    target_trigger: str
+    target_hit: bool
+    stop_hit: bool
+    timeout: bool
+    first_resolution: str
+    first_hit_time_ms: int | None
+    target_hit_time_ms: int | None
+    stop_hit_time_ms: int | None
+    intracandle_collision: bool
+    barrier_resolution: str
+    net_pnl_before_model: float
+    temporal_contract: str
+
+    def __post_init__(self) -> None:
+        if self.barrier_outcome_version != BARRIER_OUTCOME_VERSION:
+            raise MarketDataContractError("barrier_outcome_version must match the registered contract")
+        for field_name in ("strategy_name", "strategy_version", "event_id", "symbol"):
+            if not getattr(self, field_name):
+                raise MarketDataContractError(f"{field_name} is required")
+        for field_name in ("snapshot_time_ms", "feature_cutoff_time_ms", "entry_reference_time_ms"):
+            validate_timestamp_ms(getattr(self, field_name), field_name=field_name)
+        if self.feature_cutoff_time_ms > self.snapshot_time_ms:
+            raise MarketDataContractError("feature_cutoff_time_ms must be <= snapshot_time_ms")
+        if self.entry_reference_time_ms <= self.snapshot_time_ms:
+            raise MarketDataContractError("entry_reference_time_ms must be > snapshot_time_ms")
+        if not is_supported_research_horizon(self.target_horizon_minutes):
+            raise MarketDataContractError(supported_research_horizon_error_message("target_horizon_minutes"))
+        if self.execution_reference_model != EV_EXECUTION_REFERENCE_MODEL:
+            raise MarketDataContractError("execution_reference_model must match the EV/simulation execution contract")
+        if self.entry_price_basis != SIMULATION_ENTRY_PRICE_BASIS:
+            raise MarketDataContractError("entry_price_basis must document next-open barrier-outcome entry")
+        if self.side not in SIMULATION_SIDES:
+            raise MarketDataContractError("side must be long or short")
+        for field_name in (
+            "entry_reference_price",
+            "stop_reference_price",
+            "target_reference_price",
+            "stop_distance",
+            "target_distance",
+        ):
+            _require_positive_finite(getattr(self, field_name), field_name)
+        for field_name in ("stop_policy_id", "target_policy_id", "stop_trigger", "target_trigger"):
+            if not getattr(self, field_name):
+                raise MarketDataContractError(f"{field_name} is required")
+        allowed_resolutions = {"target_first", "stop_loss_first", "horizon_close"}
+        if self.first_resolution not in allowed_resolutions:
+            raise MarketDataContractError(f"first_resolution has unknown value: {self.first_resolution!r}")
+        if self.barrier_resolution != self.first_resolution:
+            raise MarketDataContractError("barrier_resolution must equal first_resolution for static realized barrier outcomes")
+        if self.timeout != (not self.target_hit and not self.stop_hit):
+            raise MarketDataContractError("timeout must mean neither target nor stop was hit")
+        if self.intracandle_collision and not (self.target_hit and self.stop_hit):
+            raise MarketDataContractError("intracandle_collision requires both target_hit and stop_hit")
+        if self.first_resolution == "horizon_close" and not self.timeout:
+            raise MarketDataContractError("horizon_close outcome must be a timeout")
+        if self.first_resolution == "target_first" and not self.target_hit:
+            raise MarketDataContractError("target_first outcome requires target_hit")
+        if self.first_resolution == "stop_loss_first" and not self.stop_hit:
+            raise MarketDataContractError("stop_loss_first outcome requires stop_hit")
+        for field_name in ("first_hit_time_ms", "target_hit_time_ms", "stop_hit_time_ms"):
+            value = getattr(self, field_name)
+            if value is not None:
+                validate_timestamp_ms(value, field_name=field_name)
+                if value < self.entry_reference_time_ms:
+                    raise MarketDataContractError(f"{field_name} must be >= entry_reference_time_ms")
+        if self.target_hit != (self.target_hit_time_ms is not None):
+            raise MarketDataContractError("target_hit and target_hit_time_ms must agree")
+        if self.stop_hit != (self.stop_hit_time_ms is not None):
+            raise MarketDataContractError("stop_hit and stop_hit_time_ms must agree")
+        if self.first_resolution == "target_first" and self.first_hit_time_ms != self.target_hit_time_ms:
+            raise MarketDataContractError("first_hit_time_ms must equal target_hit_time_ms for target_first")
+        if self.first_resolution == "stop_loss_first" and self.first_hit_time_ms != self.stop_hit_time_ms:
+            raise MarketDataContractError("first_hit_time_ms must equal stop_hit_time_ms for stop_loss_first")
+        if self.first_resolution == "horizon_close" and self.first_hit_time_ms is not None:
+            raise MarketDataContractError("horizon_close must not have first_hit_time_ms")
+        if not math.isfinite(self.net_pnl_before_model):
+            raise MarketDataContractError("net_pnl_before_model must be finite")
+        if self.temporal_contract != BARRIER_OUTCOME_TEMPORAL_CONTRACT:
+            raise MarketDataContractError("temporal_contract must document the realized barrier label boundary")
 
 
 @dataclass(frozen=True, slots=True)

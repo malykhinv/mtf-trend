@@ -57,6 +57,26 @@ Core выполняет только универсальные задачи:
 17. Reproducibility Ledger
 ```
 
+Realized barrier outcome artifact:
+
+```text
+strategy_barrier_outcomes.csv
+  side
+  entry_reference_time_ms
+  entry_reference_price
+  stop_reference_price
+  target_reference_price
+  target_hit
+  stop_hit
+  timeout
+  first_resolution
+  intracandle_collision
+  net_pnl_before_model
+
+This artifact is labels-only. It is written after decision rows and cannot be read by feature generation, prediction, EV selection, or trade admission.
+Same-candle target/stop collision resolves as stop_loss_first.
+```
+
 Запрещено:
 
 ```text
@@ -1021,7 +1041,8 @@ MVP1 boundary:
 
 ```text
 Текущий nature-class EV является proxy utility, а не final expected utility proof.
-Пока нет realized barrier outcome model, decision artifacts обязаны писать:
+Core now writes realized structural barrier outcomes as a labels-only artifact, but no realized barrier outcome model is allowed to replace the proxy until it is explicitly trained/calibrated/audited in a later patch.
+Until then decision artifacts обязаны писать:
 utility_model_kind = nature_proxy
 utility_evidence_status = NON_FINAL
 utility_evidence_claim_allowed = false
@@ -1263,6 +1284,7 @@ strategy_oos_predictions.csv
 strategy_calibration.csv
 strategy_calibration_breakdown.csv
 strategy_decision_timing.csv
+strategy_barrier_outcomes.csv
 strategy_trade_simulation.csv
 ```
 

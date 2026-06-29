@@ -11,6 +11,8 @@ from anomaly_science.data.normalized import normalize_candles_1m, normalize_fund
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.decision import load_anomaly_decision_timing_csv
 from anomaly_science.simulation.builder import (
+    barrier_outcome_rows_to_artifact,
+    build_barrier_outcome_rows,
     build_matched_market_time_control_rows,
     build_random_entry_time_control_rows,
     build_trade_simulation_rows,
@@ -51,6 +53,11 @@ def run_mvp1_trade_simulation(
         decision_rows=decision_rows,
         config=cfg,
     )
+    barrier_outcome_rows = build_barrier_outcome_rows(
+        candles_1m=candles_1m,
+        decision_rows=decision_rows,
+        config=cfg,
+    )
     random_entry_control_rows = build_random_entry_time_control_rows(
         candles_1m=candles_1m,
         funding_rates=funding_rates,
@@ -73,6 +80,7 @@ def run_mvp1_trade_simulation(
     protocol_rows = _protocol_rows(
         decision_row_count=len(decision_rows),
         simulation_row_count=len(simulation_rows),
+        barrier_outcome_row_count=len(barrier_outcome_rows),
         funding_rate_present=funding_rate_present,
     )
     run_config_rows = _run_config_rows(
@@ -83,6 +91,13 @@ def run_mvp1_trade_simulation(
     )
 
     written: list[Path] = []
+    written.extend(
+        write_csv_artifact_with_aliases(
+            output_path / "strategy_barrier_outcomes.csv",
+            barrier_outcome_rows_to_artifact(barrier_outcome_rows),
+            get_artifact_schema("strategy_barrier_outcomes.csv"),
+        )
+    )
     written.extend(
         write_csv_artifact_with_aliases(
             output_path / "strategy_trade_simulation.csv",
@@ -116,7 +131,7 @@ def run_mvp1_trade_simulation(
     return output_path
 
 
-def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, funding_rate_present: bool) -> list[ProtocolAuditRow]:
+def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, barrier_outcome_row_count: int, funding_rate_present: bool) -> list[ProtocolAuditRow]:
     from anomaly_science.audit import build_methodology_v2_audit_rows
 
     base_rows = [
@@ -158,6 +173,15 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
             status=AuditStatus.PASS if simulation_row_count > 0 else AuditStatus.WARN,
             message=f"wrote {simulation_row_count} strategy_trade_simulation.csv rows",
             artifact="strategy_trade_simulation.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="realized_barrier_outcomes_written",
+            status=AuditStatus.PASS if barrier_outcome_row_count > 0 else AuditStatus.WARN,
+            message=(
+                f"wrote {barrier_outcome_row_count} strategy_barrier_outcomes.csv rows for future utility modeling; "
+                "artifact is labels-only and is not consumed by decision selection"
+            ),
+            artifact="strategy_barrier_outcomes.csv",
         ),
         ProtocolAuditRow(
             check_name="legacy_import_boundary",
@@ -220,6 +244,12 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
             message="signal-time shuffle is not enough for selection-edge claims; matched_market_time metrics are written as a separate negative baseline",
             artifact="strategy_trade_simulation_metrics.csv",
         ),
+        ProtocolAuditRow(
+            check_name="realized_barrier_outcomes_separate_from_decision",
+            status=AuditStatus.PASS,
+            message="strategy_barrier_outcomes.csv is written after decisions as a realized label artifact for future utility modeling and is not read by EV or trade selection",
+            artifact="strategy_barrier_outcomes.csv",
+        ),
     ]
     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_simulation", implemented=implemented_methodology_rows)
 
@@ -273,6 +303,8 @@ def _run_config_rows(
         RunConfigRow(key="max_matched_market_time_candidates_per_decision", value=str(config.max_matched_market_time_candidates_per_decision), source="runtime"),
         RunConfigRow(key="require_prediction_confident", value=str(config.require_prediction_confident), source="runtime"),
         RunConfigRow(key="require_rr_acceptable", value=str(config.require_rr_acceptable), source="runtime"),
+        RunConfigRow(key="barrier_outcome_version", value="mvp1_realized_barrier_outcome_v1", source="runtime"),
+        RunConfigRow(key="barrier_outcome_scope", value="labels_only_not_model_feature_not_decision_rule", source="runtime"),
         RunConfigRow(key="simulation_scope", value="simplified_pessimistic_not_live_execution", source="runtime"),
     ]
 

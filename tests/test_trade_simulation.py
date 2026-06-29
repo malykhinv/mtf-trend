@@ -18,11 +18,13 @@ from anomaly_science.contracts.decision import (
 )
 from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 from anomaly_science.contracts.market import Candle1m, FundingRate
-from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
+from anomaly_science.contracts.simulation import BARRIER_OUTCOME_TEMPORAL_CONTRACT, BARRIER_OUTCOME_VERSION, TRADE_SIMULATION_TEMPORAL_CONTRACT
 from anomaly_science.decision import expected_value_rows_to_artifact
 from anomaly_science.simulation import (
     TradeSimulationConfig,
     TradeSimulationInputError,
+    barrier_outcome_rows_to_artifact,
+    build_barrier_outcome_rows,
     build_random_entry_time_control_rows,
     build_matched_market_time_control_rows,
     build_trade_simulation_metric_rows,
@@ -136,6 +138,75 @@ def test_trade_simulation_uses_next_open_with_slippage_and_stop_first() -> None:
     assert row.target_price == 103.0
     assert row.target_close_fraction == 0.25
     assert row.temporal_contract == TRADE_SIMULATION_TEMPORAL_CONTRACT
+
+
+def test_barrier_outcomes_record_stop_first_collision_without_changing_simulation() -> None:
+    rows = build_barrier_outcome_rows(
+        candles_1m=[
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=105.0, low=98.0, close=98.0),
+        ],
+        decision_rows=[_decision("barrier_collision")],
+        config=TradeSimulationConfig(target_horizon_minutes=30),
+    )
+
+    row = rows[0]
+
+    assert row.barrier_outcome_version == BARRIER_OUTCOME_VERSION
+    assert row.side == "long"
+    assert row.entry_reference_time_ms == BASE_MS + ONE_MINUTE_MS
+    assert row.entry_reference_price == 101.0
+    assert row.target_hit is True
+    assert row.stop_hit is True
+    assert row.timeout is False
+    assert row.intracandle_collision is True
+    assert row.first_resolution == "stop_loss_first"
+    assert row.barrier_resolution == "stop_loss_first"
+    assert row.stop_hit_time_ms == BASE_MS + ONE_MINUTE_MS
+    assert row.target_hit_time_ms == BASE_MS + ONE_MINUTE_MS
+    assert row.net_pnl_before_model == -2.0
+    assert row.temporal_contract == BARRIER_OUTCOME_TEMPORAL_CONTRACT
+
+
+def test_barrier_outcomes_skip_unresolved_or_non_actionable_decisions() -> None:
+    wait_row = replace(
+        _decision("wait"),
+        best_action="wait",
+        selected_RR=0.0,
+        selected_RR_acceptable=False,
+    )
+    unresolved = replace(
+        _decision("unresolved"),
+        execution_policy_resolved=False,
+        stop_reference_price=None,
+        target_reference_price=None,
+        stop_distance=None,
+        target_distance=None,
+    )
+
+    rows = build_barrier_outcome_rows(
+        candles_1m=[
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=102.0, low=100.0, close=101.0),
+        ],
+        decision_rows=[wait_row, unresolved],
+    )
+
+    assert rows == ()
+
+
+def test_barrier_outcome_artifact_schema_is_strict() -> None:
+    rows = build_barrier_outcome_rows(
+        candles_1m=[
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=104.5, low=100.5, close=103.0),
+        ],
+        decision_rows=[_decision("barrier_schema")],
+    )
+
+    artifact = barrier_outcome_rows_to_artifact(rows)
+
+    assert set(artifact[0]) == set(get_artifact_schema("strategy_barrier_outcomes.csv").required_columns)
 
 
 def test_trade_simulation_requires_rr_acceptability_for_selected_long_side() -> None:
@@ -453,6 +524,8 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "mvp1 trade simulation artifacts written" in result.stdout
     assert (out_dir / "anomaly_trade_simulation.csv").is_file()
+    assert (out_dir / "strategy_barrier_outcomes.csv").is_file()
+    assert (out_dir / "anomaly_barrier_outcomes.csv").is_file()
     assert (out_dir / "strategy_trade_simulation.csv").is_file()
     assert (out_dir / "strategy_trade_simulation_metrics.csv").is_file()
     assert (out_dir / "strategy_protocol_audit.csv").is_file()
@@ -467,6 +540,8 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert audit_by_name["intracandle_double_barrier_resolved_as_stop_loss_first"]["status"] == "PASS"
     assert audit_by_name["partial_target_fraction_grid_declared_by_strategy"]["status"] == "PASS"
     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
+    assert audit_by_name["realized_barrier_outcomes_written"]["status"] == "PASS"
+    assert audit_by_name["realized_barrier_outcomes_separate_from_decision"]["status"] == "PASS"
     assert audit_by_name["funding_rate_boundary"]["status"] == "WARN"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
 
@@ -485,6 +560,8 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert run_config["execution_policy_version"] == "generic_anomaly_structural_execution_v1"
     assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL
     assert run_config["entry_price_basis"] == SIMULATION_ENTRY_PRICE_BASIS
+    assert run_config["barrier_outcome_version"] == BARRIER_OUTCOME_VERSION
+    assert run_config["barrier_outcome_scope"] == "labels_only_not_model_feature_not_decision_rule"
     assert run_config["cost_model"] == ROUND_TRIP_COST_MODEL
 
 

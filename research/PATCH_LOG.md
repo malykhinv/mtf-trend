@@ -1534,3 +1534,20 @@ Validation in this environment:
 - `git apply --check` against the Patch 1-6 working tree.
 - `python -m compileall -q main.py src tests zip_project.py`
 - Focused pytest still needs the project venv if runtime dependencies are absent.
+
+## labels: add realized barrier outcome artifacts
+
+Status: PROPOSED.
+
+Changes:
+- Adds `strategy_barrier_outcomes.csv` with `anomaly_barrier_outcomes.csv` alias.
+- Builds labels-only realized structural target-first / stop-first / timeout outcomes from existing decision rows and 1m candles during the simulation stage.
+- Resolves same-candle target/stop collisions as `stop_loss_first` and records `intracandle_collision` explicitly.
+- Keeps the artifact out of feature generation, EV selection, and trade admission; current nature-proxy utility remains `NON_FINAL`.
+- Updates canonical schemas, run config, protocol audit, methodology docs, and regression tests.
+
+Validation in this environment:
+- `git apply --check` against the Patch 1-7 working tree.
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest tests/test_artifact_schemas.py::test_mvp1_artifact_schemas_are_fixed -q`
+- Full simulation pytest collection still needs the project venv because this sandbox lacks `polars`.

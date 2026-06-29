@@ -910,12 +910,13 @@ strategy_nature_atlas.csv        -> anomaly_nature_atlas.csv where strategy_fami
 strategy_oos_predictions.csv     -> anomaly_oos_predictions.csv where strategy_family=anomaly
 strategy_calibration.csv         -> anomaly_calibration.csv where strategy_family=anomaly
 strategy_decision_timing.csv     -> anomaly_decision_timing.csv where strategy_family=anomaly
+strategy_barrier_outcomes.csv    -> anomaly_barrier_outcomes.csv where strategy_family=anomaly
 strategy_trade_simulation.csv    -> anomaly_trade_simulation.csv where strategy_family=anomaly
 strategy_rejection_funnel.csv    -> anomaly_rejection_funnel.csv where strategy_family=anomaly
 strategy_protocol_audit.csv      -> anomaly_protocol_audit.csv where strategy_family=anomaly
 ```
 
-MVP1 expected utility / EV fields live inside `strategy_decision_timing.csv`. For the current MVP, those fields must remain explicitly marked as `utility_model_kind=nature_proxy`, `utility_evidence_status=NON_FINAL`, and `utility_evidence_claim_allowed=false` until Core adds realized barrier outcome modeling.
+MVP1 expected utility / EV fields live inside `strategy_decision_timing.csv`. For the current MVP, those fields must remain explicitly marked as `utility_model_kind=nature_proxy`, `utility_evidence_status=NON_FINAL`, and `utility_evidence_claim_allowed=false`. `strategy_barrier_outcomes.csv` now records labels-only realized target-first / stop-first / timeout outcomes for later utility modeling, but it must not be read by feature generation, EV selection, or trade admission.
 
 Правило:
 
