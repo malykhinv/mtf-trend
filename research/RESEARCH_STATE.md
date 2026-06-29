@@ -248,4 +248,4 @@ pump-fade regimes into stronger controls, state-lattice prediction, realized
 barrier outcomes, and pessimistic trade simulation.
 ```
 
-- Runtime thread-count source is now centralized in `src/anomaly_science/runtime.py`; archetype and prediction CatBoost configs use the same bounded default for i5/16GB runs.
+- Runtime thread-count source is centralized in `src/anomaly_science/runtime.py`; archetype and prediction CatBoost configs use the same bounded default for i5/16GB runs, and CLI thread-count overrides are intentionally not exposed.

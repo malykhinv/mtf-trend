@@ -31,6 +31,7 @@ from anomaly_science.prediction import (
     validate_model_feature_catalog_membership,
 )
 from anomaly_science.prediction.config import SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED, SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE
+from anomaly_science.prediction.builder import PredictionInputRow, _train_validation_calibration_split
 from anomaly_science.state import state_rows_to_artifact
 from anomaly_science.strategy.registry import StrategyRegistryError
 
@@ -265,6 +266,43 @@ def test_load_prediction_inputs_supports_registered_state_lattice_offsets(tmp_pa
 
     assert [row.state.minutes_since_detection for row in inputs] == [0, 5, 30]
 
+
+
+def test_train_validation_calibration_split_keeps_event_groups_exclusive() -> None:
+    rows: list[PredictionInputRow] = []
+    for event_number in range(6):
+        event_id = f"event_{event_number:02d}"
+        for offset in (0, 5):
+            state = _state_row(
+                event_id=event_id,
+                day_offset=-3 + event_number,
+                minute_of_day=10 + offset,
+                minutes_since_detection=offset,
+            )
+            rows.append(
+                PredictionInputRow(
+                    state=state,
+                    label=_label_row(state=state, scenario_30m="long_continuation"),
+                    features=_feature_row(state=state),
+                )
+            )
+
+    fit_rows, validation_rows, calibration_rows = _train_validation_calibration_split(rows)
+    fit_events = {row.state.event_id for row in fit_rows}
+    validation_events = {row.state.event_id for row in validation_rows}
+    calibration_events = {row.state.event_id for row in calibration_rows}
+
+    assert fit_events
+    assert validation_events
+    assert calibration_events
+    assert fit_events.isdisjoint(validation_events)
+    assert fit_events.isdisjoint(calibration_events)
+    assert validation_events.isdisjoint(calibration_events)
+    assert all(
+        len({row.state.minutes_since_detection for row in bucket if row.state.event_id == event_id}) == 2
+        for bucket in (fit_rows, validation_rows, calibration_rows)
+        for event_id in {row.state.event_id for row in bucket}
+    )
 
 def test_iter_prediction_inputs_rejects_non_row_aligned_artifacts(tmp_path: Path) -> None:
     first = _state_row(event_id="first", day_offset=0, minute_of_day=10)

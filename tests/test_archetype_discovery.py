@@ -339,6 +339,46 @@ def test_archetype_feature_manifest_rejects_target_as_feature() -> None:
         prepare_archetype_data(_synthetic_rows(), config)
 
 
+
+def test_archetype_feature_manifest_rejects_label_available_as_feature() -> None:
+    base = _config()
+    config = replace(
+        base,
+        input=replace(base.input, label_available_column="label_available"),
+        features=ArchetypeFeatureSpec(numeric=("nature_signal", "label_available")),
+    )
+
+    with pytest.raises(ArchetypeDiscoveryError, match="cannot be model features"):
+        prepare_archetype_data(_synthetic_rows(), config)
+
+
+def test_archetype_feature_manifest_rejects_label_schema_as_feature() -> None:
+    base = _config()
+    config = replace(
+        base,
+        input=replace(
+            base.input,
+            label_schema_column="label_schema_version",
+            required_label_schema_value="canonical_v1",
+        ),
+        features=ArchetypeFeatureSpec(numeric=("nature_signal", "label_schema_version")),
+    )
+
+    with pytest.raises(ArchetypeDiscoveryError, match="cannot be model features"):
+        prepare_archetype_data(_synthetic_rows(), config)
+
+
+def test_archetype_feature_manifest_rejects_registered_label_only_feature() -> None:
+    base = _config()
+    config = replace(
+        base,
+        input=replace(base.input, label_only_columns=("event_peak_time_ms",)),
+        features=ArchetypeFeatureSpec(numeric=("nature_signal", "event_peak_time_ms")),
+    )
+
+    with pytest.raises(ArchetypeDiscoveryError, match="cannot be model features"):
+        prepare_archetype_data(_synthetic_rows(), config)
+
 def test_matched_blind_rejects_rule_that_only_recovers_matching_stratum() -> None:
     config = replace(
         _config(),

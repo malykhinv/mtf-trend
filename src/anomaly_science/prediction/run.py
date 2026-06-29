@@ -22,6 +22,7 @@ from anomaly_science.prediction.builder import (
     prediction_metric_rows_to_artifact,
 )
 from anomaly_science.prediction.config import WalkForwardPredictionConfig
+from anomaly_science.runtime import DEFAULT_BOUNDED_CPU_THREAD_COUNT
 from anomaly_science.strategy.metadata import strategy_metadata_run_config_rows
 
 
@@ -338,6 +339,9 @@ def _run_config_rows(
         RunConfigRow(key="catboost_iterations", value=str(config.catboost_iterations), source="runtime"),
         RunConfigRow(key="catboost_depth", value=str(config.catboost_depth), source="runtime"),
         RunConfigRow(key="catboost_learning_rate", value=str(config.catboost_learning_rate), source="runtime"),
+        RunConfigRow(key="catboost_thread_count", value=str(config.catboost_thread_count), source="runtime"),
+        RunConfigRow(key="bounded_cpu_thread_count_default", value=str(DEFAULT_BOUNDED_CPU_THREAD_COUNT), source="runtime"),
+        RunConfigRow(key="threading_contract", value="single_bounded_runtime_default_no_cli_override_v1", source="runtime"),
         RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
         RunConfigRow(key="sample_weight_policy", value=config.sample_weight_policy, source="runtime"),
         RunConfigRow(key="calibration_method", value="one_vs_rest_isotonic_regression_on_train_calibration_split", source="runtime"),

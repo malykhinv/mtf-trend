@@ -45,3 +45,19 @@ def test_build_research_dataset_cli_has_explicit_phase_boundary() -> None:
     research_args = parser.parse_args(["run-research", "broad_anomaly_v1_h30", "--days", "9"])
     assert research_args.command == "run-research"
     assert not hasattr(research_args, "max_phase")
+
+
+def test_cli_does_not_expose_catboost_thread_count_overrides(capsys) -> None:
+    parser = build_parser()
+
+    for command in (
+        "run-mvp1-prediction",
+        "run-archetype-discovery",
+        "run-pump-fade-oi-incremental",
+    ):
+        try:
+            parser.parse_args([command, "--help"])
+        except SystemExit as exc:
+            assert exc.code == 0
+        help_text = capsys.readouterr().out
+        assert "--catboost-thread-count" not in help_text

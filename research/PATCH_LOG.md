@@ -2,14 +2,14 @@
 
 ## science: harden pump-fade evidence protocol
 
-Status: PROPOSED.
+Status: APPLIED_IN_CURRENT_TREE_AFTER_RUNTIME_COMPLETION.
 
 Intent:
 - Make research evidence governance explicit: `EXPERIMENT_LOG.md` is evidence, `RESEARCH_STATE.md` is summary, `METHODOLOGY_GAP_LEDGER.md` is platform capability, and `PATCH_LOG.md` is patch state.
 - Treat future-only pump-fade fields as registered `label_only_columns` and forbid label/schema/filter/label-only columns as archetype model features.
 - Replace pump-fade magic missing sentinels with `NaN` plus explicit availability/context flags.
 - Split prediction train/validation/calibration by whole `(symbol,event_id)` groups, not rows.
-- Use one bounded runtime thread-count source for CatBoost.
+- Use one bounded runtime thread-count source for CatBoost; no CLI thread-count overrides.
 - Make OI paired runs write non-evidential `FAILED_PARTIAL` summaries instead of crashing after partial artifacts.
 - Recompute random/matched-control RR acceptability after re-anchoring.
 - Limit simulation candle/funding grouping to eligible decision symbols for i5/16GB memory discipline.
@@ -17,7 +17,8 @@ Intent:
 
 Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
-- Focused pytest collection still cannot run here because this sandbox lacks `polars`.
+- `PYTHONPATH=src pytest -q tests/test_runtime.py`
+- Full CLI/import pytest still needs the project venv because this sandbox lacks `polars`.
 
 ## decision: make RR acceptability side-specific
 

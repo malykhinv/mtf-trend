@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -54,11 +53,6 @@ def _parse_anchor_offsets(value: str) -> tuple[int, ...]:
     if not offsets:
         raise ValueError("--supervised-anchor-offsets must contain at least one integer offset")
     return offsets
-
-def _with_archetype_catboost_thread_count(config, value: int | None):
-    if value is None:
-        return config
-    return replace(config, catboost_thread_count=value)
 
 
 def _add_strategy_horizon_arguments(parser: argparse.ArgumentParser, *, verb: str) -> None:
@@ -334,12 +328,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=",".join(str(value) for value in REGISTERED_STATE_LATTICE_ANCHORS_MINUTES),
         help="Comma-separated minutes_since_detection offsets for registered_state_lattice_v1.",
     )
-    prediction.add_argument(
-        "--catboost-thread-count",
-        type=int,
-        default=None,
-        help="Override prediction CatBoost thread_count. Omit to use the single bounded runtime default.",
-    )
     _add_strategy_horizon_arguments(prediction, verb="predict")
 
     controls = subparsers.add_parser(
@@ -540,12 +528,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Deterministic sorted-symbol limit for a smoke run. Omit for the registered full run.",
     )
-    archetypes.add_argument(
-        "--catboost-thread-count",
-        type=int,
-        default=None,
-        help="Override archetype CatBoost thread_count. Omit to use the registered config/default bounded value.",
-    )
 
     pump_fade_dataset = subparsers.add_parser(
         "build-pump-fade-dataset",
@@ -589,12 +571,6 @@ def build_parser() -> argparse.ArgumentParser:
     pump_fade_oi.add_argument("--config", required=True, help="Registered no-OI archetype config used as the paired baseline.")
     pump_fade_oi.add_argument("--out", required=True, help="Output directory for both paired runs and summary.")
     pump_fade_oi.add_argument("--limit-symbols", type=int, default=None, help="Deterministic smoke limit; omit for the full registered run.")
-    pump_fade_oi.add_argument(
-        "--catboost-thread-count",
-        type=int,
-        default=None,
-        help="Override paired-archetype CatBoost thread_count. Omit to use the registered config/default bounded value.",
-    )
 
 
     return parser
@@ -612,9 +588,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_archetype_discovery(
             input_path=Path(args.input),
             out_dir=Path(args.out),
-            config=_with_archetype_catboost_thread_count(
-                load_archetype_discovery_config(Path(args.config)), args.catboost_thread_count
-            ),
+            config=load_archetype_discovery_config(Path(args.config)),
             limit_symbols=args.limit_symbols,
         )
         print(f"archetype discovery artifacts written: {output_dir}")
@@ -644,9 +618,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = run_pump_fade_oi_incremental_experiment(
             input_path=Path(args.input),
             out_dir=Path(args.out),
-            base_config=_with_archetype_catboost_thread_count(
-                load_archetype_discovery_config(Path(args.config)), args.catboost_thread_count
-            ),
+            base_config=load_archetype_discovery_config(Path(args.config)),
             limit_symbols=args.limit_symbols,
         )
         print(f"pump-fade paired OI experiment artifacts written: {output_dir}")
@@ -774,7 +746,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_horizon_minutes=args.horizon_minutes,
             supervised_anchor_policy_id=args.supervised_anchor_policy,
             supervised_anchor_offsets_minutes_since_detection=_parse_anchor_offsets(args.supervised_anchor_offsets),
-            **({"catboost_thread_count": args.catboost_thread_count} if args.catboost_thread_count is not None else {}),
         )
         output_dir = run_mvp1_prediction(
             state_path=Path(args.state),

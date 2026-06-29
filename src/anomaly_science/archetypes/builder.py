@@ -164,8 +164,13 @@ def _validate_feature_boundary(config: ArchetypeDiscoveryConfig) -> None:
         forbidden.add(contract.feature_cutoff_time_column)
     if contract.future_start_time_column:
         forbidden.add(contract.future_start_time_column)
+    if contract.label_available_column:
+        forbidden.add(contract.label_available_column)
+    if contract.label_schema_column:
+        forbidden.add(contract.label_schema_column)
     if contract.row_filter_column:
         forbidden.add(contract.row_filter_column)
+    forbidden.update(contract.label_only_columns)
     forbidden.update(item.column for item in config.population.required_values)
     selected = (
         set(config.features.numeric)
