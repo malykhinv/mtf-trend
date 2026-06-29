@@ -212,10 +212,17 @@ inventing a commit.
 Priority 1:
 
 ```text
-Fix OI feature availability contract and FAILED_PARTIAL experiment reporting.
+Fix side-specific RR acceptability in decision/simulation.
+General is_RR_still_acceptable must not allow a long trade because only short RR is acceptable, or vice versa.
 ```
 
 Priority 2:
+
+```text
+Mark nature-class EV as proxy utility and block final EV-proof language until realized barrier outcome modeling exists.
+```
+
+Priority 3:
 
 ```text
 Add threshold stability audit for discovered archetype rules:
@@ -225,10 +232,10 @@ Add threshold stability audit for discovered archetype rules:
 - discovery-only quantile bins
 ```
 
-Priority 3:
+Priority 4:
 
 ```text
-Only after OI and threshold-stability cleanup, move promising pump-fade regimes
-into walk-forward calibrated probability, decision timing, EV, and pessimistic
-trade simulation.
+Only after OI, RR, proxy-EV, and threshold-stability cleanup, move promising
+pump-fade regimes into stronger controls, state-lattice prediction, realized
+barrier outcomes, and pessimistic trade simulation.
 ```

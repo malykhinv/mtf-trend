@@ -91,6 +91,9 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert summary_by_key["forensic_audit_dir"].endswith("stages/forensic_audit") or summary_by_key["forensic_audit_dir"].endswith("stages\\forensic_audit")
     assert summary_by_key["forensic_audit_status"] in {"PASS", "WARN"}
     assert summary_by_key["forensic_audit_fail_count"] == "0"
+    assert summary_by_key["forensic_evidence_mode"] == "development"
+    assert summary_by_key["forensic_evidence_status"] in {"DEVELOPMENT_ONLY", "NON_EVIDENTIAL_WARN"}
+    assert summary_by_key["forensic_evidence_claim_allowed"] == "false"
 
     run_config = pd.read_csv(run_dir / "strategy_run_config.csv")
     run_config_by_key = dict(zip(run_config["key"], run_config["value"].astype(str), strict=True))
@@ -98,6 +101,9 @@ def test_run_research_pipeline_uses_auto_output_and_cache_period(tmp_path: Path)
     assert run_config_by_key["target_horizon_minutes"] == "30"
     assert run_config_by_key["active_h_max_minutes"] == "30"
     assert run_config_by_key["forensic_audit_status"] in {"PASS", "WARN"}
+    assert run_config_by_key["forensic_evidence_mode"] == "development"
+    assert run_config_by_key["forensic_evidence_status"] in {"DEVELOPMENT_ONLY", "NON_EVIDENTIAL_WARN"}
+    assert run_config_by_key["forensic_evidence_claim_allowed"] == "false"
     assert run_config_by_key["data_snapshot_hash"]
     assert run_config_by_key["config_hash"]
 

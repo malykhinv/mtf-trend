@@ -1135,6 +1135,9 @@ final holdout not accessed before protocol freeze
 
 Если audit FAIL, результат нельзя интерпретировать.
 
+Если audit WARN, результат можно использовать только как smoke/development diagnostics.
+WARN не является доказательным PASS и не допускает evidence claim.
+
 Правило independent forensic audit:
 
 ```text
@@ -1145,7 +1148,7 @@ Core must provide an independent forensic audit layer that re-reads written arti
 Правило hard gate:
 
 ```text
-`run-research` must write an independent forensic audit artifact after simulation, add its status/counts to the run summary, and fail the run if the independent forensic audit emits any FAIL row.
+`run-research` must write an independent forensic audit artifact after simulation, add its status/counts to the run summary, and fail the run if the independent forensic audit emits any FAIL row. `run-research` must also record a separate forensic evidence interpretation mode: `smoke`, `development`, or `evidence`. In `smoke`/`development`, WARN rows may complete the run but must mark artifacts as non-evidential. In `evidence`, any WARN row blocks the evidence claim; only a clean PASS audit is evidence-eligible.
 ```
 
 

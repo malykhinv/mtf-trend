@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from anomaly_science.audit import build_independent_forensic_audit_rows
-from anomaly_science.research.run import _write_forensic_audit
+from anomaly_science.research.run import evaluate_forensic_evidence_gate, _write_forensic_audit
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus
 from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT
@@ -730,6 +730,60 @@ def test_independent_forensic_audit_fails_missing_required_control(tmp_path: Pat
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
 
+
+
+def test_forensic_evidence_gate_allows_smoke_warn_but_blocks_claims() -> None:
+    result = evaluate_forensic_evidence_gate(
+        mode="smoke",
+        forensic_status="WARN",
+        fail_count=0,
+        warn_count=2,
+    )
+
+    assert result.evidence_status == "NON_EVIDENTIAL_WARN"
+    assert result.evidence_claim_allowed is False
+    assert result.blocks_run is False
+
+
+def test_forensic_evidence_gate_blocks_evidence_warns() -> None:
+    result = evaluate_forensic_evidence_gate(
+        mode="evidence",
+        forensic_status="WARN",
+        fail_count=0,
+        warn_count=1,
+    )
+
+    assert result.evidence_status == "EVIDENCE_BLOCKED_WARN"
+    assert result.evidence_claim_allowed is False
+    assert result.blocks_run is True
+
+
+def test_forensic_evidence_gate_allows_only_clean_evidence_pass() -> None:
+    result = evaluate_forensic_evidence_gate(
+        mode="evidence",
+        forensic_status="PASS",
+        fail_count=0,
+        warn_count=0,
+    )
+
+    assert result.evidence_status == "EVIDENCE_ELIGIBLE"
+    assert result.evidence_claim_allowed is True
+    assert result.blocks_run is False
+
+
+def test_forensic_evidence_gate_fail_blocks_every_mode() -> None:
+    result = evaluate_forensic_evidence_gate(
+        mode="development",
+        forensic_status="FAIL",
+        fail_count=1,
+        warn_count=0,
+        failed_checks="temporal_contract",
+    )
+
+    assert result.evidence_status == "INVALID_FAIL"
+    assert result.evidence_claim_allowed is False
+    assert result.blocks_run is True
+    assert "temporal_contract" in result.message
 
 def test_independent_forensic_audit_fails_missing_root_manifest(tmp_path: Path) -> None:
     _write_valid_minimal_forensic_fixture(tmp_path)

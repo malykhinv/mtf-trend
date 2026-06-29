@@ -44,6 +44,95 @@ from anomaly_science.validation import run_mvp1_holdout_governance
 
 DEFAULT_RESEARCH_OUTPUT_ROOT = Path(".output/results/research_runs")
 MIN_IS_RESEARCH_DAYS_FOR_WEEKLY_WFA = 8
+ForensicEvidenceMode = Literal["smoke", "development", "evidence"]
+
+
+@dataclass(frozen=True, slots=True)
+class ForensicEvidenceGateResult:
+    mode: str
+    evidence_status: str
+    evidence_claim_allowed: bool
+    blocks_run: bool
+    message: str
+
+
+def evaluate_forensic_evidence_gate(
+    *,
+    mode: str,
+    forensic_status: str,
+    fail_count: int,
+    warn_count: int,
+    failed_checks: str = "",
+) -> ForensicEvidenceGateResult:
+    """Convert forensic audit counts into an explicit evidence-interpretation gate.
+
+    Engineering smoke runs may continue with WARN rows, but WARN rows are not
+    evidence. Evidence mode is deliberately stricter: any WARN blocks evidence
+    claims even when there are no FAIL rows.
+    """
+    if mode not in {"smoke", "development", "evidence"}:
+        raise ValueError("forensic evidence mode must be one of: smoke, development, evidence")
+    if fail_count < 0 or warn_count < 0:
+        raise ValueError("forensic fail/warn counts must be non-negative")
+
+    normalized_status = forensic_status.upper()
+    if fail_count:
+        detail = f": {failed_checks}" if failed_checks else ""
+        return ForensicEvidenceGateResult(
+            mode=mode,
+            evidence_status="INVALID_FAIL",
+            evidence_claim_allowed=False,
+            blocks_run=True,
+            message=(
+                f"forensic audit status={normalized_status} has {fail_count} FAIL row(s){detail}; "
+                "downstream results must not be interpreted"
+            ),
+        )
+    if warn_count:
+        if mode == "evidence":
+            return ForensicEvidenceGateResult(
+                mode=mode,
+                evidence_status="EVIDENCE_BLOCKED_WARN",
+                evidence_claim_allowed=False,
+                blocks_run=True,
+                message=(
+                    f"forensic audit status={normalized_status} has {warn_count} WARN row(s); "
+                    "evidence mode requires a clean PASS audit"
+                ),
+            )
+        return ForensicEvidenceGateResult(
+            mode=mode,
+            evidence_status="NON_EVIDENTIAL_WARN",
+            evidence_claim_allowed=False,
+            blocks_run=False,
+            message=(
+                f"forensic audit status={normalized_status} has {warn_count} WARN row(s); "
+                f"{mode} mode may continue, but artifacts are non-evidential"
+            ),
+        )
+    if mode == "evidence":
+        return ForensicEvidenceGateResult(
+            mode=mode,
+            evidence_status="EVIDENCE_ELIGIBLE",
+            evidence_claim_allowed=True,
+            blocks_run=False,
+            message="forensic audit PASS in evidence mode; artifacts are eligible for evidence claims",
+        )
+    if mode == "smoke":
+        return ForensicEvidenceGateResult(
+            mode=mode,
+            evidence_status="SMOKE_ONLY",
+            evidence_claim_allowed=False,
+            blocks_run=False,
+            message="forensic audit PASS in smoke mode; artifacts are engineering smoke only",
+        )
+    return ForensicEvidenceGateResult(
+        mode=mode,
+        evidence_status="DEVELOPMENT_ONLY",
+        evidence_claim_allowed=False,
+        blocks_run=False,
+        message="forensic audit PASS in development mode; artifacts remain development evidence only",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +146,7 @@ class ResearchRunConfig:
     holdout_days: int = 60
     protocol_freeze_id: str = ""
     dataset_store_dir: Path | None = None
+    forensic_evidence_mode: ForensicEvidenceMode = "development"
 
     def __post_init__(self) -> None:
         if not self.strategy_name:
@@ -65,6 +155,8 @@ class ResearchRunConfig:
             raise ValueError("days must be positive when provided")
         if self.research_mode not in {"is", "frozen_holdout"}:
             raise ValueError("research_mode must be 'is' or 'frozen_holdout'")
+        if self.forensic_evidence_mode not in {"smoke", "development", "evidence"}:
+            raise ValueError("forensic_evidence_mode must be 'smoke', 'development', or 'evidence'")
         if self.prepared_input_dir is not None and self.research_mode != "frozen_holdout":
             raise ValueError(
                 "prepared_input_dir is only supported in frozen_holdout mode; "
@@ -316,10 +408,24 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             forensic_status="PENDING",
             forensic_fail_count=-1,
             forensic_warn_count=-1,
+            forensic_evidence_gate=ForensicEvidenceGateResult(
+                mode=config.forensic_evidence_mode,
+                evidence_status="PENDING",
+                evidence_claim_allowed=False,
+                blocks_run=False,
+                message="forensic audit has not run yet",
+            ),
         )
 
     with timings.stage("forensic_audit"):
         forensic_audit_dir, forensic_status, forensic_fail_count, forensic_warn_count, forensic_failed_checks = _write_forensic_audit(run_dir)
+        forensic_evidence_gate = evaluate_forensic_evidence_gate(
+            mode=config.forensic_evidence_mode,
+            forensic_status=forensic_status,
+            fail_count=forensic_fail_count,
+            warn_count=forensic_warn_count,
+            failed_checks=forensic_failed_checks,
+        )
 
     with timings.stage("summary"):
         _write_summary(
@@ -336,6 +442,7 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
             forensic_status=forensic_status,
             forensic_fail_count=forensic_fail_count,
             forensic_warn_count=forensic_warn_count,
+            forensic_evidence_gate=forensic_evidence_gate,
         )
 
     _write_research_run_manifest(
@@ -354,12 +461,13 @@ def run_research_pipeline(config: ResearchRunConfig) -> Path:
         forensic_status=forensic_status,
         forensic_fail_count=forensic_fail_count,
         forensic_warn_count=forensic_warn_count,
+        forensic_evidence_gate=forensic_evidence_gate,
     )
 
-    if forensic_fail_count:
+    if forensic_evidence_gate.blocks_run:
         raise RuntimeError(
-            f"independent forensic protocol audit failed for {run_dir}: "
-            f"{forensic_fail_count} FAIL row(s): {forensic_failed_checks}"
+            f"independent forensic evidence gate blocked {run_dir}: "
+            f"{forensic_evidence_gate.evidence_status}: {forensic_evidence_gate.message}"
         )
     return run_dir
 
@@ -708,6 +816,7 @@ def _write_research_run_manifest(
     forensic_status: str,
     forensic_fail_count: int,
     forensic_warn_count: int,
+    forensic_evidence_gate: ForensicEvidenceGateResult,
 ) -> None:
     strategy = get_strategy(config.strategy_name)
     manifest_path = run_dir / "artifact_manifest.json"
@@ -722,6 +831,9 @@ def _write_research_run_manifest(
         "active_h_max_minutes": active_h_max,
         "input_view_mode": input_view.mode,
         "input_view_max_input_time_ms": input_view.max_input_time_ms,
+        "forensic_evidence_mode": config.forensic_evidence_mode,
+        "forensic_evidence_status": forensic_evidence_gate.evidence_status,
+        "forensic_evidence_claim_allowed": forensic_evidence_gate.evidence_claim_allowed,
     }
     rows: list[RunConfigRow] = []
     rows.extend(strategy_metadata_run_config_rows(strategy))
@@ -761,6 +873,14 @@ def _write_research_run_manifest(
             RunConfigRow(key="forensic_audit_status", value=forensic_status, source="run_research"),
             RunConfigRow(key="forensic_audit_fail_count", value=str(forensic_fail_count), source="run_research"),
             RunConfigRow(key="forensic_audit_warn_count", value=str(forensic_warn_count), source="run_research"),
+            RunConfigRow(key="forensic_evidence_mode", value=forensic_evidence_gate.mode, source="run_research"),
+            RunConfigRow(key="forensic_evidence_status", value=forensic_evidence_gate.evidence_status, source="run_research"),
+            RunConfigRow(
+                key="forensic_evidence_claim_allowed",
+                value=str(forensic_evidence_gate.evidence_claim_allowed).lower(),
+                source="run_research",
+            ),
+            RunConfigRow(key="forensic_evidence_message", value=forensic_evidence_gate.message, source="run_research"),
             RunConfigRow(key="target_horizon_minutes", value=str(strategy.metadata.horizon_minutes), source="run_research"),
             RunConfigRow(key="active_h_max_minutes", value=str(active_h_max), source="run_research"),
             RunConfigRow(key="artifact_manifest_path", value=str(manifest_path), source="run_research"),
@@ -828,36 +948,43 @@ def _write_summary(
     forensic_status: str,
     forensic_fail_count: int,
     forensic_warn_count: int,
+    forensic_evidence_gate: ForensicEvidenceGateResult,
 ) -> None:
     time_bounds = _csv_time_bounds(input_dir / "candles_1m.csv", time_column="open_time_ms")
     min_time, max_time = time_bounds if time_bounds is not None else (0, 0)
-    lines = [
-        "key,value",
-        f"strategy_name,{config.strategy_name}",
-        f"days,{'' if config.days is None else config.days}",
-        f"cache_dir,{config.cache_dir}",
-        f"run_dir,{run_dir}",
-        f"input_dir,{input_dir}",
-        f"prepared_input_dir,{'' if config.prepared_input_dir is None else config.prepared_input_dir}",
-        f"input_boundary_mode,{_input_boundary_mode(config)}",
-        f"input_view_mode,{input_view.mode}",
-        f"input_view_max_input_time_ms,{'' if input_view.max_input_time_ms is None else input_view.max_input_time_ms}",
-        f"input_min_open_time_ms,{min_time}",
-        f"input_max_open_time_ms,{max_time}",
-        f"research_start_date,{start_date.isoformat()}",
-        f"research_end_date,{end_date.isoformat()}",
-        f"research_mode,{config.research_mode}",
-        f"holdout_days,{effective_holdout_days}",
-        f"requested_holdout_days,{config.holdout_days}",
-        f"effective_holdout_days,{effective_holdout_days}",
-        f"protocol_freeze_id,{protocol_freeze_id}",
-        f"holdout_governance_dir,{governance_dir}",
-        f"forensic_audit_dir,{forensic_audit_dir}",
-        f"forensic_audit_status,{forensic_status}",
-        f"forensic_audit_fail_count,{forensic_fail_count}",
-        f"forensic_audit_warn_count,{forensic_warn_count}",
+    rows = [
+        ("strategy_name", config.strategy_name),
+        ("days", "" if config.days is None else str(config.days)),
+        ("cache_dir", str(config.cache_dir)),
+        ("run_dir", str(run_dir)),
+        ("input_dir", str(input_dir)),
+        ("prepared_input_dir", "" if config.prepared_input_dir is None else str(config.prepared_input_dir)),
+        ("input_boundary_mode", _input_boundary_mode(config)),
+        ("input_view_mode", input_view.mode),
+        ("input_view_max_input_time_ms", "" if input_view.max_input_time_ms is None else str(input_view.max_input_time_ms)),
+        ("input_min_open_time_ms", str(min_time)),
+        ("input_max_open_time_ms", str(max_time)),
+        ("research_start_date", start_date.isoformat()),
+        ("research_end_date", end_date.isoformat()),
+        ("research_mode", config.research_mode),
+        ("holdout_days", str(effective_holdout_days)),
+        ("requested_holdout_days", str(config.holdout_days)),
+        ("effective_holdout_days", str(effective_holdout_days)),
+        ("protocol_freeze_id", protocol_freeze_id),
+        ("holdout_governance_dir", str(governance_dir)),
+        ("forensic_audit_dir", str(forensic_audit_dir)),
+        ("forensic_audit_status", forensic_status),
+        ("forensic_audit_fail_count", str(forensic_fail_count)),
+        ("forensic_audit_warn_count", str(forensic_warn_count)),
+        ("forensic_evidence_mode", forensic_evidence_gate.mode),
+        ("forensic_evidence_status", forensic_evidence_gate.evidence_status),
+        ("forensic_evidence_claim_allowed", str(forensic_evidence_gate.evidence_claim_allowed).lower()),
+        ("forensic_evidence_message", forensic_evidence_gate.message),
     ]
-    (run_dir / "research_run_summary.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with (run_dir / "research_run_summary.csv").open("w", encoding="utf-8", newline="") as file_obj:
+        writer = csv.writer(file_obj)
+        writer.writerow(("key", "value"))
+        writer.writerows(rows)
 
 
 def _write_forensic_audit(run_dir: Path) -> tuple[Path, str, int, int, str]:

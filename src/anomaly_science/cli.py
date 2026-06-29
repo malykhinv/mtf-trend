@@ -131,6 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
             "so weekly walk-forward retraining only pays the heavy build once."
         ),
     )
+    research.add_argument(
+        "--forensic-evidence-mode",
+        choices=("smoke", "development", "evidence"),
+        default="development",
+        help=(
+            "How strictly to interpret independent forensic audit WARN rows. "
+            "smoke/development may complete with WARN but remain non-evidential; "
+            "evidence requires a clean PASS audit. Default: development."
+        ),
+    )
 
     dataset = subparsers.add_parser(
         "build-research-dataset",
@@ -587,6 +597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 holdout_days=args.holdout_days,
                 protocol_freeze_id=args.protocol_freeze_id,
                 dataset_store_dir=Path(args.dataset_store) if args.dataset_store else None,
+                forensic_evidence_mode=args.forensic_evidence_mode,
             )
         )
         print(f"research pipeline written: {output_dir}")

@@ -1,5 +1,19 @@
 # Patch log
 
+## audit: separate smoke and evidence forensic gates
+
+Status: PROPOSED.
+
+Intent:
+- Add an explicit `--forensic-evidence-mode smoke|development|evidence` gate for `run-research`.
+- Keep `FAIL` as a hard run blocker in every mode.
+- Allow `WARN` to complete smoke/development runs while marking artifacts non-evidential, and block evidence mode on any `WARN`.
+- Persist forensic evidence mode/status/claim eligibility in `research_run_summary.csv`, `strategy_run_config.csv`, aliases, and reproducibility config.
+
+Validation:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest tests/test_forensic_audit.py tests/test_research_run.py -q`
+
 ## pump-fade: require finite registered OI model features
 
 Status: PROPOSED.
