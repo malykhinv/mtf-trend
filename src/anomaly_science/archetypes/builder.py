@@ -139,6 +139,7 @@ def _required_input_columns(config: ArchetypeDiscoveryConfig) -> set[str]:
     if config.population.minimum_value_column:
         required.add(config.population.minimum_value_column)
     required.update(item.column for item in config.population.required_values)
+    required.update(config.population.required_finite_columns)
     return required
 
 
@@ -319,6 +320,12 @@ def prepare_archetype_data(frame: pd.DataFrame, config: ArchetypeDiscoveryConfig
         work = work[population_values >= float(config.population.minimum_value)].copy()
     for required in config.population.required_values:
         work = work[work[required.column] == required.value].copy()
+    for column in config.population.required_finite_columns:
+        values = pd.to_numeric(work[column], errors="coerce").to_numpy(
+            dtype=np.float64,
+            na_value=np.nan,
+        )
+        work = work[np.isfinite(values)].copy()
     if work.empty:
         raise ArchetypeDiscoveryError("population filter removed every row")
 

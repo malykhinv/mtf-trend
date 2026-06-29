@@ -1,5 +1,18 @@
 # Patch log
 
+## pump-fade: require finite registered OI model features
+
+Status: PROPOSED.
+
+Intent:
+- Split raw OI stream availability from registered OI model-feature availability in paired pump-fade OI experiments.
+- Require `oi_available=true` plus finite values for every registered `PUMP_FADE_OI_MODEL_FEATURES` column before either baseline or OI arm is trained.
+- Write a `FAILED_PARTIAL` summary if one paired arm fails, so a successful baseline arm cannot be interpreted as evidence.
+
+Validation:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest tests/test_archetype_discovery.py -q`
+
 ## research: make experiment ledger the evidence source of truth
 
 Status: PROPOSED.

@@ -233,6 +233,27 @@ def test_population_required_value_excludes_missing_oi_without_modeling_missingn
     assert "oi_available" not in prepared.model_feature_names
 
 
+def test_population_required_finite_columns_define_feature_availability_contract() -> None:
+    frame = _synthetic_rows()
+    frame["oi_change_60m"] = 1.0
+    frame.loc[frame.index[::11], "oi_change_60m"] = np.nan
+    frame.loc[frame.index[5::17], "oi_change_60m"] = np.inf
+    base = _config()
+    config = replace(
+        base,
+        population=replace(
+            base.population,
+            required_finite_columns=("oi_change_60m",),
+        ),
+    )
+
+    prepared = prepare_archetype_data(frame, config)
+
+    assert np.isfinite(prepared.discovery["oi_change_60m"].to_numpy(dtype=float)).all()
+    assert np.isfinite(prepared.verification["oi_change_60m"].to_numpy(dtype=float)).all()
+    assert "oi_change_60m" not in prepared.model_feature_names
+
+
 def test_population_filter_column_cannot_also_be_a_model_feature() -> None:
     frame = _synthetic_rows()
     frame["oi_available"] = True
@@ -267,6 +288,7 @@ def test_paired_oi_experiment_uses_identical_covered_population(tmp_path: Path) 
 
     summary = json.loads((out_dir / "oi_incremental_summary.json").read_text(encoding="utf-8"))
     assert summary["population_contract"].startswith("identical rows with oi_available=true")
+    assert summary["required_finite_oi_feature_names"] == list(PUMP_FADE_OI_MODEL_FEATURES)
     assert summary["baseline"]["verification_auc"] <= summary["with_open_interest"]["verification_auc"]
     assert "oi_change_5m" not in summary["baseline"]["model_feature_names"]
     assert "oi_change_5m" in summary["with_open_interest"]["model_feature_names"]

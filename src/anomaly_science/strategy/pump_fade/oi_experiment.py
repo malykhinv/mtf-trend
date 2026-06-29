@@ -45,7 +45,19 @@ def run_pump_fade_oi_incremental_experiment(
     required_values = (*base_config.population.required_values, ArchetypeRequiredValue("oi_available", True))
     if len({item.column for item in required_values}) != len(required_values):
         raise PumpFadeOiExperimentError("base population already constrains oi_available")
-    covered_population = replace(base_config.population, required_values=required_values)
+    required_finite_columns = (
+        *base_config.population.required_finite_columns,
+        *PUMP_FADE_OI_MODEL_FEATURES,
+    )
+    if len(set(required_finite_columns)) != len(required_finite_columns):
+        raise PumpFadeOiExperimentError(
+            "base population already constrains one or more OI model feature finite-availability columns"
+        )
+    covered_population = replace(
+        base_config.population,
+        required_values=required_values,
+        required_finite_columns=required_finite_columns,
+    )
     baseline_config = replace(base_config, population=covered_population)
     oi_config = replace(
         baseline_config,
@@ -56,18 +68,46 @@ def run_pump_fade_oi_incremental_experiment(
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    baseline_dir = run_archetype_discovery(
-        input_path=input_path,
-        out_dir=out_dir / "baseline_same_oi_population",
-        config=baseline_config,
-        limit_symbols=limit_symbols,
-    )
-    oi_dir = run_archetype_discovery(
-        input_path=input_path,
-        out_dir=out_dir / "with_open_interest",
-        config=oi_config,
-        limit_symbols=limit_symbols,
-    )
+    try:
+        baseline_dir = run_archetype_discovery(
+            input_path=input_path,
+            out_dir=out_dir / "baseline_same_oi_population",
+            config=baseline_config,
+            limit_symbols=limit_symbols,
+        )
+    except Exception as exc:
+        summary_path = _write_failed_summary(
+            input_path=input_path,
+            out_dir=out_dir,
+            limit_symbols=limit_symbols,
+            baseline_dir=None,
+            oi_dir=None,
+            baseline_error=exc,
+            oi_error=None,
+        )
+        raise PumpFadeOiExperimentError(
+            f"paired OI experiment failed before the baseline arm completed; summary written: {summary_path}"
+        ) from exc
+    try:
+        oi_dir = run_archetype_discovery(
+            input_path=input_path,
+            out_dir=out_dir / "with_open_interest",
+            config=oi_config,
+            limit_symbols=limit_symbols,
+        )
+    except Exception as exc:
+        summary_path = _write_failed_summary(
+            input_path=input_path,
+            out_dir=out_dir,
+            limit_symbols=limit_symbols,
+            baseline_dir=baseline_dir,
+            oi_dir=None,
+            baseline_error=None,
+            oi_error=exc,
+        )
+        raise PumpFadeOiExperimentError(
+            f"paired OI experiment failed after the baseline arm completed; summary written: {summary_path}"
+        ) from exc
     baseline = _read_run(baseline_dir / "archetype_run.json")
     with_oi = _read_run(oi_dir / "archetype_run.json")
     for field in ("input_rows_after_limit", "discovery_rows", "verification_rows", "discovery_groups", "verification_groups"):
@@ -96,7 +136,12 @@ def run_pump_fade_oi_incremental_experiment(
         "input_path": str(input_path.resolve()),
         "input_sha256": sha256_file(input_path),
         "limit_symbols": limit_symbols,
-        "population_contract": "identical rows with oi_available=true; oi_available is never a model feature",
+        "population_contract": (
+            "identical rows with oi_available=true and finite registered OI model features; "
+            "oi_available is never a model feature"
+        ),
+        "raw_oi_stream_availability_column": "oi_available",
+        "required_finite_oi_feature_names": list(PUMP_FADE_OI_MODEL_FEATURES),
         "oi_feature_names": list(PUMP_FADE_OI_MODEL_FEATURES),
         "discovery_groups": baseline["discovery_groups"],
         "verification_groups": baseline["verification_groups"],
@@ -126,6 +171,72 @@ def run_pump_fade_oi_incremental_experiment(
     )
     write_manifest(out_dir / "artifact_manifest.json", manifest)
     return out_dir
+
+
+def _write_failed_summary(
+    *,
+    input_path: Path,
+    out_dir: Path,
+    limit_symbols: int | None,
+    baseline_dir: Path | None,
+    oi_dir: Path | None,
+    baseline_error: BaseException | None,
+    oi_error: BaseException | None,
+) -> Path:
+    summary_path = out_dir / "oi_incremental_summary.json"
+    baseline = _read_optional_run(baseline_dir)
+    with_oi = _read_optional_run(oi_dir)
+    payload = {
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "input_path": str(input_path.resolve()),
+        "input_sha256": sha256_file(input_path),
+        "limit_symbols": limit_symbols,
+        "population_contract": (
+            "identical rows with oi_available=true and finite registered OI model features; "
+            "oi_available is never a model feature"
+        ),
+        "raw_oi_stream_availability_column": "oi_available",
+        "required_finite_oi_feature_names": list(PUMP_FADE_OI_MODEL_FEATURES),
+        "oi_feature_names": list(PUMP_FADE_OI_MODEL_FEATURES),
+        "baseline": None if baseline is None else _summary_fields(baseline),
+        "with_open_interest": None if with_oi is None else _summary_fields(with_oi),
+        "baseline_error": _exception_payload(baseline_error),
+        "with_open_interest_error": _exception_payload(oi_error),
+        "incremental_evidence_status": "FAILED_PARTIAL",
+        "interpretation": (
+            "The paired experiment is non-evidential because at least one arm failed. "
+            "A successful baseline arm alone must not be interpreted as OI evidence. "
+            "The required population is raw OI stream availability plus finite values for every "
+            "registered OI model feature, not oi_available alone."
+        ),
+    }
+    _atomic_json(summary_path, payload)
+    artifact_paths = [summary_path]
+    for directory in (baseline_dir, oi_dir):
+        if directory is not None and directory.exists():
+            artifact_paths.extend(path for path in directory.rglob("*") if path.is_file())
+    manifest = build_manifest(
+        run_id=f"pump-fade-oi-incremental-failed-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        artifact_paths=tuple(artifact_paths),
+        root=out_dir,
+    )
+    write_manifest(out_dir / "artifact_manifest.json", manifest)
+    return summary_path
+
+
+def _read_optional_run(directory: Path | None) -> dict[str, object] | None:
+    if directory is None:
+        return None
+    path = directory / "archetype_run.json"
+    if not path.exists():
+        return None
+    return _read_run(path)
+
+
+def _exception_payload(exc: BaseException | None) -> dict[str, str] | None:
+    if exc is None:
+        return None
+    return {"type": type(exc).__name__, "message": str(exc)}
 
 
 def _read_run(path: Path) -> dict[str, object]:

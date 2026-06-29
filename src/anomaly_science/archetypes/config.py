@@ -111,6 +111,7 @@ class ArchetypePopulationSpec:
     minimum_value_column: str | None = None
     minimum_value: float | None = None
     required_values: tuple[ArchetypeRequiredValue, ...] = ()
+    required_finite_columns: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.minimum_value_column is None) != (self.minimum_value is None):
@@ -120,6 +121,10 @@ class ArchetypePopulationSpec:
         columns = tuple(item.column for item in self.required_values)
         if len(columns) != len(set(columns)):
             raise ArchetypeConfigError("population required-value columns must be unique")
+        if any(not column for column in self.required_finite_columns):
+            raise ArchetypeConfigError("population required-finite columns must be non-empty")
+        if len(self.required_finite_columns) != len(set(self.required_finite_columns)):
+            raise ArchetypeConfigError("population required-finite columns must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,10 +385,18 @@ def load_archetype_discovery_config(path: Path) -> ArchetypeDiscoveryConfig:
     ):
         raise ArchetypeConfigError("population.required_values must be a JSON array of objects")
     required_values = tuple(ArchetypeRequiredValue(**item) for item in required_values_raw)
+    required_finite_columns = _tuple_strings(
+        population_raw.pop("required_finite_columns", []),
+        field_name="population.required_finite_columns",
+    )
     return ArchetypeDiscoveryConfig(
         input=ArchetypeInputContract(**input_raw),
         features=feature_spec,
-        population=ArchetypePopulationSpec(required_values=required_values, **population_raw),
+        population=ArchetypePopulationSpec(
+            required_values=required_values,
+            required_finite_columns=required_finite_columns,
+            **population_raw,
+        ),
         shuffled_seeds=tuple(shuffled_seeds),
         generators=generators,
         rolling_origin_fractions=tuple(float(item) for item in rolling_origin_raw),
