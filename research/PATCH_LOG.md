@@ -1502,3 +1502,19 @@ Validation in this environment:
 - `git apply --check` against the Patch 1-4 working tree.
 - `python -m compileall -q main.py src tests zip_project.py`
 - Full pytest still needs the project venv because this sandbox lacks project runtime dependencies such as `polars`.
+
+## pump-fade: add archetype threshold stability audit
+
+Status: PROPOSED.
+
+Changes:
+- Adds `anomaly_archetype_threshold_stability.csv` with a lightweight `strategy_archetype_threshold_stability.csv` alias.
+- Audits each selected frozen archetype condition against original, rounded, nearby, and discovery-only coarse-quantile threshold variants.
+- Measures discovery and later verification support, fade rate, matched blind rate, lift, cluster edge lower bound, and membership Jaccard against the original rule.
+- Keeps the audit diagnostic-only: no threshold, rule, model, EV, simulation, or evidence status is changed by stability rows.
+
+Validation in this environment:
+- `git apply --check` against the Patch 1-5 working tree.
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest tests/test_artifact_schemas.py::test_mvp1_artifact_schemas_are_fixed -q`
+- Full archetype pytest collection still needs the project venv because this sandbox lacks `polars`.

@@ -203,6 +203,9 @@ class ArchetypeDiscoveryConfig:
     )
     min_shuffled_row_fraction: float = 0.70
     control_empirical_alpha: float = 0.05
+    threshold_audit_relative_step: float = 0.05
+    threshold_audit_quantile_bins: int = 10
+    threshold_audit_bootstrap_iterations: int = 200
 
     def __post_init__(self) -> None:
         ds = parse_utc_timestamp_ms(self.discovery_start_utc, field_name="discovery_start_utc")
@@ -221,6 +224,12 @@ class ArchetypeDiscoveryConfig:
             raise ArchetypeConfigError("min_shuffled_row_fraction must be within (0, 1]")
         if not 0.0 < self.control_empirical_alpha < 1.0:
             raise ArchetypeConfigError("control_empirical_alpha must be within (0, 1)")
+        if not 0.0 < self.threshold_audit_relative_step <= 0.5:
+            raise ArchetypeConfigError("threshold_audit_relative_step must be within (0, 0.5]")
+        if self.threshold_audit_quantile_bins < 2:
+            raise ArchetypeConfigError("threshold_audit_quantile_bins must be at least two")
+        if self.threshold_audit_bootstrap_iterations < 200:
+            raise ArchetypeConfigError("threshold_audit_bootstrap_iterations must be at least 200")
         if len(self.shuffled_seeds) < math.ceil(1.0 / self.control_empirical_alpha) - 1:
             raise ArchetypeConfigError(
                 "shuffled_seeds are too few for the registered empirical control alpha"

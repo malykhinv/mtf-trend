@@ -141,6 +141,18 @@ def test_archetype_discovery_finds_frozen_rule_and_defeats_controls() -> None:
     assert all(row.controls_passed for row in result.coverage_rows)
     assert result.candidate_funnel_rows
     assert result.candidate_funnel_rows[-1].stage == "later_verification_gate"
+    assert result.threshold_stability_rows
+    assert {row.variant for row in result.threshold_stability_rows} >= {
+        "original",
+        "rounded_sig3",
+        "relaxed_nearby",
+        "tightened_nearby",
+    }
+    assert {row.split for row in result.threshold_stability_rows} == {
+        "discovery",
+        "verification",
+    }
+    assert all("thresholds are not changed" in row.notes for row in result.threshold_stability_rows)
 
 
 def test_calendar_shuffle_transplants_whole_anomaly_label_paths() -> None:
@@ -363,6 +375,8 @@ def test_archetype_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
     assert (out_dir / "strategy_archetype_coverage.csv").is_file()
     assert (out_dir / "anomaly_archetype_candidate_funnel.csv").is_file()
     assert (out_dir / "strategy_archetype_candidate_funnel.csv").is_file()
+    assert (out_dir / "anomaly_archetype_threshold_stability.csv").is_file()
+    assert (out_dir / "strategy_archetype_threshold_stability.csv").is_file()
     assert (out_dir / "anomaly_archetype_assignments.parquet").is_file()
     assert (out_dir / "archetype_rule_generator.cbm").is_file()
     assert (out_dir / "artifact_manifest.json").is_file()
@@ -371,3 +385,4 @@ def test_archetype_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
     assert run["verified_category_count"] == 0
     assert run["development_replicated_category_count"] > 0
     assert run["search_truncated"] is False
+    assert run["threshold_stability_row_count"] > 0

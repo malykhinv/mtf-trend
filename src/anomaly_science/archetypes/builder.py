@@ -22,6 +22,7 @@ from anomaly_science.contracts.archetypes import (
     ArchetypeCandidateFunnelRow,
     ArchetypeControlRow,
     ArchetypeCoverageRow,
+    ArchetypeThresholdStabilityRow,
 )
 from anomaly_science.contracts.time import TemporalContractError
 
@@ -112,6 +113,7 @@ class ArchetypeBuildResult:
     auc_control_empirical_p: float
     category_count_control_empirical_p: float
     candidate_funnel_rows: list[ArchetypeCandidateFunnelRow]
+    threshold_stability_rows: list[ArchetypeThresholdStabilityRow]
 
 
 def _required_input_columns(config: ArchetypeDiscoveryConfig) -> set[str]:
@@ -1111,6 +1113,280 @@ def _generate_candidate_pool(
     return pool, fit_count, funnel
 
 
+
+def _candidate_status(
+    candidate: RuleCandidate,
+    *,
+    config: ArchetypeDiscoveryConfig,
+    controls_passed: bool,
+) -> str:
+    passed = _is_verified(candidate, config=config)
+    if not passed:
+        return "REJECTED"
+    if not controls_passed:
+        return "CONTROL_FAILED"
+    if config.evidence_mode == "pristine_holdout":
+        return "PRISTINE_VERIFIED"
+    return "DEVELOPMENT_REPLICATED"
+
+
+def _replace_condition_threshold(
+    rule: tuple[dict[str, Any], ...], condition_index: int, threshold: float
+) -> tuple[dict[str, Any], ...]:
+    updated = [dict(condition) for condition in rule]
+    updated[condition_index]["value"] = float(threshold)
+    return tuple(updated)
+
+
+def _threshold_scale(values: np.ndarray, threshold: float, relative_step: float) -> float:
+    finite = values[np.isfinite(values)]
+    if len(finite) == 0:
+        return max(abs(threshold) * relative_step, 1e-6)
+    q25, q75 = np.quantile(finite, [0.25, 0.75])
+    iqr = float(q75 - q25)
+    spread = float(np.nanstd(finite))
+    scale = max(abs(float(threshold)), iqr, spread, 1.0)
+    return max(scale * relative_step, 1e-6)
+
+
+def _rounded_significant(value: float, digits: int = 3) -> float:
+    if value == 0.0:
+        return 0.0
+    return round(float(value), digits - int(math.floor(math.log10(abs(float(value))))) - 1)
+
+
+def _threshold_variants(
+    *,
+    discovery_values: np.ndarray,
+    operator: str,
+    threshold: float,
+    config: ArchetypeDiscoveryConfig,
+) -> list[tuple[str, str, float]]:
+    finite = np.sort(discovery_values[np.isfinite(discovery_values)].astype(float))
+    variants: list[tuple[str, str, float]] = [
+        ("original", "catboost_float_border", float(threshold))
+    ]
+    rounded = _rounded_significant(float(threshold), digits=3)
+    variants.append(("rounded_sig3", "rounded_threshold", rounded))
+    delta = _threshold_scale(finite, threshold, config.threshold_audit_relative_step)
+    if operator == ">":
+        variants.append(("relaxed_nearby", "discovery_scale_step", threshold - delta))
+        variants.append(("tightened_nearby", "discovery_scale_step", threshold + delta))
+    else:
+        variants.append(("relaxed_nearby", "discovery_scale_step", threshold + delta))
+        variants.append(("tightened_nearby", "discovery_scale_step", threshold - delta))
+    if len(finite) >= config.threshold_audit_quantile_bins:
+        percentile = float(np.searchsorted(finite, threshold, side="right") / len(finite))
+        bins = config.threshold_audit_quantile_bins
+        lower_q = max(0.0, math.floor(percentile * bins) / bins)
+        upper_q = min(1.0, math.ceil(percentile * bins) / bins)
+        lower_value = float(np.quantile(finite, lower_q))
+        upper_value = float(np.quantile(finite, upper_q))
+        variants.append(("coarse_quantile_floor", "discovery_only_quantile_bin", lower_value))
+        variants.append(("coarse_quantile_ceil", "discovery_only_quantile_bin", upper_value))
+    deduped: list[tuple[str, str, float]] = []
+    seen: set[float] = set()
+    for name, source, value in variants:
+        if not math.isfinite(value):
+            continue
+        key = round(float(value), 12)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((name, source, float(value)))
+    return deduped
+
+
+def _groups_for_indices(
+    frame: pd.DataFrame, group_column: str, indices: np.ndarray
+) -> frozenset[str]:
+    return frozenset(str(value) for value in frame.loc[indices, group_column])
+
+
+def _rule_threshold_metric(
+    *,
+    frame: pd.DataFrame,
+    matrix: pd.DataFrame,
+    rule: tuple[dict[str, Any], ...],
+    config: ArchetypeDiscoveryConfig,
+    matched_probability: np.ndarray,
+    seed: int,
+    split_name: str,
+) -> tuple[np.ndarray, int, int, int, float, float, float, float, int, bool]:
+    indices = _first_matching_rule_rows(
+        frame,
+        matrix,
+        rule,
+        group_column=config.input.group_column,
+    )
+    labels_all = frame[config.input.label_column].to_numpy(dtype=np.int8)
+    labels = labels_all[indices]
+    count = len(indices)
+    fades = int(labels.sum()) if count else 0
+    fade_rate = fades / count if count else 0.0
+    matched_indices = indices[np.isfinite(matched_probability[indices])]
+    matched_count = len(matched_indices)
+    matched_blind_rate = (
+        float(matched_probability[matched_indices].mean()) if matched_count else 0.0
+    )
+    matched_signal_rate = (
+        float(labels_all[matched_indices].mean()) if matched_count else 0.0
+    )
+    lift = matched_signal_rate / matched_blind_rate if matched_blind_rate > 0.0 else 0.0
+    edge_lower = 0.0
+    inference_blocks = 0
+    if matched_count >= config.min_matched_control_rows:
+        _, edge_lower, _, inference_blocks = _cluster_bootstrap(
+            frame=frame,
+            indices=matched_indices,
+            labels=labels_all,
+            matched_probability=matched_probability,
+            iterations=config.threshold_audit_bootstrap_iterations,
+            seed=seed,
+        )
+    min_events = (
+        config.min_discovery_events if split_name == "discovery" else config.min_verification_events
+    )
+    min_fade_rate = (
+        config.min_discovery_fade_rate
+        if split_name == "discovery"
+        else config.min_verification_fade_rate
+    )
+    min_lift = (
+        config.min_discovery_lift if split_name == "discovery" else config.min_verification_lift
+    )
+    passes = (
+        count >= min_events
+        and matched_count >= min_events
+        and inference_blocks >= config.min_inference_blocks
+        and fade_rate >= min_fade_rate
+        and lift >= min_lift
+        and edge_lower > 0.0
+    )
+    return (
+        indices,
+        count,
+        fades,
+        matched_count,
+        fade_rate,
+        matched_blind_rate,
+        lift,
+        edge_lower,
+        inference_blocks,
+        passes,
+    )
+
+
+def _threshold_stability_outputs(
+    *,
+    candidates: list[RuleCandidate],
+    prepared: PreparedArchetypeData,
+    config: ArchetypeDiscoveryConfig,
+    controls_passed: bool,
+) -> list[ArchetypeThresholdStabilityRow]:
+    rows: list[ArchetypeThresholdStabilityRow] = []
+    split_specs = (
+        ("discovery", prepared.discovery, prepared.x_discovery),
+        ("verification", prepared.verification, prepared.x_verification),
+    )
+    matched_by_split = {
+        split_name: _matched_probabilities(frame, config)
+        for split_name, frame, _ in split_specs
+    }
+    for rank, candidate in enumerate(candidates, start=1):
+        category_id = f"fade_archetype_{rank:03d}"
+        status = _candidate_status(candidate, config=config, controls_passed=controls_passed)
+        for condition_index, condition in enumerate(candidate.rule):
+            feature = str(condition["feature"])
+            operator = str(condition["operator"])
+            threshold = float(condition["value"])
+            if feature not in prepared.x_discovery:
+                continue
+            variants = _threshold_variants(
+                discovery_values=prepared.x_discovery[feature].to_numpy(dtype=float),
+                operator=operator,
+                threshold=threshold,
+                config=config,
+            )
+            for split_name, frame, matrix in split_specs:
+                matched_probability = matched_by_split[split_name]
+                original_indices = _first_matching_rule_rows(
+                    frame,
+                    matrix,
+                    candidate.rule,
+                    group_column=config.input.group_column,
+                )
+                original_groups = _groups_for_indices(
+                    frame, config.input.group_column, original_indices
+                )
+                for variant_offset, (variant, source, variant_threshold) in enumerate(variants):
+                    variant_rule = _replace_condition_threshold(
+                        candidate.rule, condition_index, variant_threshold
+                    )
+                    (
+                        indices,
+                        count,
+                        fades,
+                        matched_count,
+                        fade_rate,
+                        matched_blind_rate,
+                        lift,
+                        edge_lower,
+                        inference_blocks,
+                        passes,
+                    ) = _rule_threshold_metric(
+                        frame=frame,
+                        matrix=matrix,
+                        rule=variant_rule,
+                        config=config,
+                        matched_probability=matched_probability,
+                        seed=(
+                            config.random_seed
+                            + 3_000_001
+                            + rank * 10_003
+                            + condition_index * 257
+                            + variant_offset * 17
+                            + (0 if split_name == "discovery" else 1_000_000)
+                        ),
+                        split_name=split_name,
+                    )
+                    variant_groups = _groups_for_indices(
+                        frame, config.input.group_column, indices
+                    )
+                    rows.append(
+                        ArchetypeThresholdStabilityRow(
+                            category_id=category_id,
+                            status=status,
+                            split=split_name,
+                            condition_index=condition_index,
+                            feature=feature,
+                            operator=operator,
+                            original_threshold=threshold,
+                            variant=variant,
+                            variant_threshold=variant_threshold,
+                            threshold_source=source,
+                            event_count=count,
+                            fade_count=fades,
+                            matched_event_count=matched_count,
+                            inference_block_count=inference_blocks,
+                            fade_rate=fade_rate,
+                            matched_blind_rate=matched_blind_rate,
+                            lift=lift,
+                            cluster_edge_lower_95=edge_lower,
+                            support_jaccard_vs_original=_membership_jaccard(
+                                original_groups, variant_groups
+                            ),
+                            passes_minimum_effect_gates=passes,
+                            notes=(
+                                "Diagnostic threshold robustness audit only; thresholds are not changed. "
+                                "Nearby and coarse-quantile variants are derived from discovery feature "
+                                "distribution only, then measured on each split."
+                            ),
+                        )
+                    )
+    return rows
+
+
 def _build_category_outputs(
     *,
     candidates: list[RuleCandidate],
@@ -1126,16 +1402,7 @@ def _build_category_outputs(
     contract = config.input
     for rank, candidate in enumerate(candidates, start=1):
         category_id = f"fade_archetype_{rank:03d}"
-        passed = _is_verified(candidate, config=config)
-        status = (
-            "REJECTED"
-            if not passed
-            else "CONTROL_FAILED"
-            if not controls_passed
-            else "PRISTINE_VERIFIED"
-            if config.evidence_mode == "pristine_holdout"
-            else "DEVELOPMENT_REPLICATED"
-        )
+        status = _candidate_status(candidate, config=config, controls_passed=controls_passed)
         rows.append(
             ArchetypeCategoryRow(
                 category_id=category_id,
@@ -1513,6 +1780,12 @@ def build_archetype_discovery(
         config=config,
         controls_passed=controls_passed,
     )
+    threshold_stability_rows = _threshold_stability_outputs(
+        candidates=selected,
+        prepared=prepared,
+        config=config,
+        controls_passed=controls_passed,
+    )
     coverage_rows, unclassified = _coverage_outputs(
         candidates=selected,
         prepared=prepared,
@@ -1553,4 +1826,5 @@ def build_archetype_discovery(
         auc_control_empirical_p=auc_control_p,
         category_count_control_empirical_p=category_control_p,
         candidate_funnel_rows=candidate_funnel_rows,
+        threshold_stability_rows=threshold_stability_rows,
     )

@@ -243,6 +243,11 @@ or the future pristine holdout after protocol freeze.
   search has a category to validate, and then matches the complete real budget.
 - `anomaly_archetype_candidate_funnel.csv` reports exactly which registered
   gate removes candidates; an empty catalog without this funnel is incomplete.
+- `anomaly_archetype_threshold_stability.csv` is a diagnostic-only robustness
+  artifact for discovered float cutpoints. It evaluates the original CatBoost
+  border plus rounded, nearby, and discovery-only coarse-quantile variants on
+  discovery and later verification rows. These rows do not change the frozen
+  rule, do not create a new archetype, and cannot upgrade evidence status.
 - This frozen rule-generation experiment is not a trading probability model.
   Any later probability model used for online decisions still requires weekly
   walk-forward training with frozen weights inside each OOS week.

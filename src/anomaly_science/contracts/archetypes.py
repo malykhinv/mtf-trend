@@ -122,6 +122,68 @@ class ArchetypeCategoryRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ArchetypeThresholdStabilityRow:
+    category_id: str
+    status: str
+    split: str
+    condition_index: int
+    feature: str
+    operator: str
+    original_threshold: float
+    variant: str
+    variant_threshold: float
+    threshold_source: str
+    event_count: int
+    fade_count: int
+    matched_event_count: int
+    inference_block_count: int
+    fade_rate: float
+    matched_blind_rate: float
+    lift: float
+    cluster_edge_lower_95: float
+    support_jaccard_vs_original: float
+    passes_minimum_effect_gates: bool
+    notes: str
+
+    def __post_init__(self) -> None:
+        if not self.category_id or not self.status or not self.split:
+            raise MarketDataContractError("threshold-stability identity fields are required")
+        if self.status not in {
+            "PRISTINE_VERIFIED",
+            "DEVELOPMENT_REPLICATED",
+            "CONTROL_FAILED",
+            "REJECTED",
+        }:
+            raise MarketDataContractError("unknown threshold-stability category status")
+        if self.split not in {"discovery", "verification"}:
+            raise MarketDataContractError("threshold-stability split must be discovery or verification")
+        if self.condition_index < 0:
+            raise MarketDataContractError("condition_index must be non-negative")
+        if not self.feature or self.operator not in {">", "<="}:
+            raise MarketDataContractError("threshold-stability feature/operator are invalid")
+        for name in ("original_threshold", "variant_threshold"):
+            if not math.isfinite(getattr(self, name)):
+                raise MarketDataContractError(f"{name} must be finite")
+        if not self.variant or not self.threshold_source or not self.notes:
+            raise MarketDataContractError("threshold-stability variant/source/notes are required")
+        for name in ("event_count", "fade_count", "matched_event_count", "inference_block_count"):
+            if getattr(self, name) < 0:
+                raise MarketDataContractError(f"{name} must be non-negative")
+        for name in (
+            "fade_rate",
+            "matched_blind_rate",
+            "support_jaccard_vs_original",
+        ):
+            value = getattr(self, name)
+            if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+                raise MarketDataContractError(f"{name} must be finite and within [0, 1]")
+        if self.lift < 0.0 or not math.isfinite(self.lift):
+            raise MarketDataContractError("lift must be finite and non-negative")
+        if not math.isfinite(self.cluster_edge_lower_95) or not -1.0 <= self.cluster_edge_lower_95 <= 1.0:
+            raise MarketDataContractError("cluster_edge_lower_95 must be finite and within [-1, 1]")
+
+
+@dataclass(frozen=True, slots=True)
 class ArchetypeCoverageRow:
     split: str
     total_event_count: int

@@ -59,6 +59,7 @@ def run_archetype_discovery(
     controls_path = out_dir / "anomaly_archetype_controls.csv"
     coverage_path = out_dir / "anomaly_archetype_coverage.csv"
     funnel_path = out_dir / "anomaly_archetype_candidate_funnel.csv"
+    threshold_stability_path = out_dir / "anomaly_archetype_threshold_stability.csv"
     assignments_path = out_dir / "anomaly_archetype_assignments.parquet"
     predictions_path = out_dir / "anomaly_archetype_verification_predictions.parquet"
     model_path = out_dir / "archetype_rule_generator.cbm"
@@ -83,6 +84,11 @@ def run_archetype_discovery(
         funnel_path,
         result.candidate_funnel_rows,
         get_artifact_schema(funnel_path.name),
+    )
+    threshold_stability_paths = write_csv_artifact_with_aliases(
+        threshold_stability_path,
+        result.threshold_stability_rows,
+        get_artifact_schema(threshold_stability_path.name),
     )
     result.assignments.to_parquet(assignments_path, index=False)
     result.verification_predictions.to_parquet(predictions_path, index=False)
@@ -116,6 +122,12 @@ def run_archetype_discovery(
         "controls_passed": result.controls_passed,
         "auc_control_empirical_p": result.auc_control_empirical_p,
         "category_count_control_empirical_p": result.category_count_control_empirical_p,
+        "threshold_stability_row_count": len(result.threshold_stability_rows),
+        "threshold_stability_methodology": (
+            "Frozen CatBoost thresholds are not changed. The audit measures original, rounded, nearby, "
+            "and discovery-only coarse-quantile variants on discovery and later verification rows so noisy "
+            "float cutpoints can be identified before any evidence claim."
+        ),
         "verified_category_count": sum(
             row.status == "PRISTINE_VERIFIED" for row in result.category_rows
         ),
@@ -142,6 +154,7 @@ def run_archetype_discovery(
         *control_paths,
         *coverage_paths,
         *funnel_paths,
+        *threshold_stability_paths,
         assignments_path,
         predictions_path,
         model_path,

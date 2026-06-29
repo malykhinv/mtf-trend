@@ -1053,6 +1053,34 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         required_columns=("stage", "candidate_count", "notes"),
         description="Real-label candidate counts remaining after each pre-registered discovery and verification gate.",
     ),
+    "anomaly_archetype_threshold_stability.csv": ArtifactSchema(
+        name="anomaly_archetype_threshold_stability.csv",
+        stage="archetype_discovery",
+        required_columns=(
+            "category_id",
+            "status",
+            "split",
+            "condition_index",
+            "feature",
+            "operator",
+            "original_threshold",
+            "variant",
+            "variant_threshold",
+            "threshold_source",
+            "event_count",
+            "fade_count",
+            "matched_event_count",
+            "inference_block_count",
+            "fade_rate",
+            "matched_blind_rate",
+            "lift",
+            "cluster_edge_lower_95",
+            "support_jaccard_vs_original",
+            "passes_minimum_effect_gates",
+            "notes",
+        ),
+        description="Diagnostic stability audit for discovered archetype cutpoints using original, rounded, nearby, and discovery-only coarse-quantile thresholds.",
+    ),
     "artifact_manifest.json": ArtifactSchema(
         name="artifact_manifest.json",
         stage="all",
@@ -1093,6 +1121,7 @@ STRATEGY_ARTIFACT_ALIASES: dict[str, str] = {
     "anomaly_archetype_controls.csv": "strategy_archetype_controls.csv",
     "anomaly_archetype_coverage.csv": "strategy_archetype_coverage.csv",
     "anomaly_archetype_candidate_funnel.csv": "strategy_archetype_candidate_funnel.csv",
+    "anomaly_archetype_threshold_stability.csv": "strategy_archetype_threshold_stability.csv",
 }
 
 
