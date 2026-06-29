@@ -8,7 +8,7 @@ from anomaly_science.audit import build_independent_forensic_audit_rows
 from anomaly_science.research.run import evaluate_forensic_evidence_gate, _write_forensic_audit
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus
-from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT
+from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT, UTILITY_EVIDENCE_STATUS_NON_FINAL, UTILITY_MODEL_KIND_NATURE_PROXY
 from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
 from anomaly_science.features.catalog import build_default_feature_catalog, feature_rows_to_artifact
@@ -294,6 +294,9 @@ def _write_valid_minimal_forensic_fixture(root: Path) -> None:
         "strategy_decision_timing.csv",
         {
             "ev_version": "mvp1_expected_value_oos_calibrated_proxy_v1",
+            "utility_model_kind": UTILITY_MODEL_KIND_NATURE_PROXY,
+            "utility_evidence_status": UTILITY_EVIDENCE_STATUS_NON_FINAL,
+            "utility_evidence_claim_allowed": "False",
             "strategy_name": "broad_anomaly_v1_h30",
             "strategy_version": "v1",
             "event_id": "e1",
@@ -549,6 +552,7 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_prediction_rows_are_oos_after_train_cutoff"].status is AuditStatus.PASS
     assert by_name["forensic_prediction_model_horizon_identity_consistent"].status is AuditStatus.PASS
     assert by_name["forensic_canonical_alias_artifacts_match"].status is AuditStatus.PASS
+    assert by_name["forensic_decision_utility_proxy_marked_non_final"].status is AuditStatus.PASS
     assert by_name["forensic_simulation_decision_contract_alignment_verified"].status is AuditStatus.PASS
     assert by_name["forensic_simulation_pessimistic_prices_and_costs_verified"].status is AuditStatus.PASS
     assert by_name["forensic_simulation_no_parallel_symbol_positions_verified"].status is AuditStatus.PASS
@@ -559,6 +563,20 @@ def test_independent_forensic_audit_passes_valid_minimal_artifacts(tmp_path: Pat
     assert by_name["forensic_market_context_feature_coverage_verified"].status is AuditStatus.PASS
     assert by_name["forensic_stage_protocol_audit_has_no_fail_rows"].status is AuditStatus.PASS
     assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.PASS
+
+
+def test_independent_forensic_audit_fails_utility_proof_claim(tmp_path: Path) -> None:
+    _write_valid_minimal_forensic_fixture(tmp_path)
+    path = tmp_path / "stages" / "decision" / "strategy_decision_timing.csv"
+    rows = _read_csv_payload(path)
+    rows[0]["utility_evidence_claim_allowed"] = "True"
+    _write_artifact_rows(path, "strategy_decision_timing.csv", rows)
+    _copy_text(path, tmp_path / "stages" / "decision" / "anomaly_decision_timing.csv")
+
+    by_name = _by_name(build_independent_forensic_audit_rows(tmp_path))
+
+    assert by_name["forensic_decision_utility_proxy_marked_non_final"].status is AuditStatus.FAIL
+    assert by_name["forensic_protocol_interpretation_gate"].status is AuditStatus.FAIL
 
 
 def test_independent_forensic_audit_fails_future_leak(tmp_path: Path) -> None:

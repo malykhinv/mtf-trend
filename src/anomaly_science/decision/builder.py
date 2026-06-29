@@ -103,7 +103,10 @@ def build_expected_value_metric_rows(
             )
         )
 
-    add("ev_rows", len(rows), len(rows), "expected-value rows computed from OOS predictions")
+    add("ev_rows", len(rows), len(rows), "nature-proxy utility rows computed from OOS predictions")
+    add("utility_model_kind", cfg.utility_model_kind, len(rows), "utility model kind recorded for interpretation; nature_proxy is not final EV proof")
+    add("utility_evidence_status", cfg.utility_evidence_status, len(rows), "NON_FINAL until realized barrier first-hit/timeout outcome modeling exists")
+    add("utility_evidence_claim_allowed", str(cfg.utility_evidence_claim_allowed).lower(), len(rows), "false for nature-proxy utility artifacts")
     add("confident_rows", sum(1 for row in rows if row.is_prediction_confident), len(rows), "rows meeting min_prediction_confidence")
     add("rr_acceptable_rows", sum(1 for row in rows if row.is_RR_still_acceptable), len(rows), "rows where either side meets min_rr proxy")
     add("selected_rr_acceptable_rows", sum(1 for row in rows if row.selected_RR_acceptable), len(rows), "rows where selected long/short action meets its own side-specific min_rr proxy")
@@ -111,10 +114,10 @@ def build_expected_value_metric_rows(
     add("positive_short_ev_rows", sum(1 for row in rows if row.EV_short > 0.0), len(rows), "rows with positive short EV proxy")
     add("actionable_positive_ev_rows", sum(1 for row in rows if row.best_action in {"long", "short"}), len(rows), "rows where long/short beats wait and no_trade")
     if rows:
-        add("mean_EV_long", _mean(row.EV_long for row in rows), len(rows), "mean long expected value in price units")
-        add("mean_EV_short", _mean(row.EV_short for row in rows), len(rows), "mean short expected value in price units")
-        add("max_EV_long", max(row.EV_long for row in rows), len(rows), "maximum long expected value in price units")
-        add("max_EV_short", max(row.EV_short for row in rows), len(rows), "maximum short expected value in price units")
+        add("mean_EV_long", _mean(row.EV_long for row in rows), len(rows), "mean long nature-proxy utility in price units")
+        add("mean_EV_short", _mean(row.EV_short for row in rows), len(rows), "mean short nature-proxy utility in price units")
+        add("max_EV_long", max(row.EV_long for row in rows), len(rows), "maximum long nature-proxy utility in price units")
+        add("max_EV_short", max(row.EV_short for row in rows), len(rows), "maximum short nature-proxy utility in price units")
         add("mean_cost_penalty", _mean(row.cost_penalty for row in rows), len(rows), "mean round-trip fee plus slippage penalty in price units")
     return tuple(metrics)
 
@@ -208,6 +211,9 @@ def _build_row(
     metadata = strategy.metadata
     return ExpectedValueRow(
         ev_version=config.ev_version,
+        utility_model_kind=config.utility_model_kind,
+        utility_evidence_status=config.utility_evidence_status,
+        utility_evidence_claim_allowed=config.utility_evidence_claim_allowed,
         strategy_name=metadata.strategy_name,
         strategy_version=metadata.strategy_version,
         event_id=prediction.event_id,
@@ -444,6 +450,9 @@ def _load_ev_artifact(*, path: str | Path, schema_name: str, row_builder: object
 def _expected_value_from_mapping(row: Mapping[str, object]) -> ExpectedValueRow:
     return ExpectedValueRow(
         ev_version=_required_str(row, "ev_version"),
+        utility_model_kind=_required_str(row, "utility_model_kind"),
+        utility_evidence_status=_required_str(row, "utility_evidence_status"),
+        utility_evidence_claim_allowed=_required_bool(row, "utility_evidence_claim_allowed"),
         strategy_name=_required_str(row, "strategy_name"),
         strategy_version=_required_str(row, "strategy_version"),
         event_id=_required_str(row, "event_id"),

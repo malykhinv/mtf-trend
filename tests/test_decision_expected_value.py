@@ -10,7 +10,11 @@ import pytest
 
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
-from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT
+from anomaly_science.contracts.decision import (
+    EXPECTED_VALUE_TEMPORAL_CONTRACT,
+    UTILITY_EVIDENCE_STATUS_NON_FINAL,
+    UTILITY_MODEL_KIND_NATURE_PROXY,
+)
 from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
 from anomaly_science.contracts.labels import TEMPORAL_LABEL_CONTRACT, AnomalyOutcomeLabelRow
 from anomaly_science.contracts.prediction import PREDICTION_TEMPORAL_CONTRACT, OosPredictionRow
@@ -128,6 +132,9 @@ def test_expected_value_uses_oos_probabilities_structural_levels_and_costs() -> 
 
     row = rows[0]
 
+    assert row.utility_model_kind == UTILITY_MODEL_KIND_NATURE_PROXY
+    assert row.utility_evidence_status == UTILITY_EVIDENCE_STATUS_NON_FINAL
+    assert row.utility_evidence_claim_allowed is False
     assert row.target_distance == 3.0
     assert row.stop_distance == 1.0
     assert row.stop_reference_price == 99.0
@@ -190,6 +197,11 @@ def test_expected_value_prefers_no_trade_when_directional_ev_is_not_positive() -
     assert rows[0].best_action == "no_trade"
 
 
+def test_expected_value_config_rejects_final_utility_claim_for_nature_proxy() -> None:
+    with pytest.raises(ValueError, match="cannot allow final utility evidence claims"):
+        ExpectedValueConfig(utility_evidence_claim_allowed=True)
+
+
 def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
     state = _state("cli")
     label = _label(state)
@@ -233,6 +245,7 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
     with (out_dir / "strategy_protocol_audit.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         audit_by_name = {row["check_name"]: row for row in csv.DictReader(file_obj)}
     assert audit_by_name["expected_value_computed_before_trade_simulation"]["status"] == "PASS"
+    assert audit_by_name["nature_proxy_utility_marked_non_final"]["status"] == "PASS"
     assert audit_by_name["execution_reference_model_aligned_between_ev_and_simulation"]["status"] == "PASS"
     assert audit_by_name["fixed_percent_stop_target_forbidden"]["status"] == "PASS"
     assert audit_by_name["protocol_interpretation_gate"]["status"] == "PASS"
@@ -240,6 +253,9 @@ def test_run_mvp1_expected_value_cli_writes_artifacts(tmp_path: Path) -> None:
     with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}
     assert run_config["strategy_name"] == "broad_anomaly_v1_h30"
+    assert run_config["utility_model_kind"] == UTILITY_MODEL_KIND_NATURE_PROXY
+    assert run_config["utility_evidence_status"] == UTILITY_EVIDENCE_STATUS_NON_FINAL
+    assert run_config["utility_evidence_claim_allowed"] == "false"
     assert run_config["execution_policy_version"] == "generic_anomaly_structural_execution_v1"
     assert "long_running_low_close_then_swing_low_trail" in run_config["execution_policy_ids"]
     assert run_config["execution_reference_model"] == EV_EXECUTION_REFERENCE_MODEL

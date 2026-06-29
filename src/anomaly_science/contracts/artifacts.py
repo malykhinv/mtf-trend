@@ -442,6 +442,9 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
         stage="mvp1_decision",
         required_columns=(
             "ev_version",
+            "utility_model_kind",
+            "utility_evidence_status",
+            "utility_evidence_claim_allowed",
             "strategy_name",
             "strategy_version",
             "event_id",
@@ -491,7 +494,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "is_RR_still_acceptable",
             "temporal_contract",
         ),
-        description="Decision-timing rows with pre-simulation expected value from calibrated OOS probabilities, causal structural execution anchors, fees, and slippage; not realized PnL.",
+        description="Decision-timing rows with pre-simulation nature-proxy utility from calibrated OOS probabilities, causal structural execution anchors, fees, and slippage; not realized PnL or final EV proof.",
     ),
     "anomaly_ev_metrics.csv": ArtifactSchema(
         name="anomaly_ev_metrics.csv",

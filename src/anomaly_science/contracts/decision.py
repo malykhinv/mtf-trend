@@ -9,12 +9,17 @@ from .market import MarketDataContractError
 from .time import enforce_snapshot_contract, validate_timestamp_ms
 
 EXPECTED_VALUE_TEMPORAL_CONTRACT = "features<=snapshot_time<label_future_start;oos_probabilities_only;no_trade_simulation"
+UTILITY_MODEL_KIND_NATURE_PROXY = "nature_proxy"
+UTILITY_EVIDENCE_STATUS_NON_FINAL = "NON_FINAL"
 DECISION_ACTIONS = frozenset(("long", "short", "wait", "no_trade"))
 
 
 @dataclass(frozen=True, slots=True)
 class ExpectedValueRow:
     ev_version: str
+    utility_model_kind: str
+    utility_evidence_status: str
+    utility_evidence_claim_allowed: bool
     strategy_name: str
     strategy_version: str
     event_id: str
@@ -67,6 +72,12 @@ class ExpectedValueRow:
     def __post_init__(self) -> None:
         if not self.ev_version:
             raise MarketDataContractError("ev_version is required")
+        if self.utility_model_kind != UTILITY_MODEL_KIND_NATURE_PROXY:
+            raise MarketDataContractError("utility_model_kind must explicitly mark MVP1 EV as nature_proxy")
+        if self.utility_evidence_status != UTILITY_EVIDENCE_STATUS_NON_FINAL:
+            raise MarketDataContractError("utility_evidence_status must remain NON_FINAL until realized barrier outcome modeling exists")
+        if self.utility_evidence_claim_allowed:
+            raise MarketDataContractError("nature-proxy EV rows must not allow final utility/evidence claims")
         if not self.strategy_name:
             raise MarketDataContractError("strategy_name is required")
         if not self.strategy_version:

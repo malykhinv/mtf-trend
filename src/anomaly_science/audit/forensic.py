@@ -11,6 +11,7 @@ from anomaly_science.contracts.artifacts import (
     should_materialize_strategy_artifact_alias,
 )
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow
+from anomaly_science.contracts.decision import UTILITY_EVIDENCE_STATUS_NON_FINAL, UTILITY_MODEL_KIND_NATURE_PROXY
 from anomaly_science.contracts.execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 
 
@@ -175,6 +176,7 @@ def build_independent_forensic_audit_rows(root_dir: str | Path) -> list[Protocol
     rows.append(_prediction_oos_cutoff_row(found))
     rows.append(_prediction_model_horizon_identity_row(found))
     rows.append(_canonical_alias_consistency_row(root))
+    rows.append(_decision_utility_proxy_marked_non_final_row(found))
     rows.append(_simulation_decision_contract_alignment_row(found))
     rows.append(_simulation_pessimistic_prices_and_costs_row(found))
     rows.append(_simulation_no_parallel_symbol_positions_row(found))
@@ -833,6 +835,49 @@ def _csv_artifact_mismatch_reason(left_path: Path, right_path: Path) -> str | No
         if left_row != right_row:
             return f"row {row_index} mismatch"
     return None
+
+
+def _decision_utility_proxy_marked_non_final_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:
+    checked = 0
+    failures: list[str] = []
+    for path in found.get("strategy_decision_timing.csv", ()):  # canonical artifact is enough for proof
+        for row_index, row in enumerate(_read_csv_rows(path), start=2):
+            checked += 1
+            if row.get("utility_model_kind") != UTILITY_MODEL_KIND_NATURE_PROXY:
+                failures.append(
+                    f"{path}:{row_index} utility_model_kind={row.get('utility_model_kind')!r} must be {UTILITY_MODEL_KIND_NATURE_PROXY!r}"
+                )
+            if row.get("utility_evidence_status") != UTILITY_EVIDENCE_STATUS_NON_FINAL:
+                failures.append(
+                    f"{path}:{row_index} utility_evidence_status={row.get('utility_evidence_status')!r} must be {UTILITY_EVIDENCE_STATUS_NON_FINAL!r}"
+                )
+            if str(row.get("utility_evidence_claim_allowed", "")).strip().lower() != "false":
+                failures.append(
+                    f"{path}:{row_index} utility_evidence_claim_allowed={row.get('utility_evidence_claim_allowed')!r} must be false"
+                )
+    if failures:
+        return _row(
+            "forensic_decision_utility_proxy_marked_non_final",
+            AuditStatus.FAIL,
+            f"{len(failures)} decision utility evidence metadata violation(s): " + "; ".join(failures[:5]),
+            artifact="strategy_decision_timing.csv",
+        )
+    if checked == 0:
+        return _row(
+            "forensic_decision_utility_proxy_marked_non_final",
+            AuditStatus.WARN,
+            "no decision rows were available to verify utility evidence metadata",
+            artifact="strategy_decision_timing.csv",
+        )
+    return _row(
+        "forensic_decision_utility_proxy_marked_non_final",
+        AuditStatus.PASS,
+        (
+            f"verified {checked} decision row(s) explicitly mark nature-proxy utility as NON_FINAL "
+            "with utility_evidence_claim_allowed=false"
+        ),
+        artifact="strategy_decision_timing.csv",
+    )
 
 
 def _simulation_decision_contract_alignment_row(found: Mapping[str, tuple[Path, ...]]) -> ProtocolAuditRow:

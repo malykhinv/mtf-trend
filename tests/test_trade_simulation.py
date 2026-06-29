@@ -10,7 +10,12 @@ import pytest
 
 from anomaly_science.artifacts import write_csv_artifact
 from anomaly_science.contracts.artifacts import get_artifact_schema
-from anomaly_science.contracts.decision import EXPECTED_VALUE_TEMPORAL_CONTRACT, ExpectedValueRow
+from anomaly_science.contracts.decision import (
+    EXPECTED_VALUE_TEMPORAL_CONTRACT,
+    UTILITY_EVIDENCE_STATUS_NON_FINAL,
+    UTILITY_MODEL_KIND_NATURE_PROXY,
+    ExpectedValueRow,
+)
 from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
 from anomaly_science.contracts.market import Candle1m, FundingRate
 from anomaly_science.contracts.simulation import TRADE_SIMULATION_TEMPORAL_CONTRACT
@@ -51,6 +56,9 @@ def _candle(index: int, *, open_price: float, high: float, low: float, close: fl
 def _decision(event_id: str = "sim_long") -> ExpectedValueRow:
     return ExpectedValueRow(
         ev_version="mvp1_expected_value_oos_calibrated_proxy_v1",
+        utility_model_kind=UTILITY_MODEL_KIND_NATURE_PROXY,
+        utility_evidence_status=UTILITY_EVIDENCE_STATUS_NON_FINAL,
+        utility_evidence_claim_allowed=False,
         strategy_name="broad_anomaly_v1_h30",
         strategy_version="1.0.0",
         event_id=event_id,

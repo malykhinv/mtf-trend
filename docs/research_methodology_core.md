@@ -966,6 +966,9 @@ RR_long_acceptable
 RR_short_acceptable
 selected_RR
 selected_RR_acceptable
+utility_model_kind
+utility_evidence_status
+utility_evidence_claim_allowed
 EV_long
 EV_short
 EV_wait
@@ -1012,6 +1015,24 @@ fees
 slippage penalty
 probability of adverse move
 probability of follow-through
+```
+
+MVP1 boundary:
+
+```text
+Текущий nature-class EV является proxy utility, а не final expected utility proof.
+Пока нет realized barrier outcome model, decision artifacts обязаны писать:
+utility_model_kind = nature_proxy
+utility_evidence_status = NON_FINAL
+utility_evidence_claim_allowed = false
+```
+
+Запрещено:
+
+```text
+называть nature_proxy EV доказательством final EV / utility edge
+разрешать EV_PROOF claim без realized target-first / stop-first / timeout outcome model
+скрывать proxy status только в README или research notes вместо artifact/run_config fields
 ```
 
 ## 19. Simplified pessimistic trade simulation

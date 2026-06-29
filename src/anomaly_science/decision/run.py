@@ -157,7 +157,7 @@ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
         ProtocolAuditRow(
             check_name="costs_included",
             status=AuditStatus.PASS,
-            message="EV includes round-trip fee bps plus explicit slippage bps penalty",
+            message="Nature-proxy EV includes round-trip fee bps plus explicit slippage bps penalty",
             artifact="anomaly_decision_timing.csv",
         ),
         ProtocolAuditRow(
@@ -182,7 +182,13 @@ def _protocol_rows(*, expected_value_row_count: int) -> list[ProtocolAuditRow]:
         ProtocolAuditRow(
             check_name="expected_value_computed_before_trade_simulation",
             status=AuditStatus.PASS,
-            message="decision stage computes EV from OOS probabilities, point-in-time structural distances, fees, and slippage before any trade simulation exists",
+            message="decision stage computes nature-proxy utility from OOS probabilities, point-in-time structural distances, fees, and slippage before any trade simulation exists",
+            artifact="anomaly_decision_timing.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="nature_proxy_utility_marked_non_final",
+            status=AuditStatus.PASS,
+            message="decision artifacts explicitly mark utility_model_kind=nature_proxy, utility_evidence_status=NON_FINAL, and utility_evidence_claim_allowed=false until realized barrier outcomes exist",
             artifact="anomaly_decision_timing.csv",
         ),
         ProtocolAuditRow(
@@ -232,6 +238,9 @@ def _run_config_rows(
         RunConfigRow(key="stage", value="mvp1_decision", source="runtime"),
         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="ev_version", value=config.ev_version, source="runtime"),
+        RunConfigRow(key="utility_model_kind", value=config.utility_model_kind, source="runtime"),
+        RunConfigRow(key="utility_evidence_status", value=config.utility_evidence_status, source="runtime"),
+        RunConfigRow(key="utility_evidence_claim_allowed", value=str(config.utility_evidence_claim_allowed).lower(), source="runtime"),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),
         RunConfigRow(key="execution_reference_model", value=config.execution_reference_model, source="runtime"),
         RunConfigRow(key="entry_price_basis", value=config.entry_price_basis, source="runtime"),
@@ -240,7 +249,7 @@ def _run_config_rows(
         RunConfigRow(key="slippage_bps", value=str(config.slippage_bps), source="runtime"),
         RunConfigRow(key="min_prediction_confidence", value=str(config.min_prediction_confidence), source="runtime"),
         RunConfigRow(key="min_rr", value=str(config.min_rr), source="runtime"),
-        RunConfigRow(key="decision_scope", value="expected_value_not_trade_simulation", source="runtime"),
+        RunConfigRow(key="decision_scope", value="nature_proxy_utility_not_trade_simulation", source="runtime"),
     ]
 
 

@@ -915,7 +915,7 @@ strategy_rejection_funnel.csv    -> anomaly_rejection_funnel.csv where strategy_
 strategy_protocol_audit.csv      -> anomaly_protocol_audit.csv where strategy_family=anomaly
 ```
 
-MVP1 expected utility / EV fields live inside `strategy_decision_timing.csv`.
+MVP1 expected utility / EV fields live inside `strategy_decision_timing.csv`. For the current MVP, those fields must remain explicitly marked as `utility_model_kind=nature_proxy`, `utility_evidence_status=NON_FINAL`, and `utility_evidence_claim_allowed=false` until Core adds realized barrier outcome modeling.
 
 Правило:
 

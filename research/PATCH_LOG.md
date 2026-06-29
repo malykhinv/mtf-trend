@@ -1488,3 +1488,17 @@ Changes:
 Validation:
 - 30-symbol smoke: 1,093 event rows, 100% OI coverage; AUC 0.6050 -> 0.6351; paired 95% interval -0.0038..+0.0632; no accepted archetype categories.
 - `.venv\Scripts\python.exe -m pytest -q`: 288 passed before the final delivery-universe regression, followed by focused delivery/parallel tests: 2 passed.
+## decision: mark nature-based EV as proxy utility
+
+Status: PROPOSED.
+
+Changes:
+- Adds explicit utility interpretation fields to decision rows: `utility_model_kind=nature_proxy`, `utility_evidence_status=NON_FINAL`, and `utility_evidence_claim_allowed=false`.
+- Records the same utility boundary in EV metrics and run config so it survives artifact-only review.
+- Adds stage and independent forensic audit checks that fail if a decision artifact tries to claim final utility proof from nature-class EV.
+- Updates methodology/docs/tests without changing EV math, thresholds, model fitting, simulation entry/exit logic, or runtime-heavy stages.
+
+Validation in this environment:
+- `git apply --check` against the Patch 1-4 working tree.
+- `python -m compileall -q main.py src tests zip_project.py`
+- Full pytest still needs the project venv because this sandbox lacks project runtime dependencies such as `polars`.
