@@ -393,6 +393,8 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "best_iteration",
             "class_order",
             "model_feature_names",
+            "supervised_anchor_policy_id",
+            "supervised_anchor_offsets_minutes_since_detection",
             "sample_weight_policy",
             "sample_weight_scope",
             "calibration_method",

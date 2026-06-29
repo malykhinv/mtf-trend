@@ -1551,3 +1551,20 @@ Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest tests/test_artifact_schemas.py::test_mvp1_artifact_schemas_are_fixed -q`
 - Full simulation pytest collection still needs the project venv because this sandbox lacks `polars`.
+
+## prediction: support registered state-lattice supervised anchors
+
+Status: PROPOSED.
+
+Changes:
+- Adds `registered_state_lattice_v1` supervised anchor policy with bounded offsets `0,5,10,15,30,60`; `t0_only_v1` remains an explicit ablation/baseline.
+- Loads only registered anchor rows from state/label/feature artifacts and records policy id/offsets in run config, prediction metrics, and model metadata.
+- Adds event-anchor-normalized sample weights so multiple lattice anchors do not multiply an event's split weight.
+- Excludes same `(symbol,event_id)` rows from train if that event appears in the OOS week, preventing cross-week event leakage.
+- Updates methodology, artifact schema, CLI arguments, and regression tests without enabling full per-minute supervised datasets.
+
+Validation in this environment:
+- `git apply --check` against the Patch 1-8 working tree.
+- `python -m compileall -q main.py src tests zip_project.py`
+- `python -m pytest tests/test_artifact_schemas.py::test_mvp1_artifact_schemas_are_fixed -q`
+- Full prediction pytest collection still needs the project venv because this sandbox lacks `polars`.

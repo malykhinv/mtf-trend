@@ -8,7 +8,6 @@ from anomaly_science.artifacts import build_manifest, runtime_reproducibility_ro
 from anomaly_science.contracts.artifacts import get_artifact_schema
 from anomaly_science.contracts.audit import AuditStatus, ProtocolAuditRow, RunConfigRow
 from anomaly_science.prediction.builder import (
-    SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION,
     build_calibration_breakdown_rows,
     build_calibration_rows,
     build_prediction_metric_rows,
@@ -47,6 +46,7 @@ def run_mvp1_prediction(
         labels_path=labels_artifact_path,
         feature_matrix_path=feature_artifact_path,
         anchor_minutes_since_detection=cfg.supervised_anchor_minutes_since_detection,
+        anchor_offsets_minutes_since_detection=cfg.supervised_anchor_offsets_minutes_since_detection,
     )
     prediction_result = build_walk_forward_prediction_result(inputs=inputs, config=cfg)
     predictions = prediction_result.predictions
@@ -268,7 +268,10 @@ def _protocol_rows(
         ProtocolAuditRow(
             check_name="sample_weight_policy_explicit_and_asof_safe",
             status=AuditStatus.PASS,
-            message=f"sample_weight_policy={config.sample_weight_policy}; uniform_v1 uses no labels, no future outcomes, and no full-period fitted weights",
+            message=(
+                f"sample_weight_policy={config.sample_weight_policy}; supervised_anchor_policy_id={config.supervised_anchor_policy_id}; "
+                "weights use only event_id/symbol grouping known at snapshot time and never future outcomes"
+            ),
             artifact="strategy_model_metadata.csv;strategy_model_training_diagnostics.csv",
         ),
     ]
@@ -310,8 +313,18 @@ def _run_config_rows(
         *strategy_metadata_run_config_rows(strategy_name=config.strategy_name),
         RunConfigRow(key="prediction_version", value=config.prediction_version, source="runtime"),
         RunConfigRow(
+            key="supervised_anchor_policy_id",
+            value=config.supervised_anchor_policy_id,
+            source="runtime",
+        ),
+        RunConfigRow(
+            key="supervised_anchor_offsets_minutes_since_detection",
+            value=",".join(str(value) for value in config.supervised_anchor_offsets_minutes_since_detection),
+            source="runtime",
+        ),
+        RunConfigRow(
             key="supervised_anchor_minutes_since_detection",
-            value=str(SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION),
+            value=str(config.supervised_anchor_minutes_since_detection),
             source="runtime",
         ),
         RunConfigRow(key="target_horizon_minutes", value=str(config.target_horizon_minutes), source="runtime"),

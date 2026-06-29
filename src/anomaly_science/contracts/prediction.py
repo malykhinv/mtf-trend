@@ -231,6 +231,8 @@ class ModelMetadataRow:
     best_iteration: int
     class_order: str
     model_feature_names: str
+    supervised_anchor_policy_id: str
+    supervised_anchor_offsets_minutes_since_detection: str
     sample_weight_policy: str
     sample_weight_scope: str
     calibration_method: str
@@ -267,6 +269,10 @@ class ModelMetadataRow:
             raise MarketDataContractError("class_order is required")
         if not self.model_feature_names:
             raise MarketDataContractError("model_feature_names is required")
+        if not self.supervised_anchor_policy_id:
+            raise MarketDataContractError("supervised_anchor_policy_id is required")
+        if not self.supervised_anchor_offsets_minutes_since_detection:
+            raise MarketDataContractError("supervised_anchor_offsets_minutes_since_detection is required")
         if not self.sample_weight_policy:
             raise MarketDataContractError("sample_weight_policy is required")
         if not self.sample_weight_scope:

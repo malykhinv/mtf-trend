@@ -798,6 +798,36 @@ Unlock наступает после физического закрытия sim
 дедуплицировать между разными horizon variants: h15/h30/h60 являются разными model populations
 ```
 
+### 11.2. Registered state-lattice supervised anchors
+
+Одноминутное online-состояние события может содержать десятки строк. Полный per-minute supervised dataset запрещён как default, потому что он создаёт pseudo-replication, раздувает вес длинных событий и тяжёл для i5/16GB.
+
+Core использует заранее зарегистрированную ограниченную lattice policy:
+
+```text
+supervised_anchor_policy_id = registered_state_lattice_v1
+supervised_anchor_offsets_minutes_since_detection = 0,5,10,15,30,60
+```
+
+Правила:
+
+```text
+1. Только эти offsets могут входить в train/validation/calibration/OOS prediction rows.
+2. t0_only_v1 остаётся только baseline/ablation policy.
+3. Один event может дать несколько lattice rows, но sample weight нормируется внутри event_id/symbol, чтобы суммарный вес события в split не рос пропорционально числу anchors.
+4. Weekly split/purge обязан исключать train rows того же event_id/symbol, если этот event присутствует в OOS week.
+5. anchor policy id и offsets пишутся в run config и model metadata.
+```
+
+Запрещено:
+
+```text
+подбирать anchor offsets после просмотра OOS PnL/AUC
+обучаться на всех минутах события как на независимых examples
+скрывать anchor policy вне model metadata/run config
+смешивать t0_only и state_lattice rows в одном model_version без явного policy id
+```
+
 ## 12. Generic Future Path / Label Builder
 
 Core строит future paths после snapshot_time, но не использует их в features.

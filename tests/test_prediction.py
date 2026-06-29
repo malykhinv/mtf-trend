@@ -30,6 +30,7 @@ from anomaly_science.prediction import (
     oos_prediction_rows_to_artifact,
     validate_model_feature_catalog_membership,
 )
+from anomaly_science.prediction.config import SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED, SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE
 from anomaly_science.state import state_rows_to_artifact
 from anomaly_science.strategy.registry import StrategyRegistryError
 
@@ -213,7 +214,7 @@ def _write_features(path: Path, rows: list[AnomalyFeatureMatrixRow]) -> None:
     write_csv_artifact(path, feature_matrix_rows_to_artifact(rows), get_artifact_schema("anomaly_feature_matrix.csv"))
 
 
-def test_load_prediction_inputs_keeps_only_per_event_anchor_rows(tmp_path: Path) -> None:
+def test_load_prediction_inputs_keeps_only_detection_anchor_by_default(tmp_path: Path) -> None:
     # Each event's online window expands per minute; only the detection-minute anchor
     # (minutes_since_detection == 0) is a supervised row, the rest are dropped.
     first_anchor = _state_row(event_id="z_first", day_offset=0, minute_of_day=10, minutes_since_detection=0)
@@ -237,6 +238,32 @@ def test_load_prediction_inputs_keeps_only_per_event_anchor_rows(tmp_path: Path)
 
     assert [row.state.event_id for row in inputs] == ["z_first", "a_second"]
     assert all(row.state.minutes_since_detection == 0 for row in inputs)
+
+
+def test_load_prediction_inputs_supports_registered_state_lattice_offsets(tmp_path: Path) -> None:
+    states = [
+        _state_row(event_id="same_event", day_offset=0, minute_of_day=10, minutes_since_detection=0),
+        _state_row(event_id="same_event", day_offset=0, minute_of_day=15, minutes_since_detection=5),
+        _state_row(event_id="same_event", day_offset=0, minute_of_day=16, minutes_since_detection=6),
+        _state_row(event_id="same_event", day_offset=0, minute_of_day=40, minutes_since_detection=30),
+    ]
+    labels = [_label_row(state=state, scenario_30m="long_continuation") for state in states]
+    features = [_feature_row(state=state) for state in states]
+    state_path = tmp_path / "anomaly_state_1m.csv"
+    labels_path = tmp_path / "anomaly_outcome_labels.csv"
+    feature_path = tmp_path / "anomaly_feature_matrix.csv"
+    _write_state(state_path, states)
+    _write_labels(labels_path, labels)
+    _write_features(feature_path, features)
+
+    inputs = load_prediction_inputs(
+        state_path=state_path,
+        labels_path=labels_path,
+        feature_matrix_path=feature_path,
+        anchor_offsets_minutes_since_detection=(0, 5, 30),
+    )
+
+    assert [row.state.minutes_since_detection for row in inputs] == [0, 5, 30]
 
 
 def test_iter_prediction_inputs_rejects_non_row_aligned_artifacts(tmp_path: Path) -> None:
@@ -485,7 +512,9 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert run_config["target_label_column"] == "scenario_30m"
     assert run_config["active_h_max_minutes"] == "30"
     assert run_config["feature_schema_version"] == "feature_schema_v1_relative_asof"
-    assert run_config["sample_weight_policy"] == "uniform_v1"
+    assert run_config["sample_weight_policy"] == SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED
+    assert run_config["supervised_anchor_policy_id"] == SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE
+    assert run_config["supervised_anchor_offsets_minutes_since_detection"] == "0,5,10,15,30,60"
 
     with (out_dir / "anomaly_oos_predictions.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
@@ -507,8 +536,10 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
     assert metadata_rows[0]["target_horizon_minutes"] == "30"
     assert metadata_rows[0]["target_label_column"] == "scenario_30m"
     assert metadata_rows[0]["active_h_max_minutes"] == "30"
-    assert metadata_rows[0]["sample_weight_policy"] == "uniform_v1"
-    assert metadata_rows[0]["sample_weight_scope"] == "fit_split_only;validation_for_early_stopping;calibration_unweighted_isotonic"
+    assert metadata_rows[0]["sample_weight_policy"] == SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED
+    assert metadata_rows[0]["supervised_anchor_policy_id"] == SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE
+    assert metadata_rows[0]["supervised_anchor_offsets_minutes_since_detection"] == "0,5,10,15,30,60"
+    assert metadata_rows[0]["sample_weight_scope"] == "fit_split_event_anchor_normalized;validation_for_early_stopping_unweighted_eval;calibration_unweighted_isotonic"
     assert int(metadata_rows[0]["best_iteration"]) >= 0
     assert "feature_matrix.volume_zscore" in metadata_rows[0]["model_feature_names"]
 
@@ -521,5 +552,5 @@ def test_run_mvp1_prediction_cli_writes_prediction_artifacts(tmp_path: Path) -> 
         diagnostic_rows = list(csv.DictReader(file_obj))
     assert any(row["status"] == "TRAINED" and row["reason"] == "trained" for row in diagnostic_rows)
     trained = next(row for row in diagnostic_rows if row["status"] == "TRAINED")
-    assert trained["sample_weight_policy"] == "uniform_v1"
+    assert trained["sample_weight_policy"] == SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED
     assert float(trained["fit_sample_weight_sum"]) == pytest.approx(float(trained["fit_row_count"]))

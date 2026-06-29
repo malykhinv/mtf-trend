@@ -34,7 +34,11 @@ from anomaly_science.features.catalog import build_default_feature_catalog
 from anomaly_science.features.matrix import iter_strategy_feature_matrix_csv, load_strategy_feature_matrix_csv
 from anomaly_science.future import iter_strategy_state_1m_csv, load_strategy_state_1m_csv
 from anomaly_science.labels import iter_strategy_outcome_labels_csv, load_strategy_outcome_labels_csv
-from anomaly_science.prediction.config import WalkForwardPredictionConfig
+from anomaly_science.prediction.config import (
+    SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED,
+    SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE,
+    WalkForwardPredictionConfig,
+)
 from anomaly_science.strategy.registry import get_strategy
 
 ONE_MINUTE_MS = 60_000
@@ -126,13 +130,11 @@ class PredictionInputRow:
         return self.label.scenario_180m
 
 
-# Episodic supervised-dataset anchor (methodology section 11.1): an event's online
-# state expands to one row per minute of its post-detection window, but those minutes
-# are autocorrelated and must not be treated as independent supervised examples.
-# The supervised dataset (train/calibration/OOS prediction, and the EV/simulation that
-# read it) keeps exactly one anchor row per event at this fixed, pre-registered offset.
-# The per-minute confidence trajectory (section 17 decision timing) is a separate
-# descriptive layer over the frozen model, not part of the supervised population.
+# Registered supervised-dataset anchor policy (methodology section 11.1): an
+# event's online state expands minute by minute, but those minutes are
+# autocorrelated and must not become an unbounded per-minute supervised dataset.
+# The production default is a small pre-registered state lattice. The legacy
+# detection-minute anchor remains available as t0_only_v1 for ablations.
 SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION = 0
 
 
@@ -140,8 +142,13 @@ def is_supervised_anchor_row(
     row: PredictionInputRow,
     *,
     anchor_minutes_since_detection: int = SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION,
+    anchor_offsets_minutes_since_detection: Sequence[int] | None = None,
 ) -> bool:
-    return row.state.minutes_since_detection == anchor_minutes_since_detection
+    offsets = _supervised_anchor_offsets(
+        anchor_minutes_since_detection=anchor_minutes_since_detection,
+        anchor_offsets_minutes_since_detection=anchor_offsets_minutes_since_detection,
+    )
+    return row.state.minutes_since_detection in offsets
 
 
 def load_prediction_inputs(
@@ -150,15 +157,16 @@ def load_prediction_inputs(
     labels_path: str | Path,
     feature_matrix_path: str | Path,
     anchor_minutes_since_detection: int = SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION,
+    anchor_offsets_minutes_since_detection: Sequence[int] | None = None,
 ) -> tuple[PredictionInputRow, ...]:
     """Load the episodic supervised prediction dataset from strict artifacts.
 
-    Artifact-backed runs use the row-aligned streaming join below, then keep only the
-    per-event anchor snapshot (``minutes_since_detection ==
-    SUPERVISED_ANCHOR_MINUTES_SINCE_DETECTION``). This enforces the methodology
-    episodic-dataset rule: a single online impulse contributes one supervised example,
-    not one per minute. The join still streams and validates every state/label/feature
-    row, so non-anchor minutes remain available to a future decision-timing layer.
+    Artifact-backed runs use the row-aligned streaming join below, then keep only
+    the pre-registered supervised anchor offsets. The default policy is the
+    bounded state lattice ``[0, 5, 10, 15, 30, 60]``; it gives the model a causal
+    post-detection trajectory without a full per-minute pseudo-replicated dataset.
+    The join still streams and validates every state/label/feature row, so
+    non-anchor minutes remain available to a future decision-timing layer.
     """
     return tuple(
         row
@@ -167,7 +175,11 @@ def load_prediction_inputs(
             labels_path=labels_path,
             feature_matrix_path=feature_matrix_path,
         )
-        if is_supervised_anchor_row(row, anchor_minutes_since_detection=anchor_minutes_since_detection)
+        if is_supervised_anchor_row(
+            row,
+            anchor_minutes_since_detection=anchor_minutes_since_detection,
+            anchor_offsets_minutes_since_detection=anchor_offsets_minutes_since_detection,
+        )
     )
 
 
@@ -215,6 +227,28 @@ def iter_prediction_inputs_from_artifacts(
         _enforce_prediction_input_temporal_contract(state=state, label=label, feature=feature)
         yield PredictionInputRow(state=state, label=label, features=feature)
 
+
+
+def _supervised_anchor_offsets(
+    *,
+    anchor_minutes_since_detection: int,
+    anchor_offsets_minutes_since_detection: Sequence[int] | None,
+) -> frozenset[int]:
+    if anchor_offsets_minutes_since_detection is None:
+        offsets = (anchor_minutes_since_detection,)
+    else:
+        offsets = tuple(int(value) for value in anchor_offsets_minutes_since_detection)
+    if not offsets:
+        raise PredictionInputError("supervised anchor offsets must not be empty")
+    if any(value < 0 for value in offsets):
+        raise PredictionInputError("supervised anchor offsets must be non-negative")
+    return frozenset(offsets)
+
+
+def supervised_anchor_policy_description(config: WalkForwardPredictionConfig) -> str:
+    if config.supervised_anchor_policy_id == SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE:
+        return "bounded registered state lattice; event-normalized weights prevent pseudo-replication"
+    return "single detection-minute anchor baseline"
 
 
 def build_prediction_inputs(
@@ -288,7 +322,13 @@ def build_walk_forward_prediction_result(
     for test_week in sorted(rows_by_test_week):
         weekly_model_freeze_time_ms = _week_start_ms(test_week)
         train_cutoff_time_ms = weekly_model_freeze_time_ms - cfg.purge_horizon_minutes * ONE_MINUTE_MS
-        train_rows = [row for row in usable_rows if row.state.snapshot_time_ms <= train_cutoff_time_ms]
+        test_event_keys = {(row.state.symbol, row.state.event_id) for row in rows_by_test_week[test_week]}
+        train_rows = [
+            row
+            for row in usable_rows
+            if row.state.snapshot_time_ms <= train_cutoff_time_ms
+            and (row.state.symbol, row.state.event_id) not in test_event_keys
+        ]
         weekly_model_prefix = f"weekly_freeze={test_week}:{weekly_model_freeze_time_ms}"
         frozen_model_key = f"{weekly_model_prefix}|catboost_isotonic"
         diagnostic = _weekly_training_diagnostic(
@@ -462,6 +502,24 @@ def build_prediction_metric_rows(
         )
 
     add("input_rows", len(input_rows), len(input_rows), "state/label rows accepted through strict schema boundaries")
+    add(
+        "unique_supervised_events",
+        len({(row.state.symbol, row.state.event_id) for row in input_rows}),
+        len(input_rows),
+        "unique event keys after the registered supervised anchor filter",
+    )
+    add(
+        "supervised_anchor_policy_id",
+        cfg.supervised_anchor_policy_id,
+        len(input_rows),
+        supervised_anchor_policy_description(cfg),
+    )
+    add(
+        "supervised_anchor_offsets_minutes_since_detection",
+        ",".join(str(value) for value in cfg.supervised_anchor_offsets_minutes_since_detection),
+        len(input_rows),
+        "pre-registered minutes_since_detection offsets retained for supervised fitting/evaluation",
+    )
     add(
         "available_label_rows",
         len(available_rows),
@@ -728,8 +786,12 @@ class _CatBoostIsotonicModel:
             best_iteration=self._best_iteration(),
             class_order=",".join(PREDICTED_SCENARIOS),
             model_feature_names=",".join(self.feature_names),
+            supervised_anchor_policy_id=self._config.supervised_anchor_policy_id,
+            supervised_anchor_offsets_minutes_since_detection=",".join(
+                str(value) for value in self._config.supervised_anchor_offsets_minutes_since_detection
+            ),
             sample_weight_policy=self._config.sample_weight_policy,
-            sample_weight_scope="fit_split_only;validation_for_early_stopping;calibration_unweighted_isotonic",
+            sample_weight_scope="fit_split_event_anchor_normalized;validation_for_early_stopping_unweighted_eval;calibration_unweighted_isotonic",
             calibration_method="one_vs_rest_isotonic_regression_on_train_calibration_split",
         )
 
@@ -1002,9 +1064,13 @@ def _targets(rows: Sequence[PredictionInputRow], config: WalkForwardPredictionCo
 
 
 def _sample_weights(rows: Sequence[PredictionInputRow], *, config: WalkForwardPredictionConfig) -> np.ndarray:
-    if config.sample_weight_policy != "uniform_v1":
+    if config.sample_weight_policy == "uniform_v1":
+        weights = np.ones(len(rows), dtype=float)
+    elif config.sample_weight_policy == SAMPLE_WEIGHT_POLICY_EVENT_ANCHOR_NORMALIZED:
+        counts: Counter[tuple[str, str]] = Counter((row.state.symbol, row.state.event_id) for row in rows)
+        weights = np.array([1.0 / float(counts[(row.state.symbol, row.state.event_id)]) for row in rows], dtype=float)
+    else:
         raise PredictionInputError(f"unsupported sample_weight_policy: {config.sample_weight_policy}")
-    weights = np.ones(len(rows), dtype=float)
     if len(weights) != len(rows):
         raise PredictionInputError("sample weights length must match rows")
     if len(weights) and (not np.isfinite(weights).all() or np.any(weights <= 0.0)):

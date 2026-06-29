@@ -18,6 +18,11 @@ from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matri
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
+from anomaly_science.prediction.config import (
+    REGISTERED_STATE_LATTICE_ANCHORS_MINUTES,
+    SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE,
+    SUPERVISED_ANCHOR_POLICY_T0_ONLY,
+)
 from anomaly_science.progress import make_stderr_progress_callback
 from anomaly_science.research import ResearchDatasetBuildConfig, ResearchRunConfig, build_research_dataset, run_research_pipeline
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
@@ -38,6 +43,16 @@ _BOOTSTRAP_MESSAGE = "anomaly_science bootstrap ok"
 def _broad_strategy_name_for_horizon(horizon_minutes: int) -> str:
     return f"broad_anomaly_v1_h{horizon_minutes}"
 
+
+
+def _parse_anchor_offsets(value: str) -> tuple[int, ...]:
+    try:
+        offsets = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise ValueError(f"invalid --supervised-anchor-offsets: {value!r}") from exc
+    if not offsets:
+        raise ValueError("--supervised-anchor-offsets must contain at least one integer offset")
+    return offsets
 
 def _add_strategy_horizon_arguments(parser: argparse.ArgumentParser, *, verb: str) -> None:
     parser.add_argument(
@@ -301,6 +316,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to strategy_feature_matrix.csv from run-mvp1-feature-matrix for rich as-of model features.",
     )
     prediction.add_argument("--out", required=True, help="Directory where prediction artifacts will be written.")
+    prediction.add_argument(
+        "--supervised-anchor-policy",
+        choices=(SUPERVISED_ANCHOR_POLICY_T0_ONLY, SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE),
+        default=SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE,
+        help="Pre-registered supervised anchor policy. Default uses bounded state-lattice anchors, not full per-minute rows.",
+    )
+    prediction.add_argument(
+        "--supervised-anchor-offsets",
+        default=",".join(str(value) for value in REGISTERED_STATE_LATTICE_ANCHORS_MINUTES),
+        help="Comma-separated minutes_since_detection offsets for registered_state_lattice_v1.",
+    )
     _add_strategy_horizon_arguments(prediction, verb="predict")
 
     controls = subparsers.add_parser(
@@ -704,6 +730,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 horizon_minutes=args.horizon_minutes,
             ),
             target_horizon_minutes=args.horizon_minutes,
+            supervised_anchor_policy_id=args.supervised_anchor_policy,
+            supervised_anchor_offsets_minutes_since_detection=_parse_anchor_offsets(args.supervised_anchor_offsets),
         )
         output_dir = run_mvp1_prediction(
             state_path=Path(args.state),
