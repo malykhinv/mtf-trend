@@ -11,6 +11,7 @@ from anomaly_science.data.normalized import normalize_candles_1m, normalize_fund
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
 from anomaly_science.decision import load_anomaly_decision_timing_csv
 from anomaly_science.simulation.builder import (
+    build_matched_market_time_control_rows,
     build_random_entry_time_control_rows,
     build_trade_simulation_rows,
     build_trade_simulation_metric_rows,
@@ -56,10 +57,17 @@ def run_mvp1_trade_simulation(
         decision_rows=decision_rows,
         config=cfg,
     )
+    matched_market_time_control_rows = build_matched_market_time_control_rows(
+        candles_1m=candles_1m,
+        funding_rates=funding_rates,
+        decision_rows=decision_rows,
+        config=cfg,
+    )
     metric_rows = build_trade_simulation_metric_rows(
         decision_rows=decision_rows,
         simulation_rows=simulation_rows,
         random_entry_time_control_rows=random_entry_control_rows,
+        matched_market_time_control_rows=matched_market_time_control_rows,
         config=cfg,
     )
     protocol_rows = _protocol_rows(
@@ -156,6 +164,12 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
             status=AuditStatus.PASS,
             message="mvp1 trade simulation uses anomaly_science modules only; legacy_quarantine is reference-only",
         ),
+        ProtocolAuditRow(
+            check_name="matched_market_time_control_declared",
+            status=AuditStatus.PASS,
+            message="simulation metrics include a bounded same-symbol/session/volatility random market-time baseline separate from signal-time shuffling",
+            artifact="strategy_trade_simulation_metrics.csv",
+        ),
     ]
     implemented_methodology_rows = [
         ProtocolAuditRow(
@@ -199,6 +213,12 @@ def _protocol_rows(*, decision_row_count: int, simulation_row_count: int, fundin
             status=AuditStatus.PASS,
             message="Core enumerates only the strategy-declared partial-close fraction grid; policy selection must occur on development data before untouched verification",
             artifact="strategy_trade_simulation.csv",
+        ),
+        ProtocolAuditRow(
+            check_name="selection_edge_requires_market_time_control",
+            status=AuditStatus.PASS,
+            message="signal-time shuffle is not enough for selection-edge claims; matched_market_time metrics are written as a separate negative baseline",
+            artifact="strategy_trade_simulation_metrics.csv",
         ),
     ]
     return base_rows + build_methodology_v2_audit_rows(stage="mvp1_simulation", implemented=implemented_methodology_rows)
@@ -246,6 +266,11 @@ def _run_config_rows(
         RunConfigRow(key="cost_model", value=config.cost_model, source="runtime"),
         RunConfigRow(key="toxic_entry_atr_1m_fraction", value=str(config.toxic_entry_atr_1m_fraction), source="runtime"),
         RunConfigRow(key="random_seed", value=str(config.random_seed), source="runtime"),
+        RunConfigRow(key="matched_market_time_control_enabled", value=str(config.matched_market_time_control_enabled), source="runtime"),
+        RunConfigRow(key="matched_market_time_lookback_minutes", value=str(config.matched_market_time_lookback_minutes), source="runtime"),
+        RunConfigRow(key="matched_market_time_session_minutes", value=str(config.matched_market_time_session_minutes), source="runtime"),
+        RunConfigRow(key="matched_market_time_volatility_buckets", value=str(config.matched_market_time_volatility_buckets), source="runtime"),
+        RunConfigRow(key="max_matched_market_time_candidates_per_decision", value=str(config.max_matched_market_time_candidates_per_decision), source="runtime"),
         RunConfigRow(key="require_prediction_confident", value=str(config.require_prediction_confident), source="runtime"),
         RunConfigRow(key="require_rr_acceptable", value=str(config.require_rr_acceptable), source="runtime"),
         RunConfigRow(key="simulation_scope", value="simplified_pessimistic_not_live_execution", source="runtime"),

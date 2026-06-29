@@ -140,8 +140,11 @@ _REQUIRED_SIMULATION_CONTROL_METRICS = frozenset(
         "always_no_trade_baseline_net_pnl",
         "random_entry_time_control_rows",
         "random_entry_time_control_total_net_pnl",
+        "matched_market_time_control_rows",
+        "matched_market_time_control_total_net_pnl",
         "delta_vs_always_no_trade_net_pnl",
         "delta_vs_random_entry_time_net_pnl",
+        "delta_vs_matched_market_time_net_pnl",
     )
 )
 

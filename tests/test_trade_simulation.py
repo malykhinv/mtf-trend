@@ -24,6 +24,7 @@ from anomaly_science.simulation import (
     TradeSimulationConfig,
     TradeSimulationInputError,
     build_random_entry_time_control_rows,
+    build_matched_market_time_control_rows,
     build_trade_simulation_metric_rows,
     build_trade_simulation_rows,
     load_anomaly_trade_simulation_csv,
@@ -262,6 +263,35 @@ def test_random_entry_time_control_rows_are_deterministic() -> None:
     assert all(row.event_id.endswith("::random_entry_time") for row in rows)
 
 
+def test_matched_market_time_control_rows_are_bounded_and_deterministic() -> None:
+    decision = _decision("matched_market")
+    candles = [
+        _candle(
+            index,
+            open_price=100.0 + float(index % 5),
+            high=102.0 + float(index % 5),
+            low=98.0 + float(index % 5),
+            close=100.0 + float((index + 2) % 5),
+        )
+        for index in range(80)
+    ]
+    config = TradeSimulationConfig(
+        target_horizon_minutes=30,
+        random_seed=11,
+        matched_market_time_lookback_minutes=5,
+        matched_market_time_volatility_buckets=1,
+        max_matched_market_time_candidates_per_decision=4,
+    )
+
+    rows = build_matched_market_time_control_rows(candles_1m=candles, decision_rows=[decision], config=config)
+    repeated = build_matched_market_time_control_rows(candles_1m=candles, decision_rows=[decision], config=config)
+
+    assert rows
+    assert [row.event_id for row in rows] == [row.event_id for row in repeated]
+    assert all(row.event_id.endswith("::matched_market_time") for row in rows)
+    assert {row.snapshot_time_ms for row in rows} != {decision.snapshot_time_ms}
+
+
 def test_trade_simulation_blocks_parallel_positions_per_symbol_strategy_variant() -> None:
     first = _decision("first")
     second = _decision("second")
@@ -307,6 +337,29 @@ def test_trade_simulation_metrics_never_pool_partial_close_variants() -> None:
         for row in metrics
     )
 
+
+
+def test_trade_simulation_metrics_include_matched_market_time_control() -> None:
+    decision = _decision("matched_market_metrics")
+    trades = build_trade_simulation_rows(
+        candles_1m=[
+            _candle(0, open_price=100.0, high=100.5, low=99.5, close=100.0),
+            _candle(1, open_price=101.0, high=104.5, low=100.5, close=103.0),
+        ],
+        decision_rows=[decision],
+    )
+    matched_control = tuple(replace(row, event_id=f"{row.event_id}::matched_market_time") for row in trades)
+
+    metrics = build_trade_simulation_metric_rows(
+        decision_rows=[decision],
+        simulation_rows=trades,
+        matched_market_time_control_rows=matched_control,
+    )
+    metrics_by_name = {row.metric_name for row in metrics}
+
+    assert "matched_market_time_control_rows" in metrics_by_name
+    assert "matched_market_time_control_total_net_pnl" in metrics_by_name
+    assert "delta_vs_matched_market_time_net_pnl" in metrics_by_name
 
 def test_trade_simulation_rejects_strategy_horizon_mismatch() -> None:
     with pytest.raises(StrategyRegistryError, match="strategy/horizon mismatch"):
@@ -423,6 +476,8 @@ def test_run_mvp1_trade_simulation_cli_writes_artifacts(tmp_path: Path) -> None:
     assert "delta_vs_always_no_trade_net_pnl" in metrics_by_name
     assert "random_entry_time_control_rows" in metrics_by_name
     assert "delta_vs_random_entry_time_net_pnl" in metrics_by_name
+    assert "matched_market_time_control_rows" in metrics_by_name
+    assert "delta_vs_matched_market_time_net_pnl" in metrics_by_name
 
     with (out_dir / "strategy_run_config.csv").open(encoding="utf-8-sig", newline="") as file_obj:
         run_config = {row["key"]: row["value"] for row in csv.DictReader(file_obj)}

@@ -69,6 +69,24 @@ def build_random_entry_time_control_from_source(
     )
 
 
+
+def build_matched_market_time_control_from_source(
+    *,
+    source: MarketDataSource,
+    decision_timing_path: str | Path,
+    config: TradeSimulationConfig | None = None,
+) -> tuple[TradeSimulationRow, ...]:
+    frame = source.read_frame("candles_1m", required=True)
+    if frame is None:
+        raise CsvDataSourceError("required dataset 'candles_1m.csv' resolved to None")
+    funding_frame = source.read_frame("funding_rate", required=False)
+    return build_matched_market_time_control_rows(
+        candles_1m=normalize_candles_1m(frame),
+        funding_rates=normalize_funding_rates(funding_frame),
+        decision_rows=load_anomaly_decision_timing_csv(decision_timing_path),
+        config=config,
+    )
+
 def build_trade_simulation_rows(
     *,
     candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
@@ -205,6 +223,213 @@ def build_random_entry_time_control_rows(
     return tuple(rows)
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class _MarketTimeCandidate:
+    snapshot_time_ms: int
+    session_bucket: int
+    volatility_bucket: int
+
+
+def build_matched_market_time_control_rows(
+    *,
+    candles_1m: Sequence[Candle1m] | Iterable[Candle1m],
+    decision_rows: Sequence[ExpectedValueRow] | Iterable[ExpectedValueRow],
+    funding_rates: Sequence[FundingRate] | Iterable[FundingRate] = (),
+    config: TradeSimulationConfig | None = None,
+) -> tuple[TradeSimulationRow, ...]:
+    """Build bounded same-symbol/session/volatility random market-time controls.
+
+    This is deliberately different from ``build_random_entry_time_control_rows``.
+    The older control permutes existing signal times and therefore remains
+    conditioned on the strategy signal universe. This control samples from the
+    candle stream itself, excluding known signal snapshots for the same symbol,
+    while matching coarse session and trailing-volatility buckets.
+    """
+    cfg = config or TradeSimulationConfig()
+    if not cfg.matched_market_time_control_enabled:
+        return ()
+    _validate_strategy_horizon(config=cfg)
+    candles_by_symbol = _candles_by_symbol(candles_1m)
+    funding_by_symbol = _funding_by_symbol(funding_rates)
+    candidate_index_by_symbol = {
+        symbol: _market_time_candidate_index(candles=candles, config=cfg)
+        for symbol, candles in candles_by_symbol.items()
+    }
+    candidate_times_by_symbol = {
+        symbol: tuple(candidate.snapshot_time_ms for candidate in candidates)
+        for symbol, candidates in candidate_index_by_symbol.items()
+    }
+    candidates_by_symbol_bucket: dict[tuple[str, int, int], list[_MarketTimeCandidate]] = {}
+    for symbol, candidates in candidate_index_by_symbol.items():
+        for candidate in candidates:
+            candidates_by_symbol_bucket.setdefault((symbol, candidate.session_bucket, candidate.volatility_bucket), []).append(candidate)
+
+    strategy = get_strategy(cfg.strategy_name)
+    decisions = tuple(
+        decision
+        for decision in decision_rows
+        if decision.target_horizon_minutes == cfg.target_horizon_minutes
+        and decision.strategy_name == strategy.metadata.strategy_name
+        and decision.strategy_version == strategy.metadata.strategy_version
+        and _is_simulatable_decision(decision, config=cfg)
+    )
+    signal_times_by_symbol: dict[str, set[int]] = {}
+    for decision in decisions:
+        signal_times_by_symbol.setdefault(decision.symbol, set()).add(decision.snapshot_time_ms)
+
+    rows: list[TradeSimulationRow] = []
+    active_until_by_variant: dict[tuple[str, str, str, str, str, float], int] = {}
+    for decision in sorted(decisions, key=lambda item: (item.snapshot_time_ms, item.symbol, item.event_id)):
+        reference = _nearest_market_time_candidate(
+            candidates=candidate_index_by_symbol.get(decision.symbol, ()),
+            candidate_times=candidate_times_by_symbol.get(decision.symbol, ()),
+            snapshot_time_ms=decision.snapshot_time_ms,
+        )
+        if reference is None:
+            continue
+        raw_pool = candidates_by_symbol_bucket.get((decision.symbol, reference.session_bucket, reference.volatility_bucket), [])
+        signal_times = signal_times_by_symbol.get(decision.symbol, set())
+        pool = [candidate for candidate in raw_pool if candidate.snapshot_time_ms not in signal_times]
+        bounded_pool = _bounded_market_time_pool(
+            candidates=pool,
+            max_candidates=cfg.max_matched_market_time_candidates_per_decision,
+        )
+        if not bounded_pool:
+            continue
+        rng = random.Random(f"{cfg.random_seed}:{decision.strategy_name}:{decision.event_id}:matched_market_time")
+        selected = rng.choice(bounded_pool)
+        control_decision = replace(
+            decision,
+            event_id=f"{decision.event_id}::matched_market_time",
+            state_time_ms=selected.snapshot_time_ms,
+            snapshot_time_ms=selected.snapshot_time_ms,
+            feature_cutoff_time_ms=selected.snapshot_time_ms,
+            future_start_time_ms=selected.snapshot_time_ms + ONE_MINUTE_MS,
+        )
+        control_decision = _reanchor_random_control(
+            decision=control_decision,
+            candles=candles_by_symbol.get(control_decision.symbol, []),
+        )
+        if control_decision is None:
+            continue
+        for close_fraction in _target_close_fraction_grid(strategy=strategy, decision=control_decision):
+            key = (
+                control_decision.strategy_name,
+                control_decision.strategy_version,
+                control_decision.symbol,
+                control_decision.stop_policy_id,
+                control_decision.target_policy_id,
+                close_fraction,
+            )
+            active_until_ms = active_until_by_variant.get(key)
+            if active_until_ms is not None and control_decision.snapshot_time_ms <= active_until_ms:
+                continue
+            try:
+                row = _simulate_decision(
+                    decision=control_decision,
+                    candles=candles_by_symbol.get(control_decision.symbol, []),
+                    funding_rates=funding_by_symbol.get(control_decision.symbol, []),
+                    config=cfg,
+                    target_close_fraction=close_fraction,
+                )
+            except TradeSimulationInputError:
+                continue
+            rows.append(row)
+            active_until_by_variant[key] = row.exit_time_ms
+    return tuple(rows)
+
+
+def _market_time_candidate_index(*, candles: Sequence[Candle1m], config: TradeSimulationConfig) -> tuple[_MarketTimeCandidate, ...]:
+    lookback = config.matched_market_time_lookback_minutes
+    if len(candles) <= lookback + config.target_horizon_minutes + 1:
+        return ()
+    values: list[tuple[int, int, float]] = []
+    horizon_ms = config.target_horizon_minutes * ONE_MINUTE_MS
+    for index in range(lookback, len(candles) - 1):
+        snapshot_time_ms = candles[index].open_time_ms
+        if candles[index].available_time_ms > snapshot_time_ms + ONE_MINUTE_MS:
+            continue
+        if snapshot_time_ms + horizon_ms >= candles[-1].available_time_ms:
+            continue
+        window = candles[index - lookback : index]
+        last_close = window[-1].close
+        if last_close <= 0.0:
+            continue
+        trailing_range = max(candle.high for candle in window) - min(candle.low for candle in window)
+        if trailing_range < 0.0 or not math.isfinite(trailing_range):
+            continue
+        values.append((snapshot_time_ms, _session_bucket(snapshot_time_ms, config=config), trailing_range / last_close))
+    if not values:
+        return ()
+    ranked = sorted(value for _, _, value in values)
+    denominator = max(1, len(ranked) - 1)
+    result: list[_MarketTimeCandidate] = []
+    for snapshot_time_ms, session_bucket, value in values:
+        rank = _lower_bound(ranked, value)
+        volatility_bucket = min(
+            config.matched_market_time_volatility_buckets - 1,
+            int(rank * config.matched_market_time_volatility_buckets / denominator),
+        )
+        result.append(_MarketTimeCandidate(snapshot_time_ms, session_bucket, volatility_bucket))
+    return tuple(result)
+
+
+def _nearest_market_time_candidate(
+    *,
+    candidates: Sequence[_MarketTimeCandidate],
+    candidate_times: Sequence[int],
+    snapshot_time_ms: int,
+) -> _MarketTimeCandidate | None:
+    if not candidates:
+        return None
+    insertion = _lower_bound_int(candidate_times, snapshot_time_ms)
+    before = candidates[insertion - 1] if insertion > 0 else None
+    after = candidates[insertion] if insertion < len(candidates) else None
+    if before is None:
+        return after
+    if after is None:
+        return before
+    if abs(before.snapshot_time_ms - snapshot_time_ms) <= abs(after.snapshot_time_ms - snapshot_time_ms):
+        return before
+    return after
+
+
+def _bounded_market_time_pool(*, candidates: Sequence[_MarketTimeCandidate], max_candidates: int) -> tuple[_MarketTimeCandidate, ...]:
+    if len(candidates) <= max_candidates:
+        return tuple(candidates)
+    step = len(candidates) / float(max_candidates)
+    return tuple(candidates[min(len(candidates) - 1, int(index * step))] for index in range(max_candidates))
+
+
+def _session_bucket(snapshot_time_ms: int, *, config: TradeSimulationConfig) -> int:
+    return snapshot_time_ms // (config.matched_market_time_session_minutes * ONE_MINUTE_MS)
+
+
+def _lower_bound(values: Sequence[float], needle: float) -> int:
+    low = 0
+    high = len(values)
+    while low < high:
+        mid = (low + high) // 2
+        if values[mid] < needle:
+            low = mid + 1
+        else:
+            high = mid
+    return low
+
+
+def _lower_bound_int(values: Sequence[int], needle: int) -> int:
+    low = 0
+    high = len(values)
+    while low < high:
+        mid = (low + high) // 2
+        if values[mid] < needle:
+            low = mid + 1
+        else:
+            high = mid
+    return low
+
 def _reanchor_random_control(
     *,
     decision: ExpectedValueRow,
@@ -249,6 +474,7 @@ def build_trade_simulation_metric_rows(
     decision_rows: Sequence[ExpectedValueRow] | Iterable[ExpectedValueRow],
     simulation_rows: Sequence[TradeSimulationRow] | Iterable[TradeSimulationRow],
     random_entry_time_control_rows: Sequence[TradeSimulationRow] | Iterable[TradeSimulationRow] = (),
+    matched_market_time_control_rows: Sequence[TradeSimulationRow] | Iterable[TradeSimulationRow] = (),
     config: TradeSimulationConfig | None = None,
 ) -> tuple[TradeSimulationMetricRow, ...]:
     cfg = config or TradeSimulationConfig()
@@ -263,6 +489,7 @@ def build_trade_simulation_metric_rows(
     )
     trades = tuple(simulation_rows)
     random_entry_trades = tuple(random_entry_time_control_rows)
+    matched_market_trades = tuple(matched_market_time_control_rows)
     metrics: list[TradeSimulationMetricRow] = []
 
     def add(
@@ -303,17 +530,21 @@ def build_trade_simulation_metric_rows(
         "research rows across declared execution variants; not positions in one deployable portfolio",
     )
 
-    variants = sorted({_simulation_variant(row) for row in (*trades, *random_entry_trades)})
+    variants = sorted({_simulation_variant(row) for row in (*trades, *random_entry_trades, *matched_market_trades)})
     if not variants:
         empty_note = "no simulatable execution variant rows; zero-valued negative control for an empty run"
         add("always_no_trade_baseline_net_pnl", 0.0, len(decisions), empty_note)
         add("random_entry_time_control_rows", 0, len(decisions), empty_note)
         add("random_entry_time_control_total_net_pnl", 0.0, 0, empty_note)
+        add("matched_market_time_control_rows", 0, len(decisions), empty_note)
+        add("matched_market_time_control_total_net_pnl", 0.0, 0, empty_note)
         add("delta_vs_always_no_trade_net_pnl", 0.0, 0, empty_note)
         add("delta_vs_random_entry_time_net_pnl", 0.0, 0, empty_note)
+        add("delta_vs_matched_market_time_net_pnl", 0.0, 0, empty_note)
     for variant in variants:
         scoped_trades = tuple(row for row in trades if _simulation_variant(row) == variant)
         scoped_random = tuple(row for row in random_entry_trades if _simulation_variant(row) == variant)
+        scoped_matched_market = tuple(row for row in matched_market_trades if _simulation_variant(row) == variant)
         stop_policy_id, target_policy_id, _ = variant
         scoped_decisions = tuple(
             row
@@ -322,6 +553,7 @@ def build_trade_simulation_metric_rows(
         )
         total_net_pnl = sum(row.net_pnl for row in scoped_trades)
         random_entry_total_net_pnl = sum(row.net_pnl for row in scoped_random)
+        matched_market_total_net_pnl = sum(row.net_pnl for row in scoped_matched_market)
         add("simulated_trade_rows", len(scoped_trades), len(scoped_trades), "executed rows for this one structural execution variant", variant=variant)
         add(
             "non_trade_decision_rows",
@@ -333,8 +565,29 @@ def build_trade_simulation_metric_rows(
         add("always_no_trade_baseline_net_pnl", 0.0, len(scoped_decisions), "always no-trade baseline for this variant", variant=variant)
         add("random_entry_time_control_rows", len(scoped_random), len(scoped_decisions), "deterministic random-time control for this variant", variant=variant)
         add("random_entry_time_control_total_net_pnl", random_entry_total_net_pnl, len(scoped_random), "random-time control net PnL for this variant", variant=variant)
+        add(
+            "matched_market_time_control_rows",
+            len(scoped_matched_market),
+            len(scoped_decisions),
+            "bounded same-symbol/session/volatility random market-time control rows for this variant",
+            variant=variant,
+        )
+        add(
+            "matched_market_time_control_total_net_pnl",
+            matched_market_total_net_pnl,
+            len(scoped_matched_market),
+            "matched market-time control net PnL for this variant",
+            variant=variant,
+        )
         add("delta_vs_always_no_trade_net_pnl", total_net_pnl, len(scoped_trades), "variant net PnL minus no-trade baseline", variant=variant)
         add("delta_vs_random_entry_time_net_pnl", total_net_pnl - random_entry_total_net_pnl, len(scoped_trades), "variant net PnL minus its matched random-time control", variant=variant)
+        add(
+            "delta_vs_matched_market_time_net_pnl",
+            total_net_pnl - matched_market_total_net_pnl,
+            len(scoped_trades),
+            "variant net PnL minus its bounded same-symbol/session/volatility market-time control",
+            variant=variant,
+        )
         if scoped_trades:
             add("win_rate", _mean(1.0 if row.net_pnl > 0.0 else 0.0 for row in scoped_trades), len(scoped_trades), "share of positive rows for this variant", variant=variant)
             add("mean_net_pnl", _mean(row.net_pnl for row in scoped_trades), len(scoped_trades), "mean net PnL in price units for this variant", variant=variant)

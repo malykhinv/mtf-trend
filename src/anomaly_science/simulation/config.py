@@ -17,6 +17,11 @@ class TradeSimulationConfig:
     cost_model: str = ROUND_TRIP_COST_MODEL
     toxic_entry_atr_1m_fraction: float = 0.2
     random_seed: int = 1729
+    matched_market_time_control_enabled: bool = True
+    matched_market_time_lookback_minutes: int = 30
+    matched_market_time_session_minutes: int = 360
+    matched_market_time_volatility_buckets: int = 5
+    max_matched_market_time_candidates_per_decision: int = 32
 
     def __post_init__(self) -> None:
         if not self.simulation_version:
@@ -35,3 +40,11 @@ class TradeSimulationConfig:
             raise ValueError("toxic_entry_atr_1m_fraction must be non-negative")
         if self.random_seed < 0:
             raise ValueError("random_seed must be non-negative")
+        if self.matched_market_time_lookback_minutes <= 0:
+            raise ValueError("matched_market_time_lookback_minutes must be positive")
+        if self.matched_market_time_session_minutes <= 0:
+            raise ValueError("matched_market_time_session_minutes must be positive")
+        if self.matched_market_time_volatility_buckets <= 0:
+            raise ValueError("matched_market_time_volatility_buckets must be positive")
+        if self.max_matched_market_time_candidates_per_decision <= 0:
+            raise ValueError("max_matched_market_time_candidates_per_decision must be positive")

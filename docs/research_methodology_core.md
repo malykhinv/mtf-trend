@@ -1116,7 +1116,8 @@ Core обязан запускать controls/placebo, применимые к �
 random labels
 time-shuffled labels
 symbol-shuffled labels
-random entry times
+signal-time shuffled entry controls
+matched same-symbol/session/volatility random market-time entry controls
 session-only baseline
 BTC/ETH-only baseline
 volume-only baseline
@@ -1126,6 +1127,25 @@ simple strategy-specific heuristic baselines
 ```
 
 Если сложная модель не лучше простых baselines OOS, она не имеет исследовательской ценности.
+
+`random entry times` не является одним универсальным control. Core обязан различать:
+
+```text
+signal-time shuffle:
+  перестановка уже выбранных strategy signal times; проверяет часть timing edge,
+  но всё ещё conditioned on signal/anomaly universe.
+
+matched market-time random:
+  bounded случайные минуты из самого market stream, matching по symbol/session/volatility bucket;
+  нужен для claims о selection edge против похожих рыночных условий.
+```
+
+Запрещено:
+
+```text
+выдавать выигрыш только против signal-time shuffle за доказательство полной selection alpha
+строить random market-time через full cross join всего рынка, если bounded deterministic sampling даёт тот же protocol question дешевле
+```
 
 Если модель работает на placebo labels, pipeline протекает или overfits.
 

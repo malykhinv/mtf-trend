@@ -3,6 +3,8 @@ from __future__ import annotations
 from anomaly_science.simulation.builder import (
     TradeSimulationArtifactError,
     TradeSimulationInputError,
+    build_matched_market_time_control_from_source,
+    build_matched_market_time_control_rows,
     build_random_entry_time_control_from_source,
     build_random_entry_time_control_rows,
     build_trade_simulation_from_source,
@@ -19,6 +21,8 @@ __all__ = [
     "TradeSimulationArtifactError",
     "TradeSimulationConfig",
     "TradeSimulationInputError",
+    "build_matched_market_time_control_from_source",
+    "build_matched_market_time_control_rows",
     "build_random_entry_time_control_from_source",
     "build_random_entry_time_control_rows",
     "build_trade_simulation_from_source",

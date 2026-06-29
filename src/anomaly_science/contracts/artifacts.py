@@ -576,7 +576,7 @@ MVP1_ARTIFACT_SCHEMAS: dict[str, ArtifactSchema] = {
             "row_count",
             "notes",
         ),
-        description="Diagnostics scoped by declared structural execution variant; variant PnLs are never pooled as one portfolio.",
+        description="Diagnostics scoped by declared structural execution variant, including always-no-trade, signal-time shuffle, and bounded matched market-time controls; variant PnLs are never pooled as one portfolio.",
     ),
 
 

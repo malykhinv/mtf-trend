@@ -1518,3 +1518,19 @@ Validation in this environment:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `python -m pytest tests/test_artifact_schemas.py::test_mvp1_artifact_schemas_are_fixed -q`
 - Full archetype pytest collection still needs the project venv because this sandbox lacks `polars`.
+
+## controls: add matched random market-time baselines
+
+Status: PROPOSED.
+
+Changes:
+- Adds a bounded same-symbol/session/volatility random market-time control to trade simulation metrics.
+- Keeps the existing signal-time shuffle control separate instead of treating all random entries as one baseline.
+- Samples market-time controls from the candle stream with deterministic bounded candidate pools, avoiding a full cross join over all symbols and minutes.
+- Records matched-market-time control counts, total net PnL, and delta-vs-control metrics per declared structural execution variant.
+- Updates forensic required simulation-control metrics, methodology docs, and regression tests.
+
+Validation in this environment:
+- `git apply --check` against the Patch 1-6 working tree.
+- `python -m compileall -q main.py src tests zip_project.py`
+- Focused pytest still needs the project venv if runtime dependencies are absent.
