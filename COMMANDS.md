@@ -1,5 +1,26 @@
 # Commands
 
+## Reproducible local environment
+
+Install the test environment from the repository root:
+
+```bash
+python -m pip install -r requirements/test.txt
+python scripts/check_environment.py --scope test
+python -m compileall -q main.py src tests zip_project.py
+python -m pytest -q
+```
+
+For developer checks, install the dev entrypoint:
+
+```bash
+python -m pip install -r requirements/dev.txt
+python scripts/check_environment.py --scope dev
+python -m ruff check src tests main.py zip_project.py
+```
+
+`constraints/research-minimums.txt` is a direct-dependency constraints input, not a solved transitive lockfile. Exact lock generation is environment-specific and must be committed separately from research-logic patches.
+
 The current strategy source of truth is `docs/pump_fade_archetype_protocol.md`.
 This command list is operational reference only; it must not define or override
 strategy semantics. Fixed-horizon MVP1 commands below are compatibility/debug

@@ -15,6 +15,15 @@ dependencies = [
   "tqdm>=4.66",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
