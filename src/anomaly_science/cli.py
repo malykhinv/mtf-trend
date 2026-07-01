@@ -542,6 +542,8 @@ def build_parser() -> argparse.ArgumentParser:
     aggtrades_backfill.add_argument("--connect-timeout", type=float, default=8.0, help="Per-request connect timeout in seconds.")
     aggtrades_backfill.add_argument("--lookback-minutes", type=int, default=240, help="Causal pre-ignition lookback minutes to include when deriving required days.")
     aggtrades_backfill.add_argument("--refresh", action="store_true", help="Re-download days already marked completed or missing in the manifest.")
+    aggtrades_backfill.add_argument("--network-pause-seconds", type=float, default=30.0, help="Initial pause after a request exhausts its internal retries (network outage), before trying again. Doubles on each further outage, capped by --network-pause-max-seconds. No day is ever marked failed for this — it just waits.")
+    aggtrades_backfill.add_argument("--network-pause-max-seconds", type=float, default=300.0, help="Cap for the exponential network-outage pause.")
 
     export_cache = subparsers.add_parser(
         "export-cache-mvp1-csv",
@@ -1364,6 +1366,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 connect_timeout_seconds=args.connect_timeout,
                 lookback_minutes=args.lookback_minutes,
                 refresh=args.refresh,
+                network_pause_seconds=args.network_pause_seconds,
+                network_pause_max_seconds=args.network_pause_max_seconds,
             )
         )
         total_bytes = sum(item.bytes_downloaded for item in stats)

@@ -49,6 +49,8 @@ class AggTradesBackfillConfig:
     lookback_minutes: int = 240
     compression: str = "zstd"
     refresh: bool = False
+    network_pause_seconds: float = 30.0
+    network_pause_max_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         if not 1 <= self.symbol_workers <= 8:
@@ -61,6 +63,10 @@ class AggTradesBackfillConfig:
             raise ValueError("lookback_minutes must be positive")
         if self.max_symbols is not None and self.max_symbols <= 0:
             raise ValueError("max_symbols must be positive when provided")
+        if self.network_pause_seconds <= 0:
+            raise ValueError("network_pause_seconds must be positive")
+        if self.network_pause_max_seconds < self.network_pause_seconds:
+            raise ValueError("network_pause_max_seconds must be >= network_pause_seconds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +181,28 @@ class _AggTradesDownloadPool:
         return downloaded
 
     def _download_one(self, url: str) -> bytes | None:
-        return download_optional_bytes(url, self._request_config, session=self._session())
+        """Fetch one archive, pausing (not failing) through network outages.
+
+        `download_optional_bytes` already retries `config.retries` times internally
+        and returns None cleanly for a genuine HTTP 404 (day/symbol never existed).
+        It only raises once those internal retries are exhausted, which in practice
+        means the network itself is down rather than one flaky request. Treat that
+        as "pause and keep trying" rather than "give up and record a failed day" —
+        a permanent failure here would leave a hole that looks identical to a real
+        404 in the manifest.
+        """
+
+        pause = self._config.network_pause_seconds
+        while True:
+            try:
+                return download_optional_bytes(url, self._request_config, session=self._session())
+            except RuntimeError as exc:
+                print(
+                    f"[network] {url} unreachable after retries, pausing {pause:.0f}s before trying again: {exc}",
+                    flush=True,
+                )
+                time.sleep(pause)
+                pause = min(pause * 2.0, self._config.network_pause_max_seconds)
 
     def _session(self) -> requests.Session:
         session = getattr(self._local, "session", None)
@@ -207,30 +234,59 @@ def backfill_pump_fade_aggtrades(config: AggTradesBackfillConfig) -> tuple[Symbo
     config.sidecar_dir.mkdir(parents=True, exist_ok=True)
     manifest = _read_manifest(config.sidecar_dir)
     results: list[SymbolBackfillStats] = []
+    pending_by_symbol: dict[str, list[date]] = {}
+    for symbol in symbols:
+        required_days = sorted(day_map[symbol])
+        pending_by_symbol[symbol] = _pending_days(
+            symbol=symbol, required_days=required_days, manifest=manifest, refresh=config.refresh
+        )
+    total_pending_days = sum(len(days) for days in pending_by_symbol.values())
+    days_done = 0
+    start_time = time.monotonic()
     with ProcessPoolExecutor(max_workers=config.symbol_workers) as executor:
-        futures = {}
-        for symbol in symbols:
-            required_days = sorted(day_map[symbol])
-            pending_days = _pending_days(symbol=symbol, required_days=required_days, manifest=manifest, refresh=config.refresh)
-            future = executor.submit(
+        futures = {
+            executor.submit(
                 _backfill_one_symbol_worker,
                 symbol=symbol,
-                required_days=required_days,
-                pending_days=pending_days,
+                required_days=sorted(day_map[symbol]),
+                pending_days=pending_by_symbol[symbol],
                 config=config,
-            )
-            futures[future] = symbol
+            ): symbol
+            for symbol in symbols
+        }
         for completed, future in enumerate(as_completed(futures), start=1):
             symbol, day_status, stats = future.result()
             manifest[symbol] = {**manifest.get(symbol, {}), **day_status}
             results.append(stats)
+            days_done += stats.downloaded_days + stats.missing_days + stats.failed_days
+            eta = _format_eta(days_done=days_done, total_days=total_pending_days, elapsed_seconds=time.monotonic() - start_time)
             print(
                 f"aggTrades backfill [{completed}/{len(symbols)}] {symbol} — "
-                f"{stats.downloaded_days} downloaded, {stats.missing_days} missing, {stats.failed_days} failed",
+                f"{stats.downloaded_days} downloaded, {stats.missing_days} missing, {stats.failed_days} failed "
+                f"({days_done}/{total_pending_days} days, ETA {eta})",
                 flush=True,
             )
             _write_manifest(config.sidecar_dir, manifest)
     return tuple(results)
+
+
+def _format_eta(*, days_done: int, total_days: int, elapsed_seconds: float) -> str:
+    remaining_days = total_days - days_done
+    if days_done <= 0 or remaining_days <= 0:
+        return "0s" if remaining_days <= 0 else "unknown"
+    rate_days_per_second = days_done / max(elapsed_seconds, 1e-9)
+    return _format_duration(remaining_days / rate_days_per_second)
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = int(max(seconds, 0.0))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 def _pending_days(*, symbol: str, required_days: list[date], manifest: dict, refresh: bool) -> list[date]:
