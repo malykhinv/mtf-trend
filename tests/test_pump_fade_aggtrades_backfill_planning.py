@@ -5,6 +5,7 @@ import pandas as pd
 import anomaly_science.binance_vision_aggtrades_backfill as aggtrades_backfill
 from anomaly_science.binance_vision_aggtrades_backfill import (
     AggTradesBackfillConfig,
+    _console_safe,
     _format_duration,
     _format_eta,
     required_symbol_days,
@@ -65,6 +66,15 @@ def test_format_eta_projects_remaining_time_from_observed_rate() -> None:
 def test_format_eta_is_unknown_before_any_progress_and_zero_when_finished() -> None:
     assert _format_eta(days_done=0, total_days=20, elapsed_seconds=5.0) == "unknown"
     assert _format_eta(days_done=20, total_days=20, elapsed_seconds=5.0) == "0s"
+
+
+def test_console_safe_survives_cjk_ticker_under_cp1252() -> None:
+    # Real meme perpetuals carry CJK tickers (e.g. lobster-USDT); progress lines
+    # must stay printable when stdout is a cp1252-encoded redirected file.
+    safe = _console_safe("aggTrades backfill [693/693] 龙虾USDT - done")
+    assert safe.isascii()
+    # Encoding under the Windows locale codec must not raise anymore.
+    safe.encode("cp1252")
 
 
 def test_download_one_pauses_through_a_network_outage_instead_of_failing(monkeypatch) -> None:

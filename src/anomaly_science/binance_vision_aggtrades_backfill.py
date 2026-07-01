@@ -198,7 +198,8 @@ class _AggTradesDownloadPool:
                 return download_optional_bytes(url, self._request_config, session=self._session())
             except RuntimeError as exc:
                 print(
-                    f"[network] {url} unreachable after retries, pausing {pause:.0f}s before trying again: {exc}",
+                    f"[network] {_console_safe(url)} unreachable after retries, "
+                    f"pausing {pause:.0f}s before trying again: {_console_safe(str(exc))}",
                     flush=True,
                 )
                 time.sleep(pause)
@@ -261,7 +262,7 @@ def backfill_pump_fade_aggtrades(config: AggTradesBackfillConfig) -> tuple[Symbo
             days_done += stats.downloaded_days + stats.missing_days + stats.failed_days
             eta = _format_eta(days_done=days_done, total_days=total_pending_days, elapsed_seconds=time.monotonic() - start_time)
             print(
-                f"aggTrades backfill [{completed}/{len(symbols)}] {symbol} — "
+                f"aggTrades backfill [{completed}/{len(symbols)}] {_console_safe(symbol)} - "
                 f"{stats.downloaded_days} downloaded, {stats.missing_days} missing, {stats.failed_days} failed "
                 f"({days_done}/{total_pending_days} days, ETA {eta})",
                 flush=True,
@@ -287,6 +288,19 @@ def _format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m{secs:02d}s"
     return f"{secs}s"
+
+
+def _console_safe(text: str) -> str:
+    """Keep progress identity printable regardless of the Windows console codec.
+
+    A handful of meme perpetuals carry CJK characters in their ticker (e.g.
+    龙虾USDT). When stdout is redirected to a file, Python encodes with the
+    locale codec (cp1252 on Windows), which cannot represent those glyphs, so a
+    naive print of the symbol raises UnicodeEncodeError and kills the run. Mirror
+    the OI backfill's `_console_safe_symbol` and degrade to an ASCII escape.
+    """
+
+    return text.encode("ascii", errors="backslashreplace").decode("ascii")
 
 
 def _pending_days(*, symbol: str, required_days: list[date], manifest: dict, refresh: bool) -> list[date]:
