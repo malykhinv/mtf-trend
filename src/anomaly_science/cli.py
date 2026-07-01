@@ -535,7 +535,8 @@ def build_parser() -> argparse.ArgumentParser:
     aggtrades_backfill.add_argument("--events-source", default="", help="Decisions parquet used to derive required (symbol, day) pairs. Empty uses the canonical pump-fade decisions file.")
     aggtrades_backfill.add_argument("--symbols", default="", help="Optional comma-separated symbols. Empty means all symbols with events in --events-source.")
     aggtrades_backfill.add_argument("--max-symbols", type=int, default=None, help="Optional cap for pilot runs.")
-    aggtrades_backfill.add_argument("--workers", type=int, default=4, help="Concurrent daily aggTrades downloads; valid range: 1..16. Files are ~10MB each, keep modest.")
+    aggtrades_backfill.add_argument("--symbol-workers", type=int, default=4, help="Concurrent symbol processes (ProcessPoolExecutor); valid range: 1..8. Parsing/aggregation is CPU-bound, so this is where real speedup comes from.")
+    aggtrades_backfill.add_argument("--workers", type=int, default=3, help="Concurrent daily aggTrades downloads per symbol process; valid range: 1..16. Total concurrent downloads is roughly symbol-workers * workers.")
     aggtrades_backfill.add_argument("--retries", type=int, default=5, help="Retries per network request.")
     aggtrades_backfill.add_argument("--timeout", type=float, default=45.0, help="Per-request read timeout in seconds.")
     aggtrades_backfill.add_argument("--connect-timeout", type=float, default=8.0, help="Per-request connect timeout in seconds.")
@@ -1356,6 +1357,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 events_source=events_source,
                 symbols=symbols,
                 max_symbols=args.max_symbols,
+                symbol_workers=args.symbol_workers,
                 workers=args.workers,
                 retries=args.retries,
                 timeout_seconds=args.timeout,

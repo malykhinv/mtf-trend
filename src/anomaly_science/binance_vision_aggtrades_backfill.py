@@ -6,7 +6,7 @@ import os
 import threading
 import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -22,7 +22,6 @@ from anomaly_science.binance_vision_cache import (
     csv_has_header,
     download_optional_bytes,
     first_csv_from_zip,
-    normalize_output_arrow_table,
     replace_metadata_file,
 )
 from anomaly_science.strategy.pump_fade.aggtrades_minute import (
@@ -42,7 +41,8 @@ class AggTradesBackfillConfig:
     events_source: Path = DEFAULT_EVENTS_SOURCE
     symbols: tuple[str, ...] = ()
     max_symbols: int | None = None
-    workers: int = 4
+    symbol_workers: int = 4
+    workers: int = 3
     retries: int = 5
     timeout_seconds: float = 45.0
     connect_timeout_seconds: float = 8.0
@@ -51,6 +51,8 @@ class AggTradesBackfillConfig:
     refresh: bool = False
 
     def __post_init__(self) -> None:
+        if not 1 <= self.symbol_workers <= 8:
+            raise ValueError("symbol_workers must be between 1 and 8")
         if not 1 <= self.workers <= 16:
             raise ValueError("workers must be between 1 and 16")
         if self.retries < 0:
@@ -205,13 +207,28 @@ def backfill_pump_fade_aggtrades(config: AggTradesBackfillConfig) -> tuple[Symbo
     config.sidecar_dir.mkdir(parents=True, exist_ok=True)
     manifest = _read_manifest(config.sidecar_dir)
     results: list[SymbolBackfillStats] = []
-    with _AggTradesDownloadPool(config) as pool:
-        for index, symbol in enumerate(symbols, start=1):
+    with ProcessPoolExecutor(max_workers=config.symbol_workers) as executor:
+        futures = {}
+        for symbol in symbols:
             required_days = sorted(day_map[symbol])
-            print(f"aggTrades backfill [{index}/{len(symbols)}] {symbol} — {len(required_days)} day(s)", flush=True)
             pending_days = _pending_days(symbol=symbol, required_days=required_days, manifest=manifest, refresh=config.refresh)
-            stats = _backfill_symbol(symbol=symbol, required_days=required_days, pending_days=pending_days, config=config, pool=pool, manifest=manifest)
+            future = executor.submit(
+                _backfill_one_symbol_worker,
+                symbol=symbol,
+                required_days=required_days,
+                pending_days=pending_days,
+                config=config,
+            )
+            futures[future] = symbol
+        for completed, future in enumerate(as_completed(futures), start=1):
+            symbol, day_status, stats = future.result()
+            manifest[symbol] = {**manifest.get(symbol, {}), **day_status}
             results.append(stats)
+            print(
+                f"aggTrades backfill [{completed}/{len(symbols)}] {symbol} — "
+                f"{stats.downloaded_days} downloaded, {stats.missing_days} missing, {stats.failed_days} failed",
+                flush=True,
+            )
             _write_manifest(config.sidecar_dir, manifest)
     return tuple(results)
 
@@ -223,6 +240,28 @@ def _pending_days(*, symbol: str, required_days: list[date], manifest: dict, ref
     return [day for day in required_days if completed.get(day.isoformat()) not in ("completed", "missing_404")]
 
 
+def _backfill_one_symbol_worker(
+    *,
+    symbol: str,
+    required_days: list[date],
+    pending_days: list[date],
+    config: AggTradesBackfillConfig,
+) -> tuple[str, dict[str, str], SymbolBackfillStats]:
+    """Top-level, picklable entry point run inside a ProcessPoolExecutor worker."""
+
+    day_status: dict[str, str] = {}
+    with _AggTradesDownloadPool(config) as pool:
+        stats = _backfill_symbol(
+            symbol=symbol,
+            required_days=required_days,
+            pending_days=pending_days,
+            config=config,
+            pool=pool,
+            day_status=day_status,
+        )
+    return symbol, day_status, stats
+
+
 def _backfill_symbol(
     *,
     symbol: str,
@@ -230,12 +269,11 @@ def _backfill_symbol(
     pending_days: list[date],
     config: AggTradesBackfillConfig,
     pool: _AggTradesDownloadPool,
-    manifest: dict,
+    day_status: dict[str, str],
 ) -> SymbolBackfillStats:
     import pyarrow.parquet as pq
 
     start_time = time.monotonic()
-    symbol_status = manifest.setdefault(symbol, {})
     downloaded_days = 0
     missing_days = 0
     failed_days = 0
@@ -247,7 +285,7 @@ def _backfill_symbol(
         for day, payload in sorted(payloads.items()):
             if payload is None:
                 missing_days += 1
-                symbol_status[day.isoformat()] = "missing_404"
+                day_status[day.isoformat()] = "missing_404"
                 continue
             try:
                 bytes_downloaded += len(payload)
@@ -260,10 +298,10 @@ def _backfill_symbol(
                 )
                 minute_frames.append(minute_frame)
                 downloaded_days += 1
-                symbol_status[day.isoformat()] = "completed"
+                day_status[day.isoformat()] = "completed"
             except (zipfile.BadZipFile, ValueError, KeyError) as exc:
                 failed_days += 1
-                symbol_status[day.isoformat()] = f"failed:{exc}"
+                day_status[day.isoformat()] = f"failed:{exc}"
 
     output_path = config.sidecar_dir / f"{symbol}.parquet"
     if minute_frames:
@@ -276,7 +314,7 @@ def _backfill_symbol(
         try:
             import pyarrow as pa
 
-            table = normalize_output_arrow_table(pa.Table.from_pandas(combined, preserve_index=False))
+            table = pa.Table.from_pandas(combined, preserve_index=False)
             pq.write_table(table, tmp_path, compression=config.compression, use_dictionary=True, write_statistics=True)
             replace_metadata_file(tmp_path, output_path, label=f"aggTrades minute sidecar for {symbol}")
         finally:
