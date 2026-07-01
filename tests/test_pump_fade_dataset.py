@@ -151,6 +151,9 @@ def test_builder_emits_only_new_high_decisions_with_closed_bar_snapshot(tmp_path
     assert "retail_frenzy_proxy" in result.columns
     assert row["cvd_schema_version"] == "pump_fade_cvd_path_v1"
     assert row["path_dynamics_schema_version"] == "pump_fade_path_dynamics_v1"
+    assert row["aggtrades_dynamics_schema_version"] == "pump_fade_aggtrades_dynamics_v1"
+    assert row["aggtrades_available"] == 0.0
+    assert pd.isna(row["event_mean_notional_gini"])
     assert "event_return_sign_entropy" in result.columns
     assert "recent_red_fraction_3m" in result.columns
     assert "high_extension_decay_ratio" in result.columns
@@ -159,6 +162,40 @@ def test_builder_emits_only_new_high_decisions_with_closed_bar_snapshot(tmp_path
     assert "oi_change_60m" in result.columns
     assert pd.isna(row["price_up_oi_up_60m"])
     assert pd.isna(row["price_down_oi_down_60m"])
+
+
+def test_builder_picks_up_aggtrades_sidecar_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "TEST.parquet"
+    _write_market(path)
+    sidecar_dir = tmp_path / "aggtrades_sidecar"
+    sidecar_dir.mkdir()
+    from anomaly_science.strategy.pump_fade.aggtrades_minute import (
+        PUMP_FADE_AGGTRADES_MINUTE_FEATURES,
+    )
+
+    # Ignition is index 15 (t=900_000ms); event runs through index 17 (t=1_020_000ms).
+    minute_timestamps = [15 * 60_000, 16 * 60_000, 17 * 60_000]
+    rows = []
+    for timestamp in minute_timestamps:
+        row = {name: 0.0 for name in PUMP_FADE_AGGTRADES_MINUTE_FEATURES}
+        row["timestamp"] = timestamp
+        row["notional_gini"] = 0.42
+        row["aggtrades_trade_count"] = 25.0
+        rows.append(row)
+    pd.DataFrame(rows).to_parquet(sidecar_dir / "TEST.parquet", index=False)
+
+    import anomaly_science.strategy.pump_fade.builder as builder_module
+
+    monkeypatch.setattr(builder_module, "_default_aggtrades_sidecar_dir", lambda: sidecar_dir)
+
+    result = build_pump_fade_symbol(path, config=_config())
+
+    assert len(result) == 1
+    row = result.iloc[0]
+    assert row["aggtrades_available"] == 1.0
+    assert row["event_mean_notional_gini"] == pytest.approx(0.42)
 
 
 def test_online_states_and_offline_labels_have_disjoint_lifecycles(

@@ -28,6 +28,22 @@ from anomaly_science.strategy.pump_fade.path_dynamics import (
     PUMP_FADE_PATH_DYNAMICS_SCHEMA_VERSION,
     build_path_dynamics_features,
 )
+from anomaly_science.strategy.pump_fade.aggtrades_dynamics import (
+    PUMP_FADE_AGGTRADES_DYNAMICS_SCHEMA_VERSION,
+    build_aggtrades_dynamics_features,
+)
+
+_AGGTRADES_MINUTE_COLUMNS: tuple[str, ...] = (
+    "trade_notional_p90",
+    "notional_gini",
+    "same_side_run_mean",
+    "side_sign_entropy",
+    "side_flip_rate",
+    "inter_arrival_ms_mean",
+    "buy_impact_per_notional",
+    "sell_impact_per_notional",
+    "aggtrades_trade_count",
+)
 
 
 PUMP_FADE_LABEL_SCHEMA_VERSION = "pump_fade_close_race_horizon_free_v1"
@@ -440,6 +456,36 @@ def _load_symbol(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
     }
 
 
+def _default_aggtrades_sidecar_dir() -> Path:
+    from anomaly_science.binance_vision_aggtrades_backfill import DEFAULT_AGGTRADES_SIDECAR_DIR
+
+    return DEFAULT_AGGTRADES_SIDECAR_DIR
+
+
+def _load_aggtrades_minute_arrays(
+    *, symbol: str, timestamps: np.ndarray, sidecar_dir: Path | None
+) -> dict[str, np.ndarray]:
+    """Load event-scoped aggTrades minute features aligned onto `timestamps`.
+
+    Most symbols have no sidecar yet (only event-touched days are backfilled),
+    so absence must produce an all-NaN alignment rather than raise.
+    """
+
+    empty = {name: np.full(len(timestamps), np.nan) for name in _AGGTRADES_MINUTE_COLUMNS}
+    if sidecar_dir is None:
+        return empty
+    sidecar_path = sidecar_dir / f"{symbol}.parquet"
+    if not sidecar_path.exists():
+        return empty
+    sidecar = pd.read_parquet(sidecar_path, columns=["timestamp", *_AGGTRADES_MINUTE_COLUMNS])
+    aligned = (
+        pd.DataFrame({"timestamp": timestamps})
+        .merge(sidecar, on="timestamp", how="left")
+        .sort_values("timestamp")
+    )
+    return {name: aligned[name].to_numpy(dtype=float) for name in _AGGTRADES_MINUTE_COLUMNS}
+
+
 def _finalize_pump_fade_labels(
     online_states: pd.DataFrame,
     *,
@@ -588,6 +634,9 @@ def _build_pump_fade_symbol_result(
         frame["open_interest"].to_numpy(dtype=float)
         if "open_interest" in frame
         else np.full(len(frame), np.nan)
+    )
+    aggtrades_minute = _load_aggtrades_minute_arrays(
+        symbol=symbol, timestamps=timestamps, sidecar_dir=_default_aggtrades_sidecar_dir()
     )
     previous_close = np.concatenate(([close[0]], close[:-1]))
     true_range = np.maximum.reduce(
@@ -879,6 +928,22 @@ def _build_pump_fade_symbol_result(
                 pre_low=low[pre_path_start:ignition_index],
                 pre_close=close[pre_path_start:ignition_index],
             )
+            aggtrades_dynamics = build_aggtrades_dynamics_features(
+                event_trade_notional_p90=aggtrades_minute["trade_notional_p90"][ignition_index : absolute_index + 1],
+                event_notional_gini=aggtrades_minute["notional_gini"][ignition_index : absolute_index + 1],
+                event_same_side_run_mean=aggtrades_minute["same_side_run_mean"][ignition_index : absolute_index + 1],
+                event_side_sign_entropy=aggtrades_minute["side_sign_entropy"][ignition_index : absolute_index + 1],
+                event_side_flip_rate=aggtrades_minute["side_flip_rate"][ignition_index : absolute_index + 1],
+                event_inter_arrival_ms_mean=aggtrades_minute["inter_arrival_ms_mean"][ignition_index : absolute_index + 1],
+                event_buy_impact_per_notional=aggtrades_minute["buy_impact_per_notional"][ignition_index : absolute_index + 1],
+                event_sell_impact_per_notional=aggtrades_minute["sell_impact_per_notional"][ignition_index : absolute_index + 1],
+                event_aggtrades_trade_count=aggtrades_minute["aggtrades_trade_count"][ignition_index : absolute_index + 1],
+                pre_trade_notional_p90=aggtrades_minute["trade_notional_p90"][pre_path_start:ignition_index],
+                pre_side_sign_entropy=aggtrades_minute["side_sign_entropy"][pre_path_start:ignition_index],
+                pre_inter_arrival_ms_mean=aggtrades_minute["inter_arrival_ms_mean"][pre_path_start:ignition_index],
+                pre_buy_impact_per_notional=aggtrades_minute["buy_impact_per_notional"][pre_path_start:ignition_index],
+                pre_sell_impact_per_notional=aggtrades_minute["sell_impact_per_notional"][pre_path_start:ignition_index],
+            )
             cvd_features = build_pump_fade_cvd_features(
                 quote_volume=event_quote,
                 taker_buy_quote_volume=event_taker,
@@ -972,6 +1037,7 @@ def _build_pump_fade_symbol_result(
                     "event_memory_schema_version": PUMP_FADE_EVENT_MEMORY_SCHEMA_VERSION,
                     "cvd_schema_version": PUMP_FADE_CVD_SCHEMA_VERSION,
                     "path_dynamics_schema_version": PUMP_FADE_PATH_DYNAMICS_SCHEMA_VERSION,
+                    "aggtrades_dynamics_schema_version": PUMP_FADE_AGGTRADES_DYNAMICS_SCHEMA_VERSION,
                     "symbol": symbol,
                     "decision_index": new_high_index,
                     "ignition_time_ms": ignition_time_ms,
@@ -1096,6 +1162,7 @@ def _build_pump_fade_symbol_result(
                     ),
                     "candles_since_red": float(candles_since_red[relative_index]),
                     **path_dynamics,
+                    **aggtrades_dynamics,
                     **event_memory,
                     "pre_return_15m": return_15m,
                     "pre_return_60m": return_60m,

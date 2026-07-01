@@ -527,6 +527,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     oi_backfill.add_argument("--refresh", action="store_true", help="Re-download symbols with an intact completion proof.")
 
+    aggtrades_backfill = subparsers.add_parser(
+        "backfill-pump-fade-aggtrades",
+        help="Backfill event-scoped Binance Vision USD-M aggTrades minute features for pump-fade symbols.",
+    )
+    aggtrades_backfill.add_argument("--sidecar-dir", default="", help="Output directory for {symbol}.parquet minute sidecars. Empty uses the canonical event-scoped cache.")
+    aggtrades_backfill.add_argument("--events-source", default="", help="Decisions parquet used to derive required (symbol, day) pairs. Empty uses the canonical pump-fade decisions file.")
+    aggtrades_backfill.add_argument("--symbols", default="", help="Optional comma-separated symbols. Empty means all symbols with events in --events-source.")
+    aggtrades_backfill.add_argument("--max-symbols", type=int, default=None, help="Optional cap for pilot runs.")
+    aggtrades_backfill.add_argument("--workers", type=int, default=4, help="Concurrent daily aggTrades downloads; valid range: 1..16. Files are ~10MB each, keep modest.")
+    aggtrades_backfill.add_argument("--retries", type=int, default=5, help="Retries per network request.")
+    aggtrades_backfill.add_argument("--timeout", type=float, default=45.0, help="Per-request read timeout in seconds.")
+    aggtrades_backfill.add_argument("--connect-timeout", type=float, default=8.0, help="Per-request connect timeout in seconds.")
+    aggtrades_backfill.add_argument("--lookback-minutes", type=int, default=240, help="Causal pre-ignition lookback minutes to include when deriving required days.")
+    aggtrades_backfill.add_argument("--refresh", action="store_true", help="Re-download days already marked completed or missing in the manifest.")
+
     export_cache = subparsers.add_parser(
         "export-cache-mvp1-csv",
         help="Export Binance Vision enriched parquet cache into the explicit MVP1 CSV data boundary.",
@@ -1321,6 +1336,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             "binance vision OI backfill done: "
             f"symbols={len(stats)}, archive_days={sum(item.archive_days for item in stats)}, "
             f"oi_rows={sum(item.oi_rows_after for item in stats)}, out={cache_dir}"
+        )
+        return 0
+
+    if args.command == "backfill-pump-fade-aggtrades":
+        from anomaly_science.binance_vision_aggtrades_backfill import (
+            DEFAULT_AGGTRADES_SIDECAR_DIR,
+            DEFAULT_EVENTS_SOURCE,
+            AggTradesBackfillConfig,
+            backfill_pump_fade_aggtrades,
+        )
+
+        sidecar_dir = Path(args.sidecar_dir) if args.sidecar_dir else DEFAULT_AGGTRADES_SIDECAR_DIR
+        events_source = Path(args.events_source) if args.events_source else DEFAULT_EVENTS_SOURCE
+        symbols = tuple(symbol.strip().upper() for symbol in args.symbols.split(",") if symbol.strip())
+        stats = backfill_pump_fade_aggtrades(
+            AggTradesBackfillConfig(
+                sidecar_dir=sidecar_dir,
+                events_source=events_source,
+                symbols=symbols,
+                max_symbols=args.max_symbols,
+                workers=args.workers,
+                retries=args.retries,
+                timeout_seconds=args.timeout,
+                connect_timeout_seconds=args.connect_timeout,
+                lookback_minutes=args.lookback_minutes,
+                refresh=args.refresh,
+            )
+        )
+        total_bytes = sum(item.bytes_downloaded for item in stats)
+        print(
+            "pump-fade aggTrades backfill done: "
+            f"symbols={len(stats)}, downloaded_days={sum(item.downloaded_days for item in stats)}, "
+            f"missing_days={sum(item.missing_days for item in stats)}, failed_days={sum(item.failed_days for item in stats)}, "
+            f"bytes_downloaded={total_bytes}, minute_rows={sum(item.minute_rows for item in stats)}, out={sidecar_dir}"
         )
         return 0
 
