@@ -19,9 +19,9 @@
   "population_minimum_column": "remaining_to_base",
   "population_minimum_value": 0.03,
   "required_label_schema_column": "nature_label_schema_version",
-  "required_label_schema_value": "pump_fade_event_peak_close_race_v1",
+  "required_label_schema_value": "pump_fade_event_peak_close_race_v2",
   "required_input_schema_column": "online_state_schema_version",
-  "required_input_schema_value": "pump_fade_online_state_v3",
+  "required_input_schema_value": "pump_fade_online_state_v4",
   "label_only_columns": [
     "label_available",
     "label_schema_version",
