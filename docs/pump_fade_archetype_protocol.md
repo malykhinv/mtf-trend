@@ -12,8 +12,8 @@ Canonical identity:
 strategy_name = pump_fade_close_race_v1
 strategy_family = pump_fade
 strategy_contract_version = horizon_free_event_strategy_v1
-feature_schema_version = pump_fade_market_mechanics_v4
-nature_label_schema_version = pump_fade_event_peak_close_race_v1
+feature_schema_version = pump_fade_market_mechanics_v5
+nature_label_schema_version = pump_fade_event_peak_close_race_v2
 decision_label_schema_version = pump_fade_close_race_horizon_free_v1
 live_trading_strategy = false
 ```
@@ -108,7 +108,7 @@ any other full-period value.
 The lifecycle boundary is materialized, not implicit:
 
 ```text
-<out>.parquet             online states only; schema pump_fade_online_state_v3
+<out>.parquet             online states only; schema pump_fade_online_state_v4
 <out>.labels.parquet      offline outcomes, censoring, event peak, and event end
 <out>.supervised.parquet  audited one-to-one research join on immutable row keys
 ```
@@ -142,7 +142,7 @@ is censored for nature research because its peak was already missed online. If
 neither barrier resolves before the next data gap or end of data, the nature
 label is censored.
 
-The nature schema is `pump_fade_event_peak_close_race_v1`. Nature discovery
+The nature schema is `pump_fade_event_peak_close_race_v2`. Nature discovery
 selects only `is_nature_anchor=true`, so every event contributes at most one
 row and one label.
 

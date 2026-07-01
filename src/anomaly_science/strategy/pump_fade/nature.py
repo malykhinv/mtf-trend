@@ -29,6 +29,7 @@ _REQUIRED_COLUMNS = frozenset(
         "label_available",
         "y",
         "anchor_high",
+        "ignition_time_ms",
     }
 )
 
@@ -82,6 +83,35 @@ def build_pump_fade_nature_rows(decisions: pd.DataFrame) -> pd.DataFrame:
         first["snapshot_time_ms"].to_numpy(dtype=np.int64)
         == first["event_peak_time_ms"].to_numpy(dtype=np.int64)
     )
+    pump_duration = (
+        first["event_peak_time_ms"].to_numpy(dtype=np.int64)
+        - first["ignition_time_ms"].to_numpy(dtype=np.int64)
+    ) / 60_000.0 + 1.0
+    post_peak_duration = (
+        first["nature_resolution_time_ms"].astype("Float64")
+        - first["event_peak_time_ms"].astype("Float64")
+    ) / 60_000.0
+    faded = valid & first["nature_y"].eq(1)
+    fade_duration = post_peak_duration.where(faded)
+    total_duration = (pump_duration + fade_duration).where(faded)
+    duration_asymmetry = (
+        (pump_duration - fade_duration) / total_duration
+    ).where(faded)
+    first["pump_duration_min"] = pump_duration
+    first["post_peak_resolution_duration_min"] = post_peak_duration.where(valid)
+    first["fade_duration_min"] = fade_duration
+    first["total_pump_fade_duration_min"] = total_duration
+    first["pump_to_fade_duration_ratio"] = (
+        pump_duration / fade_duration
+    ).where(faded)
+    first["duration_asymmetry"] = duration_asymmetry
+    first["duration_asymmetry_log_weighted"] = (
+        duration_asymmetry * np.log1p(total_duration)
+    ).where(faded)
+    if np.any(pump_duration <= 0.0):
+        raise PumpFadeBuildError("pump duration must be positive")
+    if np.any(post_peak_duration.loc[valid].to_numpy(dtype=float) <= 0.0):
+        raise PumpFadeBuildError("post-peak resolution duration must be positive")
     available = first["nature_label_available"].to_numpy(dtype=bool)
     if np.any(
         first.loc[available, "nature_future_start_time_ms"].to_numpy(dtype=np.int64)

@@ -76,6 +76,11 @@ from anomaly_science.strategy.pump_fade.phenotypes import (
     PUMP_FADE_BROAD_PHENOTYPE_SURFACE_VERSION,
     load_pump_fade_phenotype_config,
 )
+from anomaly_science.strategy.pump_fade.path_dynamics import (
+    PUMP_FADE_PATH_DYNAMICS_FEATURES,
+    PUMP_FADE_PATH_DYNAMICS_SCHEMA_VERSION,
+    build_path_dynamics_features,
+)
 from anomaly_science.strategy.pump_fade.state_lattice import (
     PUMP_FADE_STATE_LATTICE_ORDINALS,
     PUMP_FADE_STATE_LATTICE_SCHEMA_VERSION,
@@ -101,6 +106,8 @@ __all__ = [
     "PUMP_FADE_EVENT_MEMORY_MODEL_FEATURES",
     "PUMP_FADE_CVD_MODEL_FEATURES",
     "PUMP_FADE_CVD_SCHEMA_VERSION",
+    "PUMP_FADE_PATH_DYNAMICS_FEATURES",
+    "PUMP_FADE_PATH_DYNAMICS_SCHEMA_VERSION",
     "PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION",
     "PUMP_FADE_ONLINE_STATE_SCHEMA_VERSION",
     "PUMP_FADE_REFERENCE_MARKET_CONTEXT",
@@ -120,6 +127,7 @@ __all__ = [
     "build_pump_fade_decisions",
     "build_event_memory_features",
     "build_pump_fade_cvd_features",
+    "build_path_dynamics_features",
     "build_pump_fade_decisions_with_quality",
     "build_pump_fade_datasets_with_quality",
     "build_pump_fade_online_symbol",

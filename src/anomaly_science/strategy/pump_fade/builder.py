@@ -24,11 +24,15 @@ from anomaly_science.strategy.pump_fade.event_memory import (
     build_event_memory_features,
     recurrence_chain_id,
 )
+from anomaly_science.strategy.pump_fade.path_dynamics import (
+    PUMP_FADE_PATH_DYNAMICS_SCHEMA_VERSION,
+    build_path_dynamics_features,
+)
 
 
 PUMP_FADE_LABEL_SCHEMA_VERSION = "pump_fade_close_race_horizon_free_v1"
-PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION = "pump_fade_event_peak_close_race_v1"
-PUMP_FADE_ONLINE_STATE_SCHEMA_VERSION = "pump_fade_online_state_v3"
+PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION = "pump_fade_event_peak_close_race_v2"
+PUMP_FADE_ONLINE_STATE_SCHEMA_VERSION = "pump_fade_online_state_v4"
 
 
 _SUPERVISED_JOIN_COLUMNS = (
@@ -784,6 +788,7 @@ def _build_pump_fade_symbol_result(
         previous_new_high_value: float | None = None
         pullbacks_between_highs: list[float] = []
         minutes_between_highs: list[int] = []
+        extensions_between_highs: list[float] = []
         for relative_index, anchor_high in enumerate(running_high):
             absolute_index = ignition_index + relative_index
             is_new_high = bool(high[absolute_index] > previous_running_high)
@@ -802,6 +807,10 @@ def _build_pump_fade_symbol_result(
                     max(previous_new_high_value - valley, 0.0) / max(previous_new_high_value, 1e-12)
                 )
                 minutes_between_highs.append(relative_index - previous_new_high_relative)
+                extensions_between_highs.append(
+                    max(float(anchor_high) - previous_new_high_value, 0.0)
+                    / max(previous_new_high_value, 1e-12)
+                )
             previous_new_high_relative = relative_index
             previous_new_high_value = float(anchor_high)
             new_high_index += 1
@@ -854,6 +863,22 @@ def _build_pump_fade_symbol_result(
             event_quote = quote_volume[ignition_index : absolute_index + 1]
             event_trades = trades[ignition_index : absolute_index + 1]
             event_taker = taker_buy_quote[ignition_index : absolute_index + 1]
+            pre_path_start = max(
+                int(block_starts[ignition_index]), ignition_index - 240
+            )
+            path_dynamics = build_path_dynamics_features(
+                event_open=open_[ignition_index : absolute_index + 1],
+                event_high=high[ignition_index : absolute_index + 1],
+                event_low=low[ignition_index : absolute_index + 1],
+                event_close=close[ignition_index : absolute_index + 1],
+                event_quote_volume=event_quote,
+                event_trade_count=event_trades,
+                event_taker_buy_quote=event_taker,
+                pre_open=open_[pre_path_start:ignition_index],
+                pre_high=high[pre_path_start:ignition_index],
+                pre_low=low[pre_path_start:ignition_index],
+                pre_close=close[pre_path_start:ignition_index],
+            )
             cvd_features = build_pump_fade_cvd_features(
                 quote_volume=event_quote,
                 taker_buy_quote_volume=event_taker,
@@ -946,6 +971,7 @@ def _build_pump_fade_symbol_result(
                     "recurrence_chain_id": chain_id,
                     "event_memory_schema_version": PUMP_FADE_EVENT_MEMORY_SCHEMA_VERSION,
                     "cvd_schema_version": PUMP_FADE_CVD_SCHEMA_VERSION,
+                    "path_dynamics_schema_version": PUMP_FADE_PATH_DYNAMICS_SCHEMA_VERSION,
                     "symbol": symbol,
                     "decision_index": new_high_index,
                     "ignition_time_ms": ignition_time_ms,
@@ -977,6 +1003,23 @@ def _build_pump_fade_symbol_result(
                     "max_pullback_between_highs": float(np.max(pullbacks_between_highs)) if pullbacks_between_highs else 0.0,
                     "mean_minutes_between_highs": float(np.mean(minutes_between_highs)) if minutes_between_highs else 0.0,
                     "rehigh_count": len(pullbacks_between_highs),
+                    "latest_high_extension": (
+                        extensions_between_highs[-1]
+                        if extensions_between_highs
+                        else size_so_far
+                    ),
+                    "high_extension_decay_ratio": (
+                        extensions_between_highs[-1]
+                        / max(float(np.mean(extensions_between_highs[:-1])), 1e-12)
+                        if len(extensions_between_highs) > 1
+                        else 1.0
+                    ),
+                    "high_interval_change_ratio": (
+                        minutes_between_highs[-1]
+                        / max(float(np.mean(minutes_between_highs[:-1])), 1e-12)
+                        if len(minutes_between_highs) > 1
+                        else 1.0
+                    ),
                     "current_upper_wick_fraction": float(upper_wick[relative_index]),
                     "current_lower_wick_fraction": float(lower_wick[relative_index]),
                     "current_body_fraction": float(body_fraction[relative_index]),
@@ -1052,6 +1095,7 @@ def _build_pump_fade_symbol_result(
                         - _window_mean(candle_range, relative_index, 3)
                     ),
                     "candles_since_red": float(candles_since_red[relative_index]),
+                    **path_dynamics,
                     **event_memory,
                     "pre_return_15m": return_15m,
                     "pre_return_60m": return_60m,

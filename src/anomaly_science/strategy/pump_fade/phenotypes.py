@@ -22,7 +22,7 @@ from anomaly_science.strategy.pump_fade.market_context import (
 from anomaly_science.strategy.pump_fade.spec import PUMP_FADE_DATASET_FEATURES
 
 
-PUMP_FADE_BROAD_PHENOTYPE_SURFACE_VERSION = "pump_fade_broad_phenotype_surface_v1"
+PUMP_FADE_BROAD_PHENOTYPE_SURFACE_VERSION = "pump_fade_broad_phenotype_surface_v2"
 
 
 def _unique(values: tuple[str, ...]) -> tuple[str, ...]:

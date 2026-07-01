@@ -11,9 +11,12 @@ from anomaly_science.strategy.pump_fade.event_memory import (
     PUMP_FADE_EVENT_MEMORY_FEATURES,
     PUMP_FADE_EVENT_MEMORY_FLAGS,
 )
+from anomaly_science.strategy.pump_fade.path_dynamics import (
+    PUMP_FADE_PATH_DYNAMICS_FEATURES,
+)
 
 
-PUMP_FADE_FEATURE_SCHEMA_VERSION = "pump_fade_market_mechanics_v4"
+PUMP_FADE_FEATURE_SCHEMA_VERSION = "pump_fade_market_mechanics_v5"
 PUMP_FADE_STRATEGY_CONTRACT_VERSION = "horizon_free_event_strategy_v1"
 
 
@@ -88,6 +91,12 @@ _PUMP_FADE_DATASET_FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
     ),
     "resolved_event_memory": PUMP_FADE_EVENT_MEMORY_FEATURES,
     "cvd_path": PUMP_FADE_CVD_MODEL_FEATURES,
+    "path_dynamics": (
+        *PUMP_FADE_PATH_DYNAMICS_FEATURES,
+        "latest_high_extension",
+        "high_extension_decay_ratio",
+        "high_interval_change_ratio",
+    ),
     "preconditioning_and_regime": (
         "pre_return_15m", "pre_return_60m", "pre_return_240m", "pre_return_1440m",
         "pre_dump_depth_60m", "pre_dump_depth_240m", "price_vs_ema_60",

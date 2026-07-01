@@ -150,6 +150,10 @@ def test_builder_emits_only_new_high_decisions_with_closed_bar_snapshot(tmp_path
     assert 0.0 < row["event_path_efficiency"] <= 1.0
     assert "retail_frenzy_proxy" in result.columns
     assert row["cvd_schema_version"] == "pump_fade_cvd_path_v1"
+    assert row["path_dynamics_schema_version"] == "pump_fade_path_dynamics_v1"
+    assert "event_return_sign_entropy" in result.columns
+    assert "recent_red_fraction_3m" in result.columns
+    assert "high_extension_decay_ratio" in result.columns
     assert bool(row["cvd_available"])
     assert "cvd_drawdown_from_peak" in result.columns
     assert "oi_change_60m" in result.columns
@@ -319,6 +323,34 @@ def test_nature_projection_uses_first_features_and_final_new_high_label(
         == decisions.iloc[-1]["future_start_time_ms"]
     )
     assert nature.iloc[0]["event_peak_time_ms"] == decisions.iloc[-1]["snapshot_time_ms"]
+    assert nature.iloc[0]["pump_duration_min"] == 2.0
+    assert pd.isna(nature.iloc[0]["fade_duration_min"])
+
+
+def test_nature_projection_emits_label_only_fade_duration_geometry(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "TEST.parquet"
+    _write_market(path)
+    decisions = build_pump_fade_symbol(
+        path, config=replace(_config(), minimum_pump_size=0.01)
+    )
+    last_index = decisions.index[-1]
+    decisions.loc[last_index, "y"] = 1
+    decisions.loc[last_index, "resolution_time_ms"] = 20 * 60_000
+    decisions.loc[last_index, "label_available"] = True
+
+    nature = build_pump_fade_nature_rows(decisions)
+    row = nature.iloc[0]
+
+    assert row["pump_duration_min"] == 2.0
+    assert row["fade_duration_min"] == 3.0
+    assert row["total_pump_fade_duration_min"] == 5.0
+    assert row["pump_to_fade_duration_ratio"] == pytest.approx(2.0 / 3.0)
+    assert row["duration_asymmetry"] == pytest.approx(-0.2)
+    assert row["duration_asymmetry_log_weighted"] == pytest.approx(
+        -0.2 * np.log1p(5.0)
+    )
 
 
 def test_state_lattice_uses_only_registered_causal_event_ordinals(tmp_path: Path) -> None:
