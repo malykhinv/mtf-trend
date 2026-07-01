@@ -9,10 +9,15 @@ import pandas as pd
 import pytest
 
 from anomaly_science.strategy.pump_fade.builder import (
+    PUMP_FADE_ONLINE_STATE_SCHEMA_VERSION,
     _BarrierIndex,
+    _block_rolling_median,
+    _contiguous_block_ends,
+    _contiguous_block_starts,
     _race,
     PumpFadeBuildError,
     build_pump_fade_decisions_with_quality,
+    build_pump_fade_online_symbol,
     build_pump_fade_symbol,
     build_pump_fade_symbol_result,
     resolve_pump_fade_cache_universe,
@@ -27,6 +32,10 @@ from anomaly_science.strategy.pump_fade.nature import (
     run_pump_fade_nature_projection,
 )
 from anomaly_science.strategy.pump_fade.spec import PUMP_FADE_STRATEGY
+from anomaly_science.strategy.pump_fade.state_lattice import (
+    PUMP_FADE_STATE_LATTICE_ORDINALS,
+    build_pump_fade_state_lattice_rows,
+)
 
 
 def _config() -> PumpFadeDecisionConfig:
@@ -140,7 +149,86 @@ def test_builder_emits_only_new_high_decisions_with_closed_bar_snapshot(tmp_path
     assert row["max_1m_close_return"] == pytest.approx(105.5 / 102.0 - 1.0)
     assert 0.0 < row["event_path_efficiency"] <= 1.0
     assert "retail_frenzy_proxy" in result.columns
+    assert row["cvd_schema_version"] == "pump_fade_cvd_path_v1"
+    assert bool(row["cvd_available"])
+    assert "cvd_drawdown_from_peak" in result.columns
     assert "oi_change_60m" in result.columns
+    assert pd.isna(row["price_up_oi_up_60m"])
+    assert pd.isna(row["price_down_oi_down_60m"])
+
+
+def test_online_states_and_offline_labels_have_disjoint_lifecycles(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "TEST.parquet"
+    _write_market(path)
+
+    result = build_pump_fade_symbol_result(path, config=_config())
+
+    assert set(
+        (
+            "y",
+            "label_available",
+            "resolution_time_ms",
+            "event_peak_time_ms",
+            "event_end_time_ms",
+            "nature_y",
+        )
+    ).isdisjoint(result.online_states.columns)
+    assert set(
+        (
+            "y",
+            "label_available",
+            "resolution_time_ms",
+            "event_peak_time_ms",
+            "event_end_time_ms",
+            "nature_y",
+        )
+    ) <= set(result.labels.columns)
+    assert set(result.online_states["online_state_schema_version"]) == {
+        PUMP_FADE_ONLINE_STATE_SCHEMA_VERSION
+    }
+    pd.testing.assert_frame_equal(result.decisions, build_pump_fade_symbol(path, config=_config()))
+
+
+def test_online_prefix_is_invariant_to_future_tail_while_labels_can_change(
+    tmp_path: Path,
+) -> None:
+    original_path = tmp_path / "ORIGINAL.parquet"
+    changed_path = tmp_path / "CHANGED.parquet"
+    _write_market(original_path)
+    changed = pd.read_parquet(original_path)
+    changed.loc[22, ["open", "high", "low", "close"]] = [
+        100.2,
+        100.3,
+        99.8,
+        99.9,
+    ]
+    changed.to_parquet(changed_path, index=False)
+
+    cutoff_ms = 17 * 60_000
+    original = build_pump_fade_symbol_result(
+        original_path, symbol="TEST", config=_config()
+    )
+    changed_result = build_pump_fade_symbol_result(
+        changed_path, symbol="TEST", config=_config()
+    )
+    original_prefix = original.online_states.loc[
+        original.online_states["snapshot_time_ms"] <= cutoff_ms
+    ].reset_index(drop=True)
+    changed_prefix = changed_result.online_states.loc[
+        changed_result.online_states["snapshot_time_ms"] <= cutoff_ms
+    ].reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(original_prefix, changed_prefix)
+    assert original.labels.iloc[0]["y"] == 0
+    assert changed_result.labels.iloc[0]["y"] == 1
+    pd.testing.assert_frame_equal(
+        original_prefix,
+        build_pump_fade_online_symbol(
+            original_path, symbol="TEST", config=_config()
+        ),
+    )
 
 
 def test_early_causal_qualification_is_not_removed_by_final_period_atr(tmp_path: Path) -> None:
@@ -172,6 +260,44 @@ def test_close_race_has_no_fixed_1440_minute_horizon() -> None:
     assert resolution == 1_500
 
 
+def test_vectorized_barrier_tree_matches_naive_search() -> None:
+    rng = np.random.default_rng(31)
+    values = rng.normal(size=257)
+    barriers = _BarrierIndex(values)
+
+    for _ in range(100):
+        start = int(rng.integers(0, len(values) - 1))
+        stop = int(rng.integers(start + 1, len(values) + 1))
+        threshold = float(rng.normal())
+        below = np.flatnonzero(values[start:stop] <= threshold)
+        above = np.flatnonzero(values[start:stop] > threshold)
+        expected_below = None if not len(below) else start + int(below[0])
+        expected_above = None if not len(above) else start + int(above[0])
+        expected_last_above = None if not len(above) else start + int(above[-1])
+
+        assert barriers.first_close_at_or_below(start, stop, threshold) == expected_below
+        assert barriers.first_close_above(start, stop, threshold) == expected_above
+        assert barriers.last_value_above(start, stop, threshold) == expected_last_above
+
+
+def test_vectorized_contiguous_boundaries_and_rolling_median_match_reference() -> None:
+    timestamps = np.asarray([0, 60, 120, 300, 360, 420], dtype=np.int64) * 1_000
+    values = np.asarray([1.0, 4.0, 2.0, 8.0, np.nan, 6.0])
+
+    assert _contiguous_block_starts(timestamps, 60_000).tolist() == [0, 0, 0, 3, 3, 3]
+    assert _contiguous_block_ends(timestamps, 60_000).tolist() == [2, 2, 2, 5, 5, 5]
+    observed = _block_rolling_median(
+        values,
+        timestamps,
+        window=2,
+        min_periods=1,
+        interval_ms=60_000,
+        exclude_current=True,
+    )
+    expected = np.asarray([np.nan, 1.0, 2.5, np.nan, 8.0, 8.0])
+    np.testing.assert_array_equal(observed, expected)
+
+
 def test_nature_projection_uses_first_features_and_final_new_high_label(
     tmp_path: Path,
 ) -> None:
@@ -193,6 +319,21 @@ def test_nature_projection_uses_first_features_and_final_new_high_label(
         == decisions.iloc[-1]["future_start_time_ms"]
     )
     assert nature.iloc[0]["event_peak_time_ms"] == decisions.iloc[-1]["snapshot_time_ms"]
+
+
+def test_state_lattice_uses_only_registered_causal_event_ordinals(tmp_path: Path) -> None:
+    path = tmp_path / "TEST.parquet"
+    _write_market(path)
+    supervised = build_pump_fade_symbol(
+        path, config=replace(_config(), minimum_pump_size=0.01)
+    )
+
+    lattice = build_pump_fade_state_lattice_rows(supervised)
+
+    assert set(lattice["state_ordinal"]) <= set(PUMP_FADE_STATE_LATTICE_ORDINALS)
+    assert lattice["is_registered_state_lattice"].all()
+    assert (lattice["feature_cutoff_time_ms"] <= lattice["snapshot_time_ms"]).all()
+    assert (lattice["future_start_time_ms"] > lattice["snapshot_time_ms"]).all()
 
 
 def test_nature_projection_run_writes_reproducible_artifacts(tmp_path: Path) -> None:
@@ -320,6 +461,30 @@ def test_dataset_run_writes_data_quality_artifact(tmp_path: Path) -> None:
     assert metadata["oi_covered_row_fraction"] == 0.0
     assert metadata["max_inflight_symbols"] == 2
     assert metadata["worker_scheduling_contract"] == "bounded_inflight_symbol_pool_v1"
+    assert metadata["lifecycle_contract"] == "online_states_and_offline_labels_separate_v1"
+    online = pd.read_parquet(output)
+    labels = pd.read_parquet(tmp_path / "decisions.labels.parquet")
+    supervised = pd.read_parquet(tmp_path / "decisions.supervised.parquet")
+    assert "y" not in online
+    assert "y" in labels
+    assert "y" in supervised
+    strategy_quality = pd.read_csv(tmp_path / "strategy_data_quality.csv")
+    missingness = pd.read_csv(tmp_path / "feature_missingness_report.csv")
+    rejection_summary = pd.read_csv(tmp_path / "dataset_rejection_summary.csv")
+    assert strategy_quality.loc[0, "strategy_name"] == "pump_fade_close_race_v1"
+    oi_state = missingness.loc[
+        missingness["feature_name"] == "price_up_oi_up_60m"
+    ].iloc[0]
+    assert oi_state["missing_fraction"] == 1.0
+    assert oi_state["availability_flag"] == "oi_available"
+    assert oi_state["status"] == "MISSING_OPTIONAL"
+    prior_memory = missingness.loc[
+        missingness["feature_name"] == "prior_1_current_vs_peak"
+    ].iloc[0]
+    assert prior_memory["availability_flag"] == "has_prior_1_resolved"
+    assert prior_memory["status"] == "MISSING_OPTIONAL"
+    assert rejection_summary.iloc[-1]["check_name"] == "run_valid"
+    assert rejection_summary.iloc[-1]["status"] == "PASS"
 
 
 def test_parallel_symbol_builder_is_deterministic(tmp_path: Path) -> None:
@@ -406,6 +571,9 @@ def test_dataset_run_fails_closed_when_dropped_rows_exceed_policy(tmp_path: Path
     assert not output.exists()
     quality = pd.read_csv(tmp_path / "decisions.data_quality.csv")
     assert quality.loc[0, "dropped_row_count"] == 1
+    rejection_summary = pd.read_csv(tmp_path / "dataset_rejection_summary.csv")
+    assert rejection_summary.iloc[-1]["check_name"] == "run_valid"
+    assert rejection_summary.iloc[-1]["status"] == "FAIL"
 
 
 def test_dataset_builder_rejects_empty_cache(tmp_path: Path) -> None:

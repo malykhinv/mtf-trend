@@ -1,5 +1,33 @@
 # Patch log
 
+## prediction: add horizon-free binary weekly walk-forward core
+
+Status: APPLIED_IN_CURRENT_TREE; FULL_DATA_DEVELOPMENT_RUN_COMPLETE_NEGATIVE.
+
+Changes:
+- Adds a generic typed binary probability Core with strict causal input validation.
+- Uses actual offline label resolution (`resolution_time < weekly freeze`) instead of a fixed-horizon purge for horizon-free targets.
+- Uses chronological event-group-exclusive 60/20/20 fit, validation, and isotonic-calibration splits; test-week groups are excluded from train.
+- Freezes one CatBoost model and one isotonic calibrator per ISO week, with no intra-week update and no unsupported-split fallback.
+- Writes OOS probabilities, frozen weekly baselines, model/calibrator files, metrics, reliability, Wilson bounds, within-week permutation controls, temporal audits, pre-registered gates, metadata, and manifest.
+- Registers pump-fade t0 features, population, dates, model settings, and twelve gates in `research/pump_fade_t0_probability.json`.
+
+Validation:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `PYTHONPATH=src pytest -q`: 347 passed in 270.08s after archived positioning ingestion/as-of additions.
+- `git diff --check`: passed (line-ending conversion warnings only).
+
+Runtime/science follow-up:
+- Vectorized segment-tree construction and contiguous-block boundaries, replaced repeated prefix medians with an exact incremental sorted median, and used exact-equal Polars rolling medians for finite blocks.
+- A real full-symbol baseline/optimized comparison was exact for every state/label value and dtype; wall time fell from about 13.0s to 6.8s for that symbol. The 796-symbol full build then completed in 13m56s.
+- Added a registered causal new-high state lattice and separate ordinal probability family with Bonferroni-controlled permutation gates.
+- Added regularized equal-support-bin Beta-shrunk isotonic V2 after direct isotonic V1 exposed unsupported endpoint probabilities.
+- T0 and every state ordinal failed the registered high-probability gates; details are in `EXPERIMENT_LOG.md`.
+- Added a generic exact-population paired OOS comparator with ISO-week block bootstrap, cluster sign-flips, minimum incremental effects, and familywise gates.
+- Ran a strategy-owned nine-feature OI increment on t0/ordinals 1-2. All incremental CI crossed zero and every paired gate family failed; OI is not admitted to the production probability model.
+- Added generic Core BTC/ETH point-in-time context artifacts with exact closed-minute joins and future-tail invariance tests. A 24-feature paired increment on t0/ordinals 1-2 failed all incremental/high-probability families and is not admitted.
+- Added cached daily Binance reference-metrics ingestion with explicit coverage, +5m publication lag, backward as-of positioning joins, and 38 registered log-ratio/change/spread coordinates. All 766 BTC/ETH archives were acquired, but the paired positioning family failed and is excluded.
+
 ## science: harden pump-fade evidence protocol
 
 Status: APPLIED_IN_CURRENT_TREE_AFTER_RUNTIME_COMPLETION.
@@ -1601,3 +1629,191 @@ Validation in this environment:
 - `git apply --check` against the Patch 1-9v3 working tree.
 - `python -m compileall -q main.py src tests zip_project.py`
 - Focused archetype pytest still needs the project venv because this sandbox lacks `polars`.
+
+## science: separate online pump-fade states from offline labels
+
+Status: APPLIED.
+
+Changes:
+- Introduces the immutable `pump_fade_online_state_v1` schema with no future-derived columns.
+- Moves outcomes, censoring, final event peak/end, and nature labels into a separate offline-label table.
+- Writes online, labels, and an audited one-to-one supervised research view as distinct Parquet artifacts.
+- Adds future-tail invariance coverage proving that online prefixes remain unchanged while offline labels may change.
+- Registers all active explicit missingness flags in the typed strategy feature catalog.
+- Closes Phase 0 consistency defects found by the full suite: archetype assignment status, simulation audit registration, active-strategy layout assertions, and strict simulation fixtures.
+
+Validation:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest -q` (`318 passed`)
+
+## science: add registered interaction atlas and causal resolved-event memory
+
+Status: APPLIED_AND_DEVELOPMENT_TESTED.
+
+Changes:
+- Extends generic Core regime inference from single frozen bins to explicitly registered pairs/triples while retaining all single hypotheses.
+- Adds cheap support/effect pruning, a complete `regime_screening.csv`, joint BY-FDR, T0/ordinal 1/ordinal 2 family execution, and Bonferroni correction across those variants.
+- Adds strategy-owned `pump_fade_event_memory_v1` with a strict prior-resolution embargo, relative price structure, bounded three-event slots, aggregate 6h-48h recurrence state, explicit availability flags, and 48h recurrence-chain IDs.
+- Bumps the online schema to `pump_fade_online_state_v2` and fixes `last_prior_size` so an unresolved prior event cannot expose its offline-finalized peak.
+- Adds generic probability `split_group_column` support so recurrent event chains remain isolated across fit, validation, calibration, and weekly OOS boundaries while event IDs remain prediction/weighting groups.
+- Adds paired baseline/event-memory weekly WFA and auditable family artifacts.
+
+Development results:
+- No interaction passed every registered gate. `efficient_path_x_upper_wick` was rejected for insufficient month/symbol support despite a large point effect.
+- Event memory failed incremental paired gates at T0 and degraded ordinals 1-2. No variant emitted calibrated probability at or above 0.70.
+- These are negative/mixed dirty-worktree development results, not pristine evidence or a production admission.
+
+Validation:
+- Full lifecycle rebuild: 157,360 online rows, 39,283 events, 105,624 state rows; temporal and finite-value audits pass.
+- `.venv\Scripts\python.exe -m pytest -q` (`357 passed`).
+- `python -m compileall -q src tests` and `git diff --check` pass.
+
+## science: add event-scoped same-symbol positioning evidence
+
+Status: APPLIED_AND_NEGATIVE_DEVELOPMENT_RESULT.
+
+Changes:
+- Adds generic Core event-scoped Binance positioning acquisition with exact symbol/date scope, bounded concurrency, atomic per-symbol checkpoints, strict resume validation, coverage, metadata, and manifest artifacts.
+- Adds same-symbol backward as-of attachment at both snapshot and ignition with a +5m publication lag, 10m maximum age, fixed 15m/60m changes, ignition-relative changes, and explicit complete-case status.
+- Treats non-positive ratios as invalid log inputs, removes only the affected rows, and records the count rather than rejecting a whole day or silently coercing values.
+- Registers a finite 19-feature pump-fade symbol-positioning family and reuses the generic paired context probability runner for T0 and ordinals 1-2.
+
+Development result:
+- 20,998/20,998 requested symbol-day archives succeeded; 587,091 causal metric rows retained; 1,869 invalid ratio rows audited.
+- Complete-case coverage exceeds 99.6%.
+- Delta AUC: T0 +0.00332, ordinal 1 -0.00045, ordinal 2 +0.00241. All effects failed registered minima/inference gates; no `p>=0.70` rows.
+- Family rejected; post-hoc ratio, lag, stage, and symbol mining forbidden.
+
+## science: add causal pump-fade CVD path evidence
+
+Status: APPLIED_AND_NEGATIVE_DEVELOPMENT_RESULT.
+
+Changes:
+- Adds strategy-owned `pump_fade_cvd_path_v1` from closed event-minute taker-buy
+  quote volume, total quote volume, and close price only.
+- Registers 11 fixed path, acceleration, drawdown, confirmation, efficiency, and
+  price/flow divergence coordinates with explicit source availability.
+- Bumps the online state to `pump_fade_online_state_v3` and feature schema to
+  `pump_fade_market_mechanics_v4`.
+- Reuses the generic paired complete-case probability runner for T0 and state
+  ordinals 1-2; baseline and augmented arms retain identical rows and freezes.
+
+Development result:
+- Lifecycle v3 preserved all 157,360 decision rows, 39,283 events, and labels
+  from v2; CVD source coverage is 100% and full-family coverage is 82.83%.
+- Delta AUC: T0 -0.00099, ordinal 1 -0.00048, ordinal 2 +0.00055. Every
+  interval crossed zero, all paired gates failed, and no `p>=0.70` row existed.
+- Family rejected; post-hoc CVD window, coordinate, and stage mining on this OOS
+  period is forbidden.
+
+Validation:
+- Full lifecycle rebuild: 157,360 online rows and 39,283 events with v2-identical
+  keys and labels; temporal audit passed.
+- 749 lifecycle/experiment manifest entries passed size and SHA-256 checks.
+- `python -m compileall -q main.py src tests` and `git diff --check` pass.
+- `.venv\Scripts\python.exe -m pytest -q` (`370 passed`).
+
+## science: add causal same-symbol perp-crowding evidence
+
+Status: APPLIED_AND_MIXED_DEVELOPMENT_RESULT_NOT_ADMITTED.
+
+Changes:
+- Adds generic Core event-scoped acquisition for official Binance Vision 1m
+  premium-index klines and monthly funding-rate records with atomic symbol
+  checkpoints, exact resume scope, coverage, metadata, and manifests.
+- Adds bounded same-symbol backward as-of joins with premium close availability,
+  conservative funding publication lag, fixed strategy-declared windows, and
+  explicit partial/complete-case flags.
+- Registers a frozen 16-coordinate pump-fade premium/funding family and reuses
+  the paired T0/ordinal 1/ordinal 2 weekly WFA runner.
+
+Development result:
+- 27,218/27,847 archives succeeded, 629 prelisting archives were explicitly
+  missing, failures were zero; complete-case coverage exceeded 93%.
+- T0 delta AUC +0.00934 had positive CI and corrected p=0.004; log-loss and
+  Brier gains passed their incremental gates. Admission still failed because
+  AUC delta missed +0.010, absolute AUC was 0.597, and no `p>=0.70` row existed.
+- The unchanged family is reserved for new forward confirmation; post-hoc
+  premium/funding mining on this OOS period is forbidden.
+
+Validation:
+- Full archive: 693 symbols, 27,847 requested archives, zero hard failures;
+  2,082 archive manifest entries verified.
+- Projection/experiment audit: row identity and temporal joins pass; all 2,775
+  acquisition/projection/experiment manifest entries verified.
+- `python -m compileall -q main.py src tests` and `git diff --check` pass.
+- `.venv\Scripts\python.exe -m pytest -q` (`376 passed`).
+
+## science: add broad cross-fitted phenotype discovery
+
+Status: APPLIED_AND_MIXED_DEVELOPMENT_RESULT_NO_HIGH_PROBABILITY_PHENOTYPE.
+
+Changes:
+- Adds generic Core cross-fitted phenotype discovery with recurrence-chain-safe
+  search/calibration/verification segments and resolution-purged temporal folds.
+- Adds explicit search-fitted numeric imputation plus missing indicators,
+  search-frozen categorical levels, direct CatBoost leaf rules, and interpretable
+  pooled-OOF-risk surrogate rules.
+- Persists every screened leaf, distinct frozen rules, Beta-shrunk calibration
+  probabilities, later verification/BY-FDR, assignments, coverage, 19 complete
+  label-permutation controls, transforms, protocol, and manifest.
+- Registers strategy-owned `pump_fade_broad_phenotype_surface_v1` spanning 288
+  causal mechanics, memory, CVD, OI, reference/symbol positioning, and
+  premium/funding features. Adds CLI progress milestones for future long runs.
+
+Development result:
+- 29,151 leaves -> 917 fold candidates -> 17 distinct recurrent rules.
+- Every one of 19 null searches produced zero frozen rules.
+- Fourteen rules passed later development verification and cover 39.1% of
+  verification events, but frozen probabilities maxed at 0.6759 and none passed
+  the registered 0.70 high-probability gate.
+- The architecture now finds many stable groups; high-probability prediction is
+  still unproven and thresholds/rules may not be retuned on verification.
+
+## science: retain governed phenotype follow-up memory
+
+Status: APPLIED.
+
+Changes:
+- Persists every frozen phenotype in a follow-up registry instead of collapsing
+  research history into pass/discard semantics.
+- Separates unchanged scientific status from forward recalibration, stability,
+  EV, and archival research dispositions.
+- Records failure mode, evidence snapshot, mechanism features, priority, and the
+  next admissible study.
+- Explicitly forbids rule/threshold/gate tuning on the already viewed periods;
+  independent confirmation requires new forward data.
+
+## science: add generic causal coarse-regime atlas
+
+Status: APPLIED.
+
+Changes:
+- Adds a Core-owned frozen-bin regime atlas between descriptive paths and CatBoost search.
+- Keeps pump-fade ownership limited to percentile, ATR-normalized, and time axis declarations.
+- Uses discovery-only threshold fitting and candidate selection, same-symbol/month/activity controls, ISO-week bootstrap with baseline re-estimation, within-stratum label permutations, BY-FDR, and month/symbol stability gates.
+- Writes discovery, stability, controls, frozen-spec, holdout-access, metadata, and manifest artifacts; dirty runs are explicitly non-evidential.
+- Adds strict signal/null/future-tail/config/artifact/CLI tests.
+
+Development diagnostic:
+- Full historical dirty-worktree V3 run: 21,746 discovery rows, 17,520 verification rows, 3 discovery candidates, 1 statistically development-replicated coarse regime.
+- The surviving regime is discovery-frozen `rel_vol_phase` 99+ (`>318.9769`): verification matched fade rate 0.6139 vs 0.4068, delta +0.2071; re-estimated week/month/symbol bootstrap lower bounds are +0.1443/+0.1480/+0.1114; shuffled p=0.001, BY q=0.0055, positive in 5/5 eligible months and 35/44 eligible symbols.
+- Artifact status remains `UNFROZEN_DIRTY_DEVELOPMENT`; this is not calibrated prediction, pristine evidence, EV, or trading proof.
+
+Validation:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest -q` (`327 passed`)
+
+## science: add pump-fade missingness and rejection audit artifacts
+
+Status: APPLIED.
+
+Changes:
+- Writes canonical `strategy_data_quality.csv`, `feature_missingness_report.csv`, and `dataset_rejection_summary.csv` artifacts on every pump-fade dataset build.
+- Records each declared feature's family, missing fraction, stream requirement, availability flag, and explicit status.
+- Preserves diagnostics on fail-closed runs while removing stale production datasets.
+- Encodes unavailable OI positioning states as `NaN` with `oi_available=false`, never as a false/zero market state.
+
+Validation:
+- `python -m compileall -q main.py src tests zip_project.py`
+- `.venv\Scripts\python.exe -m pytest -q` (`318 passed`)

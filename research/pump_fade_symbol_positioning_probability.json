@@ -1,0 +1,38 @@
+{
+  "protocol_freeze_id": "pump-fade-symbol-positioning-probability-development-v1",
+  "t0_base_config_path": "research/pump_fade_t0_probability.json",
+  "state_base_config_path": "research/pump_fade_state_probability.json",
+  "state_ordinals": [1, 2],
+  "context_family": "event_scoped_symbol_positioning_v1",
+  "required_true_columns": [
+    "symbol_positioning_complete"
+  ],
+  "context_features": [
+    "symbol_pos_toptrader_account_log_ratio",
+    "symbol_pos_toptrader_account_log_change_15m",
+    "symbol_pos_toptrader_account_log_change_60m",
+    "symbol_pos_toptrader_account_log_change_since_ignition",
+    "symbol_pos_toptrader_position_log_ratio",
+    "symbol_pos_toptrader_position_log_change_15m",
+    "symbol_pos_toptrader_position_log_change_60m",
+    "symbol_pos_toptrader_position_log_change_since_ignition",
+    "symbol_pos_global_account_log_ratio",
+    "symbol_pos_global_account_log_change_15m",
+    "symbol_pos_global_account_log_change_60m",
+    "symbol_pos_global_account_log_change_since_ignition",
+    "symbol_pos_taker_log_ratio",
+    "symbol_pos_taker_log_change_15m",
+    "symbol_pos_taker_log_change_60m",
+    "symbol_pos_taker_log_change_since_ignition",
+    "symbol_pos_toptrader_account_minus_global",
+    "symbol_pos_toptrader_position_minus_global",
+    "symbol_pos_taker_minus_global"
+  ],
+  "bootstrap_iterations": 1000,
+  "sign_flip_iterations": 999,
+  "familywise_alpha": 0.05,
+  "min_auc_delta": 0.01,
+  "min_log_loss_improvement": 0.002,
+  "min_brier_improvement": 0.001,
+  "random_seed": 20260630
+}

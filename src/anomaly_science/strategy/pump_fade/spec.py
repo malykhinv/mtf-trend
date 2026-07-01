@@ -6,9 +6,14 @@ from typing import Mapping
 from anomaly_science.strategy.base import BaseResearchStrategy, StrategyCustomFeatureSpec
 from anomaly_science.strategy.execution import PUMP_FADE_EXECUTION_POLICIES, StrategyExecutionPolicies
 from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
+from anomaly_science.strategy.pump_fade.cvd import PUMP_FADE_CVD_MODEL_FEATURES
+from anomaly_science.strategy.pump_fade.event_memory import (
+    PUMP_FADE_EVENT_MEMORY_FEATURES,
+    PUMP_FADE_EVENT_MEMORY_FLAGS,
+)
 
 
-PUMP_FADE_FEATURE_SCHEMA_VERSION = "pump_fade_market_mechanics_v2"
+PUMP_FADE_FEATURE_SCHEMA_VERSION = "pump_fade_market_mechanics_v4"
 PUMP_FADE_STRATEGY_CONTRACT_VERSION = "horizon_free_event_strategy_v1"
 
 
@@ -81,6 +86,8 @@ _PUMP_FADE_DATASET_FEATURE_FAMILIES: dict[str, tuple[str, ...]] = {
         "n_prior_24h", "n_prior_48h", "min_since_last_prior", "frac_prior_faded_48h",
         "last_prior_faded", "last_prior_size", "cluster_idx_day", "base_broken_before",
     ),
+    "resolved_event_memory": PUMP_FADE_EVENT_MEMORY_FEATURES,
+    "cvd_path": PUMP_FADE_CVD_MODEL_FEATURES,
     "preconditioning_and_regime": (
         "pre_return_15m", "pre_return_60m", "pre_return_240m", "pre_return_1440m",
         "pre_dump_depth_60m", "pre_dump_depth_240m", "price_vs_ema_60",
@@ -98,6 +105,22 @@ PUMP_FADE_OI_MODEL_FEATURES: tuple[str, ...] = (
     "oi_change_5m", "oi_change_15m", "oi_change_60m", "oi_change_240m",
     "oi_change_since_ignition", "price_up_oi_up_60m", "price_up_oi_down_60m",
     "price_down_oi_up_60m", "price_down_oi_down_60m",
+)
+
+_PUMP_FADE_MISSINGNESS_FLAGS: tuple[str, ...] = (
+    "has_atr_activity_1h_vs_4h",
+    "has_average_trade_notional_baseline",
+    "has_last_resolved_prior",
+    "has_prior_event",
+    "has_prior_higher_price",
+    "has_quote_activity_1h_vs_4h",
+    "has_quote_volume_24h",
+    "has_rel_vol_phase",
+    "has_resolved_prior_48h",
+    "has_taker_buy_quote_data",
+    "has_trade_activity_1h_vs_4h",
+    "cvd_available",
+    *PUMP_FADE_EVENT_MEMORY_FLAGS,
 )
 
 
@@ -146,6 +169,18 @@ def _dataset_feature_catalog() -> tuple[StrategyCustomFeatureSpec, ...]:
             required_streams=("open_interest",),
         )
     )
+    specs.extend(
+        StrategyCustomFeatureSpec(
+            name=name,
+            family="missingness",
+            dtype="bool",
+            description=(
+                f"Explicit point-in-time availability flag `{name}`; paired with "
+                "a NaN-valued causal feature rather than a numeric sentinel."
+            ),
+        )
+        for name in _PUMP_FADE_MISSINGNESS_FLAGS
+    )
     return tuple(specs)
 
 
@@ -185,6 +220,7 @@ __all__ = [
     "PUMP_FADE_STRATEGY",
     "PUMP_FADE_STRATEGY_CONTRACT_VERSION",
     "PUMP_FADE_DATASET_FEATURES",
+    "PUMP_FADE_CVD_MODEL_FEATURES",
     "PUMP_FADE_OI_MODEL_FEATURES",
     "PUMP_MARKET_MECHANICS_FEATURES",
     "PumpFadeStrategyDefinition",

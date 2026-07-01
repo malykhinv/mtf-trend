@@ -1,0 +1,33 @@
+{
+  "protocol_freeze_id": "pump-fade-perp-crowding-probability-development-v1",
+  "t0_base_config_path": "research/pump_fade_t0_probability.json",
+  "state_base_config_path": "research/pump_fade_state_probability.json",
+  "state_ordinals": [1, 2],
+  "context_family": "pump_fade_perp_crowding_v1",
+  "required_true_columns": ["perp_crowding_complete"],
+  "context_features": [
+    "symbol_premium_index",
+    "symbol_premium_change_5m",
+    "symbol_premium_change_15m",
+    "symbol_premium_change_60m",
+    "symbol_premium_mean_15m",
+    "symbol_premium_mean_60m",
+    "symbol_premium_std_60m",
+    "symbol_premium_max_60m",
+    "symbol_premium_zscore_240m",
+    "symbol_premium_change_since_ignition",
+    "symbol_funding_rate",
+    "symbol_funding_rate_change",
+    "symbol_funding_rate_mean_3",
+    "symbol_minutes_since_funding",
+    "symbol_premium_minus_funding_rate",
+    "symbol_premium_positive_funding_positive"
+  ],
+  "bootstrap_iterations": 1000,
+  "sign_flip_iterations": 999,
+  "familywise_alpha": 0.05,
+  "min_auc_delta": 0.01,
+  "min_log_loss_improvement": 0.002,
+  "min_brier_improvement": 0.001,
+  "random_seed": 20260630
+}

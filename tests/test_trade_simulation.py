@@ -164,7 +164,7 @@ def test_barrier_outcomes_record_stop_first_collision_without_changing_simulatio
     assert row.barrier_resolution == "stop_loss_first"
     assert row.stop_hit_time_ms == BASE_MS + ONE_MINUTE_MS
     assert row.target_hit_time_ms == BASE_MS + ONE_MINUTE_MS
-    assert row.net_pnl_before_model == -2.0
+    assert row.net_pnl_before_model == -3.0
     assert row.temporal_contract == BARRIER_OUTCOME_TEMPORAL_CONTRACT
 
 
@@ -177,6 +177,9 @@ def test_barrier_outcomes_skip_unresolved_or_non_actionable_decisions() -> None:
     )
     unresolved = replace(
         _decision("unresolved"),
+        best_action="wait",
+        selected_RR=0.0,
+        selected_RR_acceptable=False,
         execution_policy_resolved=False,
         stop_reference_price=None,
         target_reference_price=None,
@@ -336,16 +339,19 @@ def test_random_entry_time_control_rows_are_deterministic() -> None:
 
 def test_matched_market_time_control_rows_are_bounded_and_deterministic() -> None:
     decision = _decision("matched_market")
-    candles = [
-        _candle(
+
+    def matched_candle(index: int) -> Candle1m:
+        open_price = 100.0 + float(index % 5)
+        close = 100.0 + float((index + 2) % 5)
+        return _candle(
             index,
-            open_price=100.0 + float(index % 5),
-            high=102.0 + float(index % 5),
-            low=98.0 + float(index % 5),
-            close=100.0 + float((index + 2) % 5),
+            open_price=open_price,
+            high=max(open_price, close) + 2.0,
+            low=min(open_price, close) - 2.0,
+            close=close,
         )
-        for index in range(80)
-    ]
+
+    candles = [matched_candle(index) for index in range(80)]
     config = TradeSimulationConfig(
         target_horizon_minutes=30,
         random_seed=11,

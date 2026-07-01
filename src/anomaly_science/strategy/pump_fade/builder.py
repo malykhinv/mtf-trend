@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import insort
 import math
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from collections.abc import Callable, Iterator
@@ -8,15 +9,35 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pyarrow.dataset as ds
 
 from anomaly_science.binance_vision_cache import is_delivery_contract_symbol
 from anomaly_science.strategy.pump_fade.config import PumpFadeDecisionConfig
+from anomaly_science.strategy.pump_fade.cvd import (
+    PUMP_FADE_CVD_SCHEMA_VERSION,
+    build_pump_fade_cvd_features,
+)
+from anomaly_science.strategy.pump_fade.event_memory import (
+    PUMP_FADE_EVENT_MEMORY_SCHEMA_VERSION,
+    PumpEventMemoryRecord,
+    build_event_memory_features,
+    recurrence_chain_id,
+)
 
 
 PUMP_FADE_LABEL_SCHEMA_VERSION = "pump_fade_close_race_horizon_free_v1"
 PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION = "pump_fade_event_peak_close_race_v1"
+PUMP_FADE_ONLINE_STATE_SCHEMA_VERSION = "pump_fade_online_state_v3"
 
+
+_SUPERVISED_JOIN_COLUMNS = (
+    "event_id",
+    "group",
+    "symbol",
+    "snapshot_time_ms",
+    "feature_cutoff_time_ms",
+)
 
 class PumpFadeBuildError(ValueError):
     """Raised when market data cannot produce a causal pump-fade decision dataset."""
@@ -34,12 +55,66 @@ class _EventRecord:
     resolution_index: int | None
     faded: int | None
     size: float
+    memory: PumpEventMemoryRecord
 
 
 @dataclass(frozen=True, slots=True)
 class PumpFadeSymbolBuildResult:
-    decisions: pd.DataFrame
+    online_states: pd.DataFrame
+    labels: pd.DataFrame
     quality: dict[str, object]
+
+    @property
+    def decisions(self) -> pd.DataFrame:
+        """Explicit supervised join retained for research consumers.
+
+        ``online_states`` is the deployable causal surface.  Future-derived
+        columns exist only in ``labels`` and enter this view through this
+        audited one-to-one join.
+        """
+
+        return join_pump_fade_states_and_labels(self.online_states, self.labels)
+
+
+def join_pump_fade_states_and_labels(
+    online_states: pd.DataFrame,
+    labels: pd.DataFrame,
+) -> pd.DataFrame:
+    """Create a supervised research view without weakening the online schema."""
+
+    if online_states.empty:
+        if labels.empty:
+            return pd.DataFrame()
+        raise PumpFadeBuildError("offline labels exist without online states")
+    missing_state_keys = sorted(set(_SUPERVISED_JOIN_COLUMNS) - set(online_states.columns))
+    missing_label_keys = sorted(set(_SUPERVISED_JOIN_COLUMNS) - set(labels.columns))
+    if missing_state_keys or missing_label_keys:
+        raise PumpFadeBuildError(
+            "pump-fade supervised join keys are missing: "
+            f"states={missing_state_keys}; labels={missing_label_keys}"
+        )
+    if online_states[list(_SUPERVISED_JOIN_COLUMNS)].duplicated().any():
+        raise PumpFadeBuildError("online states contain duplicate supervised join keys")
+    if labels[list(_SUPERVISED_JOIN_COLUMNS)].duplicated().any():
+        raise PumpFadeBuildError("offline labels contain duplicate supervised join keys")
+    unknown = labels.merge(
+        online_states[list(_SUPERVISED_JOIN_COLUMNS)],
+        on=list(_SUPERVISED_JOIN_COLUMNS),
+        how="left",
+        indicator=True,
+    )
+    if (unknown["_merge"] != "both").any():
+        raise PumpFadeBuildError("offline labels contain rows absent from online states")
+    joined = online_states.merge(
+        labels,
+        on=list(_SUPERVISED_JOIN_COLUMNS),
+        how="left",
+        validate="one_to_one",
+        sort=False,
+    )
+    if len(joined) != len(online_states):
+        raise PumpFadeBuildError("supervised join changed the online-state row count")
+    return joined
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,9 +149,19 @@ class _BarrierIndex:
         self.maximum = np.full(2 * size, -np.inf, dtype=np.float64)
         self.minimum[size : size + count] = values
         self.maximum[size : size + count] = values
-        for node in range(size - 1, 0, -1):
-            self.minimum[node] = min(self.minimum[2 * node], self.minimum[2 * node + 1])
-            self.maximum[node] = max(self.maximum[2 * node], self.maximum[2 * node + 1])
+        level_start = size // 2
+        while level_start:
+            child_start = level_start * 2
+            child_stop = level_start * 4
+            child_minimum = self.minimum[child_start:child_stop]
+            child_maximum = self.maximum[child_start:child_stop]
+            self.minimum[level_start : level_start * 2] = np.minimum(
+                child_minimum[0::2], child_minimum[1::2]
+            )
+            self.maximum[level_start : level_start * 2] = np.maximum(
+                child_maximum[0::2], child_maximum[1::2]
+            )
+            level_start //= 2
 
     def first_close_at_or_below(self, start: int, stop: int, threshold: float) -> int | None:
         result = self._search(1, 0, self.size, start, stop, threshold, seek_below=True)
@@ -194,7 +279,16 @@ def _block_rolling_median(
 ) -> np.ndarray:
     result = np.full(len(values), np.nan, dtype=float)
     for start, stop in _contiguous_slices(timestamps, interval_ms):
-        rolling = pd.Series(values[start:stop]).rolling(window, min_periods=min_periods).median()
+        block = values[start:stop]
+        if np.isfinite(block).all():
+            rolling_values = (
+                pl.Series(block)
+                .rolling_median(window_size=window, min_samples=min_periods)
+                .to_numpy()
+            )
+            rolling = pd.Series(rolling_values, copy=False)
+        else:
+            rolling = pd.Series(block).rolling(window, min_periods=min_periods).median()
         if exclude_current:
             rolling = rolling.shift(1)
         result[start:stop] = rolling.to_numpy()
@@ -225,23 +319,24 @@ def _block_ema(values: np.ndarray, timestamps: np.ndarray, *, span: int, interva
 
 
 def _contiguous_block_starts(timestamps: np.ndarray, interval_ms: int) -> np.ndarray:
-    starts = np.empty(len(timestamps), dtype=np.int64)
-    block_start = 0
-    for index in range(len(timestamps)):
-        if index == 0 or timestamps[index] - timestamps[index - 1] != interval_ms:
-            block_start = index
-        starts[index] = block_start
-    return starts
+    if len(timestamps) == 0:
+        return np.empty(0, dtype=np.int64)
+    indices = np.arange(len(timestamps), dtype=np.int64)
+    new_block = np.concatenate(
+        (np.asarray([True]), np.diff(timestamps) != interval_ms)
+    )
+    return np.maximum.accumulate(np.where(new_block, indices, 0))
 
 
 def _contiguous_block_ends(timestamps: np.ndarray, interval_ms: int) -> np.ndarray:
-    ends = np.empty(len(timestamps), dtype=np.int64)
-    block_end = len(timestamps) - 1
-    for index in range(len(timestamps) - 1, -1, -1):
-        if index == len(timestamps) - 1 or timestamps[index + 1] - timestamps[index] != interval_ms:
-            block_end = index
-        ends[index] = block_end
-    return ends
+    if len(timestamps) == 0:
+        return np.empty(0, dtype=np.int64)
+    indices = np.arange(len(timestamps), dtype=np.int64)
+    end_block = np.concatenate(
+        (np.diff(timestamps) != interval_ms, np.asarray([True]))
+    )
+    candidates = np.where(end_block, indices, len(timestamps))
+    return np.minimum.accumulate(candidates[::-1])[::-1]
 
 
 def _last_red_lows(open_: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
@@ -341,18 +436,125 @@ def _load_symbol(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
     }
 
 
-def build_pump_fade_symbol_result(
+def _finalize_pump_fade_labels(
+    online_states: pd.DataFrame,
+    *,
+    events: list[_EventRecord],
+    timestamps: np.ndarray,
+    closes: np.ndarray,
+    block_ends: np.ndarray,
+    candle_interval_ms: int,
+) -> pd.DataFrame:
+    """Compute future-derived outcomes after online state emission is complete."""
+
+    if online_states.empty:
+        return pd.DataFrame()
+    event_by_id = {event.event_id: event for event in events}
+    if len(event_by_id) != len(events):
+        raise PumpFadeBuildError("offline finalizer received duplicate event ids")
+    barriers = _BarrierIndex(closes)
+    rows: list[dict[str, object]] = []
+    for state in online_states.to_dict(orient="records"):
+        event_id = str(state["event_id"])
+        event = event_by_id.get(event_id)
+        if event is None:
+            raise PumpFadeBuildError(
+                f"offline finalizer has no lifecycle record for {event_id}"
+            )
+        snapshot_time_ms = int(state["snapshot_time_ms"])
+        observed_open_time_ms = snapshot_time_ms - candle_interval_ms
+        absolute_index = int(np.searchsorted(timestamps, observed_open_time_ms))
+        if (
+            absolute_index >= len(timestamps)
+            or int(timestamps[absolute_index]) != observed_open_time_ms
+        ):
+            raise PumpFadeBuildError(
+                f"offline finalizer cannot locate snapshot candle for {event_id}"
+            )
+        label, resolution_index = _race(
+            barriers,
+            start=absolute_index + 1,
+            stop=int(block_ends[absolute_index]) + 1,
+            base=float(state["base_level"]),
+            anchor_high=float(state["anchor_high"]),
+        )
+        peak_label, peak_resolution_index = _race(
+            barriers,
+            start=event.peak_index + 1,
+            stop=int(block_ends[event.peak_index]) + 1,
+            base=event.base,
+            anchor_high=event.peak,
+        )
+        nature_eligible = event.peak_index >= absolute_index
+        rows.append(
+            {
+                **{column: state[column] for column in _SUPERVISED_JOIN_COLUMNS},
+                "label_schema_version": PUMP_FADE_LABEL_SCHEMA_VERSION,
+                "nature_label_schema_version": PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION,
+                "future_start_time_ms": snapshot_time_ms + candle_interval_ms,
+                "nature_future_start_time_ms": (
+                    pd.NA
+                    if not nature_eligible
+                    else int(timestamps[event.peak_index] + 2 * candle_interval_ms)
+                ),
+                "nature_resolution_time_ms": (
+                    pd.NA
+                    if not nature_eligible or peak_resolution_index is None
+                    else int(
+                        timestamps[peak_resolution_index] + candle_interval_ms
+                    )
+                ),
+                "nature_label_available": (
+                    nature_eligible and peak_resolution_index is not None
+                ),
+                "nature_y": (
+                    pd.NA
+                    if not nature_eligible or peak_resolution_index is None
+                    else int(peak_label)
+                ),
+                "event_peak_time_ms": int(
+                    timestamps[event.peak_index] + candle_interval_ms
+                ),
+                "event_end_time_ms": int(
+                    timestamps[event.end_index] + candle_interval_ms
+                ),
+                "is_event_peak_decision": absolute_index == event.peak_index,
+                "resolution_time_ms": (
+                    pd.NA
+                    if resolution_index is None
+                    else int(timestamps[resolution_index] + candle_interval_ms)
+                ),
+                "label_available": resolution_index is not None,
+                "y": pd.NA if label is None else int(label),
+            }
+        )
+    labels = pd.DataFrame(rows)
+    labels["y"] = labels["y"].astype("Int8")
+    labels["resolution_time_ms"] = labels["resolution_time_ms"].astype("Int64")
+    labels["nature_y"] = labels["nature_y"].astype("Int8")
+    labels["nature_future_start_time_ms"] = labels[
+        "nature_future_start_time_ms"
+    ].astype("Int64")
+    labels["nature_resolution_time_ms"] = labels[
+        "nature_resolution_time_ms"
+    ].astype("Int64")
+    return labels
+
+
+def _build_pump_fade_symbol_result(
     path: Path,
     *,
     symbol: str | None = None,
     config: PumpFadeDecisionConfig | None = None,
+    finalize_labels: bool,
 ) -> PumpFadeSymbolBuildResult:
     config = config or PumpFadeDecisionConfig()
     symbol = symbol or path.stem
     frame, quality_counts = _load_symbol(path)
     if len(frame) < config.baseline_min_periods + 2:
         return PumpFadeSymbolBuildResult(
-            decisions=pd.DataFrame(),
+            online_states=pd.DataFrame(),
+            labels=pd.DataFrame(),
             quality={
                 "symbol": symbol,
                 **quality_counts,
@@ -541,11 +743,17 @@ def build_pump_fade_symbol_result(
             candles_since_red[relative_index] = since_red
 
         qualification_relative: int | None = None
+        sorted_true_ranges: list[float] = []
         for relative_index in range(len(running_high)):
-            running_atr_multiple = (
-                float(np.median(true_range[ignition_index : ignition_index + relative_index + 1]))
-                / baseline_atr_value
-            )
+            insort(sorted_true_ranges, float(true_range[ignition_index + relative_index]))
+            middle = len(sorted_true_ranges) // 2
+            if len(sorted_true_ranges) % 2:
+                running_median = sorted_true_ranges[middle]
+            else:
+                running_median = (
+                    sorted_true_ranges[middle - 1] + sorted_true_ranges[middle]
+                ) / 2.0
+            running_atr_multiple = running_median / baseline_atr_value
             size_so_far = (running_high[relative_index] - base) / base
             if (
                 size_so_far >= config.minimum_pump_size
@@ -557,38 +765,21 @@ def build_pump_fade_symbol_result(
         if qualification_relative is None:
             continue
         qualification_index = ignition_index + qualification_relative
-        peak_relative = int(np.argmax(high[segment]))
-        peak_index = ignition_index + peak_relative
-        peak = float(high[peak_index])
-        peak_label, peak_resolution = _race(
-            barriers,
-            start=peak_index + 1,
-            stop=int(block_ends[peak_index]) + 1,
-            base=base,
-            anchor_high=peak,
-        )
         event_id = f"{symbol}:{int(timestamps[ignition_index])}"
         ignition_datetime = pd.Timestamp(timestamps[ignition_index], unit="ms", tz="UTC")
         ignition_minute = int(ignition_datetime.minute)
-        event = _EventRecord(
-            event_id=event_id,
-            ignition_index=ignition_index,
-            end_index=end_index,
-            qualification_index=qualification_index,
-            base=base,
-            peak=peak,
-            peak_index=peak_index,
-            resolution_index=peak_resolution,
-            faded=peak_label,
-            size=(peak - base) / base,
-        )
         prior_events = list(event_records)
-        event_records.append(event)
+        prior_memory = tuple(record.memory for record in prior_events)
+        ignition_time_ms = int(timestamps[ignition_index] + config.candle_interval_ms)
+        chain_id = recurrence_chain_id(
+            symbol=symbol,
+            ignition_time_ms=ignition_time_ms,
+            prior_records=prior_memory,
+        )
 
         previous_running_high = -np.inf
         new_high_index = 0
         nature_anchor_index: int | None = None
-        nature_temporally_eligible = False
         previous_new_high_relative: int | None = None
         previous_new_high_value: float | None = None
         pullbacks_between_highs: list[float] = []
@@ -619,16 +810,7 @@ def build_pump_fade_symbol_result(
             is_nature_anchor = nature_anchor_index is None
             if is_nature_anchor:
                 nature_anchor_index = absolute_index
-                nature_temporally_eligible = peak_index >= nature_anchor_index
             snapshot_time = int(timestamps[absolute_index] + config.candle_interval_ms)
-            future_start = snapshot_time + config.candle_interval_ms
-            label, resolution_index = _race(
-                barriers,
-                start=absolute_index + 1,
-                stop=int(block_ends[absolute_index]) + 1,
-                base=base,
-                anchor_high=float(anchor_high),
-            )
             qualified_prior = [
                 prior
                 for prior in prior_events
@@ -672,6 +854,11 @@ def build_pump_fade_symbol_result(
             event_quote = quote_volume[ignition_index : absolute_index + 1]
             event_trades = trades[ignition_index : absolute_index + 1]
             event_taker = taker_buy_quote[ignition_index : absolute_index + 1]
+            cvd_features = build_pump_fade_cvd_features(
+                quote_volume=event_quote,
+                taker_buy_quote_volume=event_taker,
+                close=close[ignition_index : absolute_index + 1],
+            )
             event_activity = np.nan_to_num(activity[ignition_index : absolute_index + 1], nan=0.0)
             event_turnover = float(np.sum(event_quote))
             event_trade_count = float(np.sum(event_trades))
@@ -745,59 +932,30 @@ def build_pump_fade_symbol_result(
             has_resolved_prior_48h = bool(resolved_prior_48h)
             has_last_resolved_prior = last_resolved is not None
             has_prior_higher_price = prior_higher_index is not None
+            event_memory = build_event_memory_features(
+                prior_memory,
+                snapshot_time_ms=snapshot_time,
+                current_base=base,
+                current_anchor_high=float(anchor_high),
+                current_close=current_close,
+            )
             output_rows.append(
                 {
-                    "label_schema_version": PUMP_FADE_LABEL_SCHEMA_VERSION,
-                    "nature_label_schema_version": PUMP_FADE_NATURE_LABEL_SCHEMA_VERSION,
                     "event_id": event_id,
                     "group": event_id,
+                    "recurrence_chain_id": chain_id,
+                    "event_memory_schema_version": PUMP_FADE_EVENT_MEMORY_SCHEMA_VERSION,
+                    "cvd_schema_version": PUMP_FADE_CVD_SCHEMA_VERSION,
                     "symbol": symbol,
                     "decision_index": new_high_index,
-                    "ignition_time_ms": int(timestamps[ignition_index] + config.candle_interval_ms),
+                    "ignition_time_ms": ignition_time_ms,
                     "ignition_hour_utc": int(ignition_datetime.hour),
                     "ignition_minute_of_hour": ignition_minute,
                     "ignition_minutes_from_round_hour": min(ignition_minute, 60 - ignition_minute),
                     "ignition_day_of_week_utc": int(ignition_datetime.dayofweek),
                     "snapshot_time_ms": snapshot_time,
                     "feature_cutoff_time_ms": snapshot_time,
-                    "future_start_time_ms": future_start,
                     "is_nature_anchor": is_nature_anchor,
-                    "nature_future_start_time_ms": (
-                        pd.NA
-                        if not nature_temporally_eligible
-                        else int(
-                            timestamps[peak_index] + 2 * config.candle_interval_ms
-                        )
-                    ),
-                    "nature_resolution_time_ms": (
-                        pd.NA
-                        if not nature_temporally_eligible or peak_resolution is None
-                        else int(
-                            timestamps[peak_resolution] + config.candle_interval_ms
-                        )
-                    ),
-                    "nature_label_available": (
-                        nature_temporally_eligible and peak_resolution is not None
-                    ),
-                    "nature_y": (
-                        pd.NA
-                        if not nature_temporally_eligible or peak_resolution is None
-                        else int(peak_label)
-                    ),
-                    "event_peak_time_ms": int(
-                        timestamps[peak_index] + config.candle_interval_ms
-                    ),
-                    "event_end_time_ms": int(
-                        timestamps[end_index] + config.candle_interval_ms
-                    ),
-                    "is_event_peak_decision": absolute_index == peak_index,
-                    "resolution_time_ms": (
-                        pd.NA
-                        if resolution_index is None
-                        else int(timestamps[resolution_index] + config.candle_interval_ms)
-                    ),
-                    "label_available": resolution_index is not None,
-                    "y": pd.NA if label is None else int(label),
                     "base_level": base,
                     "anchor_high": float(anchor_high),
                     "current_close": current_close,
@@ -839,6 +997,7 @@ def build_pump_fade_symbol_result(
                     "taker_buy_share_event": taker_buy_share_event,
                     "has_taker_buy_quote_data": has_taker_buy_quote_data,
                     "taker_imbalance_event": (2.0 * taker_buy_share_event - 1.0 if has_taker_buy_quote_data else float("nan")),
+                    **cvd_features,
                     "retail_frenzy_proxy": (t_mult / max(q_mult, 1e-12) if math.isfinite(t_mult) and math.isfinite(q_mult) and q_mult > 0.0 else float("nan")),
                     "large_print_proxy": (q_mult / max(t_mult, 1e-12) if math.isfinite(t_mult) and math.isfinite(q_mult) and t_mult > 0.0 else float("nan")),
                     "algorithmic_persistence_proxy": 1.0 / (1.0 + event_activity_cv),
@@ -870,7 +1029,13 @@ def build_pump_fade_symbol_result(
                     ),
                     "has_last_resolved_prior": has_last_resolved_prior,
                     "last_prior_faded": float("nan") if last_resolved is None else float(last_resolved.faded),
-                    "last_prior_size": float("nan") if last_prior is None else float(last_prior.size),
+                    # The final peak of an unresolved prior event is offline knowledge.
+                    # Keep this legacy coordinate causal by exposing qualification size.
+                    "last_prior_size": (
+                        float("nan")
+                        if last_prior is None
+                        else float(last_prior.memory.qualification_size)
+                    ),
                     "cluster_idx_day": sum(
                         1
                         for prior in qualified_prior
@@ -887,6 +1052,7 @@ def build_pump_fade_symbol_result(
                         - _window_mean(candle_range, relative_index, 3)
                     ),
                     "candles_since_red": float(candles_since_red[relative_index]),
+                    **event_memory,
                     "pre_return_15m": return_15m,
                     "pre_return_60m": return_60m,
                     "pre_return_240m": return_240m,
@@ -911,32 +1077,170 @@ def build_pump_fade_symbol_result(
                     "oi_change_60m": oi_change_60m,
                     "oi_change_240m": oi_change_240m,
                     "oi_change_since_ignition": oi_change_since_ignition,
-                    "price_up_oi_up_60m": float(price_change_60 > 0.0 and oi_available and oi_change_60m > 0.0),
-                    "price_up_oi_down_60m": float(price_change_60 > 0.0 and oi_available and oi_change_60m < 0.0),
-                    "price_down_oi_up_60m": float(price_change_60 < 0.0 and oi_available and oi_change_60m > 0.0),
-                    "price_down_oi_down_60m": float(price_change_60 < 0.0 and oi_available and oi_change_60m < 0.0),
+                    "price_up_oi_up_60m": (
+                        float(price_change_60 > 0.0 and oi_change_60m > 0.0)
+                        if oi_available
+                        else float("nan")
+                    ),
+                    "price_up_oi_down_60m": (
+                        float(price_change_60 > 0.0 and oi_change_60m < 0.0)
+                        if oi_available
+                        else float("nan")
+                    ),
+                    "price_down_oi_up_60m": (
+                        float(price_change_60 < 0.0 and oi_change_60m > 0.0)
+                        if oi_available
+                        else float("nan")
+                    ),
+                    "price_down_oi_down_60m": (
+                        float(price_change_60 < 0.0 and oi_change_60m < 0.0)
+                        if oi_available
+                        else float("nan")
+                    ),
                 }
             )
-    result = pd.DataFrame(output_rows)
-    if not result.empty:
-        result["y"] = result["y"].astype("Int8")
-        result["resolution_time_ms"] = result["resolution_time_ms"].astype("Int64")
-        result["nature_y"] = result["nature_y"].astype("Int8")
-        result["nature_future_start_time_ms"] = result[
-            "nature_future_start_time_ms"
-        ].astype("Int64")
-        result["nature_resolution_time_ms"] = result[
-            "nature_resolution_time_ms"
-        ].astype("Int64")
+        peak_relative = int(np.argmax(high[segment]))
+        peak_index = ignition_index + peak_relative
+        peak = float(high[peak_index])
+        peak_label, peak_resolution = _race(
+            barriers,
+            start=peak_index + 1,
+            stop=int(block_ends[peak_index]) + 1,
+            base=base,
+            anchor_high=peak,
+        )
+        qualification_high = float(running_high[qualification_relative])
+        qualification_size = (qualification_high - base) / base
+        if peak_resolution is None:
+            memory = PumpEventMemoryRecord(
+                event_id=event_id,
+                chain_id=chain_id,
+                ignition_time_ms=ignition_time_ms,
+                qualification_time_ms=int(
+                    timestamps[qualification_index] + config.candle_interval_ms
+                ),
+                base_level=base,
+                qualification_high=qualification_high,
+                qualification_size=qualification_size,
+                resolution_time_ms=None,
+                faded=None,
+                peak_level=None,
+                peak_time_ms=None,
+                resolution_close=None,
+                turnover_to_resolution=None,
+                trade_count_to_resolution=None,
+                average_trade_notional_to_resolution=None,
+                taker_buy_share_to_resolution=None,
+                path_efficiency_to_resolution=None,
+                max_1m_high_return_to_peak=None,
+                max_1m_close_return_to_peak=None,
+                mean_upper_wick_fraction_to_peak=None,
+                max_upper_wick_fraction_to_peak=None,
+            )
+        else:
+            summary_slice = slice(ignition_index, peak_resolution + 1)
+            summary_quote = float(np.sum(quote_volume[summary_slice]))
+            summary_trades = float(np.sum(trades[summary_slice]))
+            summary_taker = taker_buy_quote[summary_slice]
+            taker_available = bool(
+                np.isfinite(summary_taker).all()
+                and np.isfinite(quote_volume[summary_slice]).all()
+                and summary_quote > 0.0
+            )
+            summary_closes = close[summary_slice]
+            path_denominator = float(np.sum(np.abs(np.diff(summary_closes))))
+            peak_relative_in_event = peak_index - ignition_index
+            memory = PumpEventMemoryRecord(
+                event_id=event_id,
+                chain_id=chain_id,
+                ignition_time_ms=ignition_time_ms,
+                qualification_time_ms=int(
+                    timestamps[qualification_index] + config.candle_interval_ms
+                ),
+                base_level=base,
+                qualification_high=qualification_high,
+                qualification_size=qualification_size,
+                resolution_time_ms=int(
+                    timestamps[peak_resolution] + config.candle_interval_ms
+                ),
+                faded=peak_label,
+                peak_level=peak,
+                peak_time_ms=int(timestamps[peak_index] + config.candle_interval_ms),
+                resolution_close=float(close[peak_resolution]),
+                turnover_to_resolution=summary_quote,
+                trade_count_to_resolution=summary_trades,
+                average_trade_notional_to_resolution=(
+                    summary_quote / summary_trades if summary_trades > 0.0 else 0.0
+                ),
+                taker_buy_share_to_resolution=(
+                    float(np.sum(summary_taker) / summary_quote)
+                    if taker_available
+                    else float("nan")
+                ),
+                path_efficiency_to_resolution=(
+                    abs(float(summary_closes[-1] - summary_closes[0])) / path_denominator
+                    if path_denominator > 0.0
+                    else 0.0
+                ),
+                max_1m_high_return_to_peak=float(
+                    np.max(one_minute_high_return[: peak_relative_in_event + 1])
+                ),
+                max_1m_close_return_to_peak=float(
+                    np.max(one_minute_close_return[: peak_relative_in_event + 1])
+                ),
+                mean_upper_wick_fraction_to_peak=float(
+                    np.mean(upper_wick[: peak_relative_in_event + 1])
+                ),
+                max_upper_wick_fraction_to_peak=float(
+                    np.max(upper_wick[: peak_relative_in_event + 1])
+                ),
+            )
+        event_records.append(
+            _EventRecord(
+                event_id=event_id,
+                ignition_index=ignition_index,
+                end_index=end_index,
+                qualification_index=qualification_index,
+                base=base,
+                peak=peak,
+                peak_index=peak_index,
+                resolution_index=peak_resolution,
+                faded=peak_label,
+                size=(peak - base) / base,
+                memory=memory,
+            )
+        )
+    online_states = pd.DataFrame(output_rows)
+    if not online_states.empty:
+        online_states.insert(
+            0,
+            "online_state_schema_version",
+            PUMP_FADE_ONLINE_STATE_SCHEMA_VERSION,
+        )
+        labels = (
+            _finalize_pump_fade_labels(
+                online_states,
+                events=event_records,
+                timestamps=timestamps,
+                closes=close,
+                block_ends=block_ends,
+                candle_interval_ms=config.candle_interval_ms,
+            )
+            if finalize_labels
+            else pd.DataFrame()
+        )
+    else:
+        labels = pd.DataFrame()
     return PumpFadeSymbolBuildResult(
-        decisions=result,
+        online_states=online_states,
+        labels=labels,
         quality={
             "symbol": symbol,
             **quality_counts,
-            "decision_row_count": len(result),
-            "event_count": int(result["event_id"].nunique()) if not result.empty else 0,
-            "oi_covered_decision_row_count": int(result["oi_available"].sum()) if not result.empty else 0,
-            "oi_covered_decision_row_fraction": float(result["oi_available"].mean()) if not result.empty else 0.0,
+            "decision_row_count": len(online_states),
+            "event_count": int(online_states["event_id"].nunique()) if not online_states.empty else 0,
+            "oi_covered_decision_row_count": int(online_states["oi_available"].sum()) if not online_states.empty else 0,
+            "oi_covered_decision_row_fraction": float(online_states["oi_available"].mean()) if not online_states.empty else 0.0,
             "status": "OK_WITH_DROPPED_ROWS" if quality_counts["dropped_row_count"] else "OK",
             "reason": (
                 "invalid required market rows were removed and became explicit time gaps"
@@ -947,6 +1251,22 @@ def build_pump_fade_symbol_result(
     )
 
 
+def build_pump_fade_symbol_result(
+    path: Path,
+    *,
+    symbol: str | None = None,
+    config: PumpFadeDecisionConfig | None = None,
+) -> PumpFadeSymbolBuildResult:
+    """Build separated online states and offline labels for one symbol."""
+
+    return _build_pump_fade_symbol_result(
+        path,
+        symbol=symbol,
+        config=config,
+        finalize_labels=True,
+    )
+
+
 def build_pump_fade_symbol(
     path: Path,
     *,
@@ -954,6 +1274,22 @@ def build_pump_fade_symbol(
     config: PumpFadeDecisionConfig | None = None,
 ) -> pd.DataFrame:
     return build_pump_fade_symbol_result(path, symbol=symbol, config=config).decisions
+
+
+def build_pump_fade_online_symbol(
+    path: Path,
+    *,
+    symbol: str | None = None,
+    config: PumpFadeDecisionConfig | None = None,
+) -> pd.DataFrame:
+    """Build only point-in-time state rows; no future-derived columns."""
+
+    return _build_pump_fade_symbol_result(
+        path,
+        symbol=symbol,
+        config=config,
+        finalize_labels=False,
+    ).online_states
 
 
 def build_pump_fade_decisions(
@@ -1032,7 +1368,7 @@ def _iter_bounded_symbol_builds(
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def build_pump_fade_decisions_with_quality(
+def build_pump_fade_datasets_with_quality(
     *,
     cache_dir: Path,
     config: PumpFadeDecisionConfig | None = None,
@@ -1040,7 +1376,7 @@ def build_pump_fade_decisions_with_quality(
     workers: int = 1,
     max_inflight_symbols: int | None = None,
     progress_callback: Callable[[int, int, str, int], None] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     config = config or PumpFadeDecisionConfig()
     if not 1 <= workers <= 16:
         raise PumpFadeBuildError("workers must be between 1 and 16")
@@ -1054,7 +1390,8 @@ def build_pump_fade_decisions_with_quality(
         paths = paths[:limit_symbols]
     if not paths:
         raise PumpFadeBuildError(f"no parquet symbol caches found in {cache_dir}")
-    frames: list[pd.DataFrame] = []
+    state_frames: list[pd.DataFrame] = []
+    label_frames: list[pd.DataFrame] = []
     quality_rows: list[dict[str, object]] = []
     built = _iter_bounded_symbol_builds(
         paths=paths,
@@ -1064,18 +1401,48 @@ def build_pump_fade_decisions_with_quality(
     )
     for index, (path, outcome) in enumerate(built, start=1):
         if isinstance(outcome, PumpFadeSymbolBuildResult):
-            frame = outcome.decisions
+            states = outcome.online_states
+            labels = outcome.labels
             quality_rows.append(outcome.quality)
         else:
-            frame = pd.DataFrame()
+            states = pd.DataFrame()
+            labels = pd.DataFrame()
             quality_rows.append(_rejected_quality_row(path=path, reason=outcome))
-        if not frame.empty:
-            frames.append(frame)
+        if not states.empty:
+            state_frames.append(states)
+            label_frames.append(labels)
         if progress_callback is not None:
-            progress_callback(index, len(paths), path.stem, len(frame))
-    decisions = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+            progress_callback(index, len(paths), path.stem, len(states))
+    online_states = (
+        pd.concat(state_frames, ignore_index=True) if state_frames else pd.DataFrame()
+    )
+    labels = (
+        pd.concat(label_frames, ignore_index=True) if label_frames else pd.DataFrame()
+    )
     quality = pd.DataFrame(quality_rows)
-    return decisions, quality
+    return online_states, labels, quality
+
+
+def build_pump_fade_decisions_with_quality(
+    *,
+    cache_dir: Path,
+    config: PumpFadeDecisionConfig | None = None,
+    limit_symbols: int | None = None,
+    workers: int = 1,
+    max_inflight_symbols: int | None = None,
+    progress_callback: Callable[[int, int, str, int], None] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build the explicit supervised research view and quality audit."""
+
+    online_states, labels, quality = build_pump_fade_datasets_with_quality(
+        cache_dir=cache_dir,
+        config=config,
+        limit_symbols=limit_symbols,
+        workers=workers,
+        max_inflight_symbols=max_inflight_symbols,
+        progress_callback=progress_callback,
+    )
+    return join_pump_fade_states_and_labels(online_states, labels), quality
 
 
 def _build_symbol_or_error(

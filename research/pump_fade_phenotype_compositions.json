@@ -1,0 +1,19 @@
+{
+  "protocol_freeze_id": "pump-fade-frozen-phenotype-compositions-development-v1",
+  "min_order": 2,
+  "max_order": 3,
+  "calibration_min_events": 50,
+  "calibration_min_probability": 0.70,
+  "calibration_min_wilson_lower_95": 0.60,
+  "beta_prior_strength": 20.0,
+  "verification_min_events": 50,
+  "verification_min_observed_rate": 0.65,
+  "verification_min_wilson_lower_95": 0.60,
+  "verification_max_calibration_gap": 0.08,
+  "verification_min_positive_week_fraction": 0.60,
+  "fdr_alpha": 0.05,
+  "max_membership_jaccard": 0.90,
+  "max_frozen_compositions": 50,
+  "null_permutations": 19,
+  "random_seed": 20260702
+}

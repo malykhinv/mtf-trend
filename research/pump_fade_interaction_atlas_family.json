@@ -1,0 +1,5 @@
+{
+  "protocol_freeze_id": "pump-fade-single-interaction-family-development-v1",
+  "atlas_config_path": "research/pump_fade_regime_atlas.json",
+  "state_ordinals": [1, 2]
+}

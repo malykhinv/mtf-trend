@@ -897,6 +897,28 @@ relaxed continuous geometry slices when strategy provides them
 market-shock group summaries by point-in-time market_shock_id
 ```
 
+The separate inferential regime atlas sits between descriptive atlas and ML.
+It is generic Core infrastructure; strategies only declare admissible causal
+axes and coarse bins. Its minimum contract is:
+
+```text
+fit quantile edges on discovery only and freeze them before verification
+select candidates on discovery only
+match controls inside symbol x calendar-month x activity-regime strata
+resample ISO-week, calendar-month, and symbol clusters separately and
+re-estimate matched controls in every bootstrap draw
+permute labels only inside the same matched strata
+apply Benjamini-Yekutieli FDR across the frozen candidate family
+require explicit support and positive stability by month and symbol
+write regime_discovery_log.csv, regime_stability.csv, regime_controls.csv,
+      frozen_regime_spec.json, and holdout_access_log.csv
+```
+
+`DEVELOPMENT_REPLICATED` is statistical development status only. It is not a
+calibrated probability, EV proof, trading rule, or pristine-holdout result.
+Dirty-worktree runs are explicitly `UNFROZEN_DIRTY_DEVELOPMENT` and cannot be
+used for evidence claims.
+
 Запрещено:
 
 ```text
@@ -929,6 +951,20 @@ Core использует недельное переобучение тяжёл
 15. predict each OOS day D inside W with frozen weekly model
 16. write prediction, calibration, feature importance and audit artifacts
 ```
+
+For horizon-free event targets, a fixed `H_max` purge is not sufficient. A
+training row is eligible only when its actual offline label resolution time is
+strictly earlier than the weekly freeze:
+
+```text
+label_resolution_time < weekly_model_freeze_time_W
+```
+
+The fit/validation/calibration split remains chronological and event-group
+exclusive (60/20/20). A test-week event group is excluded from every training
+split, which also protects a future registered state lattice from sharing one
+event across train and OOS. A missing class or insufficient support in any split
+skips that week explicitly; it never activates an uncalibrated fallback.
 
 Запрещено:
 
@@ -967,6 +1003,19 @@ reliability curves
 calibration by session/week/month/symbol/regime
 calibration by systemic_cluster_regime / market_shock_group / alpha_decay_bucket / trigger-age bucket
 ```
+
+Binary probability protocols additionally store the causal weekly climatology
+baseline, fixed-bin reliability, pre-registered probability-threshold support,
+Wilson lower bounds, within-week label-permutation controls, and explicit
+pass/fail gates. Gate changes after OOS inspection require a new protocol id.
+
+Direct isotonic calibration is protocol versioned separately from regularized
+isotonic calibration. The regularized variant first forms pre-registered
+equal-support calibration-score bins, shrinks each binomial rate toward the
+train-only weekly baseline with a fixed Beta prior strength, and then fits the
+monotone isotonic map with bin support weights. This prevents unsupported 0/1
+endpoint probabilities without clipping or OOS tuning. Method, bin count, and
+prior strength are frozen before the OOS family run.
 
 Если стратегия использует multi-class target, class order должен быть frozen в model metadata.
 

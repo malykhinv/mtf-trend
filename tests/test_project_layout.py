@@ -12,6 +12,9 @@ EXPECTED_LAYER_DIRS = {
     "future",
     "features",
     "atlas",
+    "regimes",
+    "probability",
+    "market_context",
     "validation",
     "decision",
     "simulation",
@@ -51,7 +54,7 @@ def test_canonical_project_docs_are_present() -> None:
 
     assert "Core" in methodology_text
     assert "Strategy" in methodology_text
-    assert "strategy_family = anomaly" in strategy_text
-    assert "canonical_spec = docs/strategies/anomaly_strategy.md" in strategy_text
+    assert "strategy_family = pump_fade" in strategy_text
+    assert "canonical_spec = docs/pump_fade_archetype_protocol.md" in strategy_text
     assert "legacy_quarantine" in state_text
     assert "online 1m anomaly state" in state_text

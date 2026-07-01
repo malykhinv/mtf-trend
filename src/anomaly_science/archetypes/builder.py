@@ -1479,7 +1479,7 @@ def _build_category_outputs(
                 temporal_contract=ARCHETYPE_TEMPORAL_CONTRACT,
             )
         )
-        if not passed or not controls_passed:
+        if not _is_verified(candidate, config=config) or not controls_passed:
             continue
         for split_name, frame, indices in (
             ("discovery", prepared.discovery, candidate.discovery_indices),

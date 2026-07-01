@@ -385,6 +385,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--days", type=int, default=380, help="Inclusive lookback window in calendar days. Default: 380.")
     parser.add_argument(
+        "--out-dir",
+        default="",
+        help="Optional isolated cache directory. Empty uses the canonical market cache.",
+    )
+    parser.add_argument(
         "--end-date",
         default="",
         help="Inclusive UTC end date YYYY-MM-DD. Default: yesterday UTC, because daily archives lag by one day.",
@@ -463,7 +468,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     cfg = CacheConfig(
-        out_dir=DEFAULT_MARKET_CACHE_DIR,
+        out_dir=Path(args.out_dir) if args.out_dir else DEFAULT_MARKET_CACHE_DIR,
         days=args.days,
         end_date=parse_optional_date(args.end_date),
         symbols=tuple(read_symbols_arg(args.symbols, args.symbols_file)),

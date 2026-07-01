@@ -1,0 +1,14 @@
+{
+  "protocol_freeze_id": "pump-fade-resolved-event-memory-development-v1",
+  "t0_base_config_path": "research/pump_fade_t0_probability.json",
+  "state_base_config_path": "research/pump_fade_state_probability.json",
+  "state_ordinals": [1, 2],
+  "event_memory_schema_version": "pump_fade_event_memory_v1",
+  "bootstrap_iterations": 1000,
+  "sign_flip_iterations": 999,
+  "familywise_alpha": 0.05,
+  "min_auc_delta": 0.01,
+  "min_log_loss_improvement": 0.002,
+  "min_brier_improvement": 0.001,
+  "random_seed": 20260630
+}

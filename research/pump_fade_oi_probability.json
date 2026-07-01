@@ -1,0 +1,24 @@
+{
+  "protocol_freeze_id": "pump-fade-paired-oi-probability-development-v1",
+  "t0_base_config_path": "research/pump_fade_t0_probability.json",
+  "state_base_config_path": "research/pump_fade_state_probability.json",
+  "state_ordinals": [1, 2],
+  "oi_features": [
+    "oi_change_5m",
+    "oi_change_15m",
+    "oi_change_60m",
+    "oi_change_240m",
+    "oi_change_since_ignition",
+    "price_up_oi_up_60m",
+    "price_up_oi_down_60m",
+    "price_down_oi_up_60m",
+    "price_down_oi_down_60m"
+  ],
+  "bootstrap_iterations": 1000,
+  "sign_flip_iterations": 999,
+  "familywise_alpha": 0.05,
+  "min_auc_delta": 0.01,
+  "min_log_loss_improvement": 0.002,
+  "min_brier_improvement": 0.001,
+  "random_seed": 20260630
+}

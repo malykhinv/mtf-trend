@@ -34,6 +34,8 @@ METHODOLOGY_V2_REQUIRED_CHECKS: tuple[str, ...] = (
     "fixed_percent_stop_target_forbidden",
     "partial_target_fraction_grid_declared_by_strategy",
     "intracandle_double_barrier_resolved_as_stop_loss_first",
+    "selection_edge_requires_market_time_control",
+    "realized_barrier_outcomes_separate_from_decision",
     "relative_over_absolute_feature_contract_enforced",
     "custom_features_causality_gate_enforced",
     "market_shock_id_assigned",
@@ -142,6 +144,8 @@ METHODOLOGY_V2_STAGE_REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
         "intracandle_double_barrier_resolved_as_stop_loss_first",
         "fixed_percent_stop_target_forbidden",
         "partial_target_fraction_grid_declared_by_strategy",
+        "selection_edge_requires_market_time_control",
+        "realized_barrier_outcomes_separate_from_decision",
     ),
     "mvp1_governance": (
         "final_holdout_not_accessed_before_protocol_freeze",

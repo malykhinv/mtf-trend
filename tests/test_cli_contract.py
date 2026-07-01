@@ -54,6 +54,7 @@ def test_cli_does_not_expose_catboost_thread_count_overrides(capsys) -> None:
         "run-mvp1-prediction",
         "run-archetype-discovery",
         "run-pump-fade-oi-incremental",
+        "run-binary-weekly-probability",
     ):
         try:
             parser.parse_args([command, "--help"])
@@ -61,3 +62,101 @@ def test_cli_does_not_expose_catboost_thread_count_overrides(capsys) -> None:
             assert exc.code == 0
         help_text = capsys.readouterr().out
         assert "--catboost-thread-count" not in help_text
+
+
+def test_causal_regime_atlas_cli_requires_explicit_frozen_protocol() -> None:
+    args = build_parser().parse_args(
+        [
+            "run-causal-regime-atlas",
+            "--input",
+            "nature.parquet",
+            "--config",
+            "regimes.json",
+            "--out",
+            "atlas",
+        ]
+    )
+
+    assert args.command == "run-causal-regime-atlas"
+    assert args.input == "nature.parquet"
+    assert args.config == "regimes.json"
+    assert args.out == "atlas"
+    assert args.allow_dirty_development is False
+
+
+def test_binary_weekly_probability_cli_requires_explicit_frozen_protocol() -> None:
+    args = build_parser().parse_args(
+        [
+            "run-binary-weekly-probability",
+            "--input",
+            "nature.parquet",
+            "--config",
+            "probability.json",
+            "--out",
+            "probability",
+        ]
+    )
+
+    assert args.command == "run-binary-weekly-probability"
+    assert args.input == "nature.parquet"
+    assert args.config == "probability.json"
+    assert args.out == "probability"
+    assert args.allow_dirty_development is False
+
+
+def test_pump_fade_state_probability_cli_requires_family_protocol() -> None:
+    args = build_parser().parse_args(
+        [
+            "run-pump-fade-state-probability",
+            "--input", "state_lattice.parquet",
+            "--config", "state_probability.json",
+            "--out", "state_probability",
+        ]
+    )
+
+    assert args.command == "run-pump-fade-state-probability"
+    assert args.allow_dirty_development is False
+
+
+def test_pump_fade_event_memory_and_interaction_commands_require_protocols() -> None:
+    parser = build_parser()
+    for command in (
+        "run-pump-fade-event-memory-probability",
+        "run-pump-fade-interaction-atlas-family",
+    ):
+        args = parser.parse_args(
+            [
+                command,
+                "--nature", "nature.parquet",
+                "--state-lattice", "state.parquet",
+                "--config", "protocol.json",
+                "--out", "result",
+            ]
+        )
+        assert args.command == command
+        assert args.allow_dirty_development is False
+
+
+def test_event_scoped_symbol_positioning_cli_is_explicit_and_resumable() -> None:
+    parser = build_parser()
+    archive = parser.parse_args(
+        [
+            "build-event-scoped-symbol-metrics",
+            "--nature", "nature.parquet",
+            "--state-lattice", "state.parquet",
+            "--out", "metrics",
+            "--resume",
+        ]
+    )
+    attach = parser.parse_args(
+        [
+            "build-pump-fade-symbol-positioning-context",
+            "--input", "nature.parquet",
+            "--metrics-dir", "metrics",
+            "--out", "nature.symbol-positioning.parquet",
+        ]
+    )
+
+    assert archive.resume is True
+    assert archive.workers == 16
+    assert attach.command == "build-pump-fade-symbol-positioning-context"

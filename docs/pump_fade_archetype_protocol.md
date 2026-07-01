@@ -12,7 +12,7 @@ Canonical identity:
 strategy_name = pump_fade_close_race_v1
 strategy_family = pump_fade
 strategy_contract_version = horizon_free_event_strategy_v1
-feature_schema_version = pump_fade_market_mechanics_v2
+feature_schema_version = pump_fade_market_mechanics_v4
 nature_label_schema_version = pump_fade_event_peak_close_race_v1
 decision_label_schema_version = pump_fade_close_race_horizon_free_v1
 live_trading_strategy = false
@@ -39,6 +39,15 @@ the pump's nature.
 
 Trade entry, stop buffers, costs, and exit optimization are separate later
 phases and cannot alter this label.
+
+The primary search mechanism for stage 1 is now cross-fitted phenotype
+discovery, not global-AUC feature-family iteration. A broad strategy-declared
+causal feature surface enters temporal CatBoost folds; direct leaves and an
+interpretable surrogate of pooled out-of-fold risk generate separate rules.
+Search, probability calibration, and later verification are disjoint in time,
+and recurrence chains cannot cross them. Global probability remains a baseline
+and deployment component, but it cannot erase a supported rare phenotype merely
+because that phenotype contributes little to average log-loss.
 
 ## Structural execution policy boundary
 
@@ -96,6 +105,21 @@ holdout.
 An event is never admitted because of its final size, duration, ATR, peak, or
 any other full-period value.
 
+The lifecycle boundary is materialized, not implicit:
+
+```text
+<out>.parquet             online states only; schema pump_fade_online_state_v3
+<out>.labels.parquet      offline outcomes, censoring, event peak, and event end
+<out>.supervised.parquet  audited one-to-one research join on immutable row keys
+```
+
+The online artifact contains no `y`, label-availability, resolution, event-peak,
+event-end, or nature-outcome columns. Changing candles strictly after a snapshot
+must not change any online row at or before that snapshot. The offline finalizer
+may change labels in response to that future tail. Models consume only the
+explicit supervised research view, whose future-derived columns remain governed
+by the registered label-only feature boundary.
+
 ## Exact targets
 
 ### Stage 1: event nature
@@ -146,6 +170,20 @@ Missing market/context values are data conditions, not neutral values. The
 builder must emit `NaN` plus explicit availability/context flags for optional or
 not-yet-available inputs instead of hiding missingness behind magic numbers such
 as `0`, `0.5`, or `1_000_000`.
+
+Every dataset build writes three canonical quality artifacts:
+
+```text
+strategy_data_quality.csv
+feature_missingness_report.csv
+dataset_rejection_summary.csv
+```
+
+The first preserves per-symbol source validation, the second reports missingness
+for every declared feature and its explicit availability flag, and the third
+records fail-closed thresholds plus the overall `run_valid` result. Optional OI
+state flags are `NaN` when OI is unavailable; missing OI must never be encoded as
+a false positioning state or interpreted as edge.
 
 ## Scientific claim boundary
 
@@ -208,6 +246,20 @@ outer rolling-origin folds whose test blocks were not used to choose the rule,
 or the future pristine holdout after protocol freeze.
 
 ## Controls and inference
+
+Before CatBoost archetype search, the registered coarse regime atlas tests only
+strategy-declared online axes:
+
+```text
+rel_vol_phase discovery percentiles: 90-95 / 95-98 / 98-99 / 99+
+atr_mult fixed bins: 1-2 / 2-3 / 3-5 / 5+
+pump_elapsed_min fixed bins: 0-15 / 15-30 / 30-60 / 60-120 / 120+
+```
+
+Core owns bin freezing, same-symbol/calendar-month/activity matching,
+week/month/symbol cluster bootstrap with matched-baseline re-estimation,
+shuffled-label controls, BY-FDR, and month/symbol stability. The pump-fade strategy owns only
+the axis declaration. Verification cannot change an edge or create a candidate.
 
 - Global blind is descriptive only.
 - Nature AUC has one row per anomaly. Decision/timing diagnostics use
@@ -276,14 +328,75 @@ The canonical pump-fade builder uses `bounded_inflight_symbol_pool_v1`: with `wo
   --max-inflight-symbols 8
 
 .venv/Scripts/python.exe main.py build-pump-fade-nature-dataset `
-  --input .output/results/pump_fade_decisions_30.parquet `
+  --input .output/results/pump_fade_decisions_30.supervised.parquet `
   --out .output/results/pump_fade_nature_30.parquet
+
+.venv/Scripts/python.exe main.py run-causal-regime-atlas `
+  --input .output/results/pump_fade_nature_30.parquet `
+  --config research/pump_fade_regime_atlas.json `
+  --out .output/results/pump_fade_regime_atlas_30
 
 .venv/Scripts/python.exe main.py run-archetype-discovery `
   --input .output/results/pump_fade_nature_30.parquet `
   --config research/pump_fade_nature_discovery.json `
   --out .output/results/pump_fade_nature_archetypes_30
+
+.venv/Scripts/python.exe main.py run-binary-weekly-probability `
+  --input .output/results/pump_fade_lifecycle_v1/nature.parquet `
+  --config research/pump_fade_t0_probability.json `
+  --out .output/results/pump_fade_t0_probability_v1 `
+  --allow-dirty-development
+
+.venv/Scripts/python.exe main.py build-pump-fade-state-lattice `
+  --input .output/results/pump_fade_lifecycle_v1/online_states.supervised.parquet `
+  --out .output/results/pump_fade_lifecycle_v1/state_lattice.parquet
+
+.venv/Scripts/python.exe main.py run-pump-fade-state-probability `
+  --input .output/results/pump_fade_lifecycle_v1/state_lattice.parquet `
+  --config research/pump_fade_state_probability.json `
+  --out .output/results/pump_fade_state_probability_v1_dev `
+  --allow-dirty-development
+
+.venv/Scripts/python.exe main.py run-pump-fade-oi-probability `
+  --nature .output/results/pump_fade_lifecycle_v1/nature.parquet `
+  --state-lattice .output/results/pump_fade_lifecycle_v1/state_lattice.parquet `
+  --config research/pump_fade_oi_probability.json `
+  --out .output/results/pump_fade_oi_probability_v1_dev `
+  --allow-dirty-development
+
+.venv/Scripts/python.exe main.py build-pump-fade-market-context `
+  --input .output/results/pump_fade_lifecycle_v1/nature.parquet `
+  --cache-dir .output/market/binance_vision/um_futures/enriched_1m `
+  --out .output/results/pump_fade_lifecycle_v1/nature.market_context.parquet
+
+.venv/Scripts/python.exe main.py run-pump-fade-market-context-probability `
+  --nature .output/results/pump_fade_lifecycle_v1/nature.market_context.parquet `
+  --state-lattice .output/results/pump_fade_lifecycle_v1/state_lattice.market_context.parquet `
+  --config research/pump_fade_market_context_probability.json `
+  --out .output/results/pump_fade_market_context_probability_v1_dev `
+  --allow-dirty-development
+
+.venv/Scripts/python.exe main.py build-reference-metrics-cache `
+  --start 2025-06-01 --end 2026-06-18 `
+  --out .output/market/binance_vision/um_futures/reference_metrics_5m_v1 `
+  --workers 8
+
+.venv/Scripts/python.exe main.py build-pump-fade-positioning-context `
+  --input .output/results/pump_fade_lifecycle_v1/nature.parquet `
+  --metrics-dir .output/market/binance_vision/um_futures/reference_metrics_5m_v1 `
+  --out .output/results/pump_fade_lifecycle_v1/nature.positioning_context.parquet
 ```
+
+The registered t0 binary model is a probability experiment, not an archetype
+rule and not a trading policy. Each ISO-week model uses only nature labels whose
+actual resolution time is strictly before the weekly freeze, then freezes one
+CatBoost model and one isotonic calibrator for all OOS days in that week.
+
+The state-lattice family uses causal event-local new-high ordinals
+`1,2,3,5,8,13`. Every ordinal is an independent model variant, not six rows fed
+to one model. This preserves one row per event per variant and supports a
+familywise permutation correction. A state that an event never reaches is not
+imputed or selected using its future outcome.
 
 The old scratchpad `trades.parquet` does not satisfy this protocol: it contains
 every-candle pullback rows, a 0.5% invalidation buffer, a 1440-minute label cap,

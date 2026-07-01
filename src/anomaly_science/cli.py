@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from anomaly_science.atlas import run_mvp1_atlas
@@ -17,13 +17,37 @@ from anomaly_science.events.run import run_mvp1_events
 from anomaly_science.features import FeatureMatrixConfig, run_mvp1_feature_matrix, run_mvp1_features
 from anomaly_science.future import run_mvp1_future
 from anomaly_science.labels import run_mvp1_labels
+from anomaly_science.market_context import (
+    EventScopedPerpCrowdingArchiveConfig,
+    EventScopedMetricsArchiveConfig,
+    ReferenceMetricsArchiveConfig,
+    run_attach_reference_market_context,
+    run_attach_reference_positioning_context,
+    run_attach_event_positioning_context,
+    run_attach_perp_crowding_context,
+    run_event_scoped_metrics_archive_build,
+    run_event_scoped_perp_crowding_archive_build,
+    run_reference_metrics_archive_build,
+)
 from anomaly_science.prediction import WalkForwardPredictionConfig, run_mvp1_prediction
+from anomaly_science.phenotypes import (
+    load_cross_fitted_phenotype_config,
+    run_cross_fitted_phenotype_discovery,
+)
 from anomaly_science.prediction.config import (
     REGISTERED_STATE_LATTICE_ANCHORS_MINUTES,
     SUPERVISED_ANCHOR_POLICY_REGISTERED_STATE_LATTICE,
     SUPERVISED_ANCHOR_POLICY_T0_ONLY,
 )
 from anomaly_science.progress import make_stderr_progress_callback
+from anomaly_science.probability import (
+    load_binary_weekly_walk_forward_config,
+    run_binary_weekly_walk_forward,
+)
+from anomaly_science.regimes import (
+    load_causal_regime_atlas_config,
+    run_causal_regime_atlas,
+)
 from anomaly_science.research import ResearchDatasetBuildConfig, ResearchRunConfig, build_research_dataset, run_research_pipeline
 from anomaly_science.simulation import TradeSimulationConfig, run_mvp1_trade_simulation
 from anomaly_science.state import run_mvp1_state
@@ -32,6 +56,21 @@ from anomaly_science.strategy.pump_fade import (
     run_pump_fade_dataset_build,
     run_pump_fade_nature_projection,
     run_pump_fade_oi_incremental_experiment,
+    run_pump_fade_state_lattice_projection,
+    run_pump_fade_state_probability_family,
+    load_pump_fade_oi_probability_config,
+    run_pump_fade_oi_probability_experiment,
+    PUMP_FADE_REFERENCE_MARKET_CONTEXT,
+    PUMP_FADE_REFERENCE_POSITIONING_CONTEXT,
+    PUMP_FADE_SYMBOL_POSITIONING_CONTEXT,
+    PUMP_FADE_PERP_CROWDING_CONTEXT,
+    load_pump_fade_market_context_probability_config,
+    run_pump_fade_market_context_probability_experiment,
+    load_pump_fade_event_memory_probability_config,
+    run_pump_fade_event_memory_probability_experiment,
+    load_pump_fade_interaction_atlas_family_config,
+    run_pump_fade_interaction_atlas_family,
+    load_pump_fade_phenotype_config,
 )
 from anomaly_science.strategy.registry import StrategyRegistryError, validate_strategy_horizon
 from anomaly_science.validation import run_mvp1_holdout_governance
@@ -410,6 +449,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cache.add_argument("--days", type=int, default=380, help="Inclusive lookback window in calendar days. Default: 380.")
     cache.add_argument(
+        "--out-dir",
+        default="",
+        help="Optional isolated cache directory. Empty uses the canonical market cache.",
+    )
+    cache.add_argument(
         "--end-date",
         default="",
         help="Inclusive UTC end date YYYY-MM-DD. Default: yesterday UTC, because daily archives lag by one day.",
@@ -531,12 +575,77 @@ def build_parser() -> argparse.ArgumentParser:
 
     pump_fade_dataset = subparsers.add_parser(
         "build-pump-fade-dataset",
-        help="Build the canonical causal new-high decision dataset for the structural pump-fade target.",
+        help="Build separate causal online states, offline labels, and an explicit supervised research view.",
     )
     pump_fade_dataset.add_argument(
         "--cache-dir", required=True, help="Per-symbol enriched 1m parquet cache directory."
     )
-    pump_fade_dataset.add_argument("--out", required=True, help="Output parquet path.")
+    pump_fade_dataset.add_argument(
+        "--out",
+        required=True,
+        help="Online-state parquet path; sibling .labels and .supervised parquet files are also written.",
+    )
+
+    regime_atlas = subparsers.add_parser(
+        "run-causal-regime-atlas",
+        help="Evaluate frozen coarse online-state regimes before any ML model search.",
+    )
+    regime_atlas.add_argument(
+        "--input",
+        required=True,
+        help="Pump-fade supervised or event-nature parquet with explicit future labels.",
+    )
+    regime_atlas.add_argument(
+        "--config",
+        required=True,
+        help="Frozen JSON axis, time, matching, inference, and FDR protocol.",
+    )
+    regime_atlas.add_argument(
+        "--out",
+        required=True,
+        help="Directory for regime evidence, controls, stability, freeze, and access logs.",
+    )
+    regime_atlas.add_argument(
+        "--allow-dirty-development",
+        action="store_true",
+        help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
+    )
+    binary_probability = subparsers.add_parser(
+        "run-binary-weekly-probability",
+        help="Run generic weekly frozen CatBoost plus isotonic binary probability estimation.",
+    )
+    binary_probability.add_argument("--input", required=True, help="Causal labeled parquet or CSV.")
+    binary_probability.add_argument(
+        "--config", required=True, help="Pre-registered binary probability JSON protocol."
+    )
+    phenotype_discovery = subparsers.add_parser(
+        "run-cross-fitted-phenotype-discovery",
+        help="Discover stable CatBoost leaf-rule phenotypes with separate calibration and verification.",
+    )
+    phenotype_discovery.add_argument("--input", required=True, help="Causal labeled parquet or CSV.")
+    phenotype_discovery.add_argument("--config", required=True, help="Frozen phenotype JSON protocol.")
+    phenotype_discovery.add_argument("--out", required=True, help="Phenotype artifact directory.")
+    phenotype_discovery.add_argument(
+        "--allow-dirty-development", action="store_true",
+        help="Write explicitly unfrozen development artifacts.",
+    )
+    pump_fade_phenotypes = subparsers.add_parser(
+        "run-pump-fade-cross-fitted-phenotypes",
+        help="Discover broad causal pump-fade phenotypes using the strategy-owned feature surface.",
+    )
+    pump_fade_phenotypes.add_argument("--input", required=True, help="Broad-context nature parquet.")
+    pump_fade_phenotypes.add_argument("--config", required=True, help="Frozen pump-fade phenotype protocol.")
+    pump_fade_phenotypes.add_argument("--out", required=True, help="Phenotype artifact directory.")
+    pump_fade_phenotypes.add_argument(
+        "--allow-dirty-development", action="store_true",
+        help="Write explicitly unfrozen development artifacts.",
+    )
+    binary_probability.add_argument("--out", required=True, help="Output artifact directory.")
+    binary_probability.add_argument(
+        "--allow-dirty-development",
+        action="store_true",
+        help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
+    )
     pump_fade_dataset.add_argument(
         "--limit-symbols",
         type=int,
@@ -563,6 +672,95 @@ def build_parser() -> argparse.ArgumentParser:
     pump_fade_nature.add_argument("--input", required=True, help="Canonical decision parquet path.")
     pump_fade_nature.add_argument("--out", required=True, help="Output event-nature parquet path.")
 
+    pump_fade_lattice = subparsers.add_parser(
+        "build-pump-fade-state-lattice",
+        help="Project supervised pump-fade decisions to registered causal new-high states.",
+    )
+    pump_fade_lattice.add_argument("--input", required=True, help="Supervised lifecycle parquet.")
+    pump_fade_lattice.add_argument("--out", required=True, help="Output state-lattice parquet.")
+
+    pump_fade_state_probability = subparsers.add_parser(
+        "run-pump-fade-state-probability",
+        help="Run separate registered weekly probability models for each causal state ordinal.",
+    )
+    pump_fade_state_probability.add_argument("--input", required=True, help="State-lattice parquet.")
+    pump_fade_state_probability.add_argument("--config", required=True, help="Base family JSON protocol.")
+    pump_fade_state_probability.add_argument("--out", required=True, help="Family output directory.")
+    pump_fade_state_probability.add_argument(
+        "--allow-dirty-development", action="store_true",
+        help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
+    )
+    pump_fade_market_context = subparsers.add_parser(
+        "build-pump-fade-market-context",
+        help="Attach generic causal BTC/ETH reference-market features to a pump-fade artifact.",
+    )
+    pump_fade_market_context.add_argument("--input", required=True, help="Nature or state-lattice parquet.")
+    pump_fade_market_context.add_argument("--cache-dir", required=True, help="Enriched per-symbol cache directory.")
+    pump_fade_market_context.add_argument("--out", required=True, help="Augmented output parquet.")
+    pump_fade_market_probability = subparsers.add_parser(
+        "run-pump-fade-market-context-probability",
+        help="Run paired baseline/reference-context weekly probability experiments.",
+    )
+    pump_fade_market_probability.add_argument("--nature", required=True, help="Context-augmented nature parquet.")
+    pump_fade_market_probability.add_argument("--state-lattice", required=True, help="Context-augmented state lattice.")
+    pump_fade_market_probability.add_argument("--config", required=True, help="Registered context JSON protocol.")
+    pump_fade_market_probability.add_argument("--out", required=True, help="Paired experiment output directory.")
+    pump_fade_market_probability.add_argument(
+        "--allow-dirty-development", action="store_true",
+        help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
+    )
+    reference_metrics = subparsers.add_parser(
+        "build-reference-metrics-cache",
+        help="Download causal daily BTC/ETH positioning-ratio metrics archives.",
+    )
+    reference_metrics.add_argument("--start", required=True, help="Inclusive YYYY-MM-DD.")
+    reference_metrics.add_argument("--end", required=True, help="Inclusive YYYY-MM-DD.")
+    reference_metrics.add_argument("--out", required=True, help="Output cache directory.")
+    reference_metrics.add_argument("--workers", type=int, default=8, help="Concurrent daily archive downloads; 1..16.")
+    event_metrics = subparsers.add_parser(
+        "build-event-scoped-symbol-metrics",
+        help="Download only same-symbol positioning metrics required by registered pump-fade rows.",
+    )
+    event_metrics.add_argument("--nature", required=True, help="Pump-fade nature parquet.")
+    event_metrics.add_argument("--state-lattice", required=True, help="Pump-fade state-lattice parquet.")
+    event_metrics.add_argument("--out", required=True, help="Event-scoped metrics cache directory.")
+    event_metrics.add_argument("--workers", type=int, default=16, help="Concurrent symbol workers; 1..16.")
+    event_metrics.add_argument(
+        "--resume", action="store_true", help="Resume only atomically completed symbol artifacts with exact scope."
+    )
+    pump_fade_positioning = subparsers.add_parser(
+        "build-pump-fade-positioning-context",
+        help="Attach causal BTC/ETH top-trader/long-short/taker ratio features.",
+    )
+    pump_fade_positioning.add_argument("--input", required=True, help="Nature or state-lattice parquet.")
+    pump_fade_positioning.add_argument("--metrics-dir", required=True, help="Reference metrics cache directory.")
+    pump_fade_positioning.add_argument("--out", required=True, help="Augmented output parquet.")
+    pump_fade_symbol_positioning = subparsers.add_parser(
+        "build-pump-fade-symbol-positioning-context",
+        help="Attach causal same-symbol positioning levels, changes, ignition deltas, and divergences.",
+    )
+    pump_fade_symbol_positioning.add_argument("--input", required=True, help="Nature or state-lattice parquet.")
+    pump_fade_symbol_positioning.add_argument("--metrics-dir", required=True, help="Event-scoped symbol metrics cache.")
+    pump_fade_symbol_positioning.add_argument("--out", required=True, help="Augmented output parquet.")
+    event_perp_crowding = subparsers.add_parser(
+        "build-event-scoped-perp-crowding",
+        help="Download event-scoped same-symbol premium-index and funding archives.",
+    )
+    event_perp_crowding.add_argument("--nature", required=True, help="Pump-fade nature parquet.")
+    event_perp_crowding.add_argument("--state-lattice", required=True, help="Pump-fade state-lattice parquet.")
+    event_perp_crowding.add_argument("--out", required=True, help="Perp-crowding archive directory.")
+    event_perp_crowding.add_argument("--workers", type=int, default=16, help="Concurrent symbol workers; 1..16.")
+    event_perp_crowding.add_argument(
+        "--resume", action="store_true", help="Resume exact atomically completed symbol scopes."
+    )
+    pump_fade_perp_crowding = subparsers.add_parser(
+        "build-pump-fade-perp-crowding-context",
+        help="Attach causal same-symbol premium-index and funding-history features.",
+    )
+    pump_fade_perp_crowding.add_argument("--input", required=True, help="Nature or state-lattice parquet.")
+    pump_fade_perp_crowding.add_argument("--archive-dir", required=True, help="Event-scoped perp-crowding archive.")
+    pump_fade_perp_crowding.add_argument("--out", required=True, help="Augmented output parquet.")
+
     pump_fade_oi = subparsers.add_parser(
         "run-pump-fade-oi-incremental",
         help="Compare no-OI and with-OI archetype discovery on identical OI-covered event rows.",
@@ -571,6 +769,45 @@ def build_parser() -> argparse.ArgumentParser:
     pump_fade_oi.add_argument("--config", required=True, help="Registered no-OI archetype config used as the paired baseline.")
     pump_fade_oi.add_argument("--out", required=True, help="Output directory for both paired runs and summary.")
     pump_fade_oi.add_argument("--limit-symbols", type=int, default=None, help="Deterministic smoke limit; omit for the full registered run.")
+
+    pump_fade_oi_probability = subparsers.add_parser(
+        "run-pump-fade-oi-probability",
+        help="Run paired baseline/with-OI weekly probability experiments on identical rows.",
+    )
+    pump_fade_oi_probability.add_argument("--nature", required=True, help="Separated lifecycle nature parquet.")
+    pump_fade_oi_probability.add_argument("--state-lattice", required=True, help="Causal state-lattice parquet.")
+    pump_fade_oi_probability.add_argument("--config", required=True, help="Registered paired OI JSON protocol.")
+    pump_fade_oi_probability.add_argument("--out", required=True, help="Paired experiment output directory.")
+    pump_fade_oi_probability.add_argument(
+        "--allow-dirty-development", action="store_true",
+        help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
+    )
+    pump_fade_event_memory_probability = subparsers.add_parser(
+        "run-pump-fade-event-memory-probability",
+        help="Run paired baseline/resolved-event-memory weekly probability experiments.",
+    )
+    pump_fade_event_memory_probability.add_argument("--nature", required=True)
+    pump_fade_event_memory_probability.add_argument("--state-lattice", required=True)
+    pump_fade_event_memory_probability.add_argument("--config", required=True)
+    pump_fade_event_memory_probability.add_argument("--out", required=True)
+    pump_fade_event_memory_probability.add_argument(
+        "--allow-dirty-development",
+        action="store_true",
+        help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
+    )
+    pump_fade_interaction_atlas = subparsers.add_parser(
+        "run-pump-fade-interaction-atlas-family",
+        help="Run registered single/interaction atlases at T0 and new-high ordinals 1-2.",
+    )
+    pump_fade_interaction_atlas.add_argument("--nature", required=True)
+    pump_fade_interaction_atlas.add_argument("--state-lattice", required=True)
+    pump_fade_interaction_atlas.add_argument("--config", required=True)
+    pump_fade_interaction_atlas.add_argument("--out", required=True)
+    pump_fade_interaction_atlas.add_argument(
+        "--allow-dirty-development",
+        action="store_true",
+        help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
+    )
 
 
     return parser
@@ -582,6 +819,52 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "doctor":
         print(_BOOTSTRAP_MESSAGE)
+        return 0
+
+    if args.command == "run-causal-regime-atlas":
+        output_dir = run_causal_regime_atlas(
+            input_path=Path(args.input),
+            out_dir=Path(args.out),
+            config=load_causal_regime_atlas_config(Path(args.config)),
+            allow_dirty_development=args.allow_dirty_development,
+        )
+        print(f"causal regime-atlas artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-binary-weekly-probability":
+        output_dir = run_binary_weekly_walk_forward(
+            input_path=Path(args.input),
+            out_dir=Path(args.out),
+            config=load_binary_weekly_walk_forward_config(Path(args.config)),
+            allow_dirty_development=args.allow_dirty_development,
+        )
+        print(f"binary weekly probability artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-cross-fitted-phenotype-discovery":
+        output_dir = run_cross_fitted_phenotype_discovery(
+            input_path=Path(args.input),
+            out_dir=Path(args.out),
+            config=load_cross_fitted_phenotype_config(Path(args.config)),
+            allow_dirty_development=args.allow_dirty_development,
+            progress_callback=lambda stage, completed, total: print(
+                f"phenotypes {stage}: {completed}/{total}", flush=True
+            ),
+        )
+        print(f"cross-fitted phenotype artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-pump-fade-cross-fitted-phenotypes":
+        output_dir = run_cross_fitted_phenotype_discovery(
+            input_path=Path(args.input),
+            out_dir=Path(args.out),
+            config=load_pump_fade_phenotype_config(Path(args.config)),
+            allow_dirty_development=args.allow_dirty_development,
+            progress_callback=lambda stage, completed, total: print(
+                f"pump-fade phenotypes {stage}: {completed}/{total}", flush=True
+            ),
+        )
+        print(f"pump-fade cross-fitted phenotype artifacts written: {output_dir}")
         return 0
 
     if args.command == "run-archetype-discovery":
@@ -603,7 +886,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             workers=args.workers,
             max_inflight_symbols=args.max_inflight_symbols,
         )
-        print(f"pump-fade causal dataset written: {output_path}")
+        print(f"pump-fade online states and offline labels written: {output_path}")
         return 0
 
     if args.command == "build-pump-fade-nature-dataset":
@@ -614,6 +897,120 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"pump-fade event-nature dataset written: {output_path}")
         return 0
 
+    if args.command == "build-pump-fade-state-lattice":
+        output_path = run_pump_fade_state_lattice_projection(
+            input_path=Path(args.input), output_path=Path(args.out)
+        )
+        print(f"pump-fade causal state lattice written: {output_path}")
+        return 0
+
+    if args.command == "run-pump-fade-state-probability":
+        output_dir = run_pump_fade_state_probability_family(
+            input_path=Path(args.input),
+            out_dir=Path(args.out),
+            base_config=load_binary_weekly_walk_forward_config(Path(args.config)),
+            allow_dirty_development=args.allow_dirty_development,
+        )
+        print(f"pump-fade state probability family written: {output_dir}")
+        return 0
+
+    if args.command == "build-pump-fade-market-context":
+        output_path = run_attach_reference_market_context(
+            input_path=Path(args.input),
+            cache_dir=Path(args.cache_dir),
+            output_path=Path(args.out),
+            config=PUMP_FADE_REFERENCE_MARKET_CONTEXT,
+        )
+        print(f"pump-fade reference-market context written: {output_path}")
+        return 0
+
+    if args.command == "run-pump-fade-market-context-probability":
+        output_dir = run_pump_fade_market_context_probability_experiment(
+            nature_path=Path(args.nature),
+            state_lattice_path=Path(args.state_lattice),
+            out_dir=Path(args.out),
+            config=load_pump_fade_market_context_probability_config(Path(args.config)),
+            repository_root=Path.cwd(),
+            allow_dirty_development=args.allow_dirty_development,
+        )
+        print(f"pump-fade market-context probability artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "build-reference-metrics-cache":
+        output_dir = run_reference_metrics_archive_build(
+            ReferenceMetricsArchiveConfig(
+                start_date=date.fromisoformat(args.start),
+                end_date=date.fromisoformat(args.end),
+                references=PUMP_FADE_REFERENCE_MARKET_CONTEXT.references,
+                output_dir=Path(args.out),
+                workers=args.workers,
+            )
+        )
+        print(f"reference metrics cache written: {output_dir}")
+        return 0
+
+    if args.command == "build-event-scoped-symbol-metrics":
+        output_dir = run_event_scoped_metrics_archive_build(
+            input_paths=(Path(args.nature), Path(args.state_lattice)),
+            config=EventScopedMetricsArchiveConfig(
+                output_dir=Path(args.out),
+                positioning=PUMP_FADE_SYMBOL_POSITIONING_CONTEXT,
+                workers=args.workers,
+                resume=args.resume,
+            ),
+            progress_callback=lambda completed, total, symbol: print(
+                f"event metrics: {completed}/{total} symbols; last={symbol}", flush=True
+            ) if completed % 25 == 0 or completed == total else None,
+        )
+        print(f"event-scoped symbol metrics cache written: {output_dir}")
+        return 0
+
+    if args.command == "build-pump-fade-positioning-context":
+        output_path = run_attach_reference_positioning_context(
+            input_path=Path(args.input),
+            metrics_dir=Path(args.metrics_dir),
+            output_path=Path(args.out),
+            config=PUMP_FADE_REFERENCE_POSITIONING_CONTEXT,
+        )
+        print(f"pump-fade reference-positioning context written: {output_path}")
+        return 0
+
+    if args.command == "build-pump-fade-symbol-positioning-context":
+        output_path = run_attach_event_positioning_context(
+            input_path=Path(args.input),
+            metrics_dir=Path(args.metrics_dir),
+            output_path=Path(args.out),
+            config=PUMP_FADE_SYMBOL_POSITIONING_CONTEXT,
+        )
+        print(f"pump-fade symbol-positioning context written: {output_path}")
+        return 0
+
+    if args.command == "build-event-scoped-perp-crowding":
+        output_dir = run_event_scoped_perp_crowding_archive_build(
+            input_paths=(Path(args.nature), Path(args.state_lattice)),
+            config=EventScopedPerpCrowdingArchiveConfig(
+                output_dir=Path(args.out),
+                context=PUMP_FADE_PERP_CROWDING_CONTEXT,
+                workers=args.workers,
+                resume=args.resume,
+            ),
+            progress_callback=lambda completed, total, symbol: print(
+                f"perp crowding: {completed}/{total} symbols; last={symbol}", flush=True
+            ) if completed % 25 == 0 or completed == total else None,
+        )
+        print(f"event-scoped perp-crowding archive written: {output_dir}")
+        return 0
+
+    if args.command == "build-pump-fade-perp-crowding-context":
+        output_path = run_attach_perp_crowding_context(
+            input_path=Path(args.input),
+            archive_dir=Path(args.archive_dir),
+            output_path=Path(args.out),
+            config=PUMP_FADE_PERP_CROWDING_CONTEXT,
+        )
+        print(f"pump-fade perp-crowding context written: {output_path}")
+        return 0
+
     if args.command == "run-pump-fade-oi-incremental":
         output_dir = run_pump_fade_oi_incremental_experiment(
             input_path=Path(args.input),
@@ -622,6 +1019,42 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit_symbols=args.limit_symbols,
         )
         print(f"pump-fade paired OI experiment artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-pump-fade-oi-probability":
+        output_dir = run_pump_fade_oi_probability_experiment(
+            nature_path=Path(args.nature),
+            state_lattice_path=Path(args.state_lattice),
+            out_dir=Path(args.out),
+            config=load_pump_fade_oi_probability_config(Path(args.config)),
+            repository_root=Path.cwd(),
+            allow_dirty_development=args.allow_dirty_development,
+        )
+        print(f"pump-fade paired OI probability artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-pump-fade-event-memory-probability":
+        output_dir = run_pump_fade_event_memory_probability_experiment(
+            nature_path=Path(args.nature),
+            state_lattice_path=Path(args.state_lattice),
+            out_dir=Path(args.out),
+            config=load_pump_fade_event_memory_probability_config(Path(args.config)),
+            repository_root=Path.cwd(),
+            allow_dirty_development=args.allow_dirty_development,
+        )
+        print(f"pump-fade event-memory probability artifacts written: {output_dir}")
+        return 0
+
+    if args.command == "run-pump-fade-interaction-atlas-family":
+        output_dir = run_pump_fade_interaction_atlas_family(
+            nature_path=Path(args.nature),
+            state_lattice_path=Path(args.state_lattice),
+            out_dir=Path(args.out),
+            config=load_pump_fade_interaction_atlas_family_config(Path(args.config)),
+            repository_root=Path.cwd(),
+            allow_dirty_development=args.allow_dirty_development,
+        )
+        print(f"pump-fade interaction-atlas family written: {output_dir}")
         return 0
 
     if args.command == "run-research":
@@ -843,7 +1276,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         config = CacheConfig(
-            out_dir=DEFAULT_MARKET_CACHE_DIR,
+            out_dir=Path(args.out_dir) if args.out_dir else DEFAULT_MARKET_CACHE_DIR,
             days=args.days,
             end_date=parse_optional_date(args.end_date),
             symbols=tuple(read_symbols_arg(args.symbols, args.symbols_file)),
