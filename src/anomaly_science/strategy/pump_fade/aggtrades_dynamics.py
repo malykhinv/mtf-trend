@@ -4,8 +4,10 @@ import numpy as np
 
 PUMP_FADE_AGGTRADES_DYNAMICS_SCHEMA_VERSION = "pump_fade_aggtrades_dynamics_v1"
 
-PUMP_FADE_AGGTRADES_DYNAMICS_FEATURES: tuple[str, ...] = (
-    "aggtrades_available",
+# Numeric model features only; the sparse-availability gate `aggtrades_available`
+# is emitted separately as a boolean and stays OUT of the model feature list,
+# mirroring the CVD family's `cvd_available` contract.
+PUMP_FADE_AGGTRADES_MODEL_FEATURES: tuple[str, ...] = (
     "event_mean_trade_notional_p90",
     "event_mean_notional_gini",
     "event_mean_same_side_run",
@@ -38,6 +40,13 @@ PUMP_FADE_AGGTRADES_DYNAMICS_FEATURES: tuple[str, ...] = (
     "pre_sell_impact_per_notional_60m",
 )
 
+# Full set of keys the builder returns: numeric model features plus the boolean
+# availability gate.
+PUMP_FADE_AGGTRADES_DYNAMICS_FEATURES: tuple[str, ...] = (
+    *PUMP_FADE_AGGTRADES_MODEL_FEATURES,
+    "aggtrades_available",
+)
+
 
 def build_aggtrades_dynamics_features(
     *,
@@ -55,7 +64,7 @@ def build_aggtrades_dynamics_features(
     pre_inter_arrival_ms_mean: np.ndarray,
     pre_buy_impact_per_notional: np.ndarray,
     pre_sell_impact_per_notional: np.ndarray,
-) -> dict[str, float]:
+) -> dict[str, object]:
     """Build bounded causal aggTrades coordinates from per-minute sidecar features.
 
     All inputs are already-aligned per-minute arrays sliced the same way as
@@ -93,7 +102,7 @@ def build_aggtrades_dynamics_features(
     prior_inter_arrival = _prior_nanmean(inter_arrival, 5)
 
     return {
-        "aggtrades_available": 1.0,
+        "aggtrades_available": True,
         "event_mean_trade_notional_p90": _safe_nanmean(notional_p90),
         "event_mean_notional_gini": _safe_nanmean(gini),
         "event_mean_same_side_run": _safe_nanmean(run_mean),
@@ -127,8 +136,10 @@ def build_aggtrades_dynamics_features(
     }
 
 
-def _empty_result() -> dict[str, float]:
-    return {name: (0.0 if name == "aggtrades_available" else float("nan")) for name in PUMP_FADE_AGGTRADES_DYNAMICS_FEATURES}
+def _empty_result() -> dict[str, object]:
+    result: dict[str, object] = {name: float("nan") for name in PUMP_FADE_AGGTRADES_MODEL_FEATURES}
+    result["aggtrades_available"] = False
+    return result
 
 
 def _safe_nanmean(values: np.ndarray) -> float:
@@ -148,5 +159,6 @@ def _prior_nanmean(values: np.ndarray, length: int) -> float:
 __all__ = [
     "PUMP_FADE_AGGTRADES_DYNAMICS_FEATURES",
     "PUMP_FADE_AGGTRADES_DYNAMICS_SCHEMA_VERSION",
+    "PUMP_FADE_AGGTRADES_MODEL_FEATURES",
     "build_aggtrades_dynamics_features",
 ]

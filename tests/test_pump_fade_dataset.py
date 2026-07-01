@@ -152,7 +152,7 @@ def test_builder_emits_only_new_high_decisions_with_closed_bar_snapshot(tmp_path
     assert row["cvd_schema_version"] == "pump_fade_cvd_path_v1"
     assert row["path_dynamics_schema_version"] == "pump_fade_path_dynamics_v1"
     assert row["aggtrades_dynamics_schema_version"] == "pump_fade_aggtrades_dynamics_v1"
-    assert row["aggtrades_available"] == 0.0
+    assert bool(row["aggtrades_available"]) is False
     assert pd.isna(row["event_mean_notional_gini"])
     assert "event_return_sign_entropy" in result.columns
     assert "recent_red_fraction_3m" in result.columns
@@ -194,7 +194,7 @@ def test_builder_picks_up_aggtrades_sidecar_when_present(
 
     assert len(result) == 1
     row = result.iloc[0]
-    assert row["aggtrades_available"] == 1.0
+    assert bool(row["aggtrades_available"]) is True
     assert row["event_mean_notional_gini"] == pytest.approx(0.42)
 
 

@@ -30,6 +30,9 @@ from anomaly_science.strategy.pump_fade.market_context import (
     PUMP_FADE_PERP_CROWDING_CONTEXT,
 )
 from anomaly_science.strategy.pump_fade.cvd import PUMP_FADE_CVD_MODEL_FEATURES
+from anomaly_science.strategy.pump_fade.aggtrades_dynamics import (
+    PUMP_FADE_AGGTRADES_MODEL_FEATURES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +85,10 @@ class PumpFadeMarketContextProbabilityConfig:
             "pump_fade_perp_crowding_v1": (
                 perp_crowding_feature_names(PUMP_FADE_PERP_CROWDING_CONTEXT),
                 ("perp_crowding_complete",),
+            ),
+            "pump_fade_aggtrades_dynamics_v1": (
+                PUMP_FADE_AGGTRADES_MODEL_FEATURES,
+                ("aggtrades_available",),
             ),
         }
         if self.context_family not in families:

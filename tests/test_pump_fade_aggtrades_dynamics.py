@@ -29,7 +29,7 @@ def test_aggtrades_dynamics_returns_all_nan_when_sidecar_unavailable() -> None:
     )
 
     assert set(features) == set(PUMP_FADE_AGGTRADES_DYNAMICS_FEATURES)
-    assert features["aggtrades_available"] == pytest.approx(0.0)
+    assert features["aggtrades_available"] is False
     for name, value in features.items():
         if name == "aggtrades_available":
             continue
@@ -68,7 +68,7 @@ def test_aggtrades_dynamics_detects_buy_impact_decay_and_sell_impact_rise() -> N
     )
 
     assert set(features) == set(PUMP_FADE_AGGTRADES_DYNAMICS_FEATURES)
-    assert features["aggtrades_available"] == pytest.approx(1.0)
+    assert features["aggtrades_available"] is True
     assert features["buy_impact_decay_5m"] < 0.0
     assert features["sell_impact_change_5m"] > 0.0
     assert features["notional_gini_change_5m"] > 0.0
