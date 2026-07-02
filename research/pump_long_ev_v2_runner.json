@@ -1,0 +1,30 @@
+{
+  "protocol_freeze_id": "pump-long-runner-selection-ev-v2",
+  "frozen_at_utc": "2026-07-02",
+  "supersedes": "pump_long_ev_v1.json (fade-model selection, OOS-negative)",
+  "runner_target": "big_runner = forward_mfe >= 0.10; runner model = leakage-safe weekly WFA on 83 online features",
+  "frozen_rule": {
+    "selection": "p_runner >= per-OOS-week Q70 (top 30% of the runner model's calibrated probability that week)",
+    "stop_variant": "event_base",
+    "exit": "tight confirmed-swing-low trail, close-beyond (swing_low_v1)",
+    "exposure": "one concurrent position per recurrence_chain_id",
+    "eligibility": "registered retrace-kill rule (unchanged)"
+  },
+  "dev_internal_oos_evidence": {
+    "all": 0.00745,
+    "p_runner_ge_Q70": 0.02443,
+    "p_runner_ge_Q80": 0.02662,
+    "p_runner_ge_Q90_TOXIC": -0.00323,
+    "note": "selection monotonically lifts EV to a peak around Q70-Q80 then collapses at the extreme top decile; CI-lower still below zero on dev, tail-dependent"
+  },
+  "known_caveat": "extreme-top-decile (>=Q90) predicted runners are toxic (late/obvious already-run pumps); a [Q70,Q95] band is a candidate refinement, deliberately NOT tuned now to avoid overfitting the burned OOS",
+  "oos_gates": {
+    "target_success_ev_net_return": 0.02,
+    "minimum_viability_ev_net_return": 0.0,
+    "require_ci_lower_95_above_zero": true,
+    "min_trades": 300,
+    "require_ev_without_top_5pct_positive": true,
+    "min_positive_week_share": 0.50,
+    "shuffled_control_required": true
+  }
+}
