@@ -1,0 +1,32 @@
+{
+  "protocol_freeze_id": "pump-long-continuation-ev-v1",
+  "frozen_at_utc": "2026-07-02",
+  "development_period": "2025-06-01..2026-01-01",
+  "oos_period": "2026-01-01..2026-06-18",
+  "outcome_schema_version": "pump_long_outcomes_v1",
+  "execution_spec": "PUMP_LONG_EXECUTION_SPEC (spec.py), 20bps round trip primary",
+  "frozen_entry_rule": {
+    "eligibility": "registered retrace-kill rule (entries stop after confirmed closes below base+0.5*(running_high-base) for max(3min, 10% of pump age))",
+    "stratum": "first_in_48h (n_prior_48h == 0)",
+    "stop_variant": "event_base",
+    "classifier_gate": "p_cont >= per-OOS-week median of p_cont, where p_cont = 1 - calibrated fade probability from the pooled-ordinal weekly walk-forward",
+    "d_max_cap": "NONE — development quartile analysis showed near-base stops lose and far-base large pumps carry the continuation convexity; a d_max cap would remove the edge",
+    "exposure": "max one concurrent position per recurrence_chain_id"
+  },
+  "wfa_config_path": "research/pump_long_oos_state_probability.json",
+  "development_evidence": {
+    "oracle_first_in_48h_ev": 0.0248,
+    "blind_first_in_48h_ev": 0.0122,
+    "pseudo_oos_fresh_pcont_ge_median_ev": 0.0281,
+    "pseudo_oos_fresh_pcont_ge_median_positive_week_share": 0.43
+  },
+  "oos_gates": {
+    "target_success_ev_net_return": 0.02,
+    "minimum_viability_ev_net_return": 0.0,
+    "require_ci_lower_95_above_zero": true,
+    "min_trades": 300,
+    "require_ev_without_top_5pct_positive": true,
+    "min_positive_week_share": 0.50,
+    "cost_stress_bps_round_trip": [10, 20, 30]
+  }
+}
