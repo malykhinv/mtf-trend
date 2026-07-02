@@ -56,6 +56,7 @@ def simulate_pump_long_trade(
     giveback_fraction: float | None = None,
     giveback_arm_return: float = 0.0,
     breakeven_arm_return: float | None = None,
+    take_profit_return: float | None = None,
 ) -> PumpLongTradeResult:
     """Simulate one long from the next-1m-open fill until structure breaks.
 
@@ -103,6 +104,12 @@ def simulate_pump_long_trade(
             exit_index = offset
             exit_raw = bar_close if spec.stop_trigger_close_beyond else stop_price
             break
+        if take_profit_return is not None:
+            tp_price = entry_open * (1.0 + take_profit_return)
+            if float(high[offset]) >= tp_price:
+                exit_index = offset
+                exit_raw = tp_price
+                break
         if breakeven_arm_return is not None and (
             float(high[offset]) / entry_open - 1.0
         ) >= breakeven_arm_return and stop_price < entry_open:

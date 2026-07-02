@@ -204,6 +204,23 @@ def test_peak_giveback_stays_in_until_armed() -> None:
     assert result.exit_price == pytest.approx(112.0)
 
 
+def test_take_profit_fills_at_the_limit_when_high_touches_it() -> None:
+    open_ = np.asarray([100.0, 108.0, 120.0])
+    high = np.asarray([101.0, 112.0, 121.0])  # bar 1 high 112 >= TP 110
+    low = np.asarray([99.5, 107.0, 118.0])
+    close = np.asarray([100.5, 111.0, 120.0])
+
+    result = simulate_pump_long_trade(
+        open_=open_, high=high, low=low, close=close,
+        entry_index=0, initial_stop_price=95.0, spec=_frictionless(),
+        take_profit_return=0.10,
+    )
+
+    assert result.exit_index == 1
+    assert result.exit_price == pytest.approx(110.0)  # limit at entry*1.10
+    assert result.net_return == pytest.approx(0.10)
+
+
 def test_breakeven_move_caps_a_reversing_trade_near_entry() -> None:
     # Pops +6% (arms breakeven at +5%), then reverses; exit at the breakeven
     # stop close instead of bleeding to the deep initial stop.
