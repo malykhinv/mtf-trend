@@ -53,14 +53,27 @@ def simulate_pump_long_trade(
     entry_index: int,
     initial_stop_price: float,
     spec: PumpLongExecutionSpec,
+    giveback_fraction: float | None = None,
+    giveback_arm_return: float = 0.0,
+    breakeven_arm_return: float | None = None,
 ) -> PumpLongTradeResult:
     """Simulate one long from the next-1m-open fill until structure breaks.
 
     `entry_index` is the bar whose OPEN is the fill (the first bar after the
-    closed decision bar). The trade trails a confirmed swing low and exits
-    when the bar close crosses the stop (or on touch when the spec says so);
-    if the data ends first the position is closed at the final close and
-    marked censored.
+    closed decision bar). Two realizable exit families are supported, both
+    causal (they only use the peak reached so far, never a future peak):
+
+    - swing-low trail (default, `giveback_fraction is None`): trail a confirmed
+      swing low and exit on close-beyond. This is the tight v1 exit.
+    - peak-giveback trail (`giveback_fraction` set): once the trade is up by at
+      least `giveback_arm_return`, exit when the close retraces
+      `giveback_fraction` off the highest close reached since entry. Before the
+      trail arms, only the initial hard stop protects the position. This caps
+      how much of the favorable excursion is given back and is the direct lever
+      for capture ratio.
+
+    If the data ends first the position is closed at the final close and marked
+    censored.
     """
 
     if not 0 <= entry_index < len(close):
@@ -76,6 +89,8 @@ def simulate_pump_long_trade(
     exit_index: int | None = None
     exit_raw: float | None = None
     highest_high = entry_open
+    peak_close = entry_open
+    armed = False
     for offset in range(entry_index, len(close)):
         bar_close = float(close[offset])
         highest_high = max(highest_high, float(high[offset]))
@@ -88,16 +103,31 @@ def simulate_pump_long_trade(
             exit_index = offset
             exit_raw = bar_close if spec.stop_trigger_close_beyond else stop_price
             break
-        relative = offset - entry_index
-        if relative >= 2 * confirmation:
-            pivot_index = offset - confirmation
-            window_start = pivot_index - confirmation
-            pivot_low = float(low[pivot_index])
-            if pivot_low == float(np.min(low[window_start : offset + 1])) and (
-                stop_price < pivot_low < bar_close
-            ):
-                stop_price = pivot_low
+        if breakeven_arm_return is not None and (
+            float(high[offset]) / entry_open - 1.0
+        ) >= breakeven_arm_return and stop_price < entry_open:
+            stop_price = entry_open
+            stop_moved = True
+        if giveback_fraction is not None:
+            peak_close = max(peak_close, bar_close)
+            if not armed and (peak_close / entry_open - 1.0) >= giveback_arm_return:
+                armed = True
+            if armed and bar_close <= peak_close * (1.0 - giveback_fraction):
+                exit_index = offset
+                exit_raw = bar_close
                 stop_moved = True
+                break
+        else:
+            relative = offset - entry_index
+            if relative >= 2 * confirmation:
+                pivot_index = offset - confirmation
+                window_start = pivot_index - confirmation
+                pivot_low = float(low[pivot_index])
+                if pivot_low == float(np.min(low[window_start : offset + 1])) and (
+                    stop_price < pivot_low < bar_close
+                ):
+                    stop_price = pivot_low
+                    stop_moved = True
     if exit_index is None:
         exit_index = len(close) - 1
         exit_raw = float(close[exit_index])

@@ -167,6 +167,62 @@ def test_retrace_kill_scales_with_pump_age() -> None:
     ) == 55
 
 
+def test_peak_giveback_exit_caps_retrace_off_the_running_peak() -> None:
+    # Rises to close 120 (peak), then a bar closes at 108 = 10% off the peak.
+    # With a 10% giveback and immediate arming, exit fires at that bar close.
+    open_ = np.asarray([100.0, 110.0, 118.0, 120.0, 108.0])
+    high = np.asarray([101.0, 112.0, 119.0, 121.0, 119.0])
+    low = np.asarray([99.5, 109.0, 117.0, 118.0, 107.0])
+    close = np.asarray([110.0, 118.0, 120.0, 119.0, 108.0])
+
+    result = simulate_pump_long_trade(
+        open_=open_, high=high, low=low, close=close,
+        entry_index=0, initial_stop_price=95.0, spec=_frictionless(),
+        giveback_fraction=0.10, giveback_arm_return=0.0,
+    )
+
+    assert result.exit_index == 4
+    assert result.exit_price == pytest.approx(108.0)
+    assert result.net_return == pytest.approx(0.08)  # 100 -> 108, frictionless
+
+
+def test_peak_giveback_stays_in_until_armed() -> None:
+    # A 3% dip on bar 1 would trigger a 2% giveback, but arming needs +5% first,
+    # so the position is held (only the hard stop is live) and rides to the top.
+    open_ = np.asarray([100.0, 100.0, 106.0, 112.0])
+    high = np.asarray([100.5, 100.5, 107.0, 113.0])
+    low = np.asarray([99.0, 96.5, 105.0, 111.0])
+    close = np.asarray([100.0, 97.0, 106.0, 112.0])
+
+    result = simulate_pump_long_trade(
+        open_=open_, high=high, low=low, close=close,
+        entry_index=0, initial_stop_price=95.0, spec=_frictionless(),
+        giveback_fraction=0.02, giveback_arm_return=0.05,
+    )
+
+    assert result.exit_reason == EXIT_REASON_DATA_END_CENSORED
+    assert result.exit_price == pytest.approx(112.0)
+
+
+def test_breakeven_move_caps_a_reversing_trade_near_entry() -> None:
+    # Pops +6% (arms breakeven at +5%), then reverses; exit at the breakeven
+    # stop close instead of bleeding to the deep initial stop.
+    open_ = np.asarray([100.0, 106.0, 99.0])
+    high = np.asarray([100.5, 106.5, 100.0])
+    low = np.asarray([99.5, 105.0, 98.0])
+    close = np.asarray([106.0, 105.5, 99.5])
+
+    result = simulate_pump_long_trade(
+        open_=open_, high=high, low=low, close=close,
+        entry_index=0, initial_stop_price=90.0, spec=_frictionless(),
+        breakeven_arm_return=0.05,
+    )
+
+    assert result.final_stop_price == pytest.approx(100.0)
+    assert result.exit_index == 2  # bar-2 close 99.5 < breakeven 100
+    assert result.net_return == pytest.approx(-0.005)  # ~flat, not -10%
+
+
 def test_last_confirmed_swing_low_uses_only_closed_bars() -> None:
     low = np.asarray([100.0, 98.0, 99.0, 100.0, 97.0, 99.0, 100.0])
 
