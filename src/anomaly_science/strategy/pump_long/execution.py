@@ -57,6 +57,8 @@ def simulate_pump_long_trade(
     giveback_arm_return: float = 0.0,
     breakeven_arm_return: float | None = None,
     take_profit_return: float | None = None,
+    swing_reversal_atr: float | None = None,
+    atr: np.ndarray | None = None,
 ) -> PumpLongTradeResult:
     """Simulate one long from the next-1m-open fill until structure breaks.
 
@@ -92,6 +94,9 @@ def simulate_pump_long_trade(
     highest_high = entry_open
     peak_close = entry_open
     armed = False
+    # structural swing-low trail state (ZigZag-style, ATR-confirmed pivots)
+    pivot_low = float("inf")
+    pivot_low_atr = float("nan")
     for offset in range(entry_index, len(close)):
         bar_close = float(close[offset])
         highest_high = max(highest_high, float(high[offset]))
@@ -115,7 +120,26 @@ def simulate_pump_long_trade(
         ) >= breakeven_arm_return and stop_price < entry_open:
             stop_price = entry_open
             stop_moved = True
-        if giveback_fraction is not None:
+        if swing_reversal_atr is not None:
+            # ZigZag-style structural trail: track the lowest low of the current
+            # pullback; once price rallies at least swing_reversal_atr * ATR above
+            # that low, it is a CONFIRMED swing low that every participant can see.
+            # Ratchet the stop up to it (higher-lows only), then hunt the next one.
+            bar_low = float(low[offset])
+            if bar_low < pivot_low:
+                pivot_low = bar_low
+                pivot_low_atr = float(atr[offset]) if atr is not None else float("nan")
+            if (
+                math.isfinite(pivot_low_atr)
+                and pivot_low_atr > 0.0
+                and (float(high[offset]) - pivot_low) >= swing_reversal_atr * pivot_low_atr
+            ):
+                if stop_price < pivot_low < bar_close:
+                    stop_price = pivot_low
+                    stop_moved = True
+                pivot_low = bar_low
+                pivot_low_atr = float(atr[offset]) if atr is not None else float("nan")
+        elif giveback_fraction is not None:
             peak_close = max(peak_close, bar_close)
             if not armed and (peak_close / entry_open - 1.0) >= giveback_arm_return:
                 armed = True
@@ -183,6 +207,34 @@ def _unfilled(entry_index: int, entry_price: float, initial_stop_price: float) -
         mfe_return=float("nan"),
         holding_minutes=0,
     )
+
+
+def causal_atr(
+    *, high: np.ndarray, low: np.ndarray, close: np.ndarray, window: int = 30
+) -> np.ndarray:
+    """Wilder-style true-range average using only closed bars up to each index.
+
+    Fully causal: atr[j] depends on bars <= j. Used to scale the swing-reversal
+    threshold so "not microscopic" adapts to each symbol's own volatility.
+    """
+
+    high = np.asarray(high, dtype=float)
+    low = np.asarray(low, dtype=float)
+    close = np.asarray(close, dtype=float)
+    prev_close = np.concatenate(([close[0]], close[:-1]))
+    true_range = np.maximum.reduce(
+        (high - low, np.abs(high - prev_close), np.abs(low - prev_close))
+    )
+    atr = np.full(len(true_range), np.nan)
+    cumulative = 0.0
+    for i in range(len(true_range)):
+        cumulative += true_range[i]
+        if i >= window:
+            cumulative -= true_range[i - window]
+            atr[i] = cumulative / window
+        else:
+            atr[i] = cumulative / (i + 1)
+    return atr
 
 
 def first_retrace_kill_index(
@@ -261,6 +313,7 @@ __all__ = [
     "PumpLongTradeResult",
     "STATUS_FILLED",
     "STATUS_INVALID_STOP_ABOVE_ENTRY",
+    "causal_atr",
     "first_retrace_kill_index",
     "last_confirmed_swing_low",
     "simulate_pump_long_trade",
