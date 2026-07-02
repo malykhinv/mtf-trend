@@ -1,0 +1,27 @@
+{
+  "protocol_freeze_id": "pump-long-nature-exit-pareto-v3",
+  "frozen_at_utc": "2026-07-02",
+  "principle": "Optimize freely on development; OOS is a single untouched verdict, never tuned toward.",
+  "selection_surface": "dev-internal pseudo-OOS Q4-2025 (runner model trained walk-forward on pre-Q4 data)",
+  "oos_confirmation": "2026-01-01..2026-06-18 (single pass; ~3rd OOS look this session -> a positive result is PROMISING PENDING FORWARD, not proven)",
+  "search_space": {
+    "selection_threshold": "p_runner >= per-week quantile in {Q50,Q60,Q70,Q80}",
+    "nature_filters": ["none","fresh_48h","vertical","fresh_and_vertical","low_short_aggression"],
+    "exit": ["swing_low_v1","tp10","tp15","tp20","tp25","gb25_arm5","tp20_gb30","tp25_gb30"],
+    "stop_variant": "event_base (fixed)",
+    "exposure": "one position per recurrence_chain_id (fixed)"
+  },
+  "registered_objective": {
+    "hard_viability": ["ev_without_top_30pct > 0", "trades >= 100 on Q4", "positive in BOTH Q4 halves"],
+    "rank_primary": "ev_without_top_30pct",
+    "tie_breakers": ["higher winrate", "higher positive_day_share", "fewer filter conditions"],
+    "note": "user targets explored as a Pareto frontier, not all forced as hard gates (episodic pumps likely make them mutually infeasible)"
+  },
+  "oos_gates": {
+    "minimum_viability_ev_net_return": 0.0,
+    "require_ci_lower_95_above_zero": true,
+    "require_ev_without_top_30pct_positive": true,
+    "min_trades": 200,
+    "shuffled_selection_control_required": true
+  }
+}
