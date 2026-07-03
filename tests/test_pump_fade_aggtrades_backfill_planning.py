@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-import anomaly_science.binance_vision_aggtrades_backfill as aggtrades_backfill
-from anomaly_science.binance_vision_aggtrades_backfill import (
+import anomaly_science.strategy.pump_fade.aggtrades_backfill as aggtrades_backfill
+from anomaly_science.strategy.pump_fade.aggtrades_backfill import (
     AggTradesBackfillConfig,
     _console_safe,
     _format_duration,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from anomaly_science.contracts.horizons import research_horizon_label_column
+from anomaly_science.strategy.defaults import DEFAULT_RESEARCH_STRATEGY_NAME
 from anomaly_science.strategy.metadata import active_strategy_h_max_minutes
 from anomaly_science.strategy.registry import validate_strategy_horizon
 from anomaly_science.runtime import DEFAULT_BOUNDED_CPU_THREAD_COUNT, validate_bounded_thread_count
@@ -27,7 +28,7 @@ class WalkForwardPredictionConfig:
     """
 
     prediction_version: str = "mvp1_weekly_walk_forward_catboost_isotonic_v1"
-    strategy_name: str = "broad_anomaly_v1_h30"
+    strategy_name: str = DEFAULT_RESEARCH_STRATEGY_NAME
     target_horizon_minutes: int = 30
     active_strategy_names: tuple[str, ...] = ()
     min_train_rows: int = 80

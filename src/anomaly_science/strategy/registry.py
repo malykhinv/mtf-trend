@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from anomaly_science.contracts.horizons import validate_supported_research_horizon
-from anomaly_science.events.config import BroadAnomalyDetectorConfig
+from anomaly_science.strategy.anomaly_config import BroadAnomalyDetectorConfig
 from anomaly_science.strategy.anomaly import (
     ANOMALY_STRATEGY_DEFAULTS,
     BroadAnomalyStrategy,
@@ -14,7 +14,7 @@ from anomaly_science.strategy.anomaly import (
     make_post_anomaly_extension_strategy,
     make_post_pump_distribution_strategy,
 )
-from anomaly_science.strategy.base import BaseStrategy
+from anomaly_science.contracts.strategy import BaseStrategy
 
 
 class StrategyRegistryError(ValueError):
@@ -134,9 +134,26 @@ def strategy_implementation_statuses() -> tuple[StrategyImplementationStatus, ..
     return tuple(rows)
 
 
-def get_strategy(strategy_name: str) -> BaseStrategy:
+def get_strategy(
+    strategy_name: str,
+    *,
+    detector_config: object | None = None,
+) -> BaseStrategy:
     for entry in available_strategies():
         if entry.strategy_name == strategy_name:
+            if detector_config is not None:
+                if not isinstance(detector_config, BroadAnomalyDetectorConfig):
+                    raise StrategyRegistryError(
+                        "detector_config does not match the broad-anomaly strategy contract"
+                    )
+                if strategy_name not in BROAD_ANOMALY_VARIANTS:
+                    raise StrategyRegistryError(
+                        "detector_config is only supported by broad-anomaly strategy variants"
+                    )
+                return make_broad_anomaly_strategy(
+                    strategy_name=strategy_name,
+                    config=detector_config,
+                )
             return entry.factory()
     if strategy_name in SPECIFIED_NOT_IMPLEMENTED_STRATEGY_NAMES:
         raise StrategyRegistryError(f"strategy variant is specified but not implemented yet: {strategy_name!r}")

@@ -8,7 +8,7 @@ import pytest
 from anomaly_science.strategy import StrategyContractError, StrategyMetadata, validate_trigger_frame
 from anomaly_science.strategy.base import StrategyFeatureContext
 from anomaly_science.strategy.registry import available_strategies, get_strategy, specified_not_implemented_strategy_names
-from anomaly_science.events.config import BroadAnomalyDetectorConfig
+from anomaly_science.strategy.anomaly_config import BroadAnomalyDetectorConfig
 from anomaly_science.contracts.market import Candle1m, OpenInterest5m
 from anomaly_science.strategy.anomaly import (
     BroadAnomalyStrategy,

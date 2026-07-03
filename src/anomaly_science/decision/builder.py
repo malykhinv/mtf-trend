@@ -20,8 +20,8 @@ from anomaly_science.decision.config import ExpectedValueConfig
 from anomaly_science.future import load_strategy_state_1m_csv
 from anomaly_science.labels import load_strategy_outcome_labels_csv
 from anomaly_science.prediction import load_anomaly_oos_predictions_csv
-from anomaly_science.strategy.base import BaseStrategy
-from anomaly_science.strategy.execution import PositionSide, StructuralAnchor
+from anomaly_science.contracts.strategy import BaseStrategy
+from anomaly_science.contracts.execution_policy import PositionSide, StructuralAnchor
 from anomaly_science.strategy.registry import get_strategy
 
 

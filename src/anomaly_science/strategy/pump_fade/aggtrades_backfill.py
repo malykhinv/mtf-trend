@@ -1,3 +1,5 @@
+"""Pump-fade-owned event-scoped aggTrades acquisition workflow."""
+
 from __future__ import annotations
 
 import io
@@ -24,7 +26,7 @@ from anomaly_science.binance_vision_cache import (
     first_csv_from_zip,
     replace_metadata_file,
 )
-from anomaly_science.strategy.pump_fade.aggtrades_minute import (
+from anomaly_science.data.aggtrades_minute import (
     build_minute_aggtrades_features,
 )
 

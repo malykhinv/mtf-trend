@@ -11,8 +11,8 @@ import polars as pl
 from anomaly_science.contracts.events import StrategyEvent
 from anomaly_science.contracts.market import Candle1m, ONE_MINUTE_MS
 from anomaly_science.data.normalized import normalize_candles_1m
-from anomaly_science.events.config import BroadAnomalyDetectorConfig
-from anomaly_science.events.detector import detect_broad_anomaly_events, detect_broad_anomaly_events_from_frame
+from anomaly_science.strategy.anomaly_config import BroadAnomalyDetectorConfig
+from anomaly_science.strategy.anomaly_detector import detect_broad_anomaly_events, detect_broad_anomaly_events_from_frame
 from anomaly_science.features.catalog import FEATURE_SCHEMA_VERSION
 from anomaly_science.labels.config import OutcomeLabelConfig
 from anomaly_science.strategy.base import (
@@ -98,6 +98,32 @@ POST_PUMP_REQUIRED_DATA_STREAMS: dict[str, bool] = {
     "open_interest": False,
     "liquidations": False,
 }
+
+ANOMALY_RELAXED_GEOMETRY_FEATURES: tuple[StrategyCustomFeatureSpec, ...] = tuple(
+    StrategyCustomFeatureSpec(
+        name=name,
+        family="anomaly_relaxed_geometry",
+        dtype=dtype,
+        description="Strategy-owned causal anomaly geometry compatibility feature.",
+    )
+    for name, dtype in (
+        ("initial_pump_height_core_atr_1440", "float64"),
+        ("post_pump_consolidation_minutes", "int64"),
+        ("consolidation_width_ratio", "float64"),
+        ("shelf_low_asof_t", "float64"),
+        ("shelf_high_asof_t", "float64"),
+        ("current_low_minus_shelf_low_core_atr_1440", "float64"),
+        ("current_close_minus_shelf_low_core_atr_1440", "float64"),
+        ("current_high_minus_shelf_high_core_atr_1440", "float64"),
+        ("minutes_spent_below_shelf", "int64"),
+        ("minutes_since_reclaim", "int64"),
+        ("volume_on_sweep_percentile", "float64"),
+        ("trade_count_on_sweep_percentile", "float64"),
+        ("cvd_change_during_sweep", "float64"),
+        ("oi_change_during_sweep", "float64"),
+        ("liq_intensity_during_sweep", "float64"),
+    )
+)
 
 
 _TRIGGER_FRAME_SCHEMA: dict[str, pl.DataType] = {
@@ -188,6 +214,10 @@ class BroadAnomalyStrategy(BaseStrategy):
         return self._metadata
 
     @property
+    def trigger_config(self) -> object:
+        return self.config
+
+    @property
     def required_data_streams(self) -> Mapping[str, bool]:
         validate_required_data_streams(BROAD_ANOMALY_REQUIRED_DATA_STREAMS)
         return BROAD_ANOMALY_REQUIRED_DATA_STREAMS
@@ -223,6 +253,9 @@ class BroadAnomalyStrategy(BaseStrategy):
         del context
         return {}
 
+    def generate_artifact_compatibility_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
+        return _anomaly_relaxed_geometry_features(context)
+
 
 @dataclass(frozen=True, slots=True)
 class PostAnomalyExtensionStrategy(BaseStrategy):
@@ -232,6 +265,10 @@ class PostAnomalyExtensionStrategy(BaseStrategy):
     @property
     def metadata(self) -> StrategyMetadata:
         return self._metadata
+
+    @property
+    def trigger_config(self) -> object:
+        return self.config
 
     @property
     def required_data_streams(self) -> Mapping[str, bool]:
@@ -267,6 +304,9 @@ class PostAnomalyExtensionStrategy(BaseStrategy):
     def generate_custom_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
         return _pump_market_mechanics_features(context)
 
+    def generate_artifact_compatibility_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
+        return _anomaly_relaxed_geometry_features(context)
+
 
 @dataclass(frozen=True, slots=True)
 class PostPumpDistributionStrategy(BaseStrategy):
@@ -276,6 +316,10 @@ class PostPumpDistributionStrategy(BaseStrategy):
     @property
     def metadata(self) -> StrategyMetadata:
         return self._metadata
+
+    @property
+    def trigger_config(self) -> object:
+        return self.config
 
     @property
     def required_data_streams(self) -> Mapping[str, bool]:
@@ -310,6 +354,73 @@ class PostPumpDistributionStrategy(BaseStrategy):
 
     def generate_custom_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
         return _pump_market_mechanics_features(context)
+
+    def generate_artifact_compatibility_features(self, context: StrategyFeatureContext) -> Mapping[str, object]:
+        return _anomaly_relaxed_geometry_features(context)
+
+
+def _anomaly_relaxed_geometry_features(context: StrategyFeatureContext) -> Mapping[str, object]:
+    missing = {spec.name: None for spec in ANOMALY_RELAXED_GEOMETRY_FEATURES}
+    state = context.state_asof
+    event = tuple(context.event_rows_asof)
+    if state is None or not event:
+        return missing
+    current = event[-1]
+    first = event[0]
+    atr_value = context.core_features.get("core_atr_1440")
+    atr = float(atr_value) if isinstance(atr_value, (int, float)) and atr_value > 0 else None
+    shelf_low = state.structural_low_asof_t
+    shelf_high = state.structural_high_asof_t
+    pump_height = max(state.running_high_asof_t - first.open, 0.0)
+    values = dict(missing)
+    values.update(
+        initial_pump_height_core_atr_1440=pump_height / atr if atr else None,
+        shelf_low_asof_t=shelf_low,
+        shelf_high_asof_t=shelf_high,
+    )
+    if shelf_low is not None:
+        values["minutes_spent_below_shelf"] = sum(1 for candle in event if candle.close < shelf_low)
+        reclaim_time = None
+        previous_close = None
+        for candle in event:
+            if previous_close is not None and previous_close < shelf_low <= candle.close:
+                reclaim_time = candle.available_time_ms
+            previous_close = candle.close
+        values["minutes_since_reclaim"] = (
+            max((context.snapshot_time_ms - reclaim_time) // ONE_MINUTE_MS, 0)
+            if reclaim_time is not None
+            else None
+        )
+        if atr:
+            values["current_low_minus_shelf_low_core_atr_1440"] = (current.low - shelf_low) / atr
+            values["current_close_minus_shelf_low_core_atr_1440"] = (current.close - shelf_low) / atr
+    if shelf_high is not None and atr:
+        values["current_high_minus_shelf_high_core_atr_1440"] = (current.high - shelf_high) / atr
+    if shelf_low is not None and shelf_high is not None:
+        values["post_pump_consolidation_minutes"] = state.time_since_running_high_minutes
+        values["consolidation_width_ratio"] = (
+            max(shelf_high - shelf_low, 0.0) / pump_height if pump_height > 1e-12 else None
+        )
+    if shelf_low is not None and current.low < shelf_low:
+        values["volume_on_sweep_percentile"] = _rank_percentile(current.volume, [row.volume for row in event])
+        trades = [row.number_of_trades for row in event if row.number_of_trades is not None]
+        values["trade_count_on_sweep_percentile"] = (
+            _rank_percentile(current.number_of_trades, trades)
+            if current.number_of_trades is not None and trades
+            else None
+        )
+        if current.taker_buy_quote_volume is not None:
+            delta = 2.0 * current.taker_buy_quote_volume - current.quote_volume
+            values["cvd_change_during_sweep"] = delta / max(current.quote_volume, 1e-12)
+        values["oi_change_during_sweep"] = context.core_features.get("oi_change_5m_pct")
+        values["liq_intensity_during_sweep"] = context.core_features.get("liq_intensity")
+    return values
+
+
+def _rank_percentile(value: float, values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    return sum(float(item) <= float(value) for item in values) / len(values)
 
 
 def _pump_market_mechanics_features(context: StrategyFeatureContext) -> Mapping[str, object]:

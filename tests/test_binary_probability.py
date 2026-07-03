@@ -43,6 +43,7 @@ def _config() -> BinaryWeeklyWalkForwardConfig:
         categorical_features=("session",),
         breakdown_columns=("session",),
         label_only_columns=("nature_y", "nature_resolution_time_ms"),
+        required_label_schema_value="pump_fade_event_peak_close_race_v1",
         min_train_rows=80,
         min_split_rows=12,
         min_class_rows_per_split=3,
@@ -207,6 +208,7 @@ def test_binary_probability_config_loader_is_strict(tmp_path: Path) -> None:
         "oos_start_utc": "2025-03-01T00:00:00Z",
         "oos_end_utc": "2025-04-01T00:00:00Z",
         "numeric_features": ["signal"],
+        "required_label_schema_value": "unit_label_v1",
     }
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")

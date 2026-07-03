@@ -214,11 +214,11 @@ def test_take_profit_fills_at_the_limit_when_high_touches_it() -> None:
     result = simulate_pump_long_trade(
         open_=open_, high=high, low=low, close=close,
         entry_index=0, initial_stop_price=95.0, spec=_frictionless(),
-        take_profit_return=0.10,
+        take_profit_price=110.0,
     )
 
     assert result.exit_index == 1
-    assert result.exit_price == pytest.approx(110.0)  # limit at entry*1.10
+    assert result.exit_price == pytest.approx(110.0)
     assert result.net_return == pytest.approx(0.10)
 
 
@@ -260,6 +260,44 @@ def test_structural_swing_trail_ratchets_on_atr_confirmed_higher_lows() -> None:
     assert result.exit_reason == EXIT_REASON_TRAILING_STOP
     assert result.final_stop_price >= 98.0  # ratcheted up off the deep base
     assert result.final_stop_price > 90.0
+
+
+def test_stage_switch_early_tolerates_intrabar_dip_below_stop() -> None:
+    # entry 100, stop 90 => R=10, stage_switch_r=2 => "late" only once the peak
+    # reaches 120. While early, an intrabar low of 89 (below the stop) that
+    # closes back at 95 must NOT stop the trade (close-beyond tolerance).
+    open_ = np.asarray([100.0, 100.0])
+    high = np.asarray([101.0, 96.0])
+    low = np.asarray([99.0, 89.0])
+    close = np.asarray([100.0, 95.0])
+
+    result = simulate_pump_long_trade(
+        open_=open_, high=high, low=low, close=close,
+        entry_index=0, initial_stop_price=90.0, spec=_frictionless(),
+        stage_switch_r=2.0,
+    )
+
+    assert result.exit_reason == EXIT_REASON_DATA_END_CENSORED
+    assert result.exit_price == pytest.approx(95.0)
+
+
+def test_stage_switch_late_exits_on_first_intrabar_touch() -> None:
+    # Same 100/90 (R=10, switch at peak>=120). Bar 1 highs 121 => de-risked
+    # "late": bar 2's intrabar low 89 now TOUCHES the stop and exits at 90,
+    # even though its close (95) is above the stop.
+    open_ = np.asarray([100.0, 100.0, 100.0])
+    high = np.asarray([101.0, 121.0, 110.0])
+    low = np.asarray([99.0, 118.0, 89.0])
+    close = np.asarray([100.0, 120.0, 95.0])
+
+    result = simulate_pump_long_trade(
+        open_=open_, high=high, low=low, close=close,
+        entry_index=0, initial_stop_price=90.0, spec=_frictionless(),
+        stage_switch_r=2.0,
+    )
+
+    assert result.exit_index == 2
+    assert result.exit_price == pytest.approx(90.0)
 
 
 def test_causal_atr_is_positive_and_causal() -> None:

@@ -7,7 +7,9 @@ from pathlib import Path
 
 from anomaly_science.contracts.events import AnomalyEvent
 from anomaly_science.contracts.market import Candle1m
-from anomaly_science.events import BroadAnomalyDetectorConfig, detect_broad_anomaly_events, events_to_artifact
+from anomaly_science.events import events_to_artifact
+from anomaly_science.strategy.anomaly_config import BroadAnomalyDetectorConfig
+from anomaly_science.strategy.anomaly_detector import detect_broad_anomaly_events
 from anomaly_science.events.run import run_mvp1_events
 
 

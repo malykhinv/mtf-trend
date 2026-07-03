@@ -3,12 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from anomaly_science.contracts.execution import EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL, SIMULATION_ENTRY_PRICE_BASIS
+from anomaly_science.strategy.defaults import DEFAULT_RESEARCH_STRATEGY_NAME
 
 
 @dataclass(frozen=True, slots=True)
 class TradeSimulationConfig:
     simulation_version: str = "mvp1_pessimistic_trade_simulation_v1"
-    strategy_name: str = "broad_anomaly_v1_h30"
+    strategy_name: str = DEFAULT_RESEARCH_STRATEGY_NAME
     target_horizon_minutes: int = 30
     require_prediction_confident: bool = True
     require_rr_acceptable: bool = True

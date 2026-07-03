@@ -25,7 +25,7 @@ from anomaly_science.data.source import CsvDataSourceError, MarketDataSource
 from anomaly_science.decision import load_anomaly_decision_timing_csv
 from anomaly_science.simulation.config import TradeSimulationConfig
 from anomaly_science.strategy.registry import get_strategy
-from anomaly_science.strategy.execution import BarrierTrigger, PositionSide, StructuralAnchor
+from anomaly_science.contracts.execution_policy import BarrierTrigger, PositionSide, StructuralAnchor
 
 
 class TradeSimulationInputError(ValueError):

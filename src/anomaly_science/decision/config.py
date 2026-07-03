@@ -6,6 +6,7 @@ from anomaly_science.contracts.horizons import research_horizon_label_column
 from anomaly_science.contracts.decision import UTILITY_EVIDENCE_STATUS_NON_FINAL, UTILITY_MODEL_KIND_NATURE_PROXY
 from anomaly_science.contracts.execution import EV_ENTRY_PRICE_BASIS, EV_EXECUTION_REFERENCE_MODEL, ROUND_TRIP_COST_MODEL
 from anomaly_science.strategy.registry import validate_strategy_horizon
+from anomaly_science.strategy.defaults import DEFAULT_RESEARCH_STRATEGY_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +17,7 @@ class ExpectedValueConfig:
     utility_model_kind: str = UTILITY_MODEL_KIND_NATURE_PROXY
     utility_evidence_status: str = UTILITY_EVIDENCE_STATUS_NON_FINAL
     utility_evidence_claim_allowed: bool = False
-    strategy_name: str = "broad_anomaly_v1_h30"
+    strategy_name: str = DEFAULT_RESEARCH_STRATEGY_NAME
     target_horizon_minutes: int = 30
     fee_bps: float = 4.0
     slippage_bps: float = 2.0

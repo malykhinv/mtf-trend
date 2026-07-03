@@ -1343,7 +1343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "backfill-pump-fade-aggtrades":
-        from anomaly_science.binance_vision_aggtrades_backfill import (
+        from anomaly_science.strategy.pump_fade.aggtrades_backfill import (
             DEFAULT_AGGTRADES_SIDECAR_DIR,
             DEFAULT_EVENTS_SOURCE,
             AggTradesBackfillConfig,

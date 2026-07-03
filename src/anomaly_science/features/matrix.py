@@ -2618,19 +2618,11 @@ def _build_state_feature_row_raw_values(
         moderate_cluster_min_count=config.moderate_cluster_min_count,
         systemic_cluster_min_count=config.systemic_cluster_min_count,
     )
-    geometry_features = _relaxed_geometry_features(
-        candles=candles,
-        state=state,
-        atr_value=atr_value,
-        oi_features=oi_features,
-        liquidation_features=liquidation_features,
-    )
-
     time_to_running_high = max(state.minutes_since_event_start - state.time_since_running_high_minutes, 0)
     clock_maturity = state.time_since_running_high_minutes / max(time_to_running_high, 1)
     event_age_ratio = state.minutes_since_detection / max(config.expected_event_lifetime_minutes, 1)
     strategy = strategy or get_strategy(config.strategy_name)
-    custom_features_json = _strategy_custom_features_json(
+    custom_feature_values, compatibility_feature_values = _strategy_features(
         strategy=strategy,
         state=state,
         candles=candles,
@@ -2642,9 +2634,22 @@ def _build_state_feature_row_raw_values(
             "range_since_start_atr": range_since_start_atr,
             "price_speed_atr": price_speed_atr,
             "oi_change_5m_pct": oi_features.oi_change_5m_pct_of_oi,
+            "liq_intensity": (
+                (liquidation_features.short_liq_intensity or 0.0)
+                + (liquidation_features.long_liq_intensity or 0.0)
+                if not liquidation_features.missing_liquidation_flag
+                else None
+            ),
             "cvd_since_event": cvd_features.cvd_quote_since_event_start,
             "systemic_cluster_regime": market_context_features.systemic_cluster_regime,
         },
+    )
+    custom_features_json = json.dumps(
+        custom_feature_values,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
     )
 
     return (
@@ -2710,26 +2715,26 @@ def _build_state_feature_row_raw_values(
         market_context_features.simultaneous_anomalies_share_1m,
         market_context_features.systemic_cluster_regime,
         market_context_features.market_shock_id,
-        geometry_features.initial_pump_height_core_atr_1440,
-        geometry_features.post_pump_consolidation_minutes,
-        geometry_features.consolidation_width_ratio,
-        geometry_features.shelf_low_asof_t,
-        geometry_features.shelf_high_asof_t,
-        geometry_features.current_low_minus_shelf_low_core_atr_1440,
-        geometry_features.current_close_minus_shelf_low_core_atr_1440,
-        geometry_features.current_high_minus_shelf_high_core_atr_1440,
-        geometry_features.minutes_spent_below_shelf,
-        geometry_features.minutes_since_reclaim,
-        geometry_features.volume_on_sweep_percentile,
-        geometry_features.trade_count_on_sweep_percentile,
-        geometry_features.cvd_change_during_sweep,
-        geometry_features.oi_change_during_sweep,
-        geometry_features.liq_intensity_during_sweep,
+        compatibility_feature_values.get("initial_pump_height_core_atr_1440"),
+        compatibility_feature_values.get("post_pump_consolidation_minutes"),
+        compatibility_feature_values.get("consolidation_width_ratio"),
+        compatibility_feature_values.get("shelf_low_asof_t"),
+        compatibility_feature_values.get("shelf_high_asof_t"),
+        compatibility_feature_values.get("current_low_minus_shelf_low_core_atr_1440"),
+        compatibility_feature_values.get("current_close_minus_shelf_low_core_atr_1440"),
+        compatibility_feature_values.get("current_high_minus_shelf_high_core_atr_1440"),
+        compatibility_feature_values.get("minutes_spent_below_shelf"),
+        compatibility_feature_values.get("minutes_since_reclaim"),
+        compatibility_feature_values.get("volume_on_sweep_percentile"),
+        compatibility_feature_values.get("trade_count_on_sweep_percentile"),
+        compatibility_feature_values.get("cvd_change_during_sweep"),
+        compatibility_feature_values.get("oi_change_during_sweep"),
+        compatibility_feature_values.get("liq_intensity_during_sweep"),
         custom_features_json,
     )
 
 
-def _strategy_custom_features_json(
+def _strategy_features(
     *,
     strategy,
     state: StrategyState1mRow,
@@ -2737,11 +2742,9 @@ def _strategy_custom_features_json(
     open_interest_rows: Sequence[OpenInterest5m] | _OpenInterestSeries | None,
     liquidation_rows: Sequence[LiquidationEvent] | _LiquidationSeries | None,
     core_features: Mapping[str, object],
-) -> str:
-    from anomaly_science.strategy.base import StrategyFeatureContext, validate_custom_feature_values
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    from anomaly_science.contracts.strategy import StrategyFeatureContext, validate_custom_feature_values
 
-    if not strategy.custom_feature_catalog:
-        return "{}"
     event_start_time_ms = _event_start_time_ms(state)
     if isinstance(candles, _CandleSeries):
         market_rows = candles.trailing_asof(state.snapshot_time_ms, 1440)
@@ -2758,6 +2761,7 @@ def _strategy_custom_features_json(
         event_start_time_ms=event_start_time_ms,
         snapshot_time_ms=state.snapshot_time_ms,
         feature_cutoff_time_ms=state.feature_cutoff_time_ms,
+        state_asof=state,
         market_rows_asof=tuple(market_rows),
         event_rows_asof=tuple(event_rows),
         open_interest_rows_asof=_rows_available_asof(open_interest_rows, state.snapshot_time_ms),
@@ -2766,7 +2770,8 @@ def _strategy_custom_features_json(
     )
     values = dict(strategy.generate_custom_features(context))
     validate_custom_feature_values(strategy, values)
-    return json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    compatibility_values = dict(strategy.generate_artifact_compatibility_features(context))
+    return values, compatibility_values
 
 
 def _rows_available_asof(rows, snapshot_time_ms: int) -> tuple[object, ...]:
@@ -2823,174 +2828,6 @@ def _price_speed_atr(
     if not math.isfinite(expected_one_minute_atr) or expected_one_minute_atr <= 0:
         return None
     return (current.close - previous.close) / expected_one_minute_atr
-
-
-class _RelaxedGeometryFeatures:
-    def __init__(
-        self,
-        *,
-        initial_pump_height_core_atr_1440: float | None,
-        post_pump_consolidation_minutes: int | None,
-        consolidation_width_ratio: float | None,
-        shelf_low_asof_t: float | None,
-        shelf_high_asof_t: float | None,
-        current_low_minus_shelf_low_core_atr_1440: float | None,
-        current_close_minus_shelf_low_core_atr_1440: float | None,
-        current_high_minus_shelf_high_core_atr_1440: float | None,
-        minutes_spent_below_shelf: int | None,
-        minutes_since_reclaim: int | None,
-        volume_on_sweep_percentile: float | None,
-        trade_count_on_sweep_percentile: float | None,
-        cvd_change_during_sweep: float | None,
-        oi_change_during_sweep: float | None,
-        liq_intensity_during_sweep: float | None,
-    ) -> None:
-        self.initial_pump_height_core_atr_1440 = initial_pump_height_core_atr_1440
-        self.post_pump_consolidation_minutes = post_pump_consolidation_minutes
-        self.consolidation_width_ratio = consolidation_width_ratio
-        self.shelf_low_asof_t = shelf_low_asof_t
-        self.shelf_high_asof_t = shelf_high_asof_t
-        self.current_low_minus_shelf_low_core_atr_1440 = current_low_minus_shelf_low_core_atr_1440
-        self.current_close_minus_shelf_low_core_atr_1440 = current_close_minus_shelf_low_core_atr_1440
-        self.current_high_minus_shelf_high_core_atr_1440 = current_high_minus_shelf_high_core_atr_1440
-        self.minutes_spent_below_shelf = minutes_spent_below_shelf
-        self.minutes_since_reclaim = minutes_since_reclaim
-        self.volume_on_sweep_percentile = volume_on_sweep_percentile
-        self.trade_count_on_sweep_percentile = trade_count_on_sweep_percentile
-        self.cvd_change_during_sweep = cvd_change_during_sweep
-        self.oi_change_during_sweep = oi_change_during_sweep
-        self.liq_intensity_during_sweep = liq_intensity_during_sweep
-
-
-def _relaxed_geometry_features(
-    *,
-    candles: Sequence[Candle1m],
-    state: StrategyState1mRow,
-    atr_value: float | None,
-    oi_features: _OiFeatures,
-    liquidation_features: _LiquidationFeatures,
-) -> _RelaxedGeometryFeatures:
-    current = _current_candle(candles=candles, snapshot_time_ms=state.snapshot_time_ms)
-    event_start_time_ms = _event_start_time_ms(state)
-    if current is None:
-        return _missing_relaxed_geometry()
-    if isinstance(candles, _CandleSeries):
-        event_window = list(candles.event_window(event_start_time_ms=event_start_time_ms, snapshot_time_ms=state.snapshot_time_ms))
-    else:
-        event_window = [
-            candle
-            for candle in candles
-            if candle.open_time_ms >= event_start_time_ms and candle.available_time_ms <= state.snapshot_time_ms
-        ]
-        event_window.sort(key=lambda item: (item.available_time_ms, item.open_time_ms))
-    if not event_window:
-        return _missing_relaxed_geometry()
-
-    first = event_window[0]
-    initial_pump_height_core_atr_1440 = None
-    if atr_value is not None:
-        initial_pump_height_core_atr_1440 = max(state.running_high_asof_t - first.open, 0.0) / atr_value
-
-    shelf_low = state.structural_low_asof_t
-    shelf_high = state.structural_high_asof_t
-    post_pump_consolidation_minutes = None
-    consolidation_width_ratio = None
-    current_low_minus_shelf_low_core_atr_1440 = None
-    current_close_minus_shelf_low_core_atr_1440 = None
-    current_high_minus_shelf_high_core_atr_1440 = None
-    minutes_spent_below_shelf = None
-    minutes_since_reclaim = None
-    volume_on_sweep_percentile = None
-    trade_count_on_sweep_percentile = None
-    cvd_change_during_sweep = None
-    oi_change_during_sweep = None
-    liq_intensity_during_sweep = None
-
-    if shelf_low is not None:
-        minutes_spent_below_shelf = sum(1 for candle in event_window if candle.close < shelf_low)
-        minutes_since_reclaim = _minutes_since_latest_reclaim(event_window=event_window, shelf_low=shelf_low, snapshot_time_ms=state.snapshot_time_ms)
-        if atr_value is not None:
-            current_low_minus_shelf_low_core_atr_1440 = (current.low - shelf_low) / atr_value
-            current_close_minus_shelf_low_core_atr_1440 = (current.close - shelf_low) / atr_value
-
-    if shelf_high is not None and atr_value is not None:
-        current_high_minus_shelf_high_core_atr_1440 = (current.high - shelf_high) / atr_value
-
-    if shelf_low is not None and shelf_high is not None:
-        post_pump_consolidation_minutes = state.time_since_running_high_minutes
-        pump_height_price = max(state.running_high_asof_t - first.open, 0.0)
-        if pump_height_price > EPS:
-            consolidation_width_ratio = max(shelf_high - shelf_low, 0.0) / pump_height_price
-
-    if shelf_low is not None and current.low < shelf_low:
-        volume_on_sweep_percentile = _value_rank_percentile(current.volume, [candle.volume for candle in event_window])
-        trade_values = [candle.number_of_trades for candle in event_window if candle.number_of_trades is not None]
-        if current.number_of_trades is not None and trade_values:
-            trade_count_on_sweep_percentile = _value_rank_percentile(current.number_of_trades, trade_values)
-        if current.taker_buy_quote_volume is not None:
-            cvd_change_during_sweep = _candle_delta_quote(current) / max(current.quote_volume, EPS)
-        oi_change_during_sweep = oi_features.oi_change_5m_pct_of_oi
-        if not liquidation_features.missing_liquidation_flag:
-            short_intensity = liquidation_features.short_liq_intensity or 0.0
-            long_intensity = liquidation_features.long_liq_intensity or 0.0
-            liq_intensity_during_sweep = short_intensity + long_intensity
-
-    return _RelaxedGeometryFeatures(
-        initial_pump_height_core_atr_1440=initial_pump_height_core_atr_1440,
-        post_pump_consolidation_minutes=post_pump_consolidation_minutes,
-        consolidation_width_ratio=consolidation_width_ratio,
-        shelf_low_asof_t=shelf_low,
-        shelf_high_asof_t=shelf_high,
-        current_low_minus_shelf_low_core_atr_1440=current_low_minus_shelf_low_core_atr_1440,
-        current_close_minus_shelf_low_core_atr_1440=current_close_minus_shelf_low_core_atr_1440,
-        current_high_minus_shelf_high_core_atr_1440=current_high_minus_shelf_high_core_atr_1440,
-        minutes_spent_below_shelf=minutes_spent_below_shelf,
-        minutes_since_reclaim=minutes_since_reclaim,
-        volume_on_sweep_percentile=volume_on_sweep_percentile,
-        trade_count_on_sweep_percentile=trade_count_on_sweep_percentile,
-        cvd_change_during_sweep=cvd_change_during_sweep,
-        oi_change_during_sweep=oi_change_during_sweep,
-        liq_intensity_during_sweep=liq_intensity_during_sweep,
-    )
-
-
-def _missing_relaxed_geometry() -> _RelaxedGeometryFeatures:
-    return _RelaxedGeometryFeatures(
-        initial_pump_height_core_atr_1440=None,
-        post_pump_consolidation_minutes=None,
-        consolidation_width_ratio=None,
-        shelf_low_asof_t=None,
-        shelf_high_asof_t=None,
-        current_low_minus_shelf_low_core_atr_1440=None,
-        current_close_minus_shelf_low_core_atr_1440=None,
-        current_high_minus_shelf_high_core_atr_1440=None,
-        minutes_spent_below_shelf=None,
-        minutes_since_reclaim=None,
-        volume_on_sweep_percentile=None,
-        trade_count_on_sweep_percentile=None,
-        cvd_change_during_sweep=None,
-        oi_change_during_sweep=None,
-        liq_intensity_during_sweep=None,
-    )
-
-
-def _minutes_since_latest_reclaim(*, event_window: Sequence[Candle1m], shelf_low: float, snapshot_time_ms: int) -> int | None:
-    latest_reclaim_time_ms: int | None = None
-    previous_close: float | None = None
-    for candle in event_window:
-        if previous_close is not None and previous_close < shelf_low <= candle.close:
-            latest_reclaim_time_ms = candle.available_time_ms
-        previous_close = candle.close
-    if latest_reclaim_time_ms is None:
-        return None
-    return max((snapshot_time_ms - latest_reclaim_time_ms) // ONE_MINUTE_MS, 0)
-
-
-def _value_rank_percentile(value: float, values: Sequence[float]) -> float | None:
-    if not values:
-        return None
-    less_or_equal = sum(1 for item in values if item <= value)
-    return less_or_equal / len(values)
 
 
 class _VolumeFeatures:

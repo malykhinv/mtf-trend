@@ -9,9 +9,6 @@ from anomaly_science.market_context.config import EventScopedPerpCrowdingContext
 
 
 PERP_CROWDING_ARCHIVE_SCHEMA_VERSION = "binance_event_perp_crowding_archive_v1"
-PERP_CROWDING_FAMILY = "pump_fade_perp_crowding_v1"
-
-
 def perp_crowding_feature_names(
     config: EventScopedPerpCrowdingContextConfig,
 ) -> tuple[str, ...]:
@@ -339,7 +336,6 @@ def _audit_join_times(
 
 __all__ = [
     "PERP_CROWDING_ARCHIVE_SCHEMA_VERSION",
-    "PERP_CROWDING_FAMILY",
     "attach_perp_crowding_context",
     "build_perp_crowding_features",
     "perp_crowding_feature_names",

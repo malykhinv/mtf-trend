@@ -85,7 +85,7 @@ class BinaryWeeklyWalkForwardConfig:
     population_exact_column: str = ""
     population_exact_value: str | int | float | bool | None = None
     required_label_schema_column: str = "nature_label_schema_version"
-    required_label_schema_value: str = "pump_fade_event_peak_close_race_v1"
+    required_label_schema_value: str = ""
     required_input_schema_column: str = ""
     required_input_schema_value: str = ""
     label_only_columns: tuple[str, ...] = ()
@@ -113,6 +113,10 @@ class BinaryWeeklyWalkForwardConfig:
         for name in ("protocol_freeze_id", "strategy_name", "target_name"):
             if not getattr(self, name):
                 raise BinaryProbabilityConfigError(f"{name} is required")
+        if self.required_label_schema_column and not self.required_label_schema_value:
+            raise BinaryProbabilityConfigError(
+                "required_label_schema_value is required when required_label_schema_column is set"
+            )
         if not (0 <= self.development_start_ms < self.oos_start_ms < self.oos_end_ms):
             raise BinaryProbabilityConfigError(
                 "development_start_ms, oos_start_ms, and oos_end_ms must increase strictly"

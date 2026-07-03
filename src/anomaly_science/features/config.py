@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from anomaly_science.future.atr import ATR_1D_WINDOW_MINUTES
+from anomaly_science.strategy.defaults import DEFAULT_RESEARCH_STRATEGY_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +17,7 @@ class FeatureMatrixConfig:
     """
 
     feature_matrix_version: str = "feature_matrix_v5_relaxed_geometry"
-    strategy_name: str = "broad_anomaly_v1_h30"
+    strategy_name: str = DEFAULT_RESEARCH_STRATEGY_NAME
     atr_window_minutes: int = ATR_1D_WINDOW_MINUTES
     expected_event_lifetime_minutes: int = 60
     volume_baseline_window_minutes: int = 1440

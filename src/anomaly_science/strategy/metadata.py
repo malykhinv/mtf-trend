@@ -5,9 +5,7 @@ from typing import Iterable, Mapping
 from anomaly_science.contracts.audit import RunConfigRow
 from anomaly_science.strategy.base import BaseStrategy
 from anomaly_science.strategy.registry import get_strategy
-
-
-DEFAULT_RESEARCH_STRATEGY_NAME = "broad_anomaly_v1_h30"
+from anomaly_science.strategy.defaults import DEFAULT_RESEARCH_STRATEGY_NAME
 
 
 def format_required_data_streams(streams: Mapping[str, bool]) -> str:

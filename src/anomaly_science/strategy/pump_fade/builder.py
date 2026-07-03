@@ -457,7 +457,7 @@ def _load_symbol(path: Path) -> tuple[pd.DataFrame, dict[str, int]]:
 
 
 def _default_aggtrades_sidecar_dir() -> Path:
-    from anomaly_science.binance_vision_aggtrades_backfill import DEFAULT_AGGTRADES_SIDECAR_DIR
+    from anomaly_science.strategy.pump_fade.aggtrades_backfill import DEFAULT_AGGTRADES_SIDECAR_DIR
 
     return DEFAULT_AGGTRADES_SIDECAR_DIR
 

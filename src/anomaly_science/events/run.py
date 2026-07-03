@@ -20,12 +20,12 @@ from anomaly_science.data.quality import (
     run_data_quality,
 )
 from anomaly_science.data.source import CsvDataSourceError, CsvDirectoryDataSource
-from anomaly_science.events.config import BroadAnomalyDetectorConfig
 from anomaly_science.events.deduplication import suppress_event_cascade
-from anomaly_science.events.detector import events_to_artifact
-from anomaly_science.strategy.base import internal_datetime_to_utc_ms, validate_trigger_frame
+from anomaly_science.events.serialization import events_to_artifact
+from anomaly_science.contracts.strategy import internal_datetime_to_utc_ms, validate_trigger_frame
+from anomaly_science.strategy.defaults import DEFAULT_RESEARCH_STRATEGY_NAME
 from anomaly_science.strategy.metadata import format_required_data_streams, strategy_metadata_run_config_rows
-from anomaly_science.strategy.registry import get_broad_anomaly_strategy, get_strategy
+from anomaly_science.strategy.registry import get_strategy
 
 
 REQUIRED_DATASETS = ("candles_1m", "candles_5m")
@@ -37,20 +37,15 @@ def run_mvp1_events(
     *,
     input_dir: str | Path,
     out_dir: str | Path,
-    config: BroadAnomalyDetectorConfig | None = None,
-    strategy_name: str = "broad_anomaly_v1_h30",
+    config: object | None = None,
+    strategy_name: str = DEFAULT_RESEARCH_STRATEGY_NAME,
     max_input_time_ms: int | None = None,
 ) -> Path:
     """Run the MVP1 strategy event detector and write protocol artifacts."""
     input_path = Path(input_dir)
     output_path = Path(out_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    cfg = config or BroadAnomalyDetectorConfig()
-    strategy = (
-        get_broad_anomaly_strategy(config=cfg, strategy_name=strategy_name)
-        if strategy_name.startswith("broad_anomaly_v1_h")
-        else get_strategy(strategy_name)
-    )
+    strategy = get_strategy(strategy_name, detector_config=config)
 
     frames, read_errors = _read_source_frames(input_path, max_input_time_ms=max_input_time_ms)
     data_quality = run_data_quality(frames, read_errors=read_errors)
@@ -375,7 +370,7 @@ def _protocol_rows_to_artifact(rows: list[ProtocolAuditRow]) -> list[dict[str, o
     return result
 
 def _run_config_rows(*, input_path: Path, output_path: Path, strategy, max_input_time_ms: int | None = None) -> list[RunConfigRow]:
-    config = strategy.config
+    config = strategy.trigger_config
     rows = [
         RunConfigRow(key="command", value="run-mvp1-events", source="cli"),
         RunConfigRow(key="input_dir", value=str(input_path), source="cli"),
@@ -391,64 +386,6 @@ def _run_config_rows(*, input_path: Path, output_path: Path, strategy, max_input
         *strategy_metadata_run_config_rows(strategy),
         RunConfigRow(key="detector_version", value=str(config.detector_version), source="runtime"),
     ]
-    if isinstance(config, BroadAnomalyDetectorConfig):
-        rows.extend(
-            [
-                RunConfigRow(key="detector_baseline_bars", value=str(config.baseline_bars), source="runtime"),
-                RunConfigRow(key="detector_min_baseline_bars", value=str(config.min_baseline_bars), source="runtime"),
-                RunConfigRow(key="detector_min_abs_return_pct", value=str(config.min_abs_return_pct), source="runtime"),
-                RunConfigRow(key="detector_min_quote_volume_zscore", value=str(config.min_quote_volume_zscore), source="runtime"),
-                RunConfigRow(key="detector_min_volume_zscore", value=str(config.min_volume_zscore), source="runtime"),
-                RunConfigRow(key="detector_min_trade_count_zscore", value=str(config.min_trade_count_zscore), source="runtime"),
-                RunConfigRow(key="detector_min_range_zscore", value=str(config.min_range_zscore), source="runtime"),
-                RunConfigRow(key="detector_cooldown_minutes", value=str(config.cooldown_minutes), source="runtime"),
-            ]
-        )
-    elif hasattr(config, "min_abs_extension_return_from_seed_open"):
-        rows.extend(
-            [
-                RunConfigRow(
-                    key="detector_min_abs_extension_return_from_seed_open",
-                    value=str(getattr(config, "min_abs_extension_return_from_seed_open")),
-                    source="runtime",
-                ),
-                RunConfigRow(
-                    key="detector_min_minutes_since_event_start",
-                    value=str(getattr(config, "min_minutes_since_event_start")),
-                    source="runtime",
-                ),
-                RunConfigRow(
-                    key="detector_max_minutes_since_event_start",
-                    value=str(getattr(config, "max_minutes_since_event_start")),
-                    source="runtime",
-                ),
-                RunConfigRow(
-                    key="source_broad_detector_version",
-                    value=str(getattr(getattr(config, "broad_detector_config"), "detector_version")),
-                    source="runtime",
-                ),
-                RunConfigRow(
-                    key="source_broad_detector_min_abs_return_pct",
-                    value=str(getattr(getattr(config, "broad_detector_config"), "min_abs_return_pct")),
-                    source="runtime",
-                ),
-            ]
-        )
-    elif hasattr(config, "min_daily_return_asof_t"):
-        rows.extend(
-            [
-                RunConfigRow(
-                    key="detector_min_daily_return_asof_t",
-                    value=str(getattr(config, "min_daily_return_asof_t")),
-                    source="runtime",
-                ),
-                RunConfigRow(
-                    key="detector_min_trade_count_market_percentile_asof_t",
-                    value=str(getattr(config, "min_trade_count_market_percentile_asof_t")),
-                    source="runtime",
-                ),
-            ]
-        )
     return rows
 
 

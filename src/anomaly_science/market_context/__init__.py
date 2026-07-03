@@ -27,7 +27,6 @@ from anomaly_science.market_context.perp_crowding_archive import (
 )
 from anomaly_science.market_context.perp_crowding import (
     PERP_CROWDING_ARCHIVE_SCHEMA_VERSION,
-    PERP_CROWDING_FAMILY,
     attach_perp_crowding_context,
     build_perp_crowding_features,
     perp_crowding_feature_names,
@@ -94,7 +93,6 @@ __all__ = [
     "parse_funding_rate_zip",
     "parse_premium_index_zip",
     "PERP_CROWDING_ARCHIVE_SCHEMA_VERSION",
-    "PERP_CROWDING_FAMILY",
     "attach_perp_crowding_context",
     "build_perp_crowding_features",
     "perp_crowding_feature_names",
