@@ -18,6 +18,7 @@ from anomaly_science.strategy.pump_long.research.context import (
     prior_fade_context,
 )
 from anomaly_science.strategy.pump_long.research.metrics import (
+    dissect_wins_losses,
     equity_curve,
     ev_excluding_best_month,
     max_drawdown,
@@ -30,6 +31,7 @@ __all__ = [
     "BacktestResult",
     "build_event_table",
     "build_symbol_cache",
+    "dissect_wins_losses",
     "equity_curve",
     "ev_excluding_best_month",
     "load_symbol_arrays",

@@ -31,6 +31,7 @@ from anomaly_science.simulation.numpy_path import (
 )
 from anomaly_science.strategy.pump_fade.builder import _load_symbol
 from anomaly_science.strategy.pump_long.research.context import DEFAULT_CACHE, DEFAULT_LATTICE, DEV_END_MS
+from anomaly_science.strategy.pump_long.research.metrics import dissect_wins_losses
 from anomaly_science.strategy.pump_long.spec import PumpLongExecutionSpec
 
 SWING_CONFIRMATION = 2
@@ -121,25 +122,6 @@ def _line(label: str, net: np.ndarray) -> str:
     pf = w.sum() / (-l.sum() + 1e-9) if len(l) else float("inf")
     return (f"{label:<22} n={len(net):5d} win={(net>0).mean()*100:5.1f}% EV={net.mean()*100:6.2f}% "
             f"avgWin={w.mean()*100 if len(w) else 0:4.2f}% avgLoss={l.mean()*100 if len(l) else 0:6.2f}% PF={pf:4.2f}")
-
-
-def dissect_wins_losses(df: pd.DataFrame, net_col: str, features: list[str]) -> None:
-    """What separates winners from losers: standardized mean gap (Cohen's d)."""
-
-    net = df[net_col].to_numpy()
-    win = df.loc[net > 0]; loss = df.loc[net <= 0]
-    print(f"\n=== win/loss dissection [{net_col}]  wins={len(win)} losses={len(loss)} ===", flush=True)
-    print(f"{'feature':<30}{'mean_win':>12}{'mean_loss':>12}{'cohen_d':>10}", flush=True)
-    scored = []
-    for f in features:
-        a = win[f].to_numpy(); b = loss[f].to_numpy()
-        a = a[np.isfinite(a)]; b = b[np.isfinite(b)]
-        if len(a) < 30 or len(b) < 30:
-            continue
-        sd = np.sqrt((a.var() + b.var()) / 2) + 1e-12
-        scored.append((f, a.mean(), b.mean(), (a.mean() - b.mean()) / sd))
-    for f, mw, ml, d in sorted(scored, key=lambda x: -abs(x[3])):
-        print(f"{f:<30}{mw:>12.4f}{ml:>12.4f}{d:>10.2f}", flush=True)
 
 
 def report(df: pd.DataFrame) -> None:

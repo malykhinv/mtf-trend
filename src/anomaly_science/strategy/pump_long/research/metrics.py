@@ -140,8 +140,28 @@ def summarize(
     )
 
 
+def dissect_wins_losses(df: pd.DataFrame, net_col: str, features: list[str]) -> None:
+    """What separates winners from losers: standardized mean gap (Cohen's d)."""
+
+    net = df[net_col].to_numpy()
+    win = df.loc[net > 0]; loss = df.loc[net <= 0]
+    print(f"\n=== win/loss dissection [{net_col}]  wins={len(win)} losses={len(loss)} ===", flush=True)
+    print(f"{'feature':<30}{'mean_win':>12}{'mean_loss':>12}{'cohen_d':>10}", flush=True)
+    scored = []
+    for f in features:
+        a = win[f].to_numpy(); b = loss[f].to_numpy()
+        a = a[np.isfinite(a)]; b = b[np.isfinite(b)]
+        if len(a) < 30 or len(b) < 30:
+            continue
+        sd = np.sqrt((a.var() + b.var()) / 2) + 1e-12
+        scored.append((f, a.mean(), b.mean(), (a.mean() - b.mean()) / sd))
+    for f, mw, ml, d in sorted(scored, key=lambda x: -abs(x[3])):
+        print(f"{f:<30}{mw:>12.4f}{ml:>12.4f}{d:>10.2f}", flush=True)
+
+
 __all__ = [
     "TradeSetSummary",
+    "dissect_wins_losses",
     "equity_curve",
     "ev_excluding_best_month",
     "max_drawdown",
