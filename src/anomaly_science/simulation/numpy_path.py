@@ -33,6 +33,7 @@ class LongPathExecutionSpec(Protocol):
 
 EXIT_REASON_TRAILING_STOP = "trailing_stop"
 EXIT_REASON_INITIAL_STOP = "initial_stop"
+EXIT_REASON_TAKE_PROFIT = "take_profit"
 EXIT_REASON_DATA_END_CENSORED = "data_end_censored"
 STATUS_FILLED = "filled"
 STATUS_INVALID_STOP_ABOVE_ENTRY = "invalid_stop_above_entry"
@@ -113,6 +114,7 @@ def simulate_long_path(
     confirmation = spec.swing_confirmation_bars
     exit_index: int | None = None
     exit_raw: float | None = None
+    take_profit_hit = False
     highest_high = entry_open
     peak_close = entry_open
     armed = False
@@ -141,6 +143,7 @@ def simulate_long_path(
             if float(high[offset]) >= take_profit_price:
                 exit_index = offset
                 exit_raw = take_profit_price
+                take_profit_hit = True
                 break
         if breakeven_arm_return is not None and (
             float(high[offset]) / entry_open - 1.0
@@ -191,7 +194,10 @@ def simulate_long_path(
         exit_raw = float(close[exit_index])
         exit_reason = EXIT_REASON_DATA_END_CENSORED
     else:
-        exit_reason = EXIT_REASON_TRAILING_STOP if stop_moved else EXIT_REASON_INITIAL_STOP
+        if take_profit_hit:
+            exit_reason = EXIT_REASON_TAKE_PROFIT
+        else:
+            exit_reason = EXIT_REASON_TRAILING_STOP if stop_moved else EXIT_REASON_INITIAL_STOP
 
     exit_price = float(exit_raw) * (1.0 - spec.exit_slippage_bps / 10_000.0)
     fee_rate = spec.fee_per_side_bps / 10_000.0
@@ -336,6 +342,7 @@ def last_confirmed_swing_low(
 __all__ = [
     "EXIT_REASON_DATA_END_CENSORED",
     "EXIT_REASON_INITIAL_STOP",
+    "EXIT_REASON_TAKE_PROFIT",
     "EXIT_REASON_TRAILING_STOP",
     "LongPathResult",
     "STATUS_FILLED",

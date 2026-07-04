@@ -6,6 +6,7 @@ import pytest
 from anomaly_science.strategy.pump_long.execution import (
     EXIT_REASON_DATA_END_CENSORED,
     EXIT_REASON_INITIAL_STOP,
+    EXIT_REASON_TAKE_PROFIT,
     EXIT_REASON_TRAILING_STOP,
     STATUS_FILLED,
     STATUS_INVALID_STOP_ABOVE_ENTRY,
@@ -218,6 +219,7 @@ def test_take_profit_fills_at_the_limit_when_high_touches_it() -> None:
     )
 
     assert result.exit_index == 1
+    assert result.exit_reason == EXIT_REASON_TAKE_PROFIT
     assert result.exit_price == pytest.approx(110.0)
     assert result.net_return == pytest.approx(0.10)
 
