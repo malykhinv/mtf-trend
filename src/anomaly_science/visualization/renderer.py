@@ -122,29 +122,54 @@ def _draw_price_overlays(axis: plt.Axes, spec: ChartSpec, theme: ChartTheme) -> 
 
 def _draw_histograms(axis: plt.Axes, spec: ChartSpec, theme: ChartTheme) -> None:
     count = len(spec.candles.close)
-    width = _candle_width(count)
+    # Volume bars must be CONTIGUOUS (one under each candle). A narrow candle
+    # width leaves sub-pixel gaps that alias into a "_П_П_" picket fence when the
+    # window has many bars, so the histogram fills the full 1.0 step.
+    width = 1.0
+    scale = 1.0
+    has_label = False
     for series in spec.histograms:
         values = np.asarray(series.values, dtype=float)
         if len(values) != count:
             raise ValueError(f"histogram {series.label!r} must align with candle count")
         if series.normalize:
-            scale = float(np.nanmax(np.abs(values))) if len(values) else 0.0
-            values = values / scale * 100.0 if scale > 0 else np.zeros_like(values)
+            s = float(np.nanmax(np.abs(values))) if len(values) else 0.0
+            scale = s if s > 0 else 1.0
+            values = values / scale * 100.0 if s > 0 else np.zeros_like(values)
         axis.bar(
             np.arange(count), values, width=width, color=series.color,
             alpha=series.alpha, label=series.label or None,
         )
-    if spec.histograms:
+        has_label = has_label or bool(series.label)
+    # faint reference SEGMENTS (e.g. sleep-avg before H1, formation-avg after),
+    # each only spanning its own region; scaled to the series normalization.
+    for value, x0, x1, color in spec.histogram_hsegments:
+        axis.hlines(value / scale * 100.0, x0, x1, color=color, linewidth=0.7, alpha=0.5, zorder=2)
+    if has_label:
         legend = axis.legend(loc="upper left", frameon=False, fontsize=7, ncol=3)
         for text in legend.get_texts():
             text.set_color(theme.muted)
 
 
+_TICK_STEPS_MIN = (5, 15, 30, 60, 120, 240, 360, 720, 1440, 2880, 4320, 10080, 20160)
+
+
 def _apply_time_ticks(axis: plt.Axes, timestamps_ms: np.ndarray, theme: ChartTheme) -> None:
     count = len(timestamps_ms)
-    positions = np.unique(np.linspace(0, count - 1, min(8, count), dtype=int))
-    timestamps = pd.to_datetime(timestamps_ms[positions], unit="ms", utc=True)
-    labels = [stamp.strftime("%m-%d") if stamp.hour == 0 and stamp.minute == 0 else stamp.strftime("%H:%M") for stamp in timestamps]
+    if count < 2:
+        return
+    t0, t1 = int(timestamps_ms[0]), int(timestamps_ms[-1])
+    span_min = (t1 - t0) / 60_000.0
+    # pick a ROUND step (~7 ticks) so labels land on 00:00 / 06:00 / etc.
+    target = max(span_min / 7.0, 1.0)
+    step_ms = min(_TICK_STEPS_MIN, key=lambda s: abs(s - target)) * 60_000
+    first = ((t0 + step_ms - 1) // step_ms) * step_ms          # first round boundary >= t0
+    ticks_ms = np.arange(first, t1 + 1, step_ms, dtype=np.int64)
+    positions = np.searchsorted(timestamps_ms.astype(np.int64), ticks_ms)
+    positions = positions[(positions >= 0) & (positions < count)]
+    positions = np.unique(positions)
+    stamps = pd.to_datetime(timestamps_ms[positions], unit="ms", utc=True)
+    labels = [s.strftime("%m-%d\n%H:%M") for s in stamps]
     axis.set_xticks(positions)
     axis.set_xticklabels(labels, color=theme.muted)
 

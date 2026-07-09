@@ -94,6 +94,7 @@ class ChartSpec:
     zones: tuple[PriceZone, ...] = ()
     markers: tuple[PointMarker, ...] = ()
     histograms: tuple[HistogramSeries, ...] = ()
+    histogram_hsegments: tuple[tuple[float, float, float, str], ...] = ()  # (raw value, x0, x1, color) on the histogram panel
     metadata: dict[str, object] = field(default_factory=dict)
 
 
