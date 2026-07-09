@@ -478,6 +478,7 @@ LABELER_HTML = r"""<!doctype html>
     #chart:active { cursor: grabbing; }
     body.drawing #chart, body.drawing #chart * { cursor: crosshair !important; }
     #ovl { position:absolute; inset:0; pointer-events:none; z-index:3; }
+    body.drawing #ovl { pointer-events:auto; cursor: crosshair; }
     #yzone { position:absolute; z-index:4; cursor: ns-resize; }
     #xzone { position:absolute; z-index:4; cursor: ew-resize; }
     body.drawing #yzone, body.drawing #xzone { pointer-events:none; }
@@ -828,15 +829,20 @@ function chartDataEndMs() {
   const c = current && current.candles;
   return c && c.timestamp.length ? c.timestamp[c.timestamp.length-1] + barMs : Date.now();
 }
+function visibleChartRightMs() {
+  const r = plotRefs();
+  if (!r || !r.xa || !r.xa.range || r.xa.range.length < 2) return NaN;
+  return pms(r.xa.range[1]);
+}
+function unbrokenLevelEndMs() {
+  const dataEnd = chartDataEndMs();
+  const visibleRight = visibleChartRightMs();
+  return Number.isFinite(visibleRight) ? Math.max(dataEnd, visibleRight) : dataEnd;
+}
 function levelShapeEndMs(lvl) {
   if (!lvl) return chartDataEndMs();
   const end = Number.isFinite(Number(lvl.end_ms)) ? Number(lvl.end_ms) : chartDataEndMs();
-  if (lvl.broken) return end;
-  if (xRange) {
-    const visibleRight = pms(xRange[1]);
-    if (Number.isFinite(visibleRight) && visibleRight > end) return visibleRight;
-  }
-  return end;
+  return lvl.broken ? end : unbrokenLevelEndMs();
 }
 
 /* ---------- derived objects: level end + entry + stop ---------- */
@@ -976,7 +982,7 @@ function renderGhost(pt) {
     const price = anchor.price;
     const startMs = anchor.ms;
     const brk = levelBreakIdx(price, startMs);
-    const endMs = brk != null ? c.timestamp[brk] + barMs : c.timestamp[c.timestamp.length-1] + barMs;
+    const endMs = brk != null ? c.timestamp[brk] + barMs : unbrokenLevelEndMs();
     const ax = xToPx(startMs), bx = xToPx(endMs), gy = yToPx(price);
     html += `<line x1="${ax}" y1="${gy}" x2="${bx}" y2="${gy}" stroke="#8aa0d8" stroke-width="1" stroke-dasharray="5 3"/>`;
     html += `<line x1="${ax}" y1="${y0}" x2="${ax}" y2="${y1}" stroke="rgba(138,160,216,.30)" stroke-width="1" stroke-dasharray="3 3"/>`;
@@ -1377,14 +1383,14 @@ function draw() {
   const candle = {type:'candlestick', x, open:c.open, high:c.high, low:c.low, close:c.close, name:'price', xaxis:'x', yaxis:'y',
     increasing:{line:{color:'#7dbb91', width:1}, fillcolor:'rgba(125,187,145,.42)'},
     decreasing:{line:{color:'#c99a62', width:1}, fillcolor:'rgba(201,154,98,.40)'},
-    hoverinfo:'skip', hovertemplate:null};
-  const vol = {type:'bar', x, y:c.quote_volume, name:'volume', marker:{color:'#6f7890'}, xaxis:'x', yaxis:'y2', opacity:0.32, hoverinfo:'skip'};
+    hoverinfo:'none', hovertemplate:'<extra></extra>'};
+  const vol = {type:'bar', x, y:c.quote_volume, name:'volume', marker:{color:'#6f7890'}, xaxis:'x', yaxis:'y2', opacity:0.32, hoverinfo:'none', hovertemplate:'<extra></extra>'};
   const title = `pump ${fmtPct(e.pump_pct)} / vol x${Number(e.pump_over_sleep_vol||0).toFixed(1)} / trades x${Number(e.pump_over_sleep_trades||0).toFixed(1)}`;
   const spike = {showspikes:true, spikemode:'across', spikesnap:'cursor', spikedash:'dot', spikethickness:1, spikecolor:'#4a5160'};
   const layout = {
     paper_bgcolor:'#111318', plot_bgcolor:'#171a20', font:{color:'#e7e3d8'},
     margin:{l:56,r:28,t:42,b:38}, title:{text:title, x:0.99, xanchor:'right', font:{size:13}},
-    dragmode:'pan', hovermode:'x',
+    dragmode:'pan', hovermode:false, hoverdistance:-1, spikedistance:-1,
     xaxis:Object.assign({rangeslider:{visible:false}, gridcolor:'#252a32', linecolor:'#2a2e36', zeroline:false}, spike),
     yaxis:Object.assign({domain:[0.24,1], gridcolor:'#252a32', linecolor:'#2a2e36', zeroline:false, title:'price', hoverformat:'.6g', tickformat:priceTickFormat(c.close)}, spike),
     yaxis2:{domain:[0,0.17], gridcolor:'#252a32', linecolor:'#2a2e36', zeroline:false, title:'volume', hoverformat:'.4g', rangemode:'tozero', fixedrange:true},
@@ -1560,37 +1566,39 @@ function attachChartHandlers() {
     if (xChanged && yAuto) fitY();
     positionZones();
   });
-  el.addEventListener('wheel', chartWheelZoom, {passive:false});
   const wrap = document.getElementById('chartwrap');
-  wrap.addEventListener('pointerdown', e => {
+  const surface = document.getElementById('ovl');
+  wrap.addEventListener('wheel', chartWheelZoom, {passive:false});
+  surface.addEventListener('pointerdown', e => {
     if (!tool || !current || e.button !== 0) return;
     const pt = eventDataPoint(e);
     if (!pt || !pt.inPrice) return;
     e.preventDefault();
     e.stopPropagation();
     downPos = {x:e.clientX, y:e.clientY, pointerId:e.pointerId};
-    if (wrap.setPointerCapture) wrap.setPointerCapture(e.pointerId);
+    if (surface.setPointerCapture) surface.setPointerCapture(e.pointerId);
+    renderGhost(pt);
   }, true);
-  wrap.addEventListener('pointerup', e => {
+  surface.addEventListener('pointerup', e => {
     if (!tool || !current || !downPos) return;
     e.preventDefault();
     e.stopPropagation();
     const wasClick = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < 8;
     const pointerId = downPos.pointerId;
     downPos = null;
-    if (wrap.releasePointerCapture && pointerId != null) {
-      try { wrap.releasePointerCapture(pointerId); } catch (_) {}
+    if (surface.releasePointerCapture && pointerId != null) {
+      try { surface.releasePointerCapture(pointerId); } catch (_) {}
     }
     if (!wasClick) return;
     const pt = eventDataPoint(e);
     if (!pt || !pt.inPrice) { toast('click inside the price panel'); return; }
     handleToolClick(pt);
   }, true);
-  wrap.addEventListener('pointermove', e => {
+  surface.addEventListener('pointermove', e => {
     if (!tool || !current) return;
     renderGhost(eventDataPoint(e));
   }, true);
-  wrap.addEventListener('pointerleave', () => { if (tool && !downPos) clearGhost(); }, true);
+  surface.addEventListener('pointerleave', () => { if (tool && !downPos) clearGhost(); }, true);
   bindAxisZone(document.getElementById('yzone'), 'y');
   bindAxisZone(document.getElementById('xzone'), 'x');
   new ResizeObserver(() => positionZones()).observe(document.getElementById('chartwrap'));
