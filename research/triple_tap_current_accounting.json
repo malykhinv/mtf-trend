@@ -1,0 +1,42 @@
+{
+  "scope": "IS current artifacts; no ML selection; combined family portfolio accounting",
+  "setups_discovery_rows": 393,
+  "valid_entry_setups": 372,
+  "labels_close_rows": 329,
+  "labels_close_resolved_rows": 328,
+  "policy": "structure_0.50_part_0.50_runner_initial_stop",
+  "policy_status_counts": {
+    "stop": 159,
+    "final_target": 99,
+    "timeout": 70,
+    "unresolved_is_boundary": 1
+  },
+  "portfolio_candidates": 328,
+  "portfolio_taken": 271,
+  "portfolio_not_opened": 57,
+  "portfolio_rejects": {
+    "global_concurrency": 21,
+    "same_symbol": 36,
+    "insolvent": 0
+  },
+  "portfolio_metrics": {
+    "trades": 271,
+    "return_pct": 143.01499056420477,
+    "max_drawdown_pct": -12.147473125812901,
+    "win_rate_pct": 48.33948339483395,
+    "expectancy_r": 0.3073019897144525,
+    "profit_factor": 1.597690554627821,
+    "trading_days": 139,
+    "positive_days": 70,
+    "trades_per_day_mean": 1.8951048951048952,
+    "trades_per_day_median": 2.0,
+    "trades_per_day_p90": 3.0,
+    "trades_per_day_max": 7,
+    "duration_hours_p50": 3.3333333333333335,
+    "duration_hours_p90": 16.666666666666668,
+    "duration_hours_p99": 50.0,
+    "duration_hours_max": 200.0,
+    "top_winners_to_zero_count": 22,
+    "top_winners_to_zero_pct_of_trades": 8.118081180811808
+  }
+}
