@@ -28,13 +28,17 @@ class OhlcvWindowService:
             self._cache[key] = base if minutes == 1 else resample_ohlcv_np(base, minutes)
         return self._cache[key]
 
-    def event_payload(self, row: pd.Series) -> dict[str, Any]:
-        symbol, tf = str(row.symbol), str(row.tf)
-        frame = self.frame(symbol, tf)
+    def event_payload(self, row: pd.Series, *, tf: str | None = None) -> dict[str, Any]:
+        symbol = str(row.symbol)
+        source_tf = str(row.tf)
+        selected_tf = str(tf or source_tf)
+        frame = self.frame(symbol, selected_tf)
         ts = frame["timestamp"]
         a = int(np.searchsorted(ts, int(row.review_start_ms), side="left"))
         b = int(np.searchsorted(ts, int(row.review_end_ms), side="right"))
         event = row.replace({np.nan: None}).to_dict()
+        event["source_tf"] = source_tf
+        event["tf"] = selected_tf
         marker_cols = [c for c in row.index if c.endswith("_ms") or c.endswith("_price")]
         event["marker_columns"] = {c: event.get(c) for c in marker_cols if event.get(c) is not None}
         return {"event": event, "candles": _frame_slice(frame, a, b)}

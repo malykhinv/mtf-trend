@@ -231,6 +231,70 @@ def test_api_returns_json_error_for_missing_market_cache(tmp_path: Path) -> None
         server.server_close()
 
 
+def test_event_candles_can_switch_to_any_available_timeframe(tmp_path: Path) -> None:
+    candidates_path = tmp_path / "candidates.parquet"
+    labels_path = tmp_path / "labels.jsonl"
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "event_id": "evt_15m",
+                "symbol": "AAAUSDT",
+                "tf": "15m",
+                "review_start_ms": 0,
+                "review_end_ms": 300_000,
+            }
+        ]
+    ).to_parquet(candidates_path, index=False)
+    pd.DataFrame(
+        {
+            "timestamp": np.arange(0, 600_000, 60_000, dtype=np.int64),
+            "open": np.arange(10, dtype=float) + 1.0,
+            "high": np.arange(10, dtype=float) + 1.2,
+            "low": np.arange(10, dtype=float) + 0.8,
+            "close": np.arange(10, dtype=float) + 1.1,
+            "quote_volume": np.arange(10, dtype=float) + 100.0,
+            "trade_count": np.arange(10, dtype=float) + 1_000.0,
+        }
+    ).to_parquet(cache_dir / "AAAUSDT.parquet", index=False)
+
+    server = LevelLabelerServer(
+        ("127.0.0.1", 0),
+        LevelLabelerHandler,
+        candidates_path=candidates_path,
+        labels_path=labels_path,
+        cache_dir=cache_dir,
+        tf_minutes=DEFAULT_TF_MINUTES,
+        project_root=tmp_path,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        candidates_payload = _json_request(f"{base}/api/candidates")
+        assert candidates_payload["available_tfs"] == ["1m", "3m", "5m", "10m", "15m", "1h", "4h"]
+        assert candidates_payload["candidates"][0]["default_tf"] == "15m"
+
+        candles = _json_request(f"{base}/api/candles?event_id=evt_15m&tf=1m")
+        assert candles["event"]["event_id"] == "evt_15m"
+        assert candles["event"]["source_tf"] == "15m"
+        assert candles["event"]["tf"] == "1m"
+        assert candles["candles"]["timestamp"] == [0, 60_000, 120_000, 180_000, 240_000, 300_000]
+
+        try:
+            _json_request(f"{base}/api/candles?event_id=evt_15m&tf=2m")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+            body = json.loads(exc.read().decode("utf-8"))
+            assert "unknown tf" in body["error"]
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("unsupported timeframe must be rejected")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
     strategy_id = "triple_tap_manual_pump_review"
     candidates_path = tmp_path / "candidates.parquet"
@@ -610,8 +674,17 @@ def test_level_labeler_autosaves_and_navigation_flushes_edits() -> None:
     assert "async function flushAutosave" in LABELER_HTML
     assert "await flushAutosave({finishDraft:true, quiet:false})" in LABELER_HTML
     assert "function navigateToEventId" in LABELER_HTML
+    assert "function currentVisibleIndex()" in LABELER_HTML
+    assert "const target = visible[currentVisibleIndex() + delta];" in LABELER_HTML
     assert "d.onclick = () => navigateToEventId(c.event_id);" in LABELER_HTML
     assert "loadEvent(idx + 1)" not in LABELER_HTML
+
+
+def test_level_labeler_timeframe_dropdown_uses_all_available_tfs() -> None:
+    assert "availableTfs = Array.isArray(data.available_tfs)" in LABELER_HTML
+    assert "for (const tf of availableTfs)" in LABELER_HTML
+    assert "for (const v of variants)" in LABELER_HTML
+    assert "selected_tf: e.tf" in LABELER_HTML
 
 
 def test_level_labeler_ignores_stale_async_candle_loads() -> None:

@@ -388,7 +388,7 @@ LABELER_HTML = r"""<!doctype html>
   </div>
   <div id="toast"></div>
 <script>
-let candidates = [], visible = [], idx = 0, current = null, selectedTf = null;
+let candidates = [], visible = [], idx = 0, current = null, selectedTf = null, availableTfs = [];
 let xRange = null, yRange = null, yAuto = true, barMs = 60000;
 let tool = null, drawStep = 0, pending = null;
 let level = null;       // {price, start_ms, end_ms(auto body-cross or chart end), broken}
@@ -1414,6 +1414,7 @@ async function loadCandidates() {
     return;
   }
   candidates = data.candidates || [];
+  availableTfs = Array.isArray(data.available_tfs) ? data.available_tfs.map(String) : [];
   enhanceVisibleSelects();
   initDefaultLineHover();
   renderList();
@@ -1505,10 +1506,20 @@ async function loadEvent(i) {
 function populateTfSelect(group) {
   const el = document.getElementById('tfSelect');
   el.innerHTML = '';
-  for (const v of (group.variants || [group])) {
+  const variants = group.variants || [group];
+  const byTf = new Map(variants.map(v => [String(v.tf), v]));
+  const ordered = [];
+  for (const tf of availableTfs) if (!ordered.includes(tf)) ordered.push(tf);
+  for (const v of variants) {
+    const tf = String(v.tf);
+    if (!ordered.includes(tf)) ordered.push(tf);
+  }
+  if (selectedTf && !ordered.includes(String(selectedTf))) ordered.push(String(selectedTf));
+  for (const tf of ordered) {
+    const v = byTf.get(tf);
     const opt = document.createElement('option');
-    opt.value = String(v.tf);
-    opt.textContent = `${v.tf}  ${fmtPct(v.pump_pct)}`;
+    opt.value = tf;
+    opt.textContent = v ? `${tf}  ${fmtPct(v.pump_pct)}` : tf;
     el.appendChild(opt);
   }
   el.value = selectedTf;
@@ -1559,10 +1570,11 @@ function initDefaultLineHover() {
 function updateMetrics() {
   if (!current) return;
   const g = current.group || visible[idx], e = current.event;
+  const variantTfs = (g.variants || [g]).map(v => v.tf).join('/');
   const items = [
     ['sym', displaySymbol(e.symbol)],
     ['tf', e.tf],
-    ['TFs', (g.variants || [g]).map(v => v.tf).join('/')],
+    ['src TFs', variantTfs],
     ['pump', fmtPct(e.pump_pct)],
     ['vol', 'x' + Number(e.pump_over_sleep_vol || 0).toFixed(1)],
     ['trd', 'x' + Number(e.pump_over_sleep_trades || 0).toFixed(1)]
@@ -2181,6 +2193,11 @@ function saveLabel() {
 function findVisibleIndexByEventId(eventId) {
   return visible.findIndex(c => c.event_id === eventId || (c.source_event_ids || []).includes(eventId));
 }
+function currentVisibleIndex() {
+  const eventId = current && current.group ? current.group.event_id : (visible[idx] ? visible[idx].event_id : null);
+  const pos = eventId ? visible.findIndex(c => c.event_id === eventId) : -1;
+  return pos >= 0 ? pos : Math.max(0, Math.min(idx, visible.length - 1));
+}
 async function navigateToEventId(eventId) {
   if (!eventId) return;
   navigationSerial += 1;
@@ -2191,7 +2208,7 @@ async function navigateToEventId(eventId) {
 }
 async function navigateByDelta(delta) {
   if (!visible.length) return;
-  const target = visible[idx + delta];
+  const target = visible[currentVisibleIndex() + delta];
   if (!target) return;
   await navigateToEventId(target.event_id);
 }

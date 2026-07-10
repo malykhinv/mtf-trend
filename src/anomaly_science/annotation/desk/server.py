@@ -85,12 +85,20 @@ class LevelLabelerServer(ThreadingHTTPServer):
         self.group_by_id = {str(g["event_id"]): g for g in self.groups}
         self.allowed_event_ids = set(str(x) for x in self.by_event.index) | set(self.group_by_id)
 
+    def available_tfs(self) -> list[str]:
+        return [
+            str(tf)
+            for tf, minutes in sorted(self.tf_minutes.items(), key=lambda item: (int(item[1]), str(item[0])))
+            if int(minutes) > 0
+        ]
+
     def strategy_payload(self) -> dict[str, Any]:
         return {
             "strategy_id": self.strategy_id,
             "title": self.strategy_title,
             "candidate_count": len(self.groups),
             "candidate_rows": int(len(self.candidates)),
+            "available_tfs": self.available_tfs(),
             "labels_path": str(self.labels_path),
             "inputs": [
                 {"id": "level_price", "label": "horizontal level price", "required_for_level": True},
@@ -123,7 +131,9 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             self._plotly_response()
             return
         if parsed.path == "/api/candidates":
-            self._json_or_error(lambda: {"candidates": self._candidate_payloads()})
+            self._json_or_error(
+                lambda: {"candidates": self._candidate_payloads(), "available_tfs": self.server.available_tfs()}
+            )
             return
         if parsed.path == "/api/strategies":
             json_response(self, {"strategies": [self.server.strategy_payload()]})
@@ -225,7 +235,7 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             json_response(self, {"error": "unknown event_id"}, 404)
             return
         try:
-            payload = self.server.ohlcv.event_payload(row)
+            payload = self.server.ohlcv.event_payload(row, tf=tf or None)
         except ValueError as exc:
             json_response(self, {"error": str(exc)}, 400)
             return
@@ -380,7 +390,10 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             source_id = str(selected["event_id"])
             if source_id not in self.server.by_event.index:
                 return None
-            return self.server.by_event.loc[source_id]
+            row = self.server.by_event.loc[source_id].copy()
+            row["review_start_ms"] = group["review_start_ms"]
+            row["review_end_ms"] = group["review_end_ms"]
+            return row
         if event_id in self.server.by_event.index:
             return self.server.by_event.loc[event_id]
         return None
