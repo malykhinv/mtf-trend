@@ -115,6 +115,14 @@ def _optional_int(value: Any, where: str) -> int | None:
     return int(round(_number(value, where)))
 
 
+def _optional_bool(value: Any, where: str, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"{where} must be boolean")
+    return value
+
+
 def _normalize_level(raw: Any, where: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError(f"{where} must be an object")
@@ -126,7 +134,7 @@ def _normalize_level(raw: Any, where: str) -> dict[str, Any]:
         "price": _number(raw.get("price"), f"{where}.price", positive=True),
         "start_ms": start_ms,
         "end_ms": end_ms,
-        "broken": bool(raw.get("broken", False)),
+        "broken": _optional_bool(raw.get("broken"), f"{where}.broken", default=False),
     }
 
 

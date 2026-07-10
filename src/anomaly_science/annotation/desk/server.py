@@ -194,10 +194,10 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
     def _json_or_error(self, producer) -> None:
         try:
             payload = producer()
+            json_response(self, payload)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             json_response(self, {"error": str(exc)}, 500)
             return
-        json_response(self, payload)
 
     def _labels_payload(self) -> dict[str, Any]:
         with self.server.labels_lock:
@@ -229,6 +229,9 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             json_response(self, {"error": str(exc)}, 400)
             return
+        except (OSError, KeyError, TypeError) as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
         json_response(self, payload)
 
     def _handle_trade_candles(self, query: str) -> None:
@@ -237,7 +240,14 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         if not trade_id:
             json_response(self, {"error": "trade_id is required"}, 400)
             return
-        payload = self._trade_candles_payload(trade_id)
+        try:
+            payload = self._trade_candles_payload(trade_id)
+        except ValueError as exc:
+            json_response(self, {"error": str(exc)}, 400)
+            return
+        except (OSError, KeyError, TypeError) as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
         if payload is None:
             json_response(self, {"error": "unknown trade_id"}, 404)
             return
@@ -312,6 +322,9 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         except (ValueError, KeyError) as exc:
             json_response(self, {"error": str(exc)}, 400)
             return
+        except OSError as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
         json_response(self, {"ok": True, "label": None})
 
     def _save_label(self) -> None:
@@ -321,6 +334,9 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
                 row = self.server.label_store.append_label(payload, allowed_event_ids=self.server.allowed_event_ids)
         except ValueError as exc:
             json_response(self, {"error": str(exc)}, 400)
+            return
+        except OSError as exc:
+            json_response(self, {"error": str(exc)}, 500)
             return
         json_response(self, {"ok": True, "label": row})
 
@@ -336,6 +352,9 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
                 row = ResultAnnotationStore.for_run_dir(run_dir).append(payload, known_trade_ids=known_trade_ids)
         except ValueError as exc:
             json_response(self, {"error": str(exc)}, 400)
+            return
+        except OSError as exc:
+            json_response(self, {"error": str(exc)}, 500)
             return
         json_response(self, {"ok": True, "annotation": row})
 

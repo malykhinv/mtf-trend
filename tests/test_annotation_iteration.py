@@ -198,6 +198,39 @@ def test_api_returns_json_error_for_invalid_label_state(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_api_returns_json_error_for_missing_market_cache(tmp_path: Path) -> None:
+    candidates_path = tmp_path / "candidates.parquet"
+    labels_path = tmp_path / "labels.jsonl"
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    pd.DataFrame(_candidate_rows()[:1]).to_parquet(candidates_path, index=False)
+
+    server = LevelLabelerServer(
+        ("127.0.0.1", 0),
+        LevelLabelerHandler,
+        candidates_path=candidates_path,
+        labels_path=labels_path,
+        cache_dir=cache_dir,
+        tf_minutes=DEFAULT_TF_MINUTES,
+        project_root=tmp_path,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        try:
+            _json_request(f"{base}/api/candles?event_id=e1_5m&tf=5m")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 500
+            body = json.loads(exc.read().decode("utf-8"))
+            assert "AAAUSDT.parquet" in body["error"]
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("missing OHLCV cache must return a JSON API error")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
     strategy_id = "triple_tap_manual_pump_review"
     candidates_path = tmp_path / "candidates.parquet"
@@ -342,6 +375,19 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
             assert exc.code == 400
         else:  # pragma: no cover - the assertion above is the expected path
             raise AssertionError("fractional result drawing timestamps must be rejected")
+        try:
+            _json_request(
+                f"{base}/api/result_annotation",
+                {
+                    "trade_id": "trd_00000",
+                    "comment": "bad",
+                    "drawings": {"level": {"startMs": 0, "endMs": 120_000, "price": 1.0, "broken": "false"}},
+                },
+            )
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("non-boolean result level broken flag must be rejected")
 
         trades = _json_request(f"{base}/api/iteration/trades")["trades"]
         assert trades[0]["has_result_annotation"] is True
