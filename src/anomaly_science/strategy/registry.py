@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from anomaly_science.contracts.horizons import validate_supported_research_horizon
 from anomaly_science.strategy.anomaly_config import BroadAnomalyDetectorConfig
@@ -204,3 +206,9 @@ def get_post_pump_distribution_strategy(*, strategy_name: str = "post_pump_distr
 
 def get_post_anomaly_extension_strategy(*, strategy_name: str = "post_anomaly_extension_v1_h120") -> PostAnomalyExtensionStrategy:
     return make_post_anomaly_extension_strategy(strategy_name=strategy_name)
+
+
+def annotation_iteration_hooks() -> dict[str, Callable[[Path], dict[str, Any]]]:
+    from anomaly_science.strategy.triple_tap.annotation_iteration import run_trade_report_iteration
+
+    return {"triple_tap_manual_pump_review": run_trade_report_iteration}

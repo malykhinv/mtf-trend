@@ -7,7 +7,7 @@ import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 
-from anomaly_science.annotation.level_labeler import serve_level_labeler
+from anomaly_science.annotation.desk.server import serve_level_labeler
 
 
 @dataclass(frozen=True, slots=True)
