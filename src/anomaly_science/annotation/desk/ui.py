@@ -1333,9 +1333,12 @@ function loadResultDrawings(annotation) {
   pump = d.pump || null;
   exitPoint = d.exitPoint || null;
   zigzag = (d.zigzag && Array.isArray(d.zigzag.points)) ? d.zigzag : null;
+  const savedSl = d.sl && Number.isFinite(Number(d.sl.price)) ? d.sl : null;
   zzDraft = null;
-  sl = null;
+  sl = savedSl ? {price:Number(savedSl.price), hit_ms:savedSl.hit_ms ?? null, end_ms:savedSl.end_ms ?? null} : null;
   entry = null;
+  if (level) computeEntry();
+  if (sl && entry) recomputeSlRay();
   selectedObj = null;
 }
 async function selectTrade(tradeId) {

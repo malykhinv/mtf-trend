@@ -28,6 +28,8 @@ class ResultAnnotationStore:
             trade_id = str(row.get("trade_id") or "")
             if not trade_id:
                 raise ValueError(f"result annotation row has empty trade_id: {self.path}")
+            row = dict(row)
+            row["drawings"] = normalize_result_drawings(_drawings_payload(row))
             annotations[trade_id] = row
         return annotations
 
@@ -47,13 +49,17 @@ class ResultAnnotationStore:
             "result_annotation_schema_version": RESULT_ANNOTATION_SCHEMA_VERSION,
             "trade_id": trade_id,
             "comment": str(payload.get("comment") or ""),
-            "drawings": normalize_result_drawings(payload.get("drawings") or {}),
+            "drawings": normalize_result_drawings(_drawings_payload(payload)),
             "saved_at_ms": saved_at_ms,
             "saved_at_utc": utc_iso_from_ms(saved_at_ms),
             "source": "browser_result_reviewer",
         }
         append_jsonl(self.path, row)
         return row
+
+
+def _drawings_payload(row: dict[str, Any]) -> Any:
+    return {} if row.get("drawings") is None else row["drawings"]
 
 
 def normalize_result_drawings(raw: Any) -> dict[str, Any]:

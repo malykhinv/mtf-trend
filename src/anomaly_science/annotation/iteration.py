@@ -22,6 +22,7 @@ import pandas as pd
 
 from anomaly_science.annotation.app import AnnotationStrategyApp, choose_app, default_annotation_apps
 from anomaly_science.annotation.desk.candidates import DEFAULT_TF_MINUTES, build_annotation_groups, validate_candidates
+from anomaly_science.annotation.desk.labels import LabelStore, label_for_group
 
 
 DEFAULT_ITERATION_ROOT = Path(".output") / "results" / "annotation_iterations"
@@ -106,27 +107,6 @@ def _stable_config_hash(payload: dict[str, Any]) -> str:
     return _sha256_bytes(encoded)
 
 
-def _read_effective_labels(path: Path) -> dict[str, dict[str, Any]]:
-    labels: dict[str, dict[str, Any]] = {}
-    if not path.exists():
-        return labels
-    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"invalid JSONL label row {path}:{line_no}: {exc}") from exc
-        event_id = str(row.get("event_id") or "")
-        if not event_id:
-            raise ValueError(f"label row {path}:{line_no} has empty event_id")
-        if row.get("unlabeled") is True:
-            labels.pop(event_id, None)
-            continue
-        labels[event_id] = row
-    return labels
-
-
 def _label_setups(label: dict[str, Any]) -> list[dict[str, Any]]:
     """Return a label's setups, treating a legacy flat label as one setup."""
 
@@ -145,17 +125,6 @@ def _setup_has_pump_transition(setup: dict[str, Any]) -> bool:
     )
 
 
-def _label_for_group(group: dict[str, Any], labels: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
-    group_id = str(group["event_id"])
-    if group_id in labels:
-        return labels[group_id]
-    for event_id in group.get("source_event_ids", []):
-        row = labels.get(str(event_id))
-        if row is not None:
-            return row
-    return None
-
-
 def _counter_payload(counter: Counter[str]) -> dict[str, int]:
     return {key: int(value) for key, value in sorted(counter.items())}
 
@@ -164,7 +133,7 @@ def summarize_annotation_state(app: AnnotationStrategyApp) -> tuple[dict[str, An
     candidates = pd.read_parquet(app.candidates_path)
     validate_candidates(candidates)
     groups = build_annotation_groups(candidates, DEFAULT_TF_MINUTES)
-    labels = _read_effective_labels(app.labels_path)
+    labels = LabelStore(app.labels_path).read_effective()
 
     labeled_groups = 0
     has_level_groups = 0
@@ -178,7 +147,7 @@ def summarize_annotation_state(app: AnnotationStrategyApp) -> tuple[dict[str, An
     source_label_hits = 0
 
     for group in groups:
-        label = _label_for_group(group, labels)
+        label = label_for_group(group, labels)
         if label is None:
             continue
         labeled_groups += 1

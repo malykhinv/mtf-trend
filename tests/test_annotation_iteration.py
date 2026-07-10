@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from anomaly_science.annotation.app import AnnotationStrategyApp
+from anomaly_science.annotation.desk.result_annotations import ResultAnnotationStore
 from anomaly_science.annotation.iteration import AnnotationIterationConfig, run_annotation_iteration, summarize_annotation_state
 from anomaly_science.annotation.level_labeler import DEFAULT_TF_MINUTES, LABELER_HTML, LevelLabelerHandler, LevelLabelerServer
 
@@ -245,6 +246,7 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
         second_drawings = {
             "level": {"startMs": 0, "endMs": 120_000, "price": 1.2},
             "exitPoint": {"ms": 120_000, "price": 1.35},
+            "sl": {"price": 1.05, "hit_ms": 120_000, "end_ms": 180_000},
         }
         _json_request(
             f"{base}/api/result_annotation",
@@ -272,6 +274,15 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
             assert exc.code == 400
         else:  # pragma: no cover - the assertion above is the expected path
             raise AssertionError("invalid result drawing price must be rejected")
+        try:
+            _json_request(
+                f"{base}/api/result_annotation",
+                {"trade_id": "trd_00000", "comment": "bad", "drawings": []},
+            )
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("invalid result drawings type must be rejected")
 
         trades = _json_request(f"{base}/api/iteration/trades")["trades"]
         assert trades[0]["has_result_annotation"] is True
@@ -283,6 +294,7 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
         assert candles["result_annotation"]["drawings"] == {
             "level": {"start_ms": 0, "end_ms": 120_000, "price": 1.2, "broken": False},
             "exitPoint": {"ms": 120_000, "price": 1.35},
+            "sl": {"price": 1.05, "hit_ms": 120_000, "end_ms": 180_000},
         }
         assert len(candles["candles"]["timestamp"]) == 3
 
@@ -303,6 +315,32 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
         server.server_close()
 
 
+def test_result_annotation_store_normalizes_legacy_rows_on_read(tmp_path: Path) -> None:
+    path = tmp_path / "result_trade_annotations.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "trade_id": "trd_legacy",
+                "comment": "legacy note",
+                "drawings": {
+                    "level": {"startMs": 1_000, "endMs": 5_000, "price": "1.25"},
+                    "pump": {"startMs": 1_000, "endMs": 4_000, "low": 1.0, "high": 1.5},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    row = ResultAnnotationStore(path).read_effective()["trd_legacy"]
+
+    assert row["drawings"]["level"] == {"start_ms": 1_000, "end_ms": 5_000, "price": 1.25, "broken": False}
+    assert row["drawings"]["pump"] == {
+        "start": {"ms": 1_000, "price": 1.0},
+        "high": {"ms": 4_000, "price": 1.5},
+    }
+
+
 def test_plotly_axis_date_parser_does_not_force_local_ranges_to_utc() -> None:
     match = re.search(r"function pms\(v\) \{(?P<body>.*?)\n\}", LABELER_HTML, re.S)
     assert match is not None
@@ -310,6 +348,12 @@ def test_plotly_axis_date_parser_does_not_force_local_ranges_to_utc() -> None:
     assert "s + 'Z'" not in body
     assert "Date.parse(s)" in body
     assert "v instanceof Date" in body
+
+
+def test_result_review_reloads_saved_stop_loss() -> None:
+    assert "const savedSl = d.sl && Number.isFinite(Number(d.sl.price)) ? d.sl : null" in LABELER_HTML
+    assert "sl = savedSl ? {price:Number(savedSl.price), hit_ms:savedSl.hit_ms ?? null, end_ms:savedSl.end_ms ?? null} : null" in LABELER_HTML
+    assert "if (sl && entry) recomputeSlRay();" in LABELER_HTML
 
 
 def test_overlay_uses_plotly_axis_transforms_not_manual_range_math() -> None:
