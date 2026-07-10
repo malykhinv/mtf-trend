@@ -1239,6 +1239,12 @@ function renderIterationStatus(status) {
 async function loadLatestIteration() {
   const r = await fetch('/api/iteration/latest');
   const data = await r.json();
+  if (data.error) {
+    document.getElementById('iterationStatus').innerHTML = `<b>error</b><br><span style="color:var(--red)">${esc(data.error)}</span>`;
+    document.getElementById('resultSlices').innerHTML = '';
+    toast(data.error, 4200);
+    return;
+  }
   if (!data.exists) {
     document.getElementById('iterationStatus').innerHTML = '<b>no run</b> · press Run';
     document.getElementById('resultSlices').innerHTML = '';
@@ -1269,6 +1275,13 @@ function renderDashboardSlices(dashboard) {
 async function loadTrades() {
   const r = await fetch('/api/iteration/trades');
   const data = await r.json();
+  if (data.error) {
+    resultTrades = [];
+    populateTradeFilters();
+    renderTrades();
+    toast(data.error, 4200);
+    return;
+  }
   resultTrades = data.trades || [];
   populateTradeFilters();
   renderTrades();
@@ -1380,7 +1393,17 @@ async function saveResultAnnotation() {
 /* ---------- candidates list ---------- */
 async function loadCandidates() {
   const r = await fetch('/api/candidates');
-  candidates = (await r.json()).candidates;
+  const data = await r.json();
+  if (data.error) {
+    candidates = [];
+    visible = [];
+    document.getElementById('list').innerHTML = `<div class="hint">${esc(data.error)}</div>`;
+    document.getElementById('progress').innerText = '0/0 labeled';
+    clearChart();
+    toast(data.error, 4200);
+    return;
+  }
+  candidates = data.candidates || [];
   enhanceVisibleSelects();
   initDefaultLineHover();
   renderList();
@@ -1444,6 +1467,14 @@ async function loadEvent(i) {
   const r = await fetch('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf));
   const payload = await r.json();
   if (token !== loadToken) return;
+  if (payload.error) {
+    current = null;
+    level = null; pump = null; entry = null; sl = null; exitPoint = null; zigzag = null; zzDraft = null; setups = [];
+    renderObjects();
+    clearChart();
+    toast(payload.error, 4200);
+    return;
+  }
   current = payload;
   current.group = group;
   computeBarMs();
@@ -1482,6 +1513,11 @@ async function changeTf() {
   const r = await fetch('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf));
   const payload = await r.json();
   if (token !== loadToken) return;
+  if (payload.error) {
+    toast(payload.error, 4200);
+    refreshSelect(document.getElementById('tfSelect'));
+    return;
+  }
   current = payload;
   current.group = group;
   computeBarMs();
@@ -1700,6 +1736,20 @@ function draw() {
   Plotly.react('chart', traces, layout, {responsive:true, displayModeBar:false, displaylogo:false, scrollZoom:false, editable:false, edits:{shapePosition:false}});
   attachChartHandlers();
   positionZones();
+}
+function clearChart() {
+  document.getElementById('title').innerText = '';
+  clearGhost();
+  if (typeof Plotly !== 'undefined') {
+    Plotly.react('chart', [], {
+      paper_bgcolor:'#111318',
+      plot_bgcolor:'#111318',
+      margin:{l:56,r:28,t:42,b:38},
+      xaxis:{visible:false},
+      yaxis:{visible:false},
+      showlegend:false,
+    }, {responsive:true, displayModeBar:false, displaylogo:false});
+  }
 }
 
 /* ---------- axis zones: LMB-drag to scale, dblclick to fit ---------- */

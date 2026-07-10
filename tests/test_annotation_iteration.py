@@ -462,6 +462,19 @@ def test_result_review_reloads_saved_stop_loss() -> None:
     assert "if (sl && entry) recomputeSlRay();" in LABELER_HTML
 
 
+def test_read_api_errors_do_not_poison_browser_state() -> None:
+    assert "if (data.error) {" in LABELER_HTML
+    assert "document.getElementById('list').innerHTML = `<div class=\"hint\">${esc(data.error)}</div>`;" in LABELER_HTML
+    assert "document.getElementById('progress').innerText = '0/0 labeled';" in LABELER_HTML
+    assert "function clearChart()" in LABELER_HTML
+    assert "clearChart();\n    toast(data.error, 4200);" in LABELER_HTML
+    assert "if (payload.error) {\n    current = null;" in LABELER_HTML
+    assert "level = null; pump = null; entry = null; sl = null; exitPoint = null; zigzag = null; zzDraft = null; setups = [];" in LABELER_HTML
+    assert "clearChart();\n    toast(payload.error, 4200);" in LABELER_HTML
+    assert "if (payload.error) {\n    toast(payload.error, 4200);\n    refreshSelect(document.getElementById('tfSelect'));" in LABELER_HTML
+    assert "document.getElementById('iterationStatus').innerHTML = `<b>error</b>" in LABELER_HTML
+
+
 def test_overlay_uses_plotly_axis_transforms_not_manual_range_math() -> None:
     # The drawing overlay must map coordinates through Plotly's own axis functions
     # (l2p/d2c/p2l) so it stays pixel-locked to the candles regardless of how the
