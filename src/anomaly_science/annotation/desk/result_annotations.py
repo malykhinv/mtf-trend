@@ -29,7 +29,7 @@ class ResultAnnotationStore:
             if not trade_id:
                 raise ValueError(f"result annotation row has empty trade_id: {self.path}")
             row = dict(row)
-            row["drawings"] = normalize_result_drawings(_drawings_payload(row))
+            row["drawings"] = normalize_result_drawings(_drawings_payload(row), allow_legacy_unknown=True)
             annotations[trade_id] = row
         return annotations
 
@@ -49,7 +49,7 @@ class ResultAnnotationStore:
             "result_annotation_schema_version": RESULT_ANNOTATION_SCHEMA_VERSION,
             "trade_id": trade_id,
             "comment": str(payload.get("comment") or ""),
-            "drawings": normalize_result_drawings(_drawings_payload(payload)),
+            "drawings": normalize_result_drawings(_drawings_payload(payload), allow_legacy_unknown=False),
             "saved_at_ms": saved_at_ms,
             "saved_at_utc": utc_iso_from_ms(saved_at_ms),
             "source": "browser_result_reviewer",
@@ -62,9 +62,13 @@ def _drawings_payload(row: dict[str, Any]) -> Any:
     return {} if row.get("drawings") is None else row["drawings"]
 
 
-def normalize_result_drawings(raw: Any) -> dict[str, Any]:
+def normalize_result_drawings(raw: Any, *, allow_legacy_unknown: bool = False) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("drawings must be an object")
+    allowed = {"level", "pump", "exitPoint", "zigzag", "sl"}
+    unknown = sorted(str(key) for key in raw if key not in allowed)
+    if unknown and not allow_legacy_unknown:
+        raise ValueError(f"drawings contains unknown keys: {unknown}")
     drawings: dict[str, Any] = {}
     if raw.get("level") is not None:
         drawings["level"] = _normalize_level(raw["level"], "drawings.level")
@@ -82,6 +86,8 @@ def normalize_result_drawings(raw: Any) -> dict[str, Any]:
 def _number(value: Any, where: str, *, positive: bool = False) -> float:
     if value is None:
         raise ValueError(f"{where} is required")
+    if isinstance(value, bool):
+        raise ValueError(f"{where} must be numeric")
     try:
         out = float(value)
     except (TypeError, ValueError) as exc:
@@ -97,7 +103,10 @@ def _ms(value: Any, where: str) -> int:
     out = _number(value, where)
     if out < 0:
         raise ValueError(f"{where} must be non-negative epoch milliseconds")
-    return int(round(out))
+    rounded = round(out)
+    if out != rounded:
+        raise ValueError(f"{where} must be integer epoch milliseconds")
+    return int(rounded)
 
 
 def _optional_int(value: Any, where: str) -> int | None:

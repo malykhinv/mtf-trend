@@ -123,25 +123,23 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             self._plotly_response()
             return
         if parsed.path == "/api/candidates":
-            json_response(self, {"candidates": self._candidate_payloads()})
+            self._json_or_error(lambda: {"candidates": self._candidate_payloads()})
             return
         if parsed.path == "/api/strategies":
             json_response(self, {"strategies": [self.server.strategy_payload()]})
             return
         if parsed.path == "/api/labels":
-            with self.server.labels_lock:
-                labels = self.server.label_store.read_effective_list()
-            json_response(self, {"labels": labels})
+            self._json_or_error(self._labels_payload)
             return
         if parsed.path == "/api/iteration/status":
             with self.server.iteration_lock:
                 json_response(self, dict(self.server.iteration_status))
             return
         if parsed.path == "/api/iteration/latest":
-            json_response(self, self.server.iteration_artifacts.latest_payload())
+            self._json_or_error(self.server.iteration_artifacts.latest_payload)
             return
         if parsed.path == "/api/iteration/trades":
-            json_response(self, {"trades": self.server.iteration_artifacts.latest_trades()})
+            self._json_or_error(lambda: {"trades": self.server.iteration_artifacts.latest_trades()})
             return
         if parsed.path == "/api/iteration/trade_candles":
             self._handle_trade_candles(parsed.query)
@@ -192,6 +190,19 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("request body must be a JSON object")
         return payload
+
+    def _json_or_error(self, producer) -> None:
+        try:
+            payload = producer()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
+        json_response(self, payload)
+
+    def _labels_payload(self) -> dict[str, Any]:
+        with self.server.labels_lock:
+            labels = self.server.label_store.read_effective_list()
+        return {"labels": labels}
 
     def _candidate_payloads(self) -> list[dict[str, Any]]:
         with self.server.labels_lock:

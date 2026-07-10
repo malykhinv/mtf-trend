@@ -164,6 +164,40 @@ def _json_request(url: str, payload: dict | None = None) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def test_api_returns_json_error_for_invalid_label_state(tmp_path: Path) -> None:
+    candidates_path = tmp_path / "candidates.parquet"
+    labels_path = tmp_path / "labels.jsonl"
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    pd.DataFrame(_candidate_rows()[:1]).to_parquet(candidates_path, index=False)
+    labels_path.write_text("not-json\n", encoding="utf-8")
+
+    server = LevelLabelerServer(
+        ("127.0.0.1", 0),
+        LevelLabelerHandler,
+        candidates_path=candidates_path,
+        labels_path=labels_path,
+        cache_dir=cache_dir,
+        tf_minutes=DEFAULT_TF_MINUTES,
+        project_root=tmp_path,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        try:
+            _json_request(f"{base}/api/candidates")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 500
+            body = json.loads(exc.read().decode("utf-8"))
+            assert "invalid JSONL row" in body["error"]
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("invalid label JSONL must return a JSON API error")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
     strategy_id = "triple_tap_manual_pump_review"
     candidates_path = tmp_path / "candidates.parquet"
@@ -237,7 +271,6 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
         first_drawings = {
             "level": {"startMs": 60_000, "endMs": 120_000, "price": 1.15},
             "pump": {"startMs": 0, "endMs": 60_000, "low": 1.0, "high": 1.3},
-            "swings": [{"ms": 60_000, "price": 1.3, "kind": "high"}],
         }
         _json_request(
             f"{base}/api/result_annotation",
@@ -283,6 +316,32 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
             assert exc.code == 400
         else:  # pragma: no cover - the assertion above is the expected path
             raise AssertionError("invalid result drawings type must be rejected")
+        try:
+            _json_request(
+                f"{base}/api/result_annotation",
+                {
+                    "trade_id": "trd_00000",
+                    "comment": "bad",
+                    "drawings": {"swings": [{"ms": 60_000, "price": 1.3, "kind": "high"}]},
+                },
+            )
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("unknown result drawing keys must be rejected")
+        try:
+            _json_request(
+                f"{base}/api/result_annotation",
+                {
+                    "trade_id": "trd_00000",
+                    "comment": "bad",
+                    "drawings": {"level": {"startMs": 0.5, "endMs": 120_000, "price": 1.0}},
+                },
+            )
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("fractional result drawing timestamps must be rejected")
 
         trades = _json_request(f"{base}/api/iteration/trades")["trades"]
         assert trades[0]["has_result_annotation"] is True
@@ -325,6 +384,7 @@ def test_result_annotation_store_normalizes_legacy_rows_on_read(tmp_path: Path) 
                 "drawings": {
                     "level": {"startMs": 1_000, "endMs": 5_000, "price": "1.25"},
                     "pump": {"startMs": 1_000, "endMs": 4_000, "low": 1.0, "high": 1.5},
+                    "swings": [{"ms": 3_000, "price": 1.4, "kind": "high"}],
                 },
             }
         )
