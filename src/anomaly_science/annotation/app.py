@@ -69,6 +69,7 @@ def main() -> None:
         strategy_id=app.strategy_id,
         strategy_title=app.title,
         show_launcher=True,
+        project_root=project_root,
     )
 
 

@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import threading
 import time
+import traceback
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,7 +44,11 @@ def _read_labels(path: Path) -> dict[str, dict]:
         if not line.strip():
             continue
         row = json.loads(line)
-        labels[str(row["event_id"])] = row
+        event_id = str(row["event_id"])
+        if row.get("unlabeled") is True:
+            labels.pop(event_id, None)
+            continue
+        labels[event_id] = row
     return labels
 
 
@@ -52,6 +59,41 @@ def _json_response(handler: BaseHTTPRequestHandler, payload: object, status: int
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_json_list(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError(f"expected JSON list: {path}")
+    return data
+
+
+def _utc_stamp() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _result_annotations_path(run_dir: Path) -> Path:
+    return run_dir / "result_trade_annotations.jsonl"
+
+
+def _read_result_annotations(path: Path) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    if not path.exists():
+        return result
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        trade_id = str(row.get("trade_id") or "")
+        if trade_id:
+            result[trade_id] = row
+    return result
 
 
 def validate_candidates(frame: pd.DataFrame) -> None:
@@ -138,6 +180,7 @@ class LevelLabelerServer(ThreadingHTTPServer):
         strategy_id: str = "manual_level_annotation",
         strategy_title: str = "Manual level annotation",
         show_launcher: bool = False,
+        project_root: Path | None = None,
     ):
         super().__init__(server_address, handler_cls)
         self.candidates_path = candidates_path
@@ -147,6 +190,18 @@ class LevelLabelerServer(ThreadingHTTPServer):
         self.strategy_id = strategy_id
         self.strategy_title = strategy_title
         self.show_launcher = show_launcher
+        self.project_root = (project_root or Path.cwd()).resolve()
+        self.iteration_status: dict[str, object] = {
+            "state": "idle",
+            "message": "ready",
+            "started_at_utc": None,
+            "finished_at_utc": None,
+            "run_dir": None,
+            "error": None,
+            "steps": [],
+        }
+        self.iteration_lock = threading.Lock()
+        self.iteration_thread: threading.Thread | None = None
         self.candidates = pd.read_parquet(candidates_path)
         validate_candidates(self.candidates)
         if "candidate_schema_version" not in self.candidates.columns:
@@ -174,6 +229,16 @@ class LevelLabelerServer(ThreadingHTTPServer):
                 {"id": "notes", "label": "free-form trader comment", "required_for_level": False},
             ],
         }
+
+    def latest_iteration_path(self) -> Path:
+        return (
+            self.project_root
+            / ".output"
+            / "results"
+            / "annotation_iterations"
+            / self.strategy_id
+            / "latest.json"
+        )
 
 
 class LevelLabelerHandler(BaseHTTPRequestHandler):
@@ -232,6 +297,28 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/labels":
             _json_response(self, {"labels": list(_read_labels(self.server.labels_path).values())})
             return
+        if parsed.path == "/api/iteration/status":
+            with self.server.iteration_lock:
+                _json_response(self, dict(self.server.iteration_status))
+            return
+        if parsed.path == "/api/iteration/latest":
+            _json_response(self, self._latest_iteration_payload())
+            return
+        if parsed.path == "/api/iteration/trades":
+            _json_response(self, {"trades": self._latest_trades()})
+            return
+        if parsed.path == "/api/iteration/trade_candles":
+            qs = parse_qs(parsed.query)
+            trade_id = qs.get("trade_id", [""])[0]
+            if not trade_id:
+                _json_response(self, {"error": "trade_id is required"}, 400)
+                return
+            payload = self._trade_candles_payload(trade_id)
+            if payload is None:
+                _json_response(self, {"error": "unknown trade_id"}, 404)
+                return
+            _json_response(self, payload)
+            return
         if parsed.path == "/api/candles":
             qs = parse_qs(parsed.query)
             event_id = qs.get("event_id", [""])[0]
@@ -246,6 +333,36 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/api/iteration/start":
+            self._start_iteration()
+            return
+        if parsed.path == "/api/result_annotation":
+            self._save_result_annotation()
+            return
+        if parsed.path == "/api/unlabel":
+            n = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(n).decode("utf-8"))
+            event_id = str(payload.get("event_id") or "")
+            if event_id not in self.server.by_event.index and event_id not in self.server.group_by_id:
+                _json_response(self, {"error": "unknown event_id"}, 400)
+                return
+            event_ids = [event_id]
+            if event_id in self.server.group_by_id:
+                event_ids.extend(str(x) for x in self.server.group_by_id[event_id].get("source_event_ids", []))
+            saved_at_ms = int(time.time() * 1000)
+            self.server.labels_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.server.labels_path.open("a", encoding="utf-8") as fh:
+                for eid in dict.fromkeys(event_ids):
+                    row = {
+                        "event_id": eid,
+                        "unlabeled": True,
+                        "source": "browser_level_labeler",
+                        "label_schema_version": LEVEL_LABEL_SCHEMA_VERSION,
+                        "saved_at_ms": saved_at_ms,
+                    }
+                    fh.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+            _json_response(self, {"ok": True, "label": None})
+            return
         if parsed.path != "/api/label":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -264,6 +381,181 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         with self.server.labels_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n")
         _json_response(self, {"ok": True, "label": payload})
+
+    def _start_iteration(self) -> None:
+        with self.server.iteration_lock:
+            if self.server.iteration_status.get("state") == "running":
+                _json_response(self, {"ok": True, "status": dict(self.server.iteration_status)})
+                return
+            self.server.iteration_status = {
+                "state": "running",
+                "message": "starting local iteration",
+                "started_at_utc": _utc_stamp(),
+                "finished_at_utc": None,
+                "run_dir": None,
+                "error": None,
+                "steps": [{"at": _utc_stamp(), "message": "queued"}],
+            }
+
+        def worker() -> None:
+            try:
+                with self.server.iteration_lock:
+                    self.server.iteration_status["message"] = "summarizing labels and running strategy diagnostics"
+                    self.server.iteration_status["steps"].append({"at": _utc_stamp(), "message": "running"})
+                from anomaly_science.annotation.iteration import AnnotationIterationConfig, run_annotation_iteration
+
+                paths = run_annotation_iteration(
+                    AnnotationIterationConfig(
+                        project_root=self.server.project_root,
+                        strategy_id=self.server.strategy_id,
+                        run_trade_report=True,
+                    )
+                )
+                with self.server.iteration_lock:
+                    self.server.iteration_status.update(
+                        {
+                            "state": "complete",
+                            "message": "iteration complete",
+                            "finished_at_utc": _utc_stamp(),
+                            "run_dir": str(paths.run_dir),
+                            "error": None,
+                        }
+                    )
+                    self.server.iteration_status["steps"].append({"at": _utc_stamp(), "message": "complete"})
+            except Exception as exc:  # noqa: BLE001 - API status must preserve the failure
+                with self.server.iteration_lock:
+                    self.server.iteration_status.update(
+                        {
+                            "state": "error",
+                            "message": "iteration failed",
+                            "finished_at_utc": _utc_stamp(),
+                            "error": str(exc),
+                            "traceback": traceback.format_exc(),
+                        }
+                    )
+                    self.server.iteration_status["steps"].append({"at": _utc_stamp(), "message": f"error: {exc}"})
+
+        thread = threading.Thread(target=worker, name="annotation-iteration", daemon=True)
+        self.server.iteration_thread = thread
+        thread.start()
+        with self.server.iteration_lock:
+            _json_response(self, {"ok": True, "status": dict(self.server.iteration_status)})
+
+    def _latest_iteration_payload(self) -> dict:
+        latest_path = self.server.latest_iteration_path()
+        if not latest_path.exists():
+            return {"exists": False}
+        latest = _read_json(latest_path)
+        run_dir = Path(latest["run_dir"])
+        payload = {"exists": True, "latest": latest}
+        for key in ("manifest", "candidate_summary", "label_progress", "iteration_report"):
+            raw_path = latest.get(key)
+            if raw_path is None and key == "candidate_summary":
+                raw_path = run_dir / "candidate_summary.json"
+            if raw_path is None:
+                payload[key] = None
+                continue
+            path = Path(raw_path)
+            if key == "iteration_report":
+                payload[key] = path.read_text(encoding="utf-8") if path.exists() else None
+            else:
+                payload[key] = _read_json(path) if path.is_file() else None
+        dashboard = run_dir / "trade_report" / "dashboard.json"
+        if dashboard.exists():
+            payload["dashboard"] = _read_json(dashboard)
+        report = run_dir / "trade_report" / "triple_tap_current_trade_report.json"
+        if report.exists():
+            payload["trade_report"] = _read_json(report)
+        return payload
+
+    def _latest_run_dir(self) -> Path | None:
+        latest_path = self.server.latest_iteration_path()
+        if not latest_path.exists():
+            return None
+        return Path(_read_json(latest_path)["run_dir"])
+
+    def _latest_trades(self) -> list[dict]:
+        run_dir = self._latest_run_dir()
+        if run_dir is None:
+            return []
+        trades_path = run_dir / "trade_report" / "trades.json"
+        annotations = _read_result_annotations(_result_annotations_path(run_dir))
+        trades = _read_json_list(trades_path)
+        for trade in trades:
+            ann = annotations.get(str(trade.get("trade_id")))
+            trade["has_result_annotation"] = ann is not None
+            trade["result_comment"] = ann.get("comment") if ann else ""
+        return trades
+
+    def _trade_candles_payload(self, trade_id: str) -> dict | None:
+        run_dir = self._latest_run_dir()
+        if run_dir is None:
+            return None
+        trades = _read_json_list(run_dir / "trade_report" / "trades.json")
+        trade = next((row for row in trades if str(row.get("trade_id")) == trade_id), None)
+        if trade is None:
+            return None
+        symbol = str(trade["symbol"])
+        tf = str(trade["tf"])
+        minutes = self.server.tf_minutes.get(tf, 1)
+        key = (symbol, tf)
+        if key not in self.server.cache:
+            base = load_ohlcv_parquet(self.server.cache_dir / f"{symbol}.parquet")
+            self.server.cache[key] = base if minutes == 1 else resample_ohlcv_np(base, minutes)
+        frame = self.server.cache[key]
+        ts = frame["timestamp"]
+        fill_ms = int(trade["fill_time_ms"])
+        exit_ms = int(trade["exit_time_ms"])
+        pad = max(48 * minutes * 60_000, 6 * 3_600_000)
+        a = int(np.searchsorted(ts, fill_ms - pad, side="left"))
+        b = int(np.searchsorted(ts, exit_ms + pad, side="right"))
+        b = max(b, a + 1)
+        annotations = _read_result_annotations(_result_annotations_path(run_dir))
+        return {
+            "event": {
+                "event_id": trade_id,
+                "symbol": symbol,
+                "tf": tf,
+                "pump_pct": trade.get("ignition_rise"),
+                "pump_over_sleep_vol": trade.get("pump_over_sleep_vol"),
+                "pump_over_sleep_trades": trade.get("pump_over_sleep_trades"),
+                "marker_columns": {},
+            },
+            "trade": trade,
+            "result_annotation": annotations.get(trade_id),
+            "candles": {
+                "timestamp": ts[a:b].astype(int).tolist(),
+                "open": frame["open"][a:b].astype(float).tolist(),
+                "high": frame["high"][a:b].astype(float).tolist(),
+                "low": frame["low"][a:b].astype(float).tolist(),
+                "close": frame["close"][a:b].astype(float).tolist(),
+                "quote_volume": frame["quote_volume"][a:b].astype(float).tolist(),
+            },
+        }
+
+    def _save_result_annotation(self) -> None:
+        run_dir = self._latest_run_dir()
+        if run_dir is None:
+            _json_response(self, {"error": "no iteration run exists"}, 400)
+            return
+        n = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(n).decode("utf-8"))
+        trade_id = str(payload.get("trade_id") or "")
+        if not trade_id:
+            _json_response(self, {"error": "trade_id is required"}, 400)
+            return
+        row = {
+            "trade_id": trade_id,
+            "comment": str(payload.get("comment") or ""),
+            "drawings": payload.get("drawings") or {},
+            "saved_at_ms": int(time.time() * 1000),
+            "source": "browser_result_reviewer",
+        }
+        path = _result_annotations_path(run_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+        _json_response(self, {"ok": True, "annotation": row})
 
     def _candidate_row(self, event_id: str, tf: str) -> pd.Series | None:
         if event_id in self.server.group_by_id:
@@ -324,6 +616,7 @@ def serve_level_labeler(
     strategy_id: str = "manual_level_annotation",
     strategy_title: str = "Manual level annotation",
     show_launcher: bool = False,
+    project_root: Path | None = None,
 ) -> None:
     if not candidates_path.exists():
         raise FileNotFoundError(candidates_path)
@@ -337,6 +630,7 @@ def serve_level_labeler(
         strategy_id=strategy_id,
         strategy_title=strategy_title,
         show_launcher=show_launcher,
+        project_root=project_root,
     )
     print(f"labeler: http://{host}:{port}", flush=True)
     print(f"candidates: {candidates_path}", flush=True)
@@ -449,6 +743,7 @@ LABELER_HTML = r"""<!doctype html>
     .actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
     .action-group { display:flex; gap:4px; align-items:center; }
     .action-spacer { width:16px; flex:0 0 16px; }
+    .tool-spacer { flex:1 1 10px; min-width:10px; }
     .center { min-width: 0; display: flex; align-items: center; gap: 9px; }
     button, select, input, textarea {
       background: var(--surface); color: var(--text);
@@ -470,15 +765,12 @@ LABELER_HTML = r"""<!doctype html>
     button.primary:hover { background: #9aaddf; }
     button.danger { background: #251922; color: var(--red); box-shadow: inset 0 0 0 1px rgba(209,132,149,.20); }
     #wrap { display: grid; grid-template-columns: 370px minmax(0, 1fr); height: calc(100vh - 62px); }
-    body.focus #wrap { grid-template-columns: 0 minmax(0, 1fr); }
-    body.focus #side { padding: 0; border: 0; overflow: hidden; }
     #side { overflow: auto; background: rgba(17,19,24,.60); padding: 12px; }
     #chartwrap { position: relative; height: calc(100vh - 62px); min-width: 0; overflow:hidden; }
     #chart { position:absolute; inset:0; cursor: grab; }
     #chart:active { cursor: grabbing; }
-    body.drawing #chart, body.drawing #chart * { cursor: crosshair !important; }
-    #ovl { position:absolute; inset:0; pointer-events:none; z-index:3; }
-    body.drawing #ovl { pointer-events:auto; cursor: crosshair; }
+    #ovl { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:3; touch-action:none; }
+    body.drawing #ovl { pointer-events:all; }
     #yzone { position:absolute; z-index:4; cursor: ns-resize; }
     #xzone { position:absolute; z-index:4; cursor: ew-resize; }
     body.drawing #yzone, body.drawing #xzone { pointer-events:none; }
@@ -525,6 +817,16 @@ LABELER_HTML = r"""<!doctype html>
     .small { font-size: 12px; color: var(--muted); }
     .quiet-help { font-size:10px; color:var(--faint); line-height:1.35; }
     .tool-row { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
+    .field-group { margin-bottom:10px; }
+    .field-group-label { font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.06em; font-weight:760; margin-bottom:6px; }
+    .setup-tabs { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
+    .setup-tab { display:flex; align-items:center; gap:6px; height:28px; padding:0 8px; border-radius:7px; font-size:12px; font-weight:720; color:var(--muted); background:var(--surface-2); box-shadow:inset 0 0 0 1px rgba(42,46,54,.95); cursor:pointer; }
+    .setup-tab:hover { color:var(--text); }
+    .setup-tab.active { color:var(--accent); background:var(--accent-soft); box-shadow:inset 0 0 0 1px rgba(138,160,216,.50); }
+    .setup-tab .kill { display:grid; place-items:center; width:15px; height:15px; border-radius:4px; color:var(--faint); font-size:13px; line-height:1; }
+    .setup-tab .kill:hover { color:var(--red); background:rgba(209,132,149,.14); }
+    .setup-add { height:28px; width:28px; padding:0; display:grid; place-items:center; border-radius:7px; font-size:17px; color:var(--muted); background:var(--surface-2); box-shadow:inset 0 0 0 1px rgba(42,46,54,.95); cursor:pointer; }
+    .setup-add:hover { color:var(--accent); }
     .manual-list { display:flex; flex-direction:column; gap:4px; margin-top:8px; }
     .manual-item { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--muted); background:var(--surface-2); border-radius:6px; padding:5px 7px; font-size:11px; }
     .manual-item.active { color:var(--text); background:var(--accent-soft); }
@@ -542,6 +844,24 @@ LABELER_HTML = r"""<!doctype html>
     .select-option { padding:7px 8px; border-radius:6px; font-size:12px; color:var(--muted); }
     .select-option:hover { background:var(--surface-2); color:var(--text); }
     .select-option.selected { color:var(--accent); background:var(--accent-soft); }
+    .workbench-panel { display:none; }
+    body.results-mode .workbench-panel { display:block; }
+    body.results-mode #list, body.results-mode .search-panel { display:none; }
+    body.results-mode #setupsHeading, body.results-mode #setupTabs { display:none; }
+    .status-box { border-radius:8px; background:var(--surface-2); padding:9px; color:var(--muted); font-size:12px; line-height:1.45; margin-bottom:10px; }
+    .status-box b { color:var(--text); }
+    .slice-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:8px 0 10px; }
+    .slice-card { background:var(--surface-2); border-radius:7px; padding:7px; font-size:11px; color:var(--muted); }
+    .slice-card b { display:block; color:var(--text); margin-bottom:3px; }
+    .trade-filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
+    .trade-list { display:flex; flex-direction:column; gap:5px; max-height:320px; overflow:auto; }
+    .trade-row { border-radius:7px; padding:8px; background:var(--surface-2); color:var(--muted); font-size:11px; }
+    .trade-row.active { background:var(--accent-soft); color:var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+    .trade-row.win { box-shadow: inset 2px 0 0 var(--green); }
+    .trade-row.loss { box-shadow: inset 2px 0 0 var(--red); }
+    .trade-main { display:flex; justify-content:space-between; gap:8px; font-weight:760; color:var(--text); }
+    .trade-tags { margin-top:4px; display:flex; gap:6px; flex-wrap:wrap; }
+    .trade-tag { color:var(--faint); }
     .keys-panel { display:grid; grid-template-columns:1fr 1fr; gap:4px 14px; margin-top:2px; }
     .keys-panel .k-row { display:flex; align-items:baseline; gap:8px; font-size:11px; color:var(--muted); }
     .keys-panel .k { display:inline-block; min-width:22px; padding:1px 6px; border-radius:4px; background:var(--surface-2); color:var(--text); font-family: "IBM Plex Mono","JetBrains Mono",Consolas,monospace; font-size:10px; text-align:center; box-shadow: inset 0 0 0 1px rgba(42,46,54,.95); }
@@ -563,29 +883,22 @@ LABELER_HTML = r"""<!doctype html>
     </div>
     <div class="actions">
       <div class="action-group">
-        <button class="ghost icon" onclick="prevEvent()" title="Previous candidate  ←">
+        <button class="ghost icon" onclick="prevEvent()" title="Previous candidate  Left">
           <svg viewBox="0 0 20 20"><path d="M12.5 4L6.5 10l6 6"/></svg>
         </button>
-        <button class="ghost icon" onclick="nextEvent()" title="Next candidate  →">
+        <button class="ghost icon" onclick="nextEvent()" title="Next candidate  Right">
           <svg viewBox="0 0 20 20"><path d="M7.5 4l6 6-6 6"/></svg>
         </button>
         <button class="ghost icon" onclick="nextUnlabeled()" title="Next unlabeled  U">
           <svg viewBox="0 0 20 20"><path d="M10 3l7 7-7 7-7-7z"/></svg>
         </button>
-        <button class="ghost icon" onclick="resetAnnotations()" title="Reset annotations to saved state  Z">
-          <svg viewBox="0 0 20 20"><path d="M13.5 16H9a5 5 0 1 1 0-10h6.5"/><path d="M12.5 3l3 3-3 3"/></svg>
-        </button>
-        <button class="ghost icon" onclick="resetView()" title="Reset zoom  0">
-          <svg viewBox="0 0 20 20"><path d="M4 8V4h4"/><path d="M16 8V4h-4"/><path d="M4 12v4h4"/><path d="M16 12v4h-4"/></svg>
-        </button>
-        <button class="ghost icon" onclick="toggleFocus()" title="Focus chart  F">
-          <svg viewBox="0 0 20 20"><path d="M3 8V3h5"/><path d="M17 8V3h-5"/><path d="M3 12v5h5"/><path d="M17 12v5h-5"/></svg>
-        </button>
         <span class="action-spacer"></span>
-        <button class="danger text-action" onclick="saveNoSleepPump()" title="No sleep-pump transition  T">No transition</button>
-        <button class="danger text-action" onclick="saveNoLevel()" title="No valid level  N">No level</button>
+        <button class="ghost text-action" id="unlabelBtn" onclick="unlabelEvent()" disabled title="Make this event unlabeled again">Unlabel</button>
+        <button class="primary text-action" onclick="saveLabel()" title="Save this event annotation  S">Save</button>
         <span class="action-spacer"></span>
-        <button class="primary text-action" onclick="saveLevel()" title="Save level  S">Save</button>
+        <button class="ghost text-action" onclick="showLabeling()">Labeling</button>
+        <button class="ghost text-action" onclick="showResults()">Results</button>
+        <button class="primary text-action" id="runIterationBtn" onclick="startIteration()">Run</button>
       </div>
     </div>
   </div>
@@ -605,39 +918,67 @@ LABELER_HTML = r"""<!doctype html>
       </div>
       <div class="panel">
         <div class="panel-title">Annotation</div>
+        <div id="setupsHeading" class="field-group-label">setups <span class="quiet-help" style="text-transform:none;letter-spacing:0">— one event can carry several trades</span></div>
+        <div id="setupTabs" class="setup-tabs"></div>
         <div class="tool-row">
-          <button class="ghost icon tool" id="toolLevel" onclick="toggleTool('level')" title="Level: one click snaps to the candle high wick. It extends right until the first close above it.  L">
-            <svg viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.4" fill="currentColor" stroke="none"/><path d="M6 10h11" stroke-dasharray="2.5 2"/></svg>
+          <button class="ghost icon tool" id="toolLevel" onclick="toggleTool('level')" title="Level: one click snaps start to candle high; end is the first later candle that closes above the level, or chart end.  L">
+            <svg viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.4" fill="currentColor" stroke="none"/><path d="M6 10h11"/></svg>
           </button>
           <button class="ghost icon tool" id="toolPump" onclick="toggleTool('pump')" title="Pump: click start candle (snaps to low), click culmination candle (snaps to high).  P">
             <svg viewBox="0 0 20 20"><path d="M4 16L16 4"/><path d="M4 16v-5"/><path d="M16 4h-5"/><rect x="4" y="4" width="12" height="12" stroke-dasharray="2 2" opacity=".45"/></svg>
           </button>
-          <button class="ghost icon tool" id="toolSwingHigh" onclick="toggleTool('swhigh')" title="Swing high: snaps to candle high  H">
-            <svg viewBox="0 0 20 20"><path d="M3 15l5-8 4 6 5-9"/><circle cx="8" cy="7" r="1.6" fill="currentColor" stroke="none"/></svg>
-          </button>
-          <button class="ghost icon tool" id="toolSwingLow" onclick="toggleTool('swlow')" title="Swing low: snaps to candle low  J">
-            <svg viewBox="0 0 20 20"><path d="M3 5l5 8 4-6 5 9"/><circle cx="8" cy="13" r="1.6" fill="currentColor" stroke="none"/></svg>
+          <button class="ghost icon tool" id="toolZigzag" onclick="toggleTool('zigzag')" title="Swing zigzag: left-click to drop points (snap to nearest high/low), right-click to finish.  G">
+            <svg viewBox="0 0 20 20"><path d="M2 14l4-8 4 6 4-8 4 6"/></svg>
           </button>
           <button class="ghost icon tool" id="toolExit" onclick="toggleTool('exit')" disabled title="Draw a level first, then mark the possible exit point.  E">
             <svg viewBox="0 0 20 20"><path d="M5 5l10 10"/><path d="M15 5L5 15"/></svg>
           </button>
           <button class="text-action" id="slBtn" onclick="setOptimalSl()" disabled title="Auto stop-loss: low of the entry candle, ray cut at first touch  X">Auto SL</button>
+          <span class="tool-spacer"></span>
+          <button class="danger icon" id="clearDrawingsBtn" onclick="resetAnnotations()" disabled title="Clear level, pump, stop, exit and zigzag for this setup.  Z">
+            <svg viewBox="0 0 20 20"><path d="M5 6h10"/><path d="M8 6V4h4v2"/><path d="M7 8l.5 8h5L13 8"/><path d="M9.2 10v4M10.8 10v4"/></svg>
+          </button>
         </div>
         <div class="quiet-help" style="margin-bottom:10px">
-          Level snaps to the selected candle high wick and ends itself at the first close above it; entry is that same breakout close. Swings drag only between their neighbours.
+          Level is a one-click high-wick anchor; its segment ends at the first later candle that closes above it, or at chart end if none does.
         </div>
-        <div class="grid">
-          <div class="field"><label>family</label><select id="family"><option value="cap">cap</option><option value="breakout">breakout</option><option value="unknown">unknown</option></select></div>
-          <div class="field"><label>price snap</label><select id="snapMode"><option value="wick">wick</option><option value="ohlc">OHLC</option><option value="off">off</option></select></div>
+        <div class="field-group">
+          <div class="field-group-label">event assessment</div>
+          <div class="grid">
+            <div class="field"><label>family</label><select id="family" onchange="onSetupFieldChange()"><option value="cap">cap</option><option value="breakout">breakout</option><option value="structure_break">structure break</option><option value="unknown">unknown</option></select></div>
+            <div class="field"><label>quality</label><select id="quality" onchange="onSetupFieldChange()"><option value="good">good</option><option value="ok">ok</option><option value="bad">bad</option></select></div>
+          </div>
         </div>
-        <div class="grid">
-          <div class="field"><label>quality</label><select id="quality"><option value="good">good</option><option value="ok">ok</option><option value="bad">bad</option></select></div>
-          <div class="field"><label>show only</label><select id="filter" onchange="renderList()"><option value="all">all</option><option value="unlabeled">unlabeled</option><option value="labeled">labeled</option></select></div>
+        <div class="field-group">
+          <div class="field-group-label">chart</div>
+          <div class="grid">
+            <div class="field"><label>price snap</label><select id="snapMode"><option value="wick">wick</option><option value="ohlc">OHLC</option><option value="off">off</option></select></div>
+            <div class="field"><label>show only</label><select id="filter" onchange="renderList()"><option value="all">all</option><option value="unlabeled">unlabeled</option><option value="labeled">labeled</option></select></div>
+          </div>
         </div>
-        <div class="field"><label>symbol / TF search</label><input id="search" placeholder="e.g. AVNT 15m" oninput="renderList()"></div>
-        <div class="field"><label>notes</label><textarea id="notes" placeholder="why valid / why no level / what you see"></textarea></div>
+        <div class="field"><label>notes</label><textarea id="notes" placeholder="why valid / what you see; missing pump/level is inferred from drawings" oninput="onSetupFieldChange()"></textarea></div>
         <div class="field"><label>latest saved comment</label><textarea id="savedNotes" readonly></textarea></div>
         <div class="hint" id="objectsText"></div>
+      </div>
+      <div class="panel workbench-panel">
+        <div class="panel-title">Run / Results</div>
+        <div class="status-box" id="iterationStatus">No run loaded.</div>
+        <div class="slice-grid" id="resultSlices"></div>
+        <div class="trade-filters">
+          <select id="filterTf" onchange="renderTrades()"><option value="">TF</option></select>
+          <select id="filterSetup" onchange="renderTrades()"><option value="">setup</option></select>
+          <select id="filterOutcome" onchange="renderTrades()"><option value="">outcome</option></select>
+          <select id="filterSession" onchange="renderTrades()"><option value="">session</option></select>
+          <select id="filterMonth" onchange="renderTrades()"><option value="">month</option></select>
+          <select id="filterWeek" onchange="renderTrades()"><option value="">week</option></select>
+        </div>
+        <div class="trade-list" id="tradeList"></div>
+        <div class="field" style="margin-top:10px"><label>trade comment</label><textarea id="resultComment" placeholder="comment on selected result trade"></textarea></div>
+        <button class="primary text-action" onclick="saveResultAnnotation()" id="saveResultAnnotationBtn" disabled>Save trade note/drawings</button>
+      </div>
+      <div class="panel search-panel">
+        <div class="panel-title">Find candidate</div>
+        <div class="field" style="margin-bottom:0"><input id="search" placeholder="symbol / TF, e.g. AVNT 15m" oninput="renderList()"></div>
       </div>
       <div id="list"></div>
     </div>
@@ -649,10 +990,9 @@ LABELER_HTML = r"""<!doctype html>
         <div id="keysPop">
           <div class="keys-heading">Drawing</div>
           <div class="keys-panel">
-            <div class="k-row"><span class="k">L</span><span>level high-wick snap (1 click)</span></div>
+            <div class="k-row"><span class="k">L</span><span>level segment (1 click)</span></div>
             <div class="k-row"><span class="k">P</span><span>pump rectangle (2 clicks)</span></div>
-            <div class="k-row"><span class="k">H</span><span>swing high</span></div>
-            <div class="k-row"><span class="k">J</span><span>swing low</span></div>
+            <div class="k-row"><span class="k">G</span><span>swing zigzag (RMB ends)</span></div>
             <div class="k-row"><span class="k">E</span><span>exit point</span></div>
             <div class="k-row"><span class="k">X</span><span>auto stop-loss</span></div>
             <div class="k-row"><span class="k">Del</span><span>remove selected</span></div>
@@ -663,22 +1003,18 @@ LABELER_HTML = r"""<!doctype html>
           <div class="keys-panel">
             <div class="k-row"><span class="k">Drag</span><span>pan chart</span></div>
             <div class="k-row"><span class="k">Wheel</span><span>zoom X at cursor</span></div>
-            <div class="k-row"><span class="k">⇧+Wh</span><span>zoom Y at cursor</span></div>
+            <div class="k-row"><span class="k">Shift+Wh</span><span>zoom Y at cursor</span></div>
             <div class="k-row"><span class="k">^+Wh</span><span>zoom both</span></div>
             <div class="k-row"><span class="k">Axis</span><span>LMB-drag to scale</span></div>
-            <div class="k-row"><span class="k">2×ax</span><span>auto-fit axis</span></div>
-            <div class="k-row"><span class="k">0</span><span>reset view</span></div>
+            <div class="k-row"><span class="k">2x ax</span><span>auto-fit axis</span></div>
           </div>
           <div class="keys-heading">Navigation</div>
           <div class="keys-panel">
-            <div class="k-row"><span class="k">←</span><span>previous event</span></div>
-            <div class="k-row"><span class="k">→</span><span>next event</span></div>
+            <div class="k-row"><span class="k">Left</span><span>previous event</span></div>
+            <div class="k-row"><span class="k">Right</span><span>next event</span></div>
             <div class="k-row"><span class="k">U</span><span>next unlabeled</span></div>
             <div class="k-row"><span class="k">[ ]</span><span>cycle timeframe</span></div>
-            <div class="k-row"><span class="k">S</span><span>save level</span></div>
-            <div class="k-row"><span class="k">N</span><span>save no level</span></div>
-            <div class="k-row"><span class="k">T</span><span>save no transition</span></div>
-            <div class="k-row"><span class="k">F</span><span>focus chart</span></div>
+            <div class="k-row"><span class="k">S</span><span>save event annotation</span></div>
           </div>
         </div>
       </div>
@@ -691,18 +1027,24 @@ LABELER_HTML = r"""<!doctype html>
 let candidates = [], visible = [], idx = 0, current = null, selectedTf = null;
 let xRange = null, yRange = null, yAuto = true, barMs = 60000;
 let tool = null, drawStep = 0, pending = null;
-let level = null;       // {price, start_ms, end_ms(derived), broken}
+let level = null;       // {price, start_ms, end_ms(auto body-cross or chart end), broken}
 let pump = null;        // {start:{idx,ms,price}, high:{idx,ms,price}}
 let entry = null;       // auto: {idx,ms,price}
 let sl = null;          // {price, hit_ms|null, end_ms}
 let exitPoint = null;   // {ms, price}
-let swings = [];        // [{id, type:'high'|'low', ms, price}]
-let swingSeq = 0;
+let zigzag = null;      // {points:[{ms,price}]} - swing zigzag of the active setup
+let zzDraft = null;     // in-progress zigzag being drawn (before RMB finishes)
+let setups = [];        // per-event list of independent setups (see emptySetup)
+let activeSetup = 0;    // index of the setup currently shown in the workspace
 let selectedObj = null;
-let shapeBindings = [];
 let showDefaultLines = false;
 let relayoutGuard = false;
 let chartHandlersAttached = false;
+let resultMode = false;
+let resultTrade = null;
+let resultTrades = [];
+let selectedTradeId = null;
+let iterationPoll = null;
 
 function gd() { return document.getElementById('chart'); }
 function iso(ms) { return new Date(ms).toISOString().slice(0,16).replace('T',' '); }
@@ -725,15 +1067,23 @@ function priceTickFormat(values) {
 function displaySymbol(symbol) {
   return String(symbol || '').replace(/USDT$/, '').replace(/USDC$/, '');
 }
-function toast(msg) { const t=document.getElementById('toast'); t.innerText=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',1600); }
+let toastTimer = null;
+function toast(msg, ms=1600) {
+  const t = document.getElementById('toast');
+  t.innerText = msg;
+  t.style.display = 'block';
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = 'none'; toastTimer = null; }, ms);
+}
 function esc(x) {
   return String(x ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
 function pms(v) {
   if (v == null) return NaN;
   if (typeof v === 'number') return v;
+  if (v instanceof Date) return v.getTime();
   const s = String(v).replace(' ', 'T');
-  return Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z');
+  return Date.parse(s);
 }
 
 /* ---------- custom selects ---------- */
@@ -796,16 +1146,6 @@ function nearestCandle(ms) {
   }
   return best;
 }
-function nearestCloseTime(ms) {
-  const ts = current.candles.timestamp;
-  let best = ts.length ? ts[0]+barMs : ms, bd = Infinity;
-  for (let i=0; i<ts.length; i++) {
-    const close = ts[i] + barMs;
-    const d = Math.abs(close - ms);
-    if (d < bd) { bd = d; best = close; }
-  }
-  return best;
-}
 function snapPrice(ms, y) {
   const mode = document.getElementById('snapMode').value;
   if (mode === 'off') return y;
@@ -822,6 +1162,14 @@ function levelHighAnchor(ms) {
   const c = current.candles, i = nearestCandle(ms);
   return {idx: i, ms: c.timestamp[i], price: c.high[i]};
 }
+function pumpHighBetweenForward(aIdx, bIdx) {
+  const c = current.candles;
+  const a = Math.max(0, aIdx);
+  const b = Math.min(c.timestamp.length - 1, bIdx);
+  let best = a;
+  for (let i=a; i<=b; i++) if (c.high[i] >= c.high[best]) best = i;
+  return {idx:best, ms:c.timestamp[best], price:c.high[best]};
+}
 function levelShapeStartMs(lvl) {
   return lvl.start_ms;
 }
@@ -829,101 +1177,193 @@ function chartDataEndMs() {
   const c = current && current.candles;
   return c && c.timestamp.length ? c.timestamp[c.timestamp.length-1] + barMs : Date.now();
 }
-function visibleChartRightMs() {
-  const r = plotRefs();
-  if (!r || !r.xa || !r.xa.range || r.xa.range.length < 2) return NaN;
-  return pms(r.xa.range[1]);
-}
-function unbrokenLevelEndMs() {
-  const dataEnd = chartDataEndMs();
-  const visibleRight = visibleChartRightMs();
-  return Number.isFinite(visibleRight) ? Math.max(dataEnd, visibleRight) : dataEnd;
-}
 function levelShapeEndMs(lvl) {
   if (!lvl) return chartDataEndMs();
-  const end = Number.isFinite(Number(lvl.end_ms)) ? Number(lvl.end_ms) : chartDataEndMs();
-  return lvl.broken ? end : unbrokenLevelEndMs();
+  return Number.isFinite(Number(lvl.end_ms)) ? Number(lvl.end_ms) : levelAutoEndMs(lvl.price, lvl.start_ms);
+}
+function levelAutoEndMs(price, startMs) {
+  if (!current) return startMs + barMs;
+  const c = current.candles;
+  const startIdx = nearestCandle(startMs);
+  // The level (resistance) is valid until a later candle closes above it: that
+  // breakout candle is where the segment is cut, matching the entry definition.
+  for (let i=startIdx + 1; i<c.timestamp.length; i++) {
+    if (c.close[i] > price) return c.timestamp[i];
+  }
+  return chartDataEndMs();
+}
+function makeLevelFromAnchor(anchor) {
+  return {
+    price: anchor.price,
+    start_ms: anchor.ms,
+    end_ms: levelAutoEndMs(anchor.price, anchor.ms),
+    broken: false
+  };
+}
+function pumpPreviewState(toIdx) {
+  if (!pending) return null;
+  if (toIdx <= pending.idx) {
+    return {valid:false, reason:'right-to-left', start:pending, high:null, endIdx:toIdx};
+  }
+  const hi = pumpHighBetweenForward(pending.idx, toIdx);
+  if (hi.price <= pending.price) {
+    return {valid:false, reason:'top-down', start:pending, high:hi, endIdx:toIdx};
+  }
+  return {valid:true, reason:null, start:pending, high:hi, endIdx:toIdx};
 }
 
 /* ---------- derived objects: level end + entry + stop ---------- */
-function levelBreakIdx(price, startMs) {
+function levelBreakIdx(price, startMs, afterMs=null) {
   const c = current.candles;
+  const fromMs = Number.isFinite(Number(afterMs)) ? Number(afterMs) : startMs;
   for (let i=0; i<c.timestamp.length; i++) {
-    if (c.timestamp[i] < startMs) continue;
+    if (c.timestamp[i] < fromMs) continue;
     if (c.close[i] > price) return i;
   }
   return null;
 }
-function computeEntry() {
-  entry = null;
-  if (!level || !current) { sl = null; updateSlButton(); syncToolButtons(); return; }
+function entryForLevel(lvl) {
+  if (!lvl || !current) return null;
   const c = current.candles;
-  const i = levelBreakIdx(level.price, level.start_ms);
-  if (i != null) {
-    level.end_ms = c.timestamp[i] + barMs;
-    level.broken = true;
-    entry = {idx:i, ms:c.timestamp[i], price:c.close[i]};
-  } else {
-    level.end_ms = chartDataEndMs();
-    level.broken = false;
+  const i = levelBreakIdx(lvl.price, lvl.start_ms, levelShapeEndMs(lvl));
+  return i != null ? {idx:i, ms:c.timestamp[i], price:c.close[i]} : null;
+}
+function slRayFor(entryObj, price) {
+  if (entryObj == null || price == null || !current) return null;
+  const c = current.candles;
+  const out = {price:Number(price), hit_ms:null, end_ms:c.timestamp[c.timestamp.length-1] + barMs};
+  for (let j=entryObj.idx+1; j<c.timestamp.length; j++) {
+    if (c.low[j] <= out.price) { out.hit_ms = c.timestamp[j]; out.end_ms = c.timestamp[j] + barMs; break; }
   }
+  return out;
+}
+function computeEntry() {
+  const sourceLevel = activeEntryLevel();
+  entry = entryForLevel(sourceLevel);
+  if (level) level.broken = !!entry;
   if (!entry) sl = null;
   else if (sl) recomputeSlRay();
-  updateSlButton();
+  updateUiButtons();
   syncToolButtons();
 }
 function recomputeSlRay() {
-  if (!sl || !entry || !current) return;
-  const c = current.candles;
-  sl.hit_ms = null;
-  sl.end_ms = c.timestamp[c.timestamp.length-1] + barMs;
-  for (let j=entry.idx+1; j<c.timestamp.length; j++) {
-    if (c.low[j] <= sl.price) { sl.hit_ms = c.timestamp[j]; sl.end_ms = c.timestamp[j] + barMs; break; }
+  if (!sl || !entry) { return; }
+  const ray = slRayFor(entry, sl.price);
+  if (ray) { sl.hit_ms = ray.hit_ms; sl.end_ms = ray.end_ms; }
+}
+// Last local swing low / high of a zigzag (protective stop / break level).
+function zigzagExtremeFrom(z, kind) {
+  const pts = z && Array.isArray(z.points) ? [...z.points].sort((a,b) => a.ms - b.ms) : [];
+  if (pts.length < 2) return null;
+  let last = null;
+  for (let i=1; i<pts.length-1; i++) {
+    const isLow = pts[i].price < pts[i-1].price && pts[i].price < pts[i+1].price;
+    const isHigh = pts[i].price > pts[i-1].price && pts[i].price > pts[i+1].price;
+    if (kind === 'low' ? isLow : isHigh) last = pts[i];
   }
+  if (last) return last;
+  return pts.reduce((best, p) =>
+    (best == null || (kind === 'low' ? p.price < best.price : p.price > best.price)) ? p : best, null);
+}
+function zigzagExtreme(kind) { return zigzagExtremeFrom(zigzag, kind); }
+function zigzagLastSwingLow() { return zigzagExtreme('low'); }
+function zigzagLastSwingHigh() { return zigzagExtreme('high'); }
+function setupHasPump(s) { return !!(s && s.pump && s.pump.start && s.pump.high); }
+function structureBreakAnchorFrom(z) {
+  const high = zigzagExtremeFrom(z, 'high');
+  if (!high) return null;
+  return {price:high.price, start_ms:high.ms, end_ms:levelAutoEndMs(high.price, high.ms), broken:false, virtual:true};
+}
+function activeEntryLevel() {
+  const family = document.getElementById('family').value;
+  if (level) return level;
+  if (family === 'structure_break') return structureBreakAnchorFrom(zigzag);
+  return null;
 }
 function setOptimalSl() {
-  if (!entry || !current) { toast('draw a level first — entry appears on close above it'); return; }
-  sl = {price: current.candles.low[entry.idx]};
+  if (!current) return;
+  captureVisibleRanges();
+  const family = document.getElementById('family').value;
+  let msg;
+  if (family === 'structure_break') {
+    const low = zigzagLastSwingLow();
+    const high = zigzagLastSwingHigh();
+    if (!low || !high) { toast('draw the swing zigzag first (G) for the structure break'); return; }
+    computeEntry();
+    if (!entry) { toast('price has not broken above the last swing high yet'); return; }
+    sl = {price: low.price};
+    msg = 'stop behind last swing low; entry = break of last swing high';
+  } else {
+    if (!entry) { toast('draw a level first - entry appears on close above it'); return; }
+    sl = {price: current.candles.low[entry.idx]};
+    msg = 'stop-loss at entry-candle low';
+  }
   recomputeSlRay();
   selectedObj = 'sl';
+  commitActiveSetup();
   renderObjects();
-  draw();
-  toast('stop-loss at entry-candle low');
+  redrawStable(false);
+  toast(msg);
 }
 function updateSlButton() {
-  document.getElementById('slBtn').disabled = !entry;
+  const family = document.getElementById('family').value;
+  const high = family === 'structure_break' ? zigzagLastSwingHigh() : null;
+  const low = family === 'structure_break' ? zigzagLastSwingLow() : null;
+  const zzOk = !!(high && low);
+  document.getElementById('slBtn').disabled = !(entry || zzOk);
+}
+function hasDrawings() {
+  return !!(level || pump || sl || exitPoint || (zigzag && zigzag.points && zigzag.points.length));
+}
+function updateDrawingButton() {
+  const btn = document.getElementById('clearDrawingsBtn');
+  if (btn) btn.disabled = !hasDrawings();
+}
+function updateEventButton() {
+  const btn = document.getElementById('unlabelBtn');
+  if (!btn) return;
+  const group = visible.length ? visible[idx] : null;
+  btn.disabled = !(group && group.labeled);
+}
+function updateUiButtons() {
+  updateSlButton();
+  updateDrawingButton();
+  updateEventButton();
 }
 
 /* ---------- tools ---------- */
 function toggleTool(name) {
-  if (name === 'exit' && !level) { toast('draw a level first — exit is tied to an existing level'); return; }
-  tool = tool === name ? null : name;
+  if (name === 'exit' && !level) { toast('draw a level first - exit is tied to an existing level'); return; }
+  const turningOn = tool !== name;
+  tool = turningOn ? name : null;
   drawStep = 0; pending = null;
+  zzDraft = (name === 'zigzag' && turningOn) ? {points: []} : null;
   clearGhost();
   syncToolButtons();
-  if (tool === 'level') toast('level: click the cap candle — price snaps to its high wick');
+  if (tool === 'level') toast('level: one click on the start high');
   if (tool === 'pump') toast('pump: click the start candle, then the culmination');
-  if (tool === 'swhigh') toast('swing high: click a candle');
-  if (tool === 'swlow') toast('swing low: click a candle');
+  if (tool === 'zigzag') toast('zigzag: left-click swing points, right-click to finish');
   if (tool === 'exit') toast('exit: click the exit point');
 }
 function cancelTool() {
-  tool = null; drawStep = 0; pending = null;
+  captureVisibleRanges();
+  tool = null; drawStep = 0; pending = null; zzDraft = null;
   selectedObj = null;
   clearGhost();
   syncToolButtons();
   renderObjects();
-  draw();
+  redrawStable(true);
 }
 function syncToolButtons() {
-  const map = {level:'toolLevel', pump:'toolPump', swhigh:'toolSwingHigh', swlow:'toolSwingLow', exit:'toolExit'};
+  const map = {level:'toolLevel', pump:'toolPump', zigzag:'toolZigzag', exit:'toolExit'};
   if (!level && tool === 'exit') { tool = null; drawStep = 0; pending = null; clearGhost(); }
   for (const [name, id] of Object.entries(map)) {
     const btn = document.getElementById(id);
     const disabled = name === 'exit' && !level;
     btn.disabled = disabled;
     btn.classList.toggle('active', !disabled && tool === name);
-    btn.classList.toggle('pending', !disabled && tool === name && drawStep === 1);
+    const pending = drawStep === 1 || (name === 'zigzag' && zzDraft && zzDraft.points.length > 0);
+    btn.classList.toggle('pending', !disabled && tool === name && pending);
   }
   document.body.classList.toggle('drawing', tool !== null);
 }
@@ -933,15 +1373,49 @@ function plotRefs() {
   const fl = gd()._fullLayout;
   return fl && fl.xaxis && fl.yaxis ? {xa: fl.xaxis, ya: fl.yaxis, fl} : null;
 }
+/* Plotly maps our epoch-ms timestamps into an internal "linear" axis space via
+   d2c(); that map is affine but NOT the identity, so the overlay must go through
+   Plotly's own axis functions rather than parse range strings itself. This keeps
+   the overlay pixel-locked to the candles no matter how the visible range is
+   stored (local string / ISO / number). */
+function xMsToLinear(xa, ms) { return xa.d2c(new Date(ms)); }
+function xLinearToMs(xa, lin) {
+  const c = current && current.candles ? current.candles : null;
+  if (!c || c.timestamp.length < 2) return lin - xa.d2c(new Date(0));
+  const t0 = c.timestamp[0], t1 = c.timestamp[c.timestamp.length - 1];
+  const l0 = xa.d2c(new Date(t0)), l1 = xa.d2c(new Date(t1));
+  return l1 === l0 ? t0 : t0 + (lin - l0) * (t1 - t0) / (l1 - l0);
+}
 function xToPx(ms) {
   const r = plotRefs(); if (!r) return 0;
-  const a = pms(r.xa.range[0]), b = pms(r.xa.range[1]);
-  return r.xa._offset + (ms - a) / (b - a) * r.xa._length;
+  return r.xa.l2p(xMsToLinear(r.xa, ms)) + r.xa._offset;
 }
 function yToPx(p) {
   const r = plotRefs(); if (!r) return 0;
-  const a = Number(r.ya.range[0]), b = Number(r.ya.range[1]);
-  return r.ya._offset + (1 - (p - a) / (b - a)) * r.ya._length;
+  return r.ya.l2p(r.ya.d2c(p)) + r.ya._offset;
+}
+function captureVisibleRanges() {
+  const r = plotRefs();
+  if (!r || !r.xa || !r.ya || !r.xa.range || !r.ya.range) return;
+  // Store Plotly's range values verbatim. Re-serialising them (e.g. to ISO/UTC)
+  // shifts the view by the timezone offset when re-applied, so we never do that.
+  xRange = [r.xa.range[0], r.xa.range[1]];
+  const ya0 = Number(r.ya.range[0]), ya1 = Number(r.ya.range[1]);
+  if (Number.isFinite(ya0) && Number.isFinite(ya1) && ya1 > ya0) {
+    yRange = [ya0, ya1];
+  }
+}
+function relayoutDrawingsOnly() {
+  const update = {shapes: shapes(), annotations: annotations()};
+  if (xRange) update['xaxis.range'] = xRange;
+  if (yRange) update['yaxis.range'] = yRange;
+  guardedRelayout(update);
+  positionZones();
+}
+function redrawStable(full=false) {
+  captureVisibleRanges();
+  if (full) draw();
+  else relayoutDrawingsOnly();
 }
 function eventDataPoint(ev) {
   const r = plotRefs(); if (!r) return null;
@@ -949,13 +1423,41 @@ function eventDataPoint(ev) {
   const px = ev.clientX - bb.left, py = ev.clientY - bb.top;
   const inX = px >= r.xa._offset && px <= r.xa._offset + r.xa._length;
   const inY = py >= r.ya._offset && py <= r.ya._offset + r.ya._length;
-  const a = pms(r.xa.range[0]), b = pms(r.xa.range[1]);
-  const ya = Number(r.ya.range[0]), yb = Number(r.ya.range[1]);
   return {
-    ms: a + (px - r.xa._offset) / r.xa._length * (b - a),
-    price: ya + (1 - (py - r.ya._offset) / r.ya._length) * (yb - ya),
+    ms: xLinearToMs(r.xa, r.xa.p2l(px - r.xa._offset)),
+    price: r.ya.l2c(r.ya.p2l(py - r.ya._offset)),
     inPrice: inX && inY, px, py
   };
+}
+function hitObject(ev) {
+  if (!current || tool) return null;
+  const pt = eventDataPoint(ev);
+  if (!pt || !pt.inPrice) return null;
+  const threshold = 9;
+  function near(x,y) { return Math.hypot(pt.px - x, pt.py - y) <= threshold; }
+  // Level and pump are intentionally not grabbable: once placed they can only be
+  // deleted (object list / reset), never dragged. A press on them pans the chart.
+  if (exitPoint && near(xToPx(exitPoint.ms), yToPx(exitPoint.price))) return {id:'exit', part:'exit'};
+  if (sl && entry && Math.abs(pt.py - yToPx(sl.price)) <= threshold && pt.px >= xToPx(entry.ms)-threshold && pt.px <= xToPx(sl.end_ms)+threshold) return {id:'sl', part:'sl'};
+  return null;
+}
+let dragObj = null;
+function applyDrag(hit, ev) {
+  const pt = eventDataPoint(ev);
+  if (!pt || !pt.inPrice) return;
+  const c = current.candles;
+  selectedObj = hit.id;
+  let needsFullDraw = false;
+  if (hit.part === 'exit' && exitPoint) {
+    const i = nearestCandle(pt.ms);
+    exitPoint = {ms:c.timestamp[i], price:snapPrice(pt.ms, pt.price)};
+  } else if (hit.part === 'sl' && sl) {
+    sl.price = Math.max(0, pt.price);
+    recomputeSlRay();
+  }
+  commitActiveSetup();
+  renderObjects();
+  redrawStable(needsFullDraw);
 }
 
 /* ---------- ghost preview overlay ---------- */
@@ -979,45 +1481,58 @@ function renderGhost(pt) {
   let html = '';
   if (tool === 'level') {
     const anchor = levelHighAnchor(pt.ms);
-    const price = anchor.price;
-    const startMs = anchor.ms;
-    const brk = levelBreakIdx(price, startMs);
-    const endMs = brk != null ? c.timestamp[brk] + barMs : unbrokenLevelEndMs();
-    const ax = xToPx(startMs), bx = xToPx(endMs), gy = yToPx(price);
-    html += `<line x1="${ax}" y1="${gy}" x2="${bx}" y2="${gy}" stroke="#8aa0d8" stroke-width="1" stroke-dasharray="5 3"/>`;
-    html += `<line x1="${ax}" y1="${y0}" x2="${ax}" y2="${y1}" stroke="rgba(138,160,216,.30)" stroke-width="1" stroke-dasharray="3 3"/>`;
+    const endMs = levelAutoEndMs(anchor.price, anchor.ms);
+    const ax = xToPx(anchor.ms), bx = xToPx(endMs), gy = yToPx(anchor.price);
+    html += `<line x1="${ax}" y1="${gy}" x2="${bx}" y2="${gy}" stroke="#8aa0d8" stroke-width="1"/>`;
+    html += `<line x1="${ax}" y1="${y0}" x2="${ax}" y2="${y1}" stroke="rgba(138,160,216,.30)" stroke-width="1"/>`;
     html += ghostDot(ax, gy, '#8aa0d8');
-    if (brk != null) {
-      const ey = yToPx(c.close[brk]);
-      html += ghostDot(bx, gy, '#7dbb91');
-      html += `<text x="${bx+6}" y="${ey-6}" fill="#7dbb91" font-size="11">entry ${fmtPrice(c.close[brk])}</text>`;
-    }
-    html += `<text x="${ax+6}" y="${gy-6}" fill="#8aa0d8" font-size="11">high ${fmtPrice(price)}</text>`;
+    html += `<text x="${ax+6}" y="${gy-6}" fill="#8aa0d8" font-size="11">level ${fmtPrice(anchor.price)}</text>`;
   }
-  if (tool === 'swhigh' || tool === 'swlow') {
+  if (tool === 'zigzag') {
     const i = nearestCandle(pt.ms);
-    const isHigh = tool === 'swhigh';
-    const price = isHigh ? c.high[i] : c.low[i];
-    const color = isHigh ? '#c99a62' : '#7fb4d8';
-    const gx = xToPx(c.timestamp[i]), gy = yToPx(price);
-    html += `<line x1="${gx}" y1="${y0}" x2="${gx}" y2="${y1}" stroke="rgba(155,154,147,.25)" stroke-width="1" stroke-dasharray="3 3"/>`;
+    const snap = {ms:c.timestamp[i], price:snapPrice(pt.ms, pt.price)};
+    const pts = (zzDraft && zzDraft.points) ? zzDraft.points : [];
+    const color = '#d9c27a';
+    // committed segments of the in-progress zigzag
+    for (let k=1; k<pts.length; k++) {
+      html += `<line x1="${xToPx(pts[k-1].ms)}" y1="${yToPx(pts[k-1].price)}" x2="${xToPx(pts[k].ms)}" y2="${yToPx(pts[k].price)}" stroke="${color}" stroke-width="1.4"/>`;
+    }
+    for (const p of pts) html += ghostDot(xToPx(p.ms), yToPx(p.price), color);
+    // preview segment from the last point to the cursor
+    const gx = xToPx(snap.ms), gy = yToPx(snap.price);
+    if (pts.length) {
+      const last = pts[pts.length-1];
+      html += `<line x1="${xToPx(last.ms)}" y1="${yToPx(last.price)}" x2="${gx}" y2="${gy}" stroke="${color}" stroke-width="1" stroke-dasharray="4 3" opacity=".8"/>`;
+    }
+    html += `<line x1="${gx}" y1="${y0}" x2="${gx}" y2="${y1}" stroke="rgba(217,194,122,.22)" stroke-width="1"/>`;
     html += ghostDot(gx, gy, color);
-    html += `<text x="${gx+8}" y="${gy + (isHigh ? -8 : 14)}" fill="${color}" font-size="11">${isHigh ? 'high' : 'low'} ${fmtPrice(price)}</text>`;
+    html += `<text x="${gx+8}" y="${gy-8}" fill="${color}" font-size="11">${pts.length ? 'RMB to finish' : 'swing '+fmtPrice(snap.price)}</text>`;
   }
   if (tool === 'pump') {
     const i = nearestCandle(pt.ms);
     if (drawStep === 0) {
       const gx = xToPx(c.timestamp[i]), gy = yToPx(c.low[i]);
-      html += `<line x1="${gx}" y1="${y0}" x2="${gx}" y2="${y1}" stroke="rgba(125,187,145,.28)" stroke-width="1" stroke-dasharray="3 3"/>`;
+      html += `<line x1="${gx}" y1="${y0}" x2="${gx}" y2="${y1}" stroke="rgba(125,187,145,.28)" stroke-width="1"/>`;
       html += ghostDot(gx, gy, '#7dbb91');
       html += `<text x="${gx+8}" y="${gy+12}" fill="#7dbb91" font-size="11">low ${fmtPrice(c.low[i])}</text>`;
     } else {
       const ax = xToPx(pending.ms), ay = yToPx(pending.price);
-      const bx = xToPx(c.timestamp[i]), by = yToPx(c.high[i]);
-      html += `<rect x="${Math.min(ax,bx)}" y="${Math.min(ay,by)}" width="${Math.abs(bx-ax)}" height="${Math.abs(by-ay)}" fill="rgba(125,187,145,.10)" stroke="#7dbb91" stroke-width="1" stroke-dasharray="4 3"/>`;
-      html += ghostDot(ax, ay, '#7dbb91') + ghostDot(bx, by, '#7dbb91');
-      const movePct = pending.price > 0 ? (c.high[i]/pending.price - 1) * 100 : 0;
-      html += `<text x="${bx+8}" y="${by-6}" fill="#7dbb91" font-size="11">high ${fmtPrice(c.high[i])} (+${movePct.toFixed(1)}%)</text>`;
+      const state = pumpPreviewState(i);
+      const endMs = c.timestamp[i];
+      const endPx = xToPx(endMs);
+      const hi = state && state.high ? state.high : {ms:endMs, price:c.high[i]};
+      const bx = state && state.valid ? xToPx(hi.ms) : endPx;
+      const by = state && state.valid ? yToPx(hi.price) : yToPx(Math.max(pending.price, c.high[i]));
+      if (!state || !state.valid) {
+        html += `<rect x="${Math.min(ax,endPx)}" y="${Math.min(ay,by)}" width="${Math.abs(endPx-ax)}" height="${Math.abs(by-ay)}" fill="rgba(155,154,147,.12)" stroke="rgba(155,154,147,.65)" stroke-width="1"/>`;
+        html += ghostDot(ax, ay, '#9b9a93');
+        html += `<text x="${Math.max(ax,endPx)+8}" y="${Math.min(ay,by)+14}" fill="#9b9a93" font-size="11">${state ? state.reason : 'invalid'}</text>`;
+      } else {
+        html += `<rect x="${Math.min(ax,bx)}" y="${Math.min(ay,by)}" width="${Math.abs(bx-ax)}" height="${Math.abs(by-ay)}" fill="rgba(125,187,145,.10)" stroke="#7dbb91" stroke-width="1"/>`;
+        html += ghostDot(ax, ay, '#7dbb91') + ghostDot(bx, by, '#7dbb91');
+        const movePct = pending.price > 0 ? (hi.price/pending.price - 1) * 100 : 0;
+        html += `<text x="${bx+8}" y="${by-6}" fill="#7dbb91" font-size="11">high ${fmtPrice(hi.price)} (+${movePct.toFixed(1)}%)</text>`;
+      }
     }
   }
   if (tool === 'exit') {
@@ -1033,36 +1548,41 @@ function renderGhost(pt) {
 /* ---------- tool clicks ---------- */
 function handleToolClick(pt) {
   const c = current.candles;
+  let needsFullDraw = false;
+  captureVisibleRanges();
   if (tool === 'level') {
-    const anchor = levelHighAnchor(pt.ms);
-    level = {price: anchor.price, start_ms: anchor.ms, end_ms: null, broken: false};
+    level = makeLevelFromAnchor(levelHighAnchor(pt.ms));
     selectedObj = 'level';
     finishTool();
     computeEntry();
-  } else if (tool === 'swhigh' || tool === 'swlow') {
+  } else if (tool === 'zigzag') {
     const i = nearestCandle(pt.ms);
-    const type = tool === 'swhigh' ? 'high' : 'low';
-    const s = {id: 'sw' + (++swingSeq), type, ms: c.timestamp[i], price: type === 'high' ? c.high[i] : c.low[i]};
-    swings.push(s);
-    swings.sort((a,b) => a.ms - b.ms);
-    selectedObj = 'swing:' + s.id;
-    finishTool();
+    if (!zzDraft) zzDraft = {points: []};
+    const pt2 = {ms: c.timestamp[i], price: snapPrice(pt.ms, pt.price)};
+    const last = zzDraft.points[zzDraft.points.length-1];
+    if (!last || last.ms !== pt2.ms) zzDraft.points.push(pt2);   // keep drawing until RMB
+    syncToolButtons();
+    renderGhost(pt);
+    return;
   } else if (tool === 'pump') {
     const i = nearestCandle(pt.ms);
     if (drawStep === 0) {
       pending = {idx: i, ms: c.timestamp[i], price: c.low[i]};
       drawStep = 1;
       syncToolButtons();
-      toast('pump start fixed — click the culmination candle');
+      toast('pump start fixed - click the culmination candle');
       renderGhost(pt);
       return;
     }
-    let a = pending.idx, b = i;
-    if (a === b) b = Math.min(c.timestamp.length - 1, a + 1);
-    if (a > b) { const t = a; a = b; b = t; }
+    const state = pumpPreviewState(i);
+    if (!state || !state.valid) {
+      toast(state ? `invalid pump: ${state.reason}` : 'invalid pump');
+      renderGhost(pt);
+      return;
+    }
     pump = {
-      start: {idx: a, ms: c.timestamp[a], price: c.low[a]},
-      high:  {idx: b, ms: c.timestamp[b], price: c.high[b]}
+      start: {idx: pending.idx, ms: pending.ms, price: pending.price},
+      high:  state.high
     };
     selectedObj = 'pump';
     finishTool();
@@ -1072,22 +1592,40 @@ function handleToolClick(pt) {
     selectedObj = 'exit';
     finishTool();
   }
+  commitActiveSetup();
   renderObjects();
-  draw();
+  redrawStable(needsFullDraw);
 }
 function finishTool() {
   tool = null; drawStep = 0; pending = null;
   clearGhost();
   syncToolButtons();
 }
+function finishZigzag() {
+  if (!zzDraft) return;
+  captureVisibleRanges();
+  if (zzDraft.points.length >= 2) {
+    zigzag = {points: zzDraft.points.slice().sort((a,b) => a.ms - b.ms)};
+    selectedObj = 'zigzag';
+    toast('zigzag saved (' + zigzag.points.length + ' swings)');
+  } else {
+    toast('zigzag needs at least 2 points');
+  }
+  zzDraft = null;
+  finishTool();
+  computeEntry();
+  commitActiveSetup();
+  renderObjects();
+  redrawStable(true);
+}
 
 /* ---------- object list / selection / delete ---------- */
 function renderObjects() {
   const rows = [];
-  if (level) rows.push({id:'level', del:true, label:`level ${fmtPrice(level.price)} · ${iso(level.start_ms)} → ${iso(level.end_ms)}`});
+  if (level) rows.push({id:'level', del:true, label:`level ${fmtPrice(level.price)} · ${iso(level.start_ms)} -> ${iso(levelShapeEndMs(level))}`});
   if (pump) {
     const move = pump.start.price > 0 ? pump.high.price/pump.start.price - 1 : NaN;
-    rows.push({id:'pump', del:true, label:`pump +${fmtPct(move)} · ${fmtPrice(pump.start.price)} → ${fmtPrice(pump.high.price)}`});
+    rows.push({id:'pump', del:true, label:`pump +${fmtPct(move)} · ${fmtPrice(pump.start.price)} -> ${fmtPrice(pump.high.price)}`});
   }
   if (entry) rows.push({id:'entry', del:false, auto:true, label:`entry ${iso(entry.ms)} @ ${fmtPrice(entry.price)}`});
   if (sl && entry) {
@@ -1096,11 +1634,12 @@ function renderObjects() {
     rows.push({id:'sl', del:true, label:`stop ${fmtPrice(sl.price)} · risk ${fmtPct(risk)} · ${hit}`});
   }
   if (exitPoint) rows.push({id:'exit', del:true, label:`exit ${iso(exitPoint.ms)} @ ${fmtPrice(exitPoint.price)}`});
-  for (const s of [...swings].sort((a,b) => a.ms - b.ms)) {
-    rows.push({id:'swing:'+s.id, del:true, label:`swing ${s.type} ${iso(s.ms)} @ ${fmtPrice(s.price)}`});
+  if (zigzag && zigzag.points && zigzag.points.length) {
+    rows.push({id:'zigzag', del:true, label:`zigzag · ${zigzag.points.length} swings`});
   }
   const el = document.getElementById('objectsText');
-  if (!rows.length) { el.innerText = 'Nothing drawn yet. L = level, P = pump, H/J = swings.'; return; }
+  updateDrawingButton();
+  if (!rows.length) { el.innerText = 'No drawings for this setup yet.'; return; }
   el.innerHTML = `<div class="manual-list">${rows.map(row => `
     <div class="manual-item ${selectedObj === row.id ? 'active' : ''}" onclick="selectObj('${row.id}')">
       <span>${esc(row.label)}</span>
@@ -1109,39 +1648,342 @@ function renderObjects() {
     </div>
   `).join('')}</div>`;
 }
-function selectObj(id) { selectedObj = id; renderObjects(); draw(); }
+function selectObj(id) {
+  captureVisibleRanges();
+  selectedObj = id;
+  renderObjects();
+  redrawStable(id === 'zigzag');
+}
 function deleteObj(id) {
-  if (id === 'level') { level = null; computeEntry(); }
+  captureVisibleRanges();
+  if (id === 'level') { level = null; exitPoint = null; computeEntry(); }
   if (id === 'pump') pump = null;
   if (id === 'sl') sl = null;
   if (id === 'exit') exitPoint = null;
-  if (id.startsWith('swing:')) { const sid = id.slice(6); swings = swings.filter(s => s.id !== sid); }
+  if (id === 'zigzag') { zigzag = null; computeEntry(); }
   if (selectedObj === id) selectedObj = null;
+  commitActiveSetup();
   renderObjects();
-  draw();
+  redrawStable(id === 'zigzag');
 }
 function deleteSelected() { if (selectedObj && selectedObj !== 'entry') deleteObj(selectedObj); }
 function resetAnnotations() {
-  if (!visible.length) return;
-  loadEvent(idx);
-  toast('annotations reset to saved state');
+  captureVisibleRanges();
+  level = null;
+  pump = null;
+  entry = null;
+  sl = null;
+  exitPoint = null;
+  zigzag = null;
+  zzDraft = null;
+  selectedObj = null;
+  tool = null; drawStep = 0; pending = null;
+  clearGhost();
+  syncToolButtons();
+  commitActiveSetup();
+  updateUiButtons();
+  renderObjects();
+  redrawStable(false);
+  toast('setup drawings cleared');
 }
-function swingNeighbors(id) {
-  const sorted = [...swings].sort((a,b) => a.ms - b.ms);
-  const i = sorted.findIndex(s => s.id === id);
-  return {prev: i > 0 ? sorted[i-1] : null, next: i < sorted.length-1 ? sorted[i+1] : null};
+
+/* ---------- setups: multiple independent trade ideas per event ---------- */
+function emptySetup() {
+  return {family:'cap', quality:'good', notes:'', level:null, pump:null, exitPoint:null, slPrice:null, zigzag:null};
 }
-function placeSwingAt(s, rawMs) {
-  const c = current.candles;
-  let j = nearestCandle(rawMs);
-  const {prev, next} = swingNeighbors(s.id);
-  const jPrev = prev ? nearestCandle(prev.ms) + 1 : 0;
-  const jNext = next ? nearestCandle(next.ms) - 1 : c.timestamp.length - 1;
-  if (jPrev > jNext) return false;
-  j = Math.max(jPrev, Math.min(jNext, j));
-  s.ms = c.timestamp[j];
-  s.price = s.type === 'high' ? c.high[j] : c.low[j];
-  return true;
+function commitActiveSetup() {
+  if (resultMode) return;   // result review shares the drawing globals but has no setups
+  const s = setups[activeSetup];
+  if (!s) return;
+  s.family = document.getElementById('family').value;
+  s.quality = document.getElementById('quality').value;
+  s.notes = document.getElementById('notes').value;
+  s.level = level;
+  s.pump = pump;
+  s.exitPoint = exitPoint;
+  s.zigzag = zigzag;
+  s.slPrice = sl ? sl.price : null;
+}
+function applySetup(i) {
+  const s = setups[i] || emptySetup();
+  activeSetup = i;
+  level = s.level; pump = s.pump; exitPoint = s.exitPoint; zigzag = s.zigzag;
+  sl = null; entry = null; zzDraft = null; tool = null; drawStep = 0; pending = null; selectedObj = null;
+  const fam = document.getElementById('family'); fam.value = s.family || 'cap'; refreshSelect(fam);
+  const qual = document.getElementById('quality'); qual.value = s.quality || 'good'; refreshSelect(qual);
+  document.getElementById('notes').value = s.notes || '';
+  document.getElementById('savedNotes').value = s.notes || '';
+  computeEntry();
+  if (s.slPrice != null && entry) { sl = {price:+s.slPrice}; recomputeSlRay(); }
+}
+function onSetupFieldChange() {
+  commitActiveSetup();
+  computeEntry();
+  commitActiveSetup();
+  renderSetupTabs();
+  updateUiButtons();
+  renderObjects();
+  relayoutDrawingsOnly();
+}
+function setupLabel(s, i) {
+  const fam = {cap:'cap', breakout:'brk', structure_break:'SB', unknown:'?'}[s.family] || s.family;
+  return (i + 1) + ' · ' + fam;
+}
+function renderSetupTabs() {
+  const el = document.getElementById('setupTabs');
+  if (!el) return;
+  const tabs = setups.map((s, i) => `
+    <div class="setup-tab ${i === activeSetup ? 'active' : ''}" onclick="switchSetup(${i})">
+      <span>${esc(setupLabel(s, i))}</span>
+      ${setups.length > 1 ? `<span class="kill" title="Delete setup" onclick="event.stopPropagation(); deleteSetup(${i})">×</span>` : ''}
+    </div>`).join('');
+  el.innerHTML = tabs + `<div class="setup-add" title="Add another setup for this event" onclick="addSetup()">+</div>`;
+}
+function switchSetup(i) {
+  if (i === activeSetup) return;
+  if (zzDraft) finishZigzag();
+  captureVisibleRanges();
+  commitActiveSetup();
+  applySetup(i);
+  renderSetupTabs();
+  updateUiButtons();
+  renderObjects();
+  updateMetrics();
+  draw();
+}
+function addSetup() {
+  if (zzDraft) finishZigzag();
+  commitActiveSetup();
+  setups.push(emptySetup());
+  applySetup(setups.length - 1);
+  renderSetupTabs();
+  updateUiButtons();
+  renderObjects();
+  draw();
+  toast('new setup ' + setups.length);
+}
+function deleteSetup(i) {
+  if (setups.length <= 1) { toast('an event keeps at least one setup'); return; }
+  captureVisibleRanges();
+  if (i !== activeSetup) commitActiveSetup();
+  setups.splice(i, 1);
+  const next = Math.max(0, Math.min(activeSetup >= i ? activeSetup - 1 : activeSetup, setups.length - 1));
+  applySetup(next);
+  renderSetupTabs();
+  updateUiButtons();
+  renderObjects();
+  draw();
+}
+function setupFromLabel(s) {
+  const out = emptySetup();
+  out.family = s.family || 'cap';
+  out.quality = s.quality || 'good';
+  out.notes = s.notes || '';
+  out.level = (s.level_price != null && s.level_start_ms != null)
+    ? {price:+s.level_price, start_ms:+s.level_start_ms,
+       end_ms: s.level_end_ms != null ? +s.level_end_ms : levelAutoEndMs(+s.level_price, +s.level_start_ms), broken:false}
+    : null;
+  out.pump = (s.pump_start_ms != null && s.pump_start_price != null && s.culmination_ms != null && s.culmination_price != null)
+    ? {start:{idx:nearestCandle(+s.pump_start_ms), ms:+s.pump_start_ms, price:+s.pump_start_price},
+       high:{idx:nearestCandle(+s.culmination_ms), ms:+s.culmination_ms, price:+s.culmination_price}}
+    : null;
+  out.exitPoint = (s.exit_ms != null && s.exit_price != null) ? {ms:+s.exit_ms, price:+s.exit_price} : null;
+  out.slPrice = s.sl_price != null ? +s.sl_price : null;
+  const zpts = Array.isArray(s.zigzag_points)
+    ? s.zigzag_points.filter(p => p && Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.price)))
+                     .map(p => ({ms:Number(p.ms), price:Number(p.price)}))
+    : [];
+  out.zigzag = zpts.length ? {points: zpts.sort((a,b) => a.ms - b.ms)} : null;
+  return out;
+}
+function setupsFromSavedLabel(saved) {
+  if (!saved) return [emptySetup()];
+  if (Array.isArray(saved.setups) && saved.setups.length) return saved.setups.map(setupFromLabel);
+  // legacy flat label -> one setup (ignore old swing_points; zigzag replaces them)
+  if (saved.level_price != null || saved.family || saved.has_level != null) return [setupFromLabel(saved)];
+  return [emptySetup()];
+}
+
+/* ---------- workbench: run + result review ---------- */
+function showLabeling() {
+  document.body.classList.remove('results-mode');
+  resultMode = false;
+  resultTrade = null;
+  selectedTradeId = null;
+  if (visible.length) loadEvent(idx);
+}
+async function showResults() {
+  document.body.classList.add('results-mode');
+  resultMode = true;
+  await loadLatestIteration();
+  await loadTrades();
+}
+async function startIteration() {
+  document.body.classList.add('results-mode');
+  resultMode = true;
+  const btn = document.getElementById('runIterationBtn');
+  btn.disabled = true;
+  await fetch('/api/iteration/start', {method:'POST'});
+  pollIterationStatus(true);
+}
+async function pollIterationStatus(keep=false) {
+  const r = await fetch('/api/iteration/status');
+  const status = await r.json();
+  renderIterationStatus(status);
+  const running = status.state === 'running';
+  document.getElementById('runIterationBtn').disabled = running;
+  if (running || keep) {
+    if (iterationPoll) clearTimeout(iterationPoll);
+    iterationPoll = setTimeout(() => pollIterationStatus(false), running ? 1200 : 400);
+  } else {
+    await loadLatestIteration();
+    await loadTrades();
+  }
+}
+function renderIterationStatus(status) {
+  const el = document.getElementById('iterationStatus');
+  const steps = (status.steps || []).slice(-4).map(s => `${esc(s.at)} · ${esc(s.message)}`).join('<br>');
+  el.innerHTML = `<b>${esc(status.state || 'idle')}</b> · ${esc(status.message || '')}` +
+    (status.run_dir ? `<br><span>${esc(status.run_dir)}</span>` : '') +
+    (status.error ? `<br><span style="color:var(--red)">${esc(status.error)}</span>` : '') +
+    (steps ? `<br>${steps}` : '');
+}
+async function loadLatestIteration() {
+  const r = await fetch('/api/iteration/latest');
+  const data = await r.json();
+  if (!data.exists) {
+    document.getElementById('iterationStatus').innerHTML = '<b>no run</b> · press Run';
+    document.getElementById('resultSlices').innerHTML = '';
+    return;
+  }
+  const lp = data.label_progress || {};
+  const cp = data.candidate_summary || {};
+  const base = data.trade_report && data.trade_report.combined_portfolio ? data.trade_report.combined_portfolio : {};
+  document.getElementById('iterationStatus').innerHTML =
+    `<b>${esc(data.latest.run_id)}</b><br>` +
+    `labels ${lp.labeled_groups || 0}/${cp.candidate_groups || 0} · trades ${base.trades || 0} · WR ${Number(base.win_rate_pct || 0).toFixed(1)}% · return ${Number(base.return_pct || 0).toFixed(1)}%`;
+  renderDashboardSlices(data.dashboard || {});
+}
+function renderDashboardSlices(dashboard) {
+  const root = document.getElementById('resultSlices');
+  const slices = dashboard.slices || {};
+  const cards = [];
+  for (const key of ['tf','setup_family','session','outcome','month','week']) {
+    const rows = (slices[key] || []).slice(0, 6);
+    if (!rows.length) continue;
+    cards.push(`<div class="slice-card"><b>${esc(key)}</b>${rows.map(r => {
+      const name = r[key];
+      return `${esc(name)}: ${r.trades} / ${Number(r.win_rate_pct || 0).toFixed(0)}% / ${Number(r.return_pct || 0).toFixed(1)}%`;
+    }).join('<br>')}</div>`);
+  }
+  root.innerHTML = cards.join('');
+}
+async function loadTrades() {
+  const r = await fetch('/api/iteration/trades');
+  const data = await r.json();
+  resultTrades = data.trades || [];
+  populateTradeFilters();
+  renderTrades();
+}
+function populateTradeFilters() {
+  const mapping = {
+    filterTf:'tf',
+    filterSetup:'setup_family',
+    filterOutcome:'outcome',
+    filterSession:'session',
+    filterMonth:'month',
+    filterWeek:'week',
+  };
+  for (const [id, key] of Object.entries(mapping)) {
+    const el = document.getElementById(id);
+    const old = el.value;
+    const values = [...new Set(resultTrades.map(t => String(t[key] ?? '')).filter(Boolean))].sort();
+    el.innerHTML = `<option value="">${key}</option>` + values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    if (values.includes(old)) el.value = old;
+    refreshSelect(el);
+  }
+}
+function filteredTrades() {
+  const checks = [
+    ['filterTf','tf'],
+    ['filterSetup','setup_family'],
+    ['filterOutcome','outcome'],
+    ['filterSession','session'],
+    ['filterMonth','month'],
+    ['filterWeek','week'],
+  ];
+  return resultTrades.filter(t => checks.every(([id,key]) => {
+    const v = document.getElementById(id).value;
+    return !v || String(t[key] ?? '') === v;
+  }));
+}
+function renderTrades() {
+  const root = document.getElementById('tradeList');
+  const rows = filteredTrades();
+  if (!rows.length) { root.innerHTML = '<div class="hint">No trades for current filters.</div>'; return; }
+  root.innerHTML = rows.map(t => `
+    <div class="trade-row ${t.outcome || ''} ${selectedTradeId === t.trade_id ? 'active' : ''}" data-trade-id="${esc(t.trade_id)}" onclick="selectTrade('${esc(t.trade_id)}')">
+      <div class="trade-main"><span>${esc(displaySymbol(t.symbol))} ${esc(t.tf)} ${Number(t.net_r || 0).toFixed(2)}R</span><span>${esc(t.outcome)}</span></div>
+      <div class="trade-tags">
+        <span class="trade-tag">${esc(t.setup_family)}</span>
+        <span class="trade-tag">${esc(t.session)}</span>
+        <span class="trade-tag">${esc(t.day)}</span>
+        ${t.has_result_annotation ? '<span class="trade-tag">note</span>' : ''}
+      </div>
+    </div>
+  `).join('');
+}
+function drawingsPayload() {
+  return {
+    level, pump, exitPoint, zigzag,
+    sl: sl && entry ? sl : null,
+  };
+}
+function loadResultDrawings(annotation) {
+  const d = annotation && annotation.drawings ? annotation.drawings : {};
+  level = d.level || null;
+  pump = d.pump || null;
+  exitPoint = d.exitPoint || null;
+  zigzag = (d.zigzag && Array.isArray(d.zigzag.points)) ? d.zigzag : null;
+  zzDraft = null;
+  sl = null;
+  entry = null;
+  selectedObj = null;
+}
+async function selectTrade(tradeId) {
+  selectedTradeId = tradeId;
+  renderTrades();
+  const r = await fetch('/api/iteration/trade_candles?trade_id=' + encodeURIComponent(tradeId));
+  const payload = await r.json();
+  if (payload.error) { toast(payload.error, 3000); return; }
+  resultMode = true;
+  resultTrade = payload.trade;
+  current = payload;
+  current.group = {event_id: tradeId};
+  computeBarMs();
+  xRange = null; yRange = null; yAuto = true;
+  tool = null; drawStep = 0; pending = null;
+  loadResultDrawings(payload.result_annotation);
+  document.getElementById('resultComment').value = payload.result_annotation ? (payload.result_annotation.comment || '') : '';
+  document.getElementById('saveResultAnnotationBtn').disabled = false;
+  clearGhost();
+  syncToolButtons();
+  renderObjects();
+  updateMetrics();
+  draw();
+}
+async function saveResultAnnotation() {
+  if (!selectedTradeId) { toast('select a trade first'); return; }
+  const payload = {
+    trade_id: selectedTradeId,
+    comment: document.getElementById('resultComment').value,
+    drawings: drawingsPayload(),
+  };
+  const r = await fetch('/api/result_annotation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const j = await r.json();
+  if (!j.ok) { toast(j.error || 'save failed', 3000); return; }
+  toast('trade annotation saved');
+  await loadTrades();
 }
 
 /* ---------- candidates list ---------- */
@@ -1152,6 +1994,18 @@ async function loadCandidates() {
   initDefaultLineHover();
   renderList();
   if (visible.length) loadEvent(0);
+  pollIterationStatus(false);
+  loadLatestIteration();
+}
+function labelNoteText(label) {
+  if (!label) return '';
+  if (Array.isArray(label.setups)) {
+    const parts = label.setups.map(s => s && s.notes).filter(Boolean);
+    if (parts.length) return parts.join(' | ');
+    const n = label.setups.length;
+    return n > 1 ? (n + ' setups') : '';
+  }
+  return label.notes || '';
 }
 function filtered() {
   const f = document.getElementById('filter').value;
@@ -1169,7 +2023,8 @@ function renderList() {
     const variants = c.variants || [c];
     const pumpBadge = c.pump_pct == null ? '' : `<span class="badge hot">${fmtPct(c.pump_pct)}</span>`;
     const tfs = variants.map(v => esc(v.tf)).join('/');
-    const note = c.label && c.label.notes ? `<div class="small">note: ${esc(String(c.label.notes).slice(0,90))}</div>` : '';
+    const noteText = labelNoteText(c.label);
+    const note = noteText ? `<div class="small">note: ${esc(noteText.slice(0,90))}</div>` : '';
     const multi = variants.length > 1 ? tfs : variants[0].tf;
     d.innerHTML = `<div class="row-head"><span>${i+1}. ${esc(displaySymbol(c.symbol))}</span><span class="small">${esc(multi)}</span></div>
       <div class="row-badges">${pumpBadge}<span class="badge">${iso(c.review_start_ms)}</span></div>${note}`;
@@ -1177,10 +2032,16 @@ function renderList() {
   });
   document.getElementById('progress').innerText = `${candidates.filter(c=>c.labeled).length}/${candidates.length} labeled`;
   document.getElementById('jump').max = String(Math.max(1, visible.length));
+  updateEventButton();
 }
 async function loadEvent(i) {
+  resultMode = false;
+  resultTrade = null;
+  selectedTradeId = null;
+  document.body.classList.remove('results-mode');
   idx = Math.max(0, Math.min(i, visible.length - 1));
   renderList();
+  document.getElementById('side').scrollTop = 0;
   const group = visible[idx];
   selectedTf = group.default_tf || (group.variants && group.variants[0] && group.variants[0].tf) || group.tf;
   populateTfSelect(group);
@@ -1191,26 +2052,14 @@ async function loadEvent(i) {
   current = await r.json();
   current.group = group;
   computeBarMs();
-  const saved = group.label || {};
-  level = (saved.level_price != null && saved.level_start_ms != null)
-    ? {price:+saved.level_price, start_ms:+saved.level_start_ms, end_ms:null, broken:false} : null;
-  swings = Array.isArray(saved.swing_points)
-    ? saved.swing_points
-        .filter(s => s && Number.isFinite(Number(s.ms)) && Number.isFinite(Number(s.price)) && (s.type === 'high' || s.type === 'low'))
-        .map(s => ({id:'sw' + (++swingSeq), type:s.type, ms:Number(s.ms), price:Number(s.price)}))
-        .sort((a,b) => a.ms - b.ms)
-    : [];
-  pump = (saved.pump_start_ms != null && saved.pump_start_price != null && saved.culmination_ms != null && saved.culmination_price != null)
-    ? {start:{idx:nearestCandle(+saved.pump_start_ms), ms:+saved.pump_start_ms, price:+saved.pump_start_price},
-       high:{idx:nearestCandle(+saved.culmination_ms), ms:+saved.culmination_ms, price:+saved.culmination_price}} : null;
-  exitPoint = (saved.exit_ms != null && saved.exit_price != null) ? {ms:+saved.exit_ms, price:+saved.exit_price} : null;
-  sl = null;
-  computeEntry();
-  if (saved.sl_price != null && entry) { sl = {price:+saved.sl_price}; recomputeSlRay(); }
-  document.getElementById('notes').value = '';
-  document.getElementById('savedNotes').value = saved.notes || '';
+  // Build the per-event setups from the saved label (or one empty setup) and show
+  // the first one. Each setup carries its own family/quality/level/pump/exit/SL/zigzag.
+  setups = setupsFromSavedLabel(group.label);
+  applySetup(0);
+  renderSetupTabs();
   document.getElementById('jump').value = String(idx + 1);
   syncToolButtons();
+  updateUiButtons();
   renderObjects();
   updateMetrics();
   draw();
@@ -1276,8 +2125,7 @@ function updateMetrics() {
 function shapes() {
   if (!current) return [];
   const e = current.event, out = [];
-  shapeBindings = [];
-  function add(shape, binding=null) { out.push(shape); shapeBindings.push(binding); }
+  function add(shape) { out.push(shape); }
   if (showDefaultLines) {
     for (const [k,v] of Object.entries(e.marker_columns || {})) {
       if (k.endsWith('_ms') && Number.isFinite(Number(v))) {
@@ -1288,39 +2136,57 @@ function shapes() {
       add({type:'line', layer:'below', editable:false, x0:new Date(e.suggested_level_start_ms), x1:new Date(e.suggested_level_end_ms), y0:Number(e.suggested_level), y1:Number(e.suggested_level), line:{color:'#5f6673', width:1}});
     }
   }
+  if (resultTrade) {
+    const start = Number(resultTrade.fill_time_ms);
+    const end = Number(resultTrade.exit_time_ms);
+    const left = Number.isFinite(start) ? start : chartDataEndMs() - barMs;
+    const right = Number.isFinite(end) ? end : chartDataEndMs();
+    function addTradeLine(price, color, label) {
+      const p = Number(price);
+      if (!Number.isFinite(p) || p <= 0) return;
+      add({type:'line', layer:'above', editable:false,
+        x0:new Date(left), x1:new Date(right), y0:p, y1:p,
+        line:{color, width:1}});
+    }
+    addTradeLine(resultTrade.level, '#8aa0d8', 'level');
+    addTradeLine(resultTrade.entry_price, '#7dbb91', 'entry');
+    addTradeLine(resultTrade.stop, '#d18495', 'stop');
+    addTradeLine(resultTrade.take, '#7dbb91', 'take');
+    if (Number.isFinite(Number(resultTrade.exit_time_ms))) {
+      add({type:'line', layer:'above', editable:false,
+        x0:new Date(Number(resultTrade.exit_time_ms)), x1:new Date(Number(resultTrade.exit_time_ms)),
+        yref:'paper', y0:0.24, y1:1,
+        line:{color:'#a597d6', width:1}});
+    }
+  }
   if (pump) {
     const sel = selectedObj === 'pump';
-    add({type:'rect', layer:'below', editable:false,
-      x0:new Date(Math.min(pump.start.ms, pump.high.ms)), x1:new Date(Math.max(pump.start.ms, pump.high.ms) + barMs),
+      add({type:'rect', layer:'below', editable:false,
+      x0:new Date(Math.min(pump.start.ms, pump.high.ms)), x1:new Date(Math.max(pump.start.ms, pump.high.ms)),
       y0:Math.min(pump.start.price, pump.high.price), y1:Math.max(pump.start.price, pump.high.price),
       line:{color: sel ? '#a9d8b9' : '#7dbb91', width: 1},
-      fillcolor:'rgba(125,187,145,.08)'}, {kind:'pump'});
+      fillcolor:'rgba(125,187,145,.08)'});
+  }
+  const sbAnchor = (!level && document.getElementById('family').value === 'structure_break') ? structureBreakAnchorFrom(zigzag) : null;
+  if (sbAnchor) {
+    add({type:'line', layer:'above', editable:false,
+      x0:new Date(sbAnchor.start_ms), x1:new Date(levelShapeEndMs(sbAnchor)),
+      y0:sbAnchor.price, y1:sbAnchor.price,
+      line:{color:'#d9c27a', width:1, dash:'dot'}});
   }
   if (level) {
     const sel = selectedObj === 'level';
-    add({type:'line', layer:'above', editable:true,
+    add({type:'line', layer:'above', editable:false,
       x0:new Date(levelShapeStartMs(level)), x1:new Date(levelShapeEndMs(level)),
       y0:level.price, y1:level.price,
-      line:{color: sel ? '#c8d4ff' : '#8aa0d8', width: 1}}, {kind:'level'});
-    if (sel) {
-      const c = current.candles;
-      const yr = Math.max(...c.high) - Math.min(...c.low);
-      const dy = Math.max(Math.abs(level.price) * 0.0012, yr * 0.004);
-      const dx = Math.max(barMs * 0.25, 60000);
-      for (const t of [levelShapeStartMs(level), levelShapeEndMs(level)]) {
-        add({type:'rect', layer:'above', editable:false,
-             x0:new Date(t - dx), x1:new Date(t + dx),
-             y0:level.price - dy, y1:level.price + dy,
-             line:{color:'#c8d4ff', width:1}, fillcolor:'rgba(200,212,255,.20)'});
-      }
-    }
+      line:{color: sel ? '#c8d4ff' : '#8aa0d8', width: 1}});
   }
   if (sl && entry) {
     const sel = selectedObj === 'sl';
     add({type:'line', layer:'above', editable:false,
       x0:new Date(entry.ms), x1:new Date(sl.end_ms),
       y0:sl.price, y1:sl.price,
-      line:{color: sel ? '#e7a9b6' : '#d18495', width: 1, dash:'solid'}}, {kind:'sl'});
+      line:{color: sel ? '#e7a9b6' : '#d18495', width: 1, dash:'solid'}});
   }
   if (exitPoint) {
     const sel = selectedObj === 'exit';
@@ -1328,30 +2194,56 @@ function shapes() {
     const yr = Math.max(...c.high) - Math.min(...c.low);
     const dy = Math.max(Math.abs(exitPoint.price) * 0.0015, yr * 0.006);
     const dx = Math.max(barMs * 0.5, 2*60000);
-    add({type:'circle', layer:'above', editable:true,
+    add({type:'circle', layer:'above', editable:false,
       x0:new Date(exitPoint.ms - dx), x1:new Date(exitPoint.ms + dx),
       y0:exitPoint.price - dy, y1:exitPoint.price + dy,
-      line:{color: sel ? '#c9bdf0' : '#a597d6', width: 1}, fillcolor:'rgba(165,151,214,.10)'}, {kind:'exit'});
-  }
-  for (const s of swings) {
-    const sel = selectedObj === 'swing:' + s.id;
-    const c = current.candles;
-    const yr = Math.max(...c.high) - Math.min(...c.low);
-    const dy = Math.max(Math.abs(s.price) * 0.0015, yr * 0.006);
-    const dx = Math.max(barMs * 0.5, 2*60000);
-    const base = s.type === 'high' ? '#c99a62' : '#7fb4d8';
-    const hot = s.type === 'high' ? '#e8c299' : '#a9d2ea';
-    add({type:'circle', layer:'above', editable:true,
-      x0:new Date(s.ms - dx), x1:new Date(s.ms + dx),
-      y0:s.price - dy, y1:s.price + dy,
-      line:{color: sel ? hot : base, width: 1},
-      fillcolor: s.type === 'high' ? 'rgba(201,154,98,.10)' : 'rgba(127,180,216,.10)'}, {kind:'swing', id:s.id});
+      line:{color: sel ? '#c9bdf0' : '#a597d6', width: 1}, fillcolor:'rgba(165,151,214,.10)'});
   }
   return out;
+}
+function zigzagTrace() {
+  const pts = (zigzag && Array.isArray(zigzag.points)) ? [...zigzag.points].sort((a,b) => a.ms - b.ms) : [];
+  const sel = selectedObj === 'zigzag';
+  const color = sel ? '#f0dc96' : '#d9c27a';
+  return {
+    type:'scatter',
+    mode:'lines+markers',
+    x: pts.map(p => new Date(p.ms)),
+    y: pts.map(p => p.price),
+    xaxis:'x',
+    yaxis:'y',
+    name:'zigzag',
+    hoverinfo:'none',
+    hovertemplate:'<extra></extra>',
+    line:{color, width: sel ? 2 : 1.4},
+    marker:{size: sel ? 8 : 6, symbol:'circle', color, line:{width:1, color:'#171a20'}, opacity:0.95}
+  };
 }
 function annotations() {
   if (!current) return [];
   const out = [];
+  if (resultTrade) {
+    const x = new Date(Number(resultTrade.fill_time_ms));
+    const fields = [
+      ['ENTRY', resultTrade.entry_price, '#7dbb91', -18],
+      ['STOP', resultTrade.stop, '#d18495', 16],
+      ['TAKE', resultTrade.take, '#7dbb91', -18],
+      ['LEVEL', resultTrade.level, '#8aa0d8', 16],
+    ];
+    for (const [label, price, color, shift] of fields) {
+      const p = Number(price);
+      if (!Number.isFinite(p) || p <= 0) continue;
+      out.push({x, y:p, text:`${label} ${fmtPrice(p)}`,
+        showarrow:false, xanchor:'right', yanchor:'middle', xshift:-6, yshift:shift,
+        font:{size:10, color}, bgcolor:'rgba(17,19,24,.78)', borderpad:2});
+    }
+  }
+  const sbAnchor = (!level && document.getElementById('family').value === 'structure_break') ? structureBreakAnchorFrom(zigzag) : null;
+  if (sbAnchor) {
+    out.push({x:new Date(levelShapeEndMs(sbAnchor)), y:sbAnchor.price, text:`SB ${fmtPrice(sbAnchor.price)}`,
+      showarrow:false, xanchor:'left', yanchor:'middle', xshift:6,
+      font:{size:11, color:'#d9c27a'}, bgcolor:'rgba(17,19,24,.75)', borderpad:3});
+  }
   if (level) {
     out.push({x:new Date(levelShapeEndMs(level)), y:level.price, text:fmtPrice(level.price),
       showarrow:false, xanchor:'left', yanchor:'middle', xshift:6,
@@ -1370,7 +2262,7 @@ function annotations() {
   }
   if (sl && entry && entry.price > 0) {
     const risk = (entry.price - sl.price) / entry.price;
-    out.push({x:new Date(entry.ms), y:sl.price, text:`SL −${(risk*100).toFixed(1)}%`,
+    out.push({x:new Date(entry.ms), y:sl.price, text:`SL -${(risk*100).toFixed(1)}%`,
       showarrow:false, xanchor:'right', yanchor:'middle', xshift:-6,
       font:{size:11, color:'#d18495'}, bgcolor:'rgba(37,25,34,.80)', borderpad:3});
   }
@@ -1385,7 +2277,11 @@ function draw() {
     decreasing:{line:{color:'#c99a62', width:1}, fillcolor:'rgba(201,154,98,.40)'},
     hoverinfo:'none', hovertemplate:'<extra></extra>'};
   const vol = {type:'bar', x, y:c.quote_volume, name:'volume', marker:{color:'#6f7890'}, xaxis:'x', yaxis:'y2', opacity:0.32, hoverinfo:'none', hovertemplate:'<extra></extra>'};
-  const title = `pump ${fmtPct(e.pump_pct)} / vol x${Number(e.pump_over_sleep_vol||0).toFixed(1)} / trades x${Number(e.pump_over_sleep_trades||0).toFixed(1)}`;
+  const traces = [candle, vol];
+  if (zigzag && zigzag.points && zigzag.points.length) traces.push(zigzagTrace());
+  const title = resultTrade
+    ? `${displaySymbol(e.symbol)} ${e.tf} / ${resultTrade.outcome} / ${Number(resultTrade.net_r || 0).toFixed(2)}R`
+    : `pump ${fmtPct(e.pump_pct)} / vol x${Number(e.pump_over_sleep_vol||0).toFixed(1)} / trades x${Number(e.pump_over_sleep_trades||0).toFixed(1)}`;
   const spike = {showspikes:true, spikemode:'across', spikesnap:'cursor', spikedash:'dot', spikethickness:1, spikecolor:'#4a5160'};
   const layout = {
     paper_bgcolor:'#111318', plot_bgcolor:'#171a20', font:{color:'#e7e3d8'},
@@ -1398,7 +2294,7 @@ function draw() {
   };
   if (xRange) layout.xaxis.range = xRange;
   if (yRange) layout.yaxis.range = yRange;
-  Plotly.react('chart', [candle, vol], layout, {responsive:true, displayModeBar:false, displaylogo:false, scrollZoom:false, editable:false, edits:{shapePosition:true}});
+  Plotly.react('chart', traces, layout, {responsive:true, displayModeBar:false, displaylogo:false, scrollZoom:false, editable:false, edits:{shapePosition:false}});
   attachChartHandlers();
   positionZones();
 }
@@ -1441,8 +2337,10 @@ function fitY() {
   if (!current) return;
   const c = current.candles;
   if (!c.timestamp.length) return;
+  const r = plotRefs();
   let a, b;
-  if (xRange) { a = pms(xRange[0]); b = pms(xRange[1]); }
+  if (xRange && r) { a = xLinearToMs(r.xa, r.xa.r2l(xRange[0])); b = xLinearToMs(r.xa, r.xa.r2l(xRange[1])); }
+  else if (xRange) { a = pms(xRange[0]); b = pms(xRange[1]); }
   else { a = c.timestamp[0]; b = c.timestamp[c.timestamp.length-1] + barMs; }
   let lo = Infinity, hi = -Infinity;
   for (let i=0; i<c.timestamp.length; i++) {
@@ -1460,13 +2358,14 @@ function bindAxisZone(el, axis) {
   el.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
+    const r = plotRefs();
     const startPx = axis === 'y' ? e.clientY : e.clientX;
     const ranges = currentAxisRanges();
     if (axis === 'y' && !ranges.y) return;
-    if (axis === 'x' && !ranges.x) return;
+    if (axis === 'x' && (!ranges.x || !r)) return;
     const startRange = axis === 'y'
       ? [Number(ranges.y[0]), Number(ranges.y[1])]
-      : [pms(ranges.x[0]), pms(ranges.x[1])];
+      : [r.xa.r2l(ranges.x[0]), r.xa.r2l(ranges.x[1])];
     function move(me) {
       const d = (axis === 'y' ? me.clientY : me.clientX) - startPx;
       const factor = Math.exp((axis === 'y' ? d : -d) * 0.005);
@@ -1479,7 +2378,7 @@ function bindAxisZone(el, axis) {
       } else {
         const b = startRange[1];
         const span = (startRange[1] - startRange[0]) * factor;
-        xRange = [new Date(b - span).toISOString(), new Date(b).toISOString()];
+        xRange = [r.xa.l2r(b - span), r.xa.l2r(b)];
         guardedRelayout({'xaxis.range': xRange});
         if (yAuto) fitY();
       }
@@ -1518,11 +2417,11 @@ function chartWheelZoom(ev) {
   const zoomY = ev.shiftKey || zoomBoth;
   const zoomX = zoomBoth || !ev.shiftKey;
   const update = {};
-  if (zoomX && ranges.x) {
-    const a = pms(ranges.x[0]), b = pms(ranges.x[1]);
+  if (zoomX && ranges.x && r) {
+    const a = r.xa.r2l(ranges.x[0]), b = r.xa.r2l(ranges.x[1]);
     const anchor = a + (b - a) * fracX;
     const [na, nb] = zoomAroundAnchor(a, b, anchor, factor);
-    xRange = [new Date(na).toISOString(), new Date(nb).toISOString()];
+    xRange = [r.xa.l2r(na), r.xa.l2r(nb)];
     update['xaxis.range'] = xRange;
   }
   if (zoomY && ranges.y) {
@@ -1535,12 +2434,6 @@ function chartWheelZoom(ev) {
   guardedRelayout(update);
   if (zoomX && !zoomY && yAuto) fitY();
 }
-function resetView() {
-  xRange = null; yRange = null; yAuto = true;
-  guardedRelayout({'xaxis.autorange': true, 'yaxis.autorange': true, 'yaxis2.autorange': true});
-  setTimeout(fitY, 60);
-}
-
 /* ---------- chart event wiring ---------- */
 let downPos = null;
 function attachChartHandlers() {
@@ -1549,6 +2442,7 @@ function attachChartHandlers() {
   const el = gd();
   el.on('plotly_relayout', ev => {
     if (relayoutGuard) return;
+    if (dragObj || tool || downPos) return;
     let xChanged = false;
     if (ev['xaxis.range[0]'] && ev['xaxis.range[1]']) { xRange = [ev['xaxis.range[0]'], ev['xaxis.range[1]']]; xChanged = true; }
     if (ev['yaxis.range[0]'] != null && ev['yaxis.range[1]'] != null && !yAuto) {
@@ -1562,13 +2456,59 @@ function attachChartHandlers() {
     }
     if (ev['xaxis.autorange']) { xRange = null; yAuto = true; }
     if (ev['yaxis.autorange']) { yRange = null; yAuto = true; }
-    syncDraggedShapes(ev);
     if (xChanged && yAuto) fitY();
     positionZones();
   });
   const wrap = document.getElementById('chartwrap');
   const surface = document.getElementById('ovl');
   wrap.addEventListener('wheel', chartWheelZoom, {passive:false});
+  function beginObjectDrag(e) {
+    if (dragObj) return false;
+    if (tool || !current || e.button !== 0) return;
+    const hit = hitObject(e);
+    if (!hit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragObj = { hit, start: eventDataPoint(e), pointerId: e.pointerId };
+    selectedObj = hit.id;
+    renderObjects();
+    return true;
+  }
+  wrap.addEventListener('pointerdown', e => {
+    if (!beginObjectDrag(e)) return;
+    if (wrap.setPointerCapture) wrap.setPointerCapture(e.pointerId);
+  }, true);
+  wrap.addEventListener('mousedown', e => {
+    beginObjectDrag(e);
+  }, true);
+  wrap.addEventListener('pointermove', e => {
+    if (!dragObj) return;
+    e.preventDefault();
+    e.stopPropagation();
+    applyDrag(dragObj.hit, e);
+  }, true);
+  window.addEventListener('mousemove', e => {
+    if (!dragObj) return;
+    e.preventDefault();
+    e.stopPropagation();
+    applyDrag(dragObj.hit, e);
+  }, true);
+  wrap.addEventListener('pointerup', e => {
+    if (!dragObj) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pointerId = dragObj.pointerId;
+    dragObj = null;
+    if (wrap.releasePointerCapture && pointerId != null) {
+      try { wrap.releasePointerCapture(pointerId); } catch (_) {}
+    }
+  }, true);
+  window.addEventListener('mouseup', e => {
+    if (!dragObj) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragObj = null;
+  }, true);
   surface.addEventListener('pointerdown', e => {
     if (!tool || !current || e.button !== 0) return;
     const pt = eventDataPoint(e);
@@ -1599,107 +2539,126 @@ function attachChartHandlers() {
     renderGhost(eventDataPoint(e));
   }, true);
   surface.addEventListener('pointerleave', () => { if (tool && !downPos) clearGhost(); }, true);
+  // right-click finishes the zigzag (and never opens the browser context menu while drawing)
+  surface.addEventListener('contextmenu', e => {
+    if (tool === 'zigzag') { e.preventDefault(); e.stopPropagation(); finishZigzag(); }
+  }, true);
   bindAxisZone(document.getElementById('yzone'), 'y');
   bindAxisZone(document.getElementById('xzone'), 'x');
   new ResizeObserver(() => positionZones()).observe(document.getElementById('chartwrap'));
 }
-function syncDraggedShapes(ev) {
-  const changed = new Set();
-  for (const key of Object.keys(ev)) {
-    const m = key.match(/^shapes\[(\d+)\]\./);
-    if (m) changed.add(Number(m[1]));
-  }
-  if (!changed.size) return;
-  const shapesNow = gd()._fullLayout && gd()._fullLayout.shapes ? gd()._fullLayout.shapes : [];
-  let dirty = false;
-  for (const i of changed) {
-    const binding = shapeBindings[i];
-    const shape = shapesNow[i];
-    if (!binding || !shape) continue;
-    if (binding.kind === 'level' && level) {
-      const rawA = pms(shape.x0), rawB = pms(shape.x1);
-      const anchor = levelHighAnchor(Math.min(rawA, rawB));
-      level = {price: anchor.price, start_ms: anchor.ms, end_ms: null, broken: false};
-      selectedObj = 'level';
-      computeEntry();
-      dirty = true;
-    }
-    if (binding.kind === 'exit' && exitPoint) {
-      exitPoint = {
-        ms: (pms(shape.x0) + pms(shape.x1)) / 2,
-        price: (Number(shape.y0) + Number(shape.y1)) / 2
-      };
-      selectedObj = 'exit';
-      dirty = true;
-    }
-    if (binding.kind === 'swing') {
-      const s = swings.find(x => x.id === binding.id);
-      if (s) {
-        const rawMs = (pms(shape.x0) + pms(shape.x1)) / 2;
-        if (!placeSwingAt(s, rawMs)) toast('swing is pinned between its neighbours');
-        swings.sort((a,b) => a.ms - b.ms);
-        selectedObj = 'swing:' + s.id;
-        dirty = true;
-      }
-    }
-  }
-  if (dirty) { renderObjects(); draw(); }
-}
-
 /* ---------- save ---------- */
-function payload(hasLevel) {
+function setupStructureParts(s) {
+  if (!s || s.family !== 'structure_break') return null;
+  const high = zigzagExtremeFrom(s.zigzag, 'high');
+  const low = zigzagExtremeFrom(s.zigzag, 'low');
+  if (!high || !low) return null;
+  const anchor = {price:high.price, start_ms:high.ms, end_ms:levelAutoEndMs(high.price, high.ms), broken:false, virtual:true};
+  return {high, low, anchor, entry: entryForLevel(anchor)};
+}
+function serializeSetup(s) {
+  const lvl = s.level;
+  const withLevel = !!lvl;
+  const structure = setupStructureParts(s);
+  const entryObj = withLevel ? entryForLevel(lvl) : (structure ? structure.entry : null);
+  const stopPrice = s.slPrice != null ? s.slPrice : (structure ? structure.low.price : null);
+  const slRay = (stopPrice != null && entryObj) ? slRayFor(entryObj, stopPrice) : null;
+  const zpts = (s.zigzag && Array.isArray(s.zigzag.points)) ? s.zigzag.points : [];
+  const hasPump = setupHasPump(s);
+  return {
+    family: s.family, quality: s.quality, notes: s.notes || '',
+    has_level: withLevel,
+    has_pump_transition: hasPump,
+    has_structure_break: !!structure,
+    level_price: withLevel ? lvl.price : null,
+    level_start_ms: withLevel ? lvl.start_ms : null,
+    level_end_ms: withLevel ? levelShapeEndMs(lvl) : null,
+    level_broken: withLevel ? !!entryObj : null,
+    pump_start_ms: hasPump ? s.pump.start.ms : null,
+    pump_start_price: hasPump ? s.pump.start.price : null,
+    culmination_ms: hasPump ? s.pump.high.ms : null,
+    culmination_price: hasPump ? s.pump.high.price : null,
+    structure_break_ms: structure ? structure.high.ms : null,
+    structure_break_price: structure ? structure.high.price : null,
+    structure_swing_low_ms: structure ? structure.low.ms : null,
+    structure_swing_low_price: structure ? structure.low.price : null,
+    entry_ms: entryObj ? entryObj.ms : null,
+    entry_price: entryObj ? entryObj.price : null,
+    entry_auto: entryObj ? true : null,
+    entry_source: entryObj ? (withLevel ? 'level_break' : 'structure_break') : null,
+    exit_ms: s.exitPoint ? s.exitPoint.ms : null,
+    exit_price: s.exitPoint ? s.exitPoint.price : null,
+    sl_price: slRay ? slRay.price : null,
+    sl_ms: slRay ? entryObj.ms : null,
+    sl_hit_ms: slRay ? slRay.hit_ms : null,
+    sl_auto: slRay ? true : null,
+    sl_source: slRay ? (structure && s.slPrice == null ? 'last_swing_low' : 'annotated') : null,
+    zigzag_points: zpts.map(p => ({ms:Math.round(p.ms), price:Number(p.price)})),
+  };
+}
+function baseLabel(serializedSetups) {
   const e = current.event;
   const group = current.group || visible[idx];
-  const withLevel = hasLevel && !!level;
-  const out = {
-    event_id: group.event_id, symbol: e.symbol, tf: e.tf, has_level: withLevel,
+  return {
+    event_id: group.event_id, symbol: e.symbol, tf: e.tf,
     source_event_id: e.event_id,
     source_event_ids: group.source_event_ids || [e.event_id],
     selected_tf: e.tf,
-    level_price: withLevel ? level.price : null,
-    level_start_ms: withLevel ? level.start_ms : null,
-    level_end_ms: withLevel ? level.end_ms : null,
-    family: document.getElementById('family').value,
-    quality: document.getElementById('quality').value,
-    notes: document.getElementById('notes').value,
-    pump_start_ms: pump ? pump.start.ms : null,
-    pump_start_price: pump ? pump.start.price : null,
-    culmination_ms: pump ? pump.high.ms : null,
-    culmination_price: pump ? pump.high.price : null,
-    entry_ms: entry ? entry.ms : null,
-    entry_price: entry ? entry.price : null,
-    entry_auto: entry ? true : null,
-    exit_ms: exitPoint ? exitPoint.ms : null,
-    exit_price: exitPoint ? exitPoint.price : null,
-    sl_price: (sl && entry) ? sl.price : null,
-    sl_ms: (sl && entry) ? entry.ms : null,
-    sl_hit_ms: (sl && entry) ? sl.hit_ms : null,
-    sl_auto: (sl && entry) ? true : null,
-    swing_points: [...swings].sort((a,b) => a.ms - b.ms).map(s => ({id:s.id, type:s.type, ms:Math.round(s.ms), price:Number(s.price), manual:true})),
-    level_broken: level ? !!level.broken : null,
-    source: 'browser_level_labeler'
+    has_level: serializedSetups.some(s => s.has_level),
+    has_pump_transition: serializedSetups.some(s => s.has_pump_transition),
+    setups: serializedSetups,
+    source: 'browser_level_labeler',
   };
-  return out;
 }
 async function postLabel(p) {
-  const r = await fetch('/api/label', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p)});
-  const j = await r.json();
-  if (!j.ok) { alert(JSON.stringify(j)); return; }
+  let j;
+  try {
+    const r = await fetch('/api/label', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p)});
+    j = await r.json();
+  } catch (err) {
+    toast('save failed: request error', 3200);
+    return;
+  }
+  if (!j.ok) {
+    toast('save failed: ' + (j.error || 'validation error'), 4200);
+    return;
+  }
   const c = candidates.find(x => x.event_id === p.event_id); if (c) { c.labeled = true; c.label = j.label; }
+  updateEventButton();
   toast('saved'); renderList(); nextEvent();
 }
-function saveLevel() {
-  if (!level) { toast('no level drawn — press L and draw it, or save as no level [N]'); return; }
-  postLabel(payload(true));
+async function unlabelEvent() {
+  if (resultMode) { toast('result review mode'); return; }
+  if (!visible.length) return;
+  const group = visible[idx];
+  if (!group || !group.labeled) { toast('event is already unlabeled'); return; }
+  let j;
+  try {
+    const r = await fetch('/api/unlabel', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({event_id: group.event_id})});
+    j = await r.json();
+  } catch (err) {
+    toast('unlabel failed: request error', 3200);
+    return;
+  }
+  if (!j.ok) {
+    toast('unlabel failed: ' + (j.error || 'validation error'), 4200);
+    return;
+  }
+  const c = candidates.find(x => x.event_id === group.event_id);
+  if (c) { c.labeled = false; c.label = null; }
+  group.labeled = false;
+  group.label = null;
+  toast('event is unlabeled');
+  renderList();
+  loadEvent(idx);
 }
-function saveNoLevel() { postLabel(payload(false)); }
-function saveNoSleepPump() {
-  const p = payload(false);
-  p.quality = 'bad';
-  p.rejection_reason = 'no_sleep_pump_transition';
-  const note = document.getElementById('notes').value.trim();
-  p.notes = note ? `no_sleep_pump_transition | ${note}` : 'no_sleep_pump_transition';
-  postLabel(p);
+function saveLabel() {
+  if (resultMode) { toast('result review mode: use Save trade note/drawings'); return; }
+  if (zzDraft) finishZigzag();
+  commitActiveSetup();
+  const serialized = setups.map(serializeSetup);
+  // Empty setup is meaningful: no pump drawn => no transition; no level drawn => no level.
+  postLabel(baseLabel(serialized.length ? serialized : [serializeSetup(emptySetup())]));
 }
 
 /* ---------- navigation ---------- */
@@ -1719,20 +2678,14 @@ function jumpKey(e) {
     if (Number.isFinite(n)) loadEvent(n - 1);
   }
 }
-function toggleFocus() {
-  document.body.classList.toggle('focus');
-  setTimeout(() => { Plotly.Plots.resize(gd()); positionZones(); }, 80);
-}
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelected(); return; }
   if (e.key === 'Escape') { cancelTool(); return; }
-  if (e.key === '0') { resetView(); return; }
   const k = e.key.toLowerCase();
   if (k === 'l') toggleTool('level');
   if (k === 'p') toggleTool('pump');
-  if (k === 'h') toggleTool('swhigh');
-  if (k === 'j') toggleTool('swlow');
+  if (k === 'g') { if (tool === 'zigzag' && zzDraft && zzDraft.points.length) finishZigzag(); else toggleTool('zigzag'); }
   if (k === 'e') toggleTool('exit');
   if (k === 'x') setOptimalSl();
   if (k === 'z') resetAnnotations();
@@ -1740,11 +2693,8 @@ document.addEventListener('keydown', e => {
   if (e.key === ']') changeTfBy(1);
   if (e.key === 'ArrowRight') nextEvent();
   if (e.key === 'ArrowLeft') prevEvent();
-  if (k === 's') saveLevel();
-  if (k === 'n') saveNoLevel();
-  if (k === 't') saveNoSleepPump();
+  if (k === 's') saveLabel();
   if (k === 'u') nextUnlabeled();
-  if (k === 'f') toggleFocus();
 });
 loadCandidates();
 </script>
