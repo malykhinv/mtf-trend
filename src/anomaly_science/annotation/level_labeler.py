@@ -202,6 +202,7 @@ class LevelLabelerServer(ThreadingHTTPServer):
         }
         self.iteration_lock = threading.Lock()
         self.iteration_thread: threading.Thread | None = None
+        self.labels_lock = threading.Lock()
         self.candidates = pd.read_parquet(candidates_path)
         validate_candidates(self.candidates)
         if "candidate_schema_version" not in self.candidates.columns:
@@ -278,7 +279,8 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if parsed.path == "/api/candidates":
-            labels = _read_labels(self.server.labels_path)
+            with self.server.labels_lock:
+                labels = _read_labels(self.server.labels_path)
             payload = []
             for group in self.server.groups:
                 row = dict(group)
@@ -295,7 +297,9 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             _json_response(self, {"strategies": [self.server.strategy_payload()]})
             return
         if parsed.path == "/api/labels":
-            _json_response(self, {"labels": list(_read_labels(self.server.labels_path).values())})
+            with self.server.labels_lock:
+                labels = list(_read_labels(self.server.labels_path).values())
+            _json_response(self, {"labels": labels})
             return
         if parsed.path == "/api/iteration/status":
             with self.server.iteration_lock:
@@ -350,17 +354,18 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             if event_id in self.server.group_by_id:
                 event_ids.extend(str(x) for x in self.server.group_by_id[event_id].get("source_event_ids", []))
             saved_at_ms = int(time.time() * 1000)
-            self.server.labels_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.server.labels_path.open("a", encoding="utf-8") as fh:
-                for eid in dict.fromkeys(event_ids):
-                    row = {
-                        "event_id": eid,
-                        "unlabeled": True,
-                        "source": "browser_level_labeler",
-                        "label_schema_version": LEVEL_LABEL_SCHEMA_VERSION,
-                        "saved_at_ms": saved_at_ms,
-                    }
-                    fh.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+            with self.server.labels_lock:
+                self.server.labels_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.server.labels_path.open("a", encoding="utf-8") as fh:
+                    for eid in dict.fromkeys(event_ids):
+                        row = {
+                            "event_id": eid,
+                            "unlabeled": True,
+                            "source": "browser_level_labeler",
+                            "label_schema_version": LEVEL_LABEL_SCHEMA_VERSION,
+                            "saved_at_ms": saved_at_ms,
+                        }
+                        fh.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
             _json_response(self, {"ok": True, "label": None})
             return
         if parsed.path != "/api/label":
@@ -377,9 +382,10 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             _json_response(self, {"error": str(exc)}, 400)
             return
-        self.server.labels_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.server.labels_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n")
+        with self.server.labels_lock:
+            self.server.labels_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.server.labels_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n")
         _json_response(self, {"ok": True, "label": payload})
 
     def _start_iteration(self) -> None:
@@ -1045,6 +1051,12 @@ let resultTrade = null;
 let resultTrades = [];
 let selectedTradeId = null;
 let iterationPoll = null;
+let loadToken = 0;
+let navigationSerial = 0;
+let autosaveTimer = null;
+let saveQueue = Promise.resolve();
+let savedSignatures = new Map();
+const AUTOSAVE_DELAY_MS = 350;
 
 function gd() { return document.getElementById('chart'); }
 function iso(ms) { return new Date(ms).toISOString().slice(0,16).replace('T',' '); }
@@ -1307,6 +1319,7 @@ function setOptimalSl() {
   commitActiveSetup();
   renderObjects();
   redrawStable(false);
+  scheduleAutosave();
   toast(msg);
 }
 function updateSlButton() {
@@ -1462,6 +1475,7 @@ function applyDrag(hit, ev) {
   commitActiveSetup();
   renderObjects();
   redrawStable(needsFullDraw);
+  scheduleAutosave();
 }
 
 /* ---------- ghost preview overlay ---------- */
@@ -1599,6 +1613,7 @@ function handleToolClick(pt) {
   commitActiveSetup();
   renderObjects();
   redrawStable(needsFullDraw);
+  scheduleAutosave();
 }
 function finishTool() {
   tool = null; drawStep = 0; pending = null;
@@ -1621,6 +1636,7 @@ function finishZigzag() {
   commitActiveSetup();
   renderObjects();
   redrawStable(true);
+  scheduleAutosave();
 }
 
 /* ---------- object list / selection / delete ---------- */
@@ -1669,6 +1685,7 @@ function deleteObj(id) {
   commitActiveSetup();
   renderObjects();
   redrawStable(id === 'zigzag');
+  scheduleAutosave();
 }
 function deleteSelected() { if (selectedObj && selectedObj !== 'entry') deleteObj(selectedObj); }
 function resetAnnotations() {
@@ -1688,6 +1705,7 @@ function resetAnnotations() {
   updateUiButtons();
   renderObjects();
   redrawStable(false);
+  scheduleAutosave();
   toast('setup drawings cleared');
 }
 
@@ -1728,6 +1746,7 @@ function onSetupFieldChange() {
   updateUiButtons();
   renderObjects();
   relayoutDrawingsOnly();
+  scheduleAutosave();
 }
 function setupLabel(s, i) {
   const fam = {cap:'cap', breakout:'brk', structure_break:'SB', unknown:'?'}[s.family] || s.family;
@@ -1754,6 +1773,7 @@ function switchSetup(i) {
   renderObjects();
   updateMetrics();
   draw();
+  scheduleAutosave();
 }
 function addSetup() {
   if (zzDraft) finishZigzag();
@@ -1764,6 +1784,7 @@ function addSetup() {
   updateUiButtons();
   renderObjects();
   draw();
+  scheduleAutosave();
   toast('new setup ' + setups.length);
 }
 function deleteSetup(i) {
@@ -1777,6 +1798,7 @@ function deleteSetup(i) {
   updateUiButtons();
   renderObjects();
   draw();
+  scheduleAutosave();
 }
 function setupFromLabel(s) {
   const out = emptySetup();
@@ -1817,12 +1839,16 @@ function showLabeling() {
   if (visible.length) loadEvent(idx);
 }
 async function showResults() {
+  const ok = await flushAutosave({finishDraft:true, quiet:false});
+  if (!ok) return;
   document.body.classList.add('results-mode');
   resultMode = true;
   await loadLatestIteration();
   await loadTrades();
 }
 async function startIteration() {
+  const ok = await flushAutosave({finishDraft:true, quiet:false});
+  if (!ok) return;
   document.body.classList.add('results-mode');
   resultMode = true;
   const btn = document.getElementById('runIterationBtn');
@@ -2023,7 +2049,7 @@ function renderList() {
   visible.forEach((c, i) => {
     const d = document.createElement('div');
     d.className = 'row' + (i===idx ? ' active' : '') + (c.labeled ? ' labeled' : '');
-    d.onclick = () => loadEvent(i);
+    d.onclick = () => navigateToEventId(c.event_id);
     const variants = c.variants || [c];
     const pumpBadge = c.pump_pct == null ? '' : `<span class="badge hot">${fmtPct(c.pump_pct)}</span>`;
     const tfs = variants.map(v => esc(v.tf)).join('/');
@@ -2039,6 +2065,7 @@ function renderList() {
   updateEventButton();
 }
 async function loadEvent(i) {
+  const token = ++loadToken;
   resultMode = false;
   resultTrade = null;
   selectedTradeId = null;
@@ -2047,13 +2074,16 @@ async function loadEvent(i) {
   renderList();
   document.getElementById('side').scrollTop = 0;
   const group = visible[idx];
+  if (!group) return;
   selectedTf = group.default_tf || (group.variants && group.variants[0] && group.variants[0].tf) || group.tf;
   populateTfSelect(group);
   xRange = null; yRange = null; yAuto = true;
   tool = null; drawStep = 0; pending = null; selectedObj = null;
   clearGhost();
   const r = await fetch('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf));
-  current = await r.json();
+  const payload = await r.json();
+  if (token !== loadToken) return;
+  current = payload;
   current.group = group;
   computeBarMs();
   // Build the per-event setups from the saved label (or one empty setup) and show
@@ -2067,6 +2097,8 @@ async function loadEvent(i) {
   renderObjects();
   updateMetrics();
   draw();
+  const baseline = currentLabelPayload({finishDraft:false});
+  if (baseline) savedSignatures.set(baseline.event_id, labelSignature(baseline));
 }
 function populateTfSelect(group) {
   const el = document.getElementById('tfSelect');
@@ -2082,19 +2114,25 @@ function populateTfSelect(group) {
 }
 async function changeTf() {
   if (!visible.length) return;
+  const token = ++loadToken;
   selectedTf = document.getElementById('tfSelect').value;
   const group = visible[idx];
+  commitActiveSetup();
   const r = await fetch('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf));
-  current = await r.json();
+  const payload = await r.json();
+  if (token !== loadToken) return;
+  current = payload;
   current.group = group;
   computeBarMs();
   const keepSl = sl ? sl.price : null;
   computeEntry();
   if (keepSl != null && entry) { sl = {price: keepSl}; recomputeSlRay(); }
+  commitActiveSetup();
   updateMetrics();
   refreshSelect(document.getElementById('tfSelect'));
   if (yAuto) { draw(); fitY(); } else draw();
   renderObjects();
+  scheduleAutosave();
 }
 function changeTfBy(delta) {
   const el = document.getElementById('tfSelect');
@@ -2614,22 +2652,75 @@ function baseLabel(serializedSetups) {
     source: 'browser_level_labeler',
   };
 }
-async function postLabel(p) {
+function labelSignature(payload) {
+  return JSON.stringify(payload);
+}
+function updateCandidateLabel(eventId, label) {
+  const match = candidates.find(x => x.event_id === eventId || (x.source_event_ids || []).includes(eventId));
+  if (match) { match.labeled = true; match.label = label; }
+  const group = visible.find(x => x.event_id === eventId || (x.source_event_ids || []).includes(eventId));
+  if (group) { group.labeled = true; group.label = label; }
+}
+function currentLabelPayload(options={}) {
+  if (resultMode || !current) return null;
+  if (options.finishDraft && zzDraft) finishZigzag();
+  commitActiveSetup();
+  computeEntry();
+  commitActiveSetup();
+  const serialized = setups.map(serializeSetup);
+  // Empty setup is meaningful: no pump drawn => no transition; no level drawn => no level.
+  return baseLabel(serialized.length ? serialized : [serializeSetup(emptySetup())]);
+}
+async function sendLabelPayload(payload, {quiet=false}={}) {
   let j;
   try {
-    const r = await fetch('/api/label', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(p)});
+    const r = await fetch('/api/label', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     j = await r.json();
   } catch (err) {
-    toast('save failed: request error', 3200);
-    return;
+    if (!quiet) toast('save failed: request error', 3200);
+    return {ok:false, error:'request error'};
   }
   if (!j.ok) {
-    toast('save failed: ' + (j.error || 'validation error'), 4200);
-    return;
+    if (!quiet) toast('save failed: ' + (j.error || 'validation error'), 4200);
+    return {ok:false, error:j.error || 'validation error'};
   }
-  const c = candidates.find(x => x.event_id === p.event_id); if (c) { c.labeled = true; c.label = j.label; }
-  updateEventButton();
-  toast('saved'); renderList(); nextEvent();
+  return {ok:true, label:j.label};
+}
+function queueLabelSave(payload, {advance=false, force=false, quiet=false, advanceSerial=null}={}) {
+  const eventId = payload.event_id;
+  const sig = labelSignature(payload);
+  if (!force && savedSignatures.get(eventId) === sig) {
+    if (advance) navigateAfterManualSave(eventId, advanceSerial);
+    return Promise.resolve(true);
+  }
+  const task = async () => {
+    const res = await sendLabelPayload(payload, {quiet});
+    if (!res.ok) return false;
+    savedSignatures.set(eventId, sig);
+    updateCandidateLabel(eventId, res.label);
+    renderList();
+    updateEventButton();
+    if (!quiet) toast('saved');
+    if (advance) navigateAfterManualSave(eventId, advanceSerial);
+    return true;
+  };
+  saveQueue = saveQueue.then(task, task);
+  return saveQueue;
+}
+function scheduleAutosave() {
+  if (resultMode || !current) return;
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = null;
+    flushAutosave({finishDraft:false});
+  }, AUTOSAVE_DELAY_MS);
+}
+async function flushAutosave({finishDraft=false, quiet=true}={}) {
+  if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
+  const payload = currentLabelPayload({finishDraft});
+  if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
+  if (!payload) return true;
+  return queueLabelSave(payload, {quiet, force:false});
 }
 async function unlabelEvent() {
   if (resultMode) { toast('result review mode'); return; }
@@ -2652,36 +2743,58 @@ async function unlabelEvent() {
   if (c) { c.labeled = false; c.label = null; }
   group.labeled = false;
   group.label = null;
+  savedSignatures.delete(group.event_id);
   toast('event is unlabeled');
   renderList();
-  loadEvent(idx);
+  const pos = findVisibleIndexByEventId(group.event_id);
+  if (pos >= 0) loadEvent(pos);
 }
 function saveLabel() {
-  if (resultMode) { toast('result review mode: use Save trade note/drawings'); return; }
-  if (zzDraft) finishZigzag();
-  commitActiveSetup();
-  computeEntry();
-  commitActiveSetup();
-  const serialized = setups.map(serializeSetup);
-  // Empty setup is meaningful: no pump drawn => no transition; no level drawn => no level.
-  postLabel(baseLabel(serialized.length ? serialized : [serializeSetup(emptySetup())]));
+  const payload = currentLabelPayload({finishDraft:true});
+  if (!payload) { toast('nothing to save'); return; }
+  if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
+  queueLabelSave(payload, {advance:true, force:true, quiet:false, advanceSerial:navigationSerial});
 }
 
 /* ---------- navigation ---------- */
-function nextEvent() { if (idx < visible.length - 1) loadEvent(idx + 1); }
-function prevEvent() { if (idx > 0) loadEvent(idx - 1); }
-function nextUnlabeled() {
-  const pos = visible.findIndex((c, i) => i > idx && !c.labeled);
+function findVisibleIndexByEventId(eventId) {
+  return visible.findIndex(c => c.event_id === eventId || (c.source_event_ids || []).includes(eventId));
+}
+async function navigateToEventId(eventId) {
+  if (!eventId) return;
+  navigationSerial += 1;
+  const ok = await flushAutosave({finishDraft:true, quiet:false});
+  if (!ok) return;
+  const pos = findVisibleIndexByEventId(eventId);
   if (pos >= 0) loadEvent(pos);
-  else {
-    const wrap = visible.findIndex(c => !c.labeled);
-    if (wrap >= 0) loadEvent(wrap); else toast('all visible candidates labeled');
+}
+async function navigateByDelta(delta) {
+  if (!visible.length) return;
+  const target = visible[idx + delta];
+  if (!target) return;
+  await navigateToEventId(target.event_id);
+}
+function navigateAfterManualSave(savedEventId, advanceSerial) {
+  if (advanceSerial !== navigationSerial) return;
+  const pos = findVisibleIndexByEventId(savedEventId);
+  if (pos >= 0 && pos < visible.length - 1) { loadEvent(pos + 1); return; }
+  if (pos < 0) {
+    const fallback = Math.min(idx, visible.length - 1);
+    if (fallback >= 0) { loadEvent(fallback); return; }
   }
+  toast('saved');
+}
+function nextEvent() { navigateByDelta(1); }
+function prevEvent() { navigateByDelta(-1); }
+async function nextUnlabeled() {
+  const target = visible.find((c, i) => i > idx && !c.labeled) || visible.find(c => !c.labeled);
+  if (target) await navigateToEventId(target.event_id);
+  else toast('all visible candidates labeled');
 }
 function jumpKey(e) {
   if (e.key === 'Enter') {
     const n = Number(document.getElementById('jump').value);
-    if (Number.isFinite(n)) loadEvent(n - 1);
+    if (Number.isFinite(n) && visible[n - 1]) navigateToEventId(visible[n - 1].event_id);
   }
 }
 document.addEventListener('keydown', e => {
