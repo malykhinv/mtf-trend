@@ -1256,9 +1256,13 @@ function zigzagExtremeFrom(z, kind) {
   const pts = z && Array.isArray(z.points) ? [...z.points].sort((a,b) => a.ms - b.ms) : [];
   if (pts.length < 2) return null;
   let last = null;
-  for (let i=1; i<pts.length-1; i++) {
-    const isLow = pts[i].price < pts[i-1].price && pts[i].price < pts[i+1].price;
-    const isHigh = pts[i].price > pts[i-1].price && pts[i].price > pts[i+1].price;
+  for (let i=0; i<pts.length; i++) {
+    const prev = i > 0 ? pts[i-1] : null;
+    const next = i < pts.length - 1 ? pts[i+1] : null;
+    // Manual zigzag points are the swing points themselves, so endpoints count.
+    // In a downtrend sequence H1-L1-H2-L2, the protected stop must be L2, not L1.
+    const isLow = !!(prev || next) && (!prev || pts[i].price < prev.price) && (!next || pts[i].price < next.price);
+    const isHigh = !!(prev || next) && (!prev || pts[i].price > prev.price) && (!next || pts[i].price > next.price);
     if (kind === 'low' ? isLow : isHigh) last = pts[i];
   }
   if (last) return last;
@@ -2655,6 +2659,8 @@ async function unlabelEvent() {
 function saveLabel() {
   if (resultMode) { toast('result review mode: use Save trade note/drawings'); return; }
   if (zzDraft) finishZigzag();
+  commitActiveSetup();
+  computeEntry();
   commitActiveSetup();
   const serialized = setups.map(serializeSetup);
   // Empty setup is meaningful: no pump drawn => no transition; no level drawn => no level.
