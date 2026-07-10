@@ -459,7 +459,11 @@ def test_plotly_axis_date_parser_does_not_force_local_ranges_to_utc() -> None:
 def test_result_review_reloads_saved_stop_loss() -> None:
     assert "const savedSl = d.sl && Number.isFinite(Number(d.sl.price)) ? d.sl : null" in LABELER_HTML
     assert "sl = savedSl ? {price:Number(savedSl.price), hit_ms:savedSl.hit_ms ?? null, end_ms:savedSl.end_ms ?? null} : null" in LABELER_HTML
-    assert "if (sl && entry) recomputeSlRay();" in LABELER_HTML
+    assert "function slStartMs()" in LABELER_HTML
+    assert "function slEndMs()" in LABELER_HTML
+    assert "sl: sl ? {price:sl.price, hit_ms:sl.hit_ms ?? null, end_ms:slEndMs()} : null" in LABELER_HTML
+    assert "if (!entry && !resultMode) sl = null" in LABELER_HTML
+    assert "if (sl) {" in LABELER_HTML
 
 
 def test_read_api_errors_do_not_poison_browser_state() -> None:

@@ -607,12 +607,22 @@ function slRayFor(entryObj, price) {
   }
   return out;
 }
+function slStartMs() {
+  if (entry) return entry.ms;
+  const c = current && current.candles;
+  return c && c.timestamp && c.timestamp.length ? c.timestamp[0] : chartDataEndMs() - barMs;
+}
+function slEndMs() {
+  if (sl && Number.isFinite(Number(sl.end_ms))) return Number(sl.end_ms);
+  const c = current && current.candles;
+  return c && c.timestamp && c.timestamp.length ? c.timestamp[c.timestamp.length-1] + barMs : chartDataEndMs();
+}
 function computeEntry() {
   const sourceLevel = activeEntryLevel();
   entry = entryForLevel(sourceLevel);
   if (level) level.broken = !!entry;
-  if (!entry) sl = null;
-  else if (sl) recomputeSlRay();
+  if (!entry && !resultMode) sl = null;
+  else if (entry && sl) recomputeSlRay();
   updateUiButtons();
   syncToolButtons();
 }
@@ -813,7 +823,7 @@ function hitObject(ev) {
   // Level and pump are intentionally not grabbable: once placed they can only be
   // deleted (object list / reset), never dragged. A press on them pans the chart.
   if (exitPoint && near(xToPx(exitPoint.ms), yToPx(exitPoint.price))) return {id:'exit', part:'exit'};
-  if (sl && entry && Math.abs(pt.py - yToPx(sl.price)) <= threshold && pt.px >= xToPx(entry.ms)-threshold && pt.px <= xToPx(sl.end_ms)+threshold) return {id:'sl', part:'sl'};
+  if (sl && Math.abs(pt.py - yToPx(sl.price)) <= threshold && pt.px >= xToPx(slStartMs())-threshold && pt.px <= xToPx(slEndMs())+threshold) return {id:'sl', part:'sl'};
   return null;
 }
 let dragObj = null;
@@ -1006,8 +1016,8 @@ function renderObjects() {
     rows.push({id:'pump', del:true, label:`pump +${fmtPct(move)} · ${fmtPrice(pump.start.price)} -> ${fmtPrice(pump.high.price)}`});
   }
   if (entry) rows.push({id:'entry', del:false, auto:true, label:`entry ${iso(entry.ms)} @ ${fmtPrice(entry.price)}`});
-  if (sl && entry) {
-    const risk = (entry.price - sl.price) / entry.price;
+  if (sl) {
+    const risk = entry && entry.price > 0 ? (entry.price - sl.price) / entry.price : NaN;
     const hit = sl.hit_ms ? `hit ${iso(sl.hit_ms)}` : 'not hit';
     rows.push({id:'sl', del:true, label:`stop ${fmtPrice(sl.price)} · risk ${fmtPct(risk)} · ${hit}`});
   }
@@ -1337,7 +1347,7 @@ function renderTrades() {
 function drawingsPayload() {
   return {
     level, pump, exitPoint, zigzag,
-    sl: sl && entry ? sl : null,
+    sl: sl ? {price:sl.price, hit_ms:sl.hit_ms ?? null, end_ms:slEndMs()} : null,
   };
 }
 function loadResultDrawings(annotation) {
@@ -1620,10 +1630,10 @@ function shapes() {
       y0:level.price, y1:level.price,
       line:{color: sel ? '#c8d4ff' : '#8aa0d8', width: 1}});
   }
-  if (sl && entry) {
+  if (sl) {
     const sel = selectedObj === 'sl';
     add({type:'line', layer:'above', editable:false,
-      x0:new Date(entry.ms), x1:new Date(sl.end_ms),
+      x0:new Date(slStartMs()), x1:new Date(slEndMs()),
       y0:sl.price, y1:sl.price,
       line:{color: sel ? '#e7a9b6' : '#d18495', width: 1, dash:'solid'}});
   }
