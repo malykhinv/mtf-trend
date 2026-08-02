@@ -75,6 +75,14 @@ def test_population_selects_only_causal_second_and_third_recurrences() -> None:
     assert population["untouched_2026_row_used"].eq(False).all()
 
 
+def test_available_v3_online_schema_is_explicitly_supported() -> None:
+    population = build_wave_population(
+        _frame().assign(online_state_schema_version="pump_fade_online_state_v3")
+    )
+
+    assert population["source_event_id"].tolist() == ["b", "c"]
+
+
 def test_future_tail_rows_cannot_change_existing_wave_candidates() -> None:
     original = build_wave_population(_frame())
     changed = _frame()

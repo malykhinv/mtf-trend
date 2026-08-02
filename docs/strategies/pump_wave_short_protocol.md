@@ -9,7 +9,7 @@ Canonical identity:
 strategy_name = recurrent_pump_wave_short_v1
 strategy_family = pump_wave_short
 candidate_schema_version = recurrent_pump_wave_candidate_v1
-source_online_schema_version = pump_fade_online_state_v4
+source_online_schema_versions = pump_fade_online_state_v3 | pump_fade_online_state_v4
 live_trading_strategy = false
 ```
 
@@ -39,8 +39,11 @@ part of the evidence.
 
 ## Stage 0 recurrence-wave contract
 
-The source is the already materialized causal `pump_fade_online_state_v4`
-artifact. The builder reads an explicit allowlist of online columns and rejects
+The source is an already materialized causal `pump_fade_online_state_v3` or
+`pump_fade_online_state_v4` artifact. Version 3 is the available 2025 lifecycle
+build; version 4 adds unrelated online feature families but preserves the
+recurrence and time columns consumed here. The builder reads an explicit
+allowlist of shared online columns and rejects
 label, resolution, future-peak, event-end, and outcome columns. It selects one
 row per source event: the first causally qualified new-high state marked
 `is_nature_anchor=true`.

@@ -28,7 +28,9 @@ from anomaly_science.artifacts.manifest import (
 
 PUMP_WAVE_CANDIDATE_SCHEMA_VERSION = "recurrent_pump_wave_candidate_v1"
 PUMP_WAVE_PROTOCOL_FREEZE_ID = "recurrent_pump_wave_stage0_20250802_v1"
-SOURCE_ONLINE_SCHEMA_VERSION = "pump_fade_online_state_v4"
+SOURCE_ONLINE_SCHEMA_VERSIONS: frozenset[str] = frozenset(
+    {"pump_fade_online_state_v3", "pump_fade_online_state_v4"}
+)
 MINUTE_MS = 60_000
 IS_END_EXCLUSIVE_MS = int(pd.Timestamp("2026-01-01T00:00:00Z").timestamp() * 1_000)
 
@@ -130,7 +132,7 @@ def build_wave_population(
 
     work = online_states.loc[:, SOURCE_COLUMNS].copy()
     schemas = set(work["online_state_schema_version"].dropna().astype(str).unique())
-    if schemas != {SOURCE_ONLINE_SCHEMA_VERSION}:
+    if len(schemas) != 1 or not schemas.issubset(SOURCE_ONLINE_SCHEMA_VERSIONS):
         raise ValueError(f"online-state schema mismatch: {sorted(schemas)}")
     for column in ("ignition_time_ms", "snapshot_time_ms", "feature_cutoff_time_ms"):
         work[column] = pd.to_numeric(work[column], errors="raise").astype("int64")
@@ -328,7 +330,8 @@ def run_wave_review_build(
         "input_path": str(input_path.resolve()),
         "input_sha256": sha256_file(input_path),
         "source_row_count": len(source),
-        "source_online_schema_version": SOURCE_ONLINE_SCHEMA_VERSION,
+        "source_online_schema_version": str(source["online_state_schema_version"].iloc[0]),
+        "accepted_source_online_schema_versions": sorted(SOURCE_ONLINE_SCHEMA_VERSIONS),
         "population_count": len(population),
         "review_queue_count": len(queue),
         "population_symbol_count": int(population["symbol"].nunique()),
@@ -509,6 +512,7 @@ __all__ = [
     "PUMP_WAVE_PROTOCOL_FREEZE_ID",
     "PumpWaveReviewConfig",
     "SOURCE_COLUMNS",
+    "SOURCE_ONLINE_SCHEMA_VERSIONS",
     "build_wave_population",
     "load_online_source",
     "run_wave_review_build",
