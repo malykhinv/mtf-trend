@@ -21,6 +21,11 @@ from anomaly_science.strategy.residual_absorption.spec import (
     RESIDUAL_ABSORPTION_RESEARCH_SPLIT,
     ResidualAbsorptionResearchSpec,
 )
+from anomaly_science.strategy.residual_absorption.data import (
+    is_last_open_time_ms_exclusive,
+    read_is_parquet_schema,
+    read_is_symbol_minutes,
+)
 from anomaly_science.strategy.session_break.research.sessions import BLOCKS
 from anomaly_science.universe.session_liquidity import (
     SessionLiquidityUniverseConfig,
@@ -266,3 +271,25 @@ def test_strategy_spec_registers_structural_distance_rejection() -> None:
     assert spec.allowed_high_resolution_sources == ("candles_1s", "aggtrades")
     assert spec.distance_floor.primary_noise_quantile == 0.90
     assert spec.distance_floor.action_when_anchor_inside_floor == "reject_trade"
+
+
+def test_physical_is_reader_excludes_rows_whose_close_reaches_oos(tmp_path) -> None:
+    path = tmp_path / "AAAUSDT.parquet"
+    last_allowed_open = is_last_open_time_ms_exclusive() - MINUTE_MS
+    first_rejected_open = is_last_open_time_ms_exclusive()
+    pd.DataFrame(
+        {
+            "timestamp": [
+                _ms("2025-06-02T23:59:00Z"),
+                last_allowed_open,
+                first_rejected_open,
+                _ms("2026-01-01T00:00:00Z"),
+            ],
+            "close": [1.0, 2.0, 3.0, 4.0],
+        }
+    ).to_parquet(path, index=False)
+
+    assert read_is_parquet_schema(path) == ("timestamp", "close")
+    frame = read_is_symbol_minutes(path, columns=("close",))
+    assert frame["timestamp"].tolist() == [last_allowed_open]
+    assert frame["close"].tolist() == [2.0]

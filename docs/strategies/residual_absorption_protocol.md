@@ -14,6 +14,9 @@ research is to try to falsify two related mechanisms, not to optimize PnL.
   calibration, execution parameters, or report layout before protocol freeze.
 - All tuning and weekly walk-forward validation happen inside IS.
 
+The non-analytic 2026 schema-inspection incident is disclosed separately in
+`residual_absorption_oos_access_log.md`. It changed no registered definition.
+
 ## Strategy in plain language
 
 After a broad market impulse, a coin may react less or more than its own causal
@@ -25,6 +28,28 @@ combined policy is allowed.
 
 The model estimates future-state probabilities. It does not receive a direct
 PnL target and does not emit an unconstrained buy/sell instruction.
+
+## Registered stage-1 definitions
+
+The broad factor is the median 15-minute return of point-in-time core-eligible
+alt perpetuals, excluding BTC and ETH. Its causal baseline contains only the
+previous 20 completed sessions of the same type. The primary impulse threshold
+is an absolute robust z-score of 3.0, at least 60% directional breadth, and at
+least 30 alt symbols. Z-score variants 2.5/3.5 and breadth variants 50%/70% are
+registered sensitivity arms, not hidden retuning. BTC/ETH agreement is retained
+as a separate confirmation variable so its incremental value can be tested.
+
+For every event/symbol, the factor is recomputed leave-one-out. A 15-minute
+alpha, beta, correlation, and R-squared are estimated only from prior completed
+same-type sessions and frozen at the event. The online residual is observed
+return minus the frozen expected return. Positive direction-adjusted
+underreaction means the coin moved less in the impulse direction than expected.
+
+Future response outcomes are residual changes after the event at 15/30/60/120
+minutes using event-time-frozen beta and factor membership. They are research
+labels, never online features. A prior outcome enters memory only after its
+120-minute resolution time. Unresolved events may contribute counts but cannot
+expose catch-up, zero-cross, terminal-residual, or timing fields.
 
 ## Stage order and gates
 

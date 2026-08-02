@@ -39,6 +39,84 @@ class StructuralDistanceFloorSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class MarketImpulseSpec:
+    schema_version: str = "market_impulse_v1"
+    primary_return_window_minutes: int = 15
+    factor_return_windows_minutes: tuple[int, ...] = (5, 15, 30)
+    same_type_baseline_sessions: int = 20
+    minimum_baseline_snapshots: int = 100
+    minimum_cross_section_symbols: int = 30
+    primary_absolute_robust_z: float = 3.0
+    sensitivity_absolute_robust_z: tuple[float, ...] = (2.5, 3.5)
+    primary_directional_breadth: float = 0.60
+    sensitivity_directional_breadth: tuple[float, ...] = (0.50, 0.70)
+    event_cooldown_minutes: int = 60
+    reference_symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT")
+    response_horizons_minutes: tuple[int, ...] = (15, 30, 60, 120)
+
+    def __post_init__(self) -> None:
+        if self.factor_return_windows_minutes != (5, 15, 30):
+            raise ValueError("market_impulse_v1 factor windows are fixed at 5/15/30 minutes")
+        if self.primary_return_window_minutes not in self.factor_return_windows_minutes:
+            raise ValueError("primary return window must be a registered factor window")
+        if tuple(sorted(set(self.factor_return_windows_minutes))) != self.factor_return_windows_minutes:
+            raise ValueError("factor return windows must be positive, sorted, and unique")
+        if any(value <= 0 for value in self.factor_return_windows_minutes):
+            raise ValueError("factor return windows must be positive")
+        if self.same_type_baseline_sessions <= 0 or self.minimum_baseline_snapshots <= 0:
+            raise ValueError("market impulse baseline requirements must be positive")
+        if self.minimum_cross_section_symbols < 3:
+            raise ValueError("market impulse cross-section requires at least three symbols")
+        if self.primary_absolute_robust_z <= 0.0:
+            raise ValueError("primary_absolute_robust_z must be positive")
+        breadths = (self.primary_directional_breadth, *self.sensitivity_directional_breadth)
+        if any(not 0.5 <= value <= 1.0 for value in breadths):
+            raise ValueError("directional breadth thresholds must be in [0.5, 1]")
+        if self.event_cooldown_minutes < self.primary_return_window_minutes:
+            raise ValueError("event cooldown must cover the primary return window")
+        if tuple(sorted(set(self.response_horizons_minutes))) != self.response_horizons_minutes:
+            raise ValueError("response horizons must be positive, sorted, and unique")
+
+
+@dataclass(frozen=True, slots=True)
+class ResidualResponseSpec:
+    schema_version: str = "residual_response_profile_v1"
+    response_window_minutes: int = 15
+    beta_history_same_type_sessions: int = 20
+    beta_short_history_sessions: int = 5
+    minimum_beta_observations: int = 100
+    minimum_short_beta_observations: int = 25
+    reference_symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT")
+
+    def __post_init__(self) -> None:
+        if self.response_window_minutes != 15:
+            raise ValueError("residual_response_profile_v1 uses a fixed 15-minute response")
+        if not 1 <= self.beta_short_history_sessions < self.beta_history_same_type_sessions:
+            raise ValueError("short beta history must be smaller than full beta history")
+        if self.minimum_beta_observations <= 2 or self.minimum_short_beta_observations <= 2:
+            raise ValueError("beta estimates require at least three observations")
+        if self.minimum_short_beta_observations >= self.minimum_beta_observations:
+            raise ValueError("short beta minimum must be below full beta minimum")
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseOutcomeSpec:
+    schema_version: str = "residual_response_outcome_v1"
+    path_interval_minutes: int = 5
+    horizons_minutes: tuple[int, ...] = (15, 30, 60, 120)
+    minimum_factor_symbols: int = 3
+    reference_symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT")
+
+    def __post_init__(self) -> None:
+        if self.path_interval_minutes != 5:
+            raise ValueError("residual_response_outcome_v1 uses five-minute paths")
+        if self.horizons_minutes != (15, 30, 60, 120):
+            raise ValueError("residual_response_outcome_v1 horizons are fixed")
+        if self.minimum_factor_symbols < 2:
+            raise ValueError("outcome factor requires at least two peer symbols")
+
+
+@dataclass(frozen=True, slots=True)
 class ResidualAbsorptionResearchSpec:
     protocol_version: str = "residual_absorption_protocol_v1"
     feature_schema_version: str = "residual_absorption_features_v1"
@@ -54,6 +132,9 @@ class ResidualAbsorptionResearchSpec:
     distance_floor: StructuralDistanceFloorSpec = field(
         default_factory=StructuralDistanceFloorSpec
     )
+    market_impulse: MarketImpulseSpec = field(default_factory=MarketImpulseSpec)
+    residual_response: ResidualResponseSpec = field(default_factory=ResidualResponseSpec)
+    response_outcome: ResponseOutcomeSpec = field(default_factory=ResponseOutcomeSpec)
 
     def __post_init__(self) -> None:
         if self.snapshot_interval_minutes != 5:
@@ -64,6 +145,9 @@ class ResidualAbsorptionResearchSpec:
 
 __all__ = [
     "RESIDUAL_ABSORPTION_RESEARCH_SPLIT",
+    "MarketImpulseSpec",
+    "ResidualResponseSpec",
+    "ResponseOutcomeSpec",
     "ResidualAbsorptionResearchSpec",
     "StructuralDistanceFloorSpec",
 ]
