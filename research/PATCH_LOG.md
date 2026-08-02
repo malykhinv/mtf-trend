@@ -1930,3 +1930,17 @@ Changes:
 - Adds an immutable gate-amendment runner that reuses frozen predictions,
   metrics, null tests, and weekly metadata, changes no model output, and records
   all source hashes and the exact correction reason.
+
+## science: add post-gate drawdown win/loss diagnostics
+
+Status: APPLIED as explanatory analysis only; no filter authority.
+
+Changes:
+- Compares recovery wins and failures across every available numeric model
+  feature using finite support, missingness, means, and standardized differences.
+- Aggregates full-model feature importance by feature and causal family across
+  all frozen weeks.
+- Reports recovery/failure shares and full-versus-structural AUC, log loss, and
+  Brier by symbol, week, month, session, and exact ladder state.
+- Marks all outputs as post-gate associations that cannot rescue the failed
+  incremental hypothesis or become IS trading filters.

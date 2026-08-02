@@ -85,6 +85,9 @@ from anomaly_science.strategy.drawdown_ladder.stage1_analysis import (
     build_stage1_probability_gate_amendment,
     build_stage1_probability_comparison,
 )
+from anomaly_science.strategy.drawdown_ladder.stage1_diagnostics import (
+    build_stage1_post_gate_diagnostics,
+)
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
 from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
 from anomaly_science.strategy.drawdown_ladder.matched_control import (
@@ -978,6 +981,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     drawdown_stage1_gate_amendment.add_argument("--out", required=True)
 
+    drawdown_stage1_diagnostics = subparsers.add_parser(
+        "diagnose-drawdown-ladder-stage1",
+        help="Write post-gate win/loss, coin, context, and importance diagnostics.",
+    )
+    drawdown_stage1_diagnostics.add_argument("--dataset", required=True)
+    drawdown_stage1_diagnostics.add_argument("--catalog", required=True)
+    drawdown_stage1_diagnostics.add_argument("--structural", required=True)
+    drawdown_stage1_diagnostics.add_argument("--full", required=True)
+    drawdown_stage1_diagnostics.add_argument("--out", required=True)
+
 
     return parser
 
@@ -1086,6 +1099,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=Path(args.out),
         )
         print(f"drawdown-ladder Stage-1 gate amendment written: {output_dir}")
+        return 0
+
+    if args.command == "diagnose-drawdown-ladder-stage1":
+        output_dir = build_stage1_post_gate_diagnostics(
+            dataset_path=Path(args.dataset),
+            feature_catalog_path=Path(args.catalog),
+            structural_dir=Path(args.structural),
+            full_dir=Path(args.full),
+            output_dir=Path(args.out),
+        )
+        print(f"drawdown-ladder Stage-1 diagnostics written: {output_dir}")
         return 0
 
     if args.command == "run-causal-regime-atlas":
