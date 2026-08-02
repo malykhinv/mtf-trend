@@ -141,6 +141,36 @@ a physically separate label artifact. Win/loss trait stability uses the same
 forward-month rules above. High-resolution enrichment remains a later paired
 ablation and cannot change the coarse population.
 
+### Registered stage-2 event-scoped aggTrades grid
+
+This grid was locked after the coarse local-activity trait report and before
+aggTrades features were associated with response outcomes. The immutable
+request population is every already selected event/symbol. Each request covers
+the trailing 15 minutes ending at, but not including, the coarse selection
+snapshot. The request record retains the original event id, symbol, snapshot,
+feature cutoff, five-minute selection granularity, raw-trade source, and exact
+requested interval. Archive availability cannot add, remove, or re-time a
+coarse event.
+
+Raw aggTrades are projected into closed-minute microstructure summaries and
+then aggregated over fixed 5/15-minute windows. Registered families are trade
+intensity and its minute burstiness; trade-size p50/p95/p99 and tail ratios;
+top-one-percent notional share, notional Gini and large-trade frequency;
+same-aggressor run length, sign entropy and side-flip rate; inter-arrival time
+and dispersion; buy/sell price impact; impulse-aligned versus adverse impact;
+and 5-minute versus 15-minute acceleration. Missingness and exact minute
+coverage are explicit features. No outcome-derived threshold or symbol list is
+allowed.
+
+The primary high-resolution arm requires all 15 closed minutes. Partial and
+missing archive rows stay in the coarse experiment and receive explicit
+coverage flags; they are never silently deleted or imputed. Because the local
+archive was collected for a different strategy and its coverage is not random,
+coverage must be reported by month, session, impulse direction, symbol and
+causal coarse covariates. High-resolution value is tested only as a paired
+coarse-only versus coarse-plus-aggTrades ablation on identical covered rows.
+The result is exploratory IS evidence and cannot rescue a failed coarse model.
+
 ### Registered symbol reliability and context attribution
 
 This post-primary analysis distinguishes ex-post diagnosis from online memory.

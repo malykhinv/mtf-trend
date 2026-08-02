@@ -42,6 +42,10 @@ from anomaly_science.strategy.residual_absorption.stage2_local_features import (
     compute_local_window_features,
     compute_symbol_local_features,
 )
+from anomaly_science.strategy.residual_absorption.stage2_high_resolution import (
+    build_enrichment_request_manifest,
+    compute_symbol_aggtrades_features,
+)
 from anomaly_science.strategy.residual_absorption.spec import (
     MarketImpulseSpec,
     ResidualResponseSpec,
@@ -656,6 +660,94 @@ def test_local_activity_window_is_invariant_to_future_tail() -> None:
             assert actual == pytest.approx(expected)
         else:
             assert actual == expected
+
+
+def _aggtrades_minute(
+    timestamp: int, *, trades: float, future_scale: float = 1.0
+) -> dict[str, object]:
+    return {
+        "timestamp": timestamp,
+        "aggtrades_trade_count": trades * future_scale,
+        "trade_notional_p50": 10.0,
+        "trade_notional_p75": 15.0,
+        "trade_notional_p90": 20.0,
+        "trade_notional_p95": 30.0,
+        "trade_notional_p99": 50.0,
+        "top1pct_notional_share": 0.2,
+        "large_trade_count": 2.0,
+        "notional_gini": 0.4,
+        "same_side_run_mean": 3.0,
+        "same_side_run_max": 7.0,
+        "side_sign_entropy": 0.8,
+        "side_flip_rate": 0.3,
+        "inter_arrival_ms_mean": 100.0,
+        "inter_arrival_ms_std": 50.0,
+        "inter_arrival_ms_p90": 200.0,
+        "buy_impact_per_notional": 2e-8,
+        "sell_impact_per_notional": 1e-8,
+    }
+
+
+def test_aggtrades_manifest_is_fixed_from_coarse_selection() -> None:
+    snapshot = _ms("2025-08-03T08:30:00Z")
+    profiles = pd.DataFrame(
+        [
+            {
+                "schema_version": "residual_response_profile_v1",
+                "event_id": "event-1",
+                "symbol": "AAAUSDT",
+                "snapshot_time_ms": snapshot,
+                "feature_cutoff_time_ms": snapshot,
+            }
+        ]
+    )
+    manifest = build_enrichment_request_manifest(profiles)
+
+    assert len(manifest) == 1
+    assert manifest.iloc[0]["requested_start_time_ms"] == snapshot - 15 * 60_000
+    assert manifest.iloc[0]["requested_end_time_ms_exclusive"] == snapshot
+    assert manifest.iloc[0]["selection_granularity_ms"] == 300_000
+    assert manifest.iloc[0]["enrichment_granularity_ms"] == 1
+
+
+def test_aggtrades_features_ignore_future_tail_and_preserve_missingness() -> None:
+    snapshot = _ms("2025-08-03T08:30:00Z")
+    past = pd.DataFrame(
+        [
+            _aggtrades_minute(snapshot - offset * 60_000, trades=10.0 + offset)
+            for offset in range(1, 16)
+        ]
+    )
+    future = pd.DataFrame(
+        [_aggtrades_minute(snapshot + 60_000, trades=10.0, future_scale=10**9)]
+    )
+    events = pd.DataFrame(
+        [{"event_id": "event-1", "snapshot_time_ms": snapshot, "impulse_direction": 1}]
+    )
+    base = compute_symbol_aggtrades_features(past, events=events, symbol="AAAUSDT")
+    replay = compute_symbol_aggtrades_features(
+        pd.concat([past, future], ignore_index=True), events=events, symbol="AAAUSDT"
+    )
+
+    pd.testing.assert_frame_equal(base, replay)
+    row = base.iloc[0]
+    assert row["aggtrades_15m_minute_count"] == 15
+    assert bool(row["aggtrades_primary_complete"])
+    assert row["aggtrades_15m_p95_to_p50"] == pytest.approx(3.0)
+    assert row["aggtrades_15m_impact_asymmetry"] == pytest.approx(1.0 / 3.0)
+
+    missing = compute_symbol_aggtrades_features(
+        past.iloc[:-1], events=events, symbol="AAAUSDT"
+    ).iloc[0]
+    assert missing["aggtrades_15m_coverage"] == pytest.approx(14.0 / 15.0)
+    assert not bool(missing["aggtrades_primary_complete"])
+
+    empty = compute_symbol_aggtrades_features(
+        past.iloc[0:0], events=events, symbol="AAAUSDT"
+    ).iloc[0]
+    assert empty["aggtrades_15m_coverage"] == 0.0
+    assert np.isnan(empty["aggtrades_15m_large_trades_per_1000"])
+    assert not bool(empty["aggtrades_primary_complete"])
 
 
 def test_causal_symbol_memory_uses_only_resolved_prior_outcomes(tmp_path) -> None:

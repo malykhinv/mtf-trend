@@ -117,6 +117,31 @@ class ResponseOutcomeSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class HighResolutionAggTradesSpec:
+    """Locked raw-trade projection used only after coarse event selection."""
+
+    schema_version: str = "residual_absorption_aggtrades_features_v1"
+    source: str = "aggtrades"
+    projection_schema_version: str = "binance_aggtrades_minute_v1"
+    windows_minutes: tuple[int, ...] = (5, 15)
+    selection_granularity_ms: int = 300_000
+    enrichment_granularity_ms: int = 1
+    primary_minimum_coverage: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.source != "aggtrades":
+            raise ValueError("high-resolution v1 is fixed to aggtrades")
+        if self.windows_minutes != (5, 15):
+            raise ValueError("high-resolution v1 windows are fixed at 5/15 minutes")
+        if self.selection_granularity_ms < 60_000:
+            raise ValueError("high-resolution selection must remain coarse")
+        if not 0.0 < self.enrichment_granularity_ms < self.selection_granularity_ms:
+            raise ValueError("aggTrades granularity must be finer than selection")
+        if self.primary_minimum_coverage != 1.0:
+            raise ValueError("primary high-resolution arm requires complete minute coverage")
+
+
+@dataclass(frozen=True, slots=True)
 class ResidualAbsorptionResearchSpec:
     protocol_version: str = "residual_absorption_protocol_v1"
     feature_schema_version: str = "residual_absorption_features_v1"
@@ -135,6 +160,9 @@ class ResidualAbsorptionResearchSpec:
     market_impulse: MarketImpulseSpec = field(default_factory=MarketImpulseSpec)
     residual_response: ResidualResponseSpec = field(default_factory=ResidualResponseSpec)
     response_outcome: ResponseOutcomeSpec = field(default_factory=ResponseOutcomeSpec)
+    high_resolution: HighResolutionAggTradesSpec = field(
+        default_factory=HighResolutionAggTradesSpec
+    )
 
     def __post_init__(self) -> None:
         if self.snapshot_interval_minutes != 5:
@@ -148,6 +176,7 @@ __all__ = [
     "MarketImpulseSpec",
     "ResidualResponseSpec",
     "ResponseOutcomeSpec",
+    "HighResolutionAggTradesSpec",
     "ResidualAbsorptionResearchSpec",
     "StructuralDistanceFloorSpec",
 ]

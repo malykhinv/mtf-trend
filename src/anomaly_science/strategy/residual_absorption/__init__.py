@@ -5,6 +5,7 @@ from anomaly_science.strategy.residual_absorption.spec import (
     MarketImpulseSpec,
     ResidualResponseSpec,
     ResponseOutcomeSpec,
+    HighResolutionAggTradesSpec,
     ResidualAbsorptionResearchSpec,
     StructuralDistanceFloorSpec,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "MarketImpulseSpec",
     "ResidualResponseSpec",
     "ResponseOutcomeSpec",
+    "HighResolutionAggTradesSpec",
     "ResidualAbsorptionResearchSpec",
     "StructuralDistanceFloorSpec",
     "read_is_parquet_schema",
