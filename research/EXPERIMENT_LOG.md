@@ -829,3 +829,73 @@ verification failure is a medium-priority stability candidate, and the two
 calibration failures remain low-priority archived research candidates. Each row
 stores its failure mode, evidence snapshot, mechanism features, and admissible
 next experiment. No disposition permits retuning on the viewed periods.
+
+## 2026-08-02 — blind drawdown ladder Stage 0
+
+Status: `IS_DESCRIPTIVE_PHENOMENON_ONLY_NO_EDGE_CLAIM`.
+
+Frozen design:
+
+```text
+protocol freeze: drawdown_ladder_stage0_20260802_v1
+population: Binance USDT perpetual one-minute data available from 2025-06-03
+IS end / OOS start: 2026-01-01 00:00 UTC
+OOS rows read: 0
+anchor: previous completed close at a versioned UTC session boundary
+order activation delay: one minute
+fill: limit price traded through by 5 bps
+measurement depths: 3% through 90% in 1% increments
+registered equal-notional grids: 3%, 5%, and 10%
+future horizon: 48 hours, beginning strictly after the fill snapshot
+cost-adjusted recovery thresholds: 10, 25, and 50 bps
+```
+
+Build result:
+
+```text
+source perpetual symbols: 796
+individual filled-level rows: 347,866
+equal-notional ladder-state rows: 214,992
+unique parent symbol/session events: 106,922
+temporal audit: PASS
+candidate/outcome joins: one-to-one
+feature cutoff <= snapshot: PASS
+future start > snapshot: PASS
+```
+
+Selected descriptive results at a 25 bps recovery buffer:
+
+```text
+individual 3% limit: 106,922 rows, KM 48h recovery 97.18%, KM median 2 min
+individual 5% limit:  40,175 rows, KM 48h recovery 97.06%, KM median 1 min
+individual 10% limit:  8,018 rows, KM 48h recovery 97.72%, KM median 1 min
+
+3% grid through 6%: 24,718 rows, KM 48h recovery 87.80%, KM median 60 min
+3% grid through 9%:  8,921 rows, KM 48h recovery 82.72%, KM median 115 min
+3% grid through 15%: 2,168 rows, KM 48h recovery 78.66%, KM median 146 min
+
+5% grid through 10%: 7,438 rows, KM 48h recovery 87.34%, KM median 34 min
+5% grid through 20%: 1,127 rows, KM 48h recovery 80.94%, KM median 125 min
+
+10% grid through 20%: 1,337 rows, KM 48h recovery 87.72%, KM median 35 min
+```
+
+The apparently high recovery probability of an individual deep limit is not a
+strategy result. Multiple levels filled by one fall are dependent observations,
+the blended inventory recovers materially less often, recovery varies by month,
+and touching a small positive threshold says nothing about the losses of paths
+that do not recover. For example, the 3% grid through 6% recovered 25 bps in
+82.3% to 92.4% of observed monthly cohorts, while its mean 48-hour return was
+negative in five of seven calendar-month cohorts. Deeper exact strata are sparse
+and show stronger temporal instability.
+
+Interpretation:
+
+```text
+The raw rebound phenomenon exists strongly enough to continue studying.
+No trading edge, TP, protection filter, position sizing rule, or profitable bot
+has been established. Stage 1 must add outcome-blind matched controls and the
+mirrored short experiment before feature selection or CatBoost. Subsequent
+inference must cluster dependent observations at least by symbol/time block and
+must preserve the untouched 2026 partition.
+```

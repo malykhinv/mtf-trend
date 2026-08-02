@@ -160,3 +160,28 @@ def test_event_scoped_symbol_positioning_cli_is_explicit_and_resumable() -> None
     assert archive.resume is True
     assert archive.workers == 16
     assert attach.command == "build-pump-fade-symbol-positioning-context"
+
+
+def test_drawdown_ladder_stage0_cli_exposes_bounded_is_build() -> None:
+    args = build_parser().parse_args(
+        [
+            "build-drawdown-ladder-stage0",
+            "--source-dir",
+            "cache",
+            "--out",
+            "stage0",
+            "--workers",
+            "6",
+            "--max-inflight-symbols",
+            "12",
+            "--limit-symbols",
+            "30",
+        ]
+    )
+
+    assert args.command == "build-drawdown-ladder-stage0"
+    assert args.source_dir == "cache"
+    assert args.out == "stage0"
+    assert args.workers == 6
+    assert args.max_inflight_symbols == 12
+    assert args.limit_symbols == 30

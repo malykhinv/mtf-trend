@@ -73,6 +73,10 @@ from anomaly_science.strategy.pump_fade import (
     load_pump_fade_phenotype_config,
 )
 from anomaly_science.strategy.registry import StrategyRegistryError, validate_strategy_horizon
+from anomaly_science.strategy.drawdown_ladder.stage0 import (
+    DrawdownLadderStage0BuildConfig,
+    build_stage0_is as build_drawdown_ladder_stage0_is,
+)
 from anomaly_science.validation import run_mvp1_holdout_governance
 
 
@@ -827,6 +831,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
     )
 
+    drawdown_ladder_stage0 = subparsers.add_parser(
+        "build-drawdown-ladder-stage0",
+        help="Build the frozen IS-only session-anchored drawdown/recovery event study.",
+    )
+    drawdown_ladder_stage0.add_argument(
+        "--source-dir",
+        default=str(DrawdownLadderStage0BuildConfig().source_dir),
+        help="Directory containing enriched 1m perpetual parquet files.",
+    )
+    drawdown_ladder_stage0.add_argument(
+        "--out",
+        default=str(DrawdownLadderStage0BuildConfig().output_dir),
+        help="New Stage-0 output directory.",
+    )
+    drawdown_ladder_stage0.add_argument("--workers", type=int, default=4)
+    drawdown_ladder_stage0.add_argument("--max-inflight-symbols", type=int, default=None)
+    drawdown_ladder_stage0.add_argument(
+        "--limit-symbols",
+        type=int,
+        default=None,
+        help="Deterministic alphabetic smoke limit; omit for the full IS universe.",
+    )
+
 
     return parser
 
@@ -837,6 +864,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "doctor":
         print(_BOOTSTRAP_MESSAGE)
+        return 0
+
+    if args.command == "build-drawdown-ladder-stage0":
+        result = build_drawdown_ladder_stage0_is(
+            DrawdownLadderStage0BuildConfig(
+                source_dir=Path(args.source_dir),
+                output_dir=Path(args.out),
+                workers=args.workers,
+                max_inflight_symbols=args.max_inflight_symbols,
+                max_symbols=args.limit_symbols,
+            ),
+            progress=lambda message: print(message, flush=True),
+        )
+        print(f"drawdown-ladder Stage-0 artifacts written: {result.output_dir}")
         return 0
 
     if args.command == "run-causal-regime-atlas":

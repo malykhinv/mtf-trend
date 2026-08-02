@@ -38,6 +38,12 @@ from anomaly_science.future.builder import (
 )
 from anomaly_science.future.config import FuturePathBuilderConfig
 from anomaly_science.future.run import run_mvp1_future
+from anomaly_science.future.recovery import (
+    HorizonRecoveryMetrics,
+    RecoveryPathError,
+    RecoveryPathIndex,
+    RecoveryPathMeasurement,
+)
 
 __all__ = [
     "ATR_1D_WINDOW_MINUTES",
@@ -74,4 +80,8 @@ __all__ = [
     "load_anomaly_future_paths_csv",
     "load_anomaly_state_1m_csv",
     "run_mvp1_future",
+    "HorizonRecoveryMetrics",
+    "RecoveryPathError",
+    "RecoveryPathIndex",
+    "RecoveryPathMeasurement",
 ]

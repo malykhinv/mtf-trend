@@ -1817,3 +1817,23 @@ Changes:
 Validation:
 - `python -m compileall -q main.py src tests zip_project.py`
 - `.venv\Scripts\python.exe -m pytest -q` (`318 passed`)
+
+## science: add IS-only blind drawdown recovery Stage 0
+
+Status: APPLIED, descriptive evidence only.
+
+Changes:
+- Adds a generic causal recovery-path index with strict future timing and
+  censor-aware break-even measurements.
+- Adds the frozen session-anchored drawdown-ladder protocol, physical IS-only
+  reader, bounded parallel builder, separate candidate/outcome artifacts,
+  equal-notional ladder states, and Kaplan-Meier summaries.
+- Adds fail-closed temporal audits proving that no 2026 row is consumed.
+- Adds CLI coverage, future-tail mutation tests, session activation tests, and
+  censoring tests.
+
+Full IS diagnostic:
+- 796 perpetual symbols, 347,866 individual levels, 214,992 ladder states, and
+  106,922 parent symbol/session events.
+- Temporal audit PASS; this run is not a trade simulation and makes no edge or
+  PnL claim.
