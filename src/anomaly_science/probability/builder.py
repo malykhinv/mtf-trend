@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
@@ -39,10 +40,22 @@ class BinaryWalkForwardResult:
     frozen_models: tuple[FrozenWeeklyBinaryModel, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _WeeklyBuildPart:
+    prediction: pd.DataFrame | None
+    metadata: dict[str, object]
+    importance: tuple[dict[str, object], ...]
+    frozen_model: FrozenWeeklyBinaryModel | None
+
+
 def build_binary_weekly_walk_forward(
     frame: pd.DataFrame,
     config: BinaryWeeklyWalkForwardConfig,
+    *,
+    weekly_jobs: int = 1,
 ) -> BinaryWalkForwardResult:
+    if not 1 <= weekly_jobs <= 8:
+        raise ValueError("weekly_jobs must be between 1 and 8")
     work = validate_binary_probability_frame(frame, config)
     oos = work.loc[
         (work[config.snapshot_time_column] >= config.oos_start_ms)
@@ -54,177 +67,29 @@ def build_binary_weekly_walk_forward(
     importance: list[dict[str, object]] = []
     frozen_models: list[FrozenWeeklyBinaryModel] = []
 
-    split_group_column = config.split_group_column or config.group_column
-    weight_group_column = config.weight_group_column or config.group_column
-    for test_week, test in oos.groupby("test_week", sort=True):
-        freeze_ms = _week_start_ms(str(test_week))
-        test = test.sort_values(
-            [config.snapshot_time_column, config.symbol_column, config.group_column],
-            kind="mergesort",
-        ).copy()
-        test_groups = set(test[split_group_column].astype(str))
-        train_before_split_exclusion = work.loc[
-            (work[config.snapshot_time_column] >= config.development_start_ms)
-            & (work[config.resolution_time_column] < freeze_ms)
-        ].copy()
-        excluded_same_split_group = train_before_split_exclusion[
-            split_group_column
-        ].astype(str).isin(test_groups)
-        train = train_before_split_exclusion.loc[~excluded_same_split_group].copy()
-        train = train.sort_values(
-            [config.snapshot_time_column, config.symbol_column, config.group_column],
-            kind="mergesort",
+    weeks = tuple(
+        (str(test_week), test.copy())
+        for test_week, test in oos.groupby("test_week", sort=True)
+    )
+    if weekly_jobs == 1:
+        parts = tuple(
+            _build_binary_week(work, test_week, test, config)
+            for test_week, test in weeks
         )
-        base_metadata = {
-            "test_week": test_week,
-            "weekly_model_freeze_time_ms": freeze_ms,
-            "oos_row_count": len(test),
-            "eligible_train_row_count": len(train),
-            "eligible_train_group_count": train[config.group_column].nunique(),
-            "eligible_train_weight_group_count": train[weight_group_column].nunique(),
-            "eligible_train_split_group_count": train[split_group_column].nunique(),
-            "test_split_group_count": len(test_groups),
-            "excluded_train_same_split_group_row_count": int(
-                excluded_same_split_group.sum()
-            ),
-            "latest_train_resolution_time_ms": (
-                int(train[config.resolution_time_column].max()) if not train.empty else pd.NA
-            ),
-        }
-        if len(train) < config.min_train_rows:
-            metadata.append({**base_metadata, "status": "SKIPPED", "reason": "min_train_rows"})
-            continue
-        split = _chronological_group_split(train, config)
-        if isinstance(split, str):
-            metadata.append({**base_metadata, "status": "SKIPPED", "reason": split})
-            continue
-        fit, validation, calibration = split
-        invalid_reason = _split_support_reason(fit, validation, calibration, config)
-        if invalid_reason:
-            metadata.append({**base_metadata, "status": "SKIPPED", "reason": invalid_reason})
-            continue
-
-        active_numeric, active_categorical, dropped = _active_features(fit, config)
-        active_features = (*active_numeric, *active_categorical)
-        if not active_features:
-            metadata.append({**base_metadata, "status": "SKIPPED", "reason": "no_active_features"})
-            continue
-        x_fit = _model_matrix(fit, active_numeric, active_categorical)
-        x_validation = _model_matrix(validation, active_numeric, active_categorical)
-        x_calibration = _model_matrix(calibration, active_numeric, active_categorical)
-        x_test = _model_matrix(test, active_numeric, active_categorical)
-        y_fit = fit[config.label_column].to_numpy(dtype=np.int8)
-        y_validation = validation[config.label_column].to_numpy(dtype=np.int8)
-        y_calibration = calibration[config.label_column].to_numpy(dtype=np.int8)
-        cat_indices = [x_fit.columns.get_loc(name) for name in active_categorical]
-        model = CatBoostClassifier(
-            loss_function="Logloss",
-            eval_metric="Logloss",
-            iterations=config.catboost_iterations,
-            depth=config.catboost_depth,
-            learning_rate=config.catboost_learning_rate,
-            l2_leaf_reg=config.catboost_l2_leaf_reg,
-            random_seed=config.random_seed,
-            thread_count=config.catboost_thread_count,
-            allow_writing_files=False,
-            verbose=False,
-        )
-        model.fit(
-            x_fit,
-            y_fit,
-            cat_features=cat_indices,
-            sample_weight=_event_normalized_weights(fit, weight_group_column),
-            eval_set=(x_validation, y_validation),
-            early_stopping_rounds=config.catboost_early_stopping_rounds,
-            use_best_model=True,
-            verbose=False,
-        )
-        baseline = float(
-            np.average(
-                train[config.label_column].to_numpy(dtype=float),
-                weights=_event_normalized_weights(train, weight_group_column),
+    else:
+        with ThreadPoolExecutor(max_workers=min(weekly_jobs, len(weeks))) as executor:
+            futures = tuple(
+                executor.submit(_build_binary_week, work, test_week, test, config)
+                for test_week, test in weeks
             )
-        )
-        raw_calibration = model.predict_proba(x_calibration)[:, 1]
-        raw_validation = model.predict_proba(x_validation)[:, 1]
-        calibrator = _fit_isotonic_calibrator(
-            raw_calibration,
-            y_calibration,
-            weights=_event_normalized_weights(calibration, weight_group_column),
-            baseline=baseline,
-            config=config,
-        )
-        raw_test = model.predict_proba(x_test)[:, 1]
-        calibrated_test = np.asarray(calibrator.predict(raw_test), dtype=float)
-        model_id = f"{config.protocol_freeze_id}:{test_week}"
-        prediction_parts.append(
-            _prediction_frame(
-                test,
-                config=config,
-                test_week=str(test_week),
-                freeze_ms=freeze_ms,
-                model_id=model_id,
-                raw=raw_test,
-                calibrated=calibrated_test,
-                baseline=baseline,
-            )
-        )
-        best_iteration = int(model.get_best_iteration())
-        metadata.append(
-            {
-                **base_metadata,
-                "status": "FROZEN_AND_SCORED",
-                "reason": "",
-                "model_id": model_id,
-                "fit_row_count": len(fit),
-                "validation_row_count": len(validation),
-                "calibration_row_count": len(calibration),
-                "fit_group_count": fit[config.group_column].nunique(),
-                "validation_group_count": validation[config.group_column].nunique(),
-                "calibration_group_count": calibration[config.group_column].nunique(),
-                "fit_positive_rate": float(fit[config.label_column].mean()),
-                "validation_positive_rate": float(validation[config.label_column].mean()),
-                "calibration_positive_rate": float(calibration[config.label_column].mean()),
-                "weekly_frozen_baseline_probability": baseline,
-                "best_iteration": best_iteration,
-                "validation_raw_log_loss": float(
-                    log_loss(y_validation, raw_validation, labels=[0, 1])
-                ),
-                "calibration_raw_log_loss": float(
-                    log_loss(y_calibration, raw_calibration, labels=[0, 1])
-                ),
-                "calibration_isotonic_log_loss": float(
-                    log_loss(
-                        y_calibration,
-                        np.asarray(calibrator.predict(raw_calibration), dtype=float),
-                        labels=[0, 1],
-                    )
-                ),
-                "active_features": ";".join(active_features),
-                "dropped_constant_or_all_missing_features": ";".join(dropped),
-                "calibrator_knot_count": len(calibrator.X_thresholds_),
-                "calibration_method": config.calibration_method,
-            }
-        )
-        for name, value in zip(active_features, model.get_feature_importance()):
-            importance.append(
-                {
-                    "test_week": test_week,
-                    "model_id": model_id,
-                    "feature_name": name,
-                    "importance": float(value),
-                }
-            )
-        frozen_models.append(
-            FrozenWeeklyBinaryModel(
-                test_week=str(test_week),
-                model_id=model_id,
-                model=model,
-                calibrator=calibrator,
-                feature_names=tuple(active_features),
-                categorical_feature_names=tuple(active_categorical),
-            )
-        )
+            parts = tuple(future.result() for future in futures)
+    for part in parts:
+        if part.prediction is not None:
+            prediction_parts.append(part.prediction)
+        metadata.append(part.metadata)
+        importance.extend(part.importance)
+        if part.frozen_model is not None:
+            frozen_models.append(part.frozen_model)
 
     predictions = (
         pd.concat(prediction_parts, ignore_index=True)
@@ -237,6 +102,180 @@ def build_binary_weekly_walk_forward(
         feature_importance=pd.DataFrame(importance),
         frozen_models=tuple(frozen_models),
     )
+
+
+def _build_binary_week(
+    work: pd.DataFrame,
+    test_week: str,
+    test: pd.DataFrame,
+    config: BinaryWeeklyWalkForwardConfig,
+) -> _WeeklyBuildPart:
+    split_group_column = config.split_group_column or config.group_column
+    weight_group_column = config.weight_group_column or config.group_column
+    freeze_ms = _week_start_ms(test_week)
+    test = test.sort_values(
+        [config.snapshot_time_column, config.symbol_column, config.group_column],
+        kind="mergesort",
+    ).copy()
+    test_groups = set(test[split_group_column].astype(str))
+    train_before_split_exclusion = work.loc[
+        (work[config.snapshot_time_column] >= config.development_start_ms)
+        & (work[config.resolution_time_column] < freeze_ms)
+    ].copy()
+    excluded_same_split_group = train_before_split_exclusion[
+        split_group_column
+    ].astype(str).isin(test_groups)
+    train = train_before_split_exclusion.loc[~excluded_same_split_group].copy()
+    train = train.sort_values(
+        [config.snapshot_time_column, config.symbol_column, config.group_column],
+        kind="mergesort",
+    )
+    base_metadata = {
+        "test_week": test_week,
+        "weekly_model_freeze_time_ms": freeze_ms,
+        "oos_row_count": len(test),
+        "eligible_train_row_count": len(train),
+        "eligible_train_group_count": train[config.group_column].nunique(),
+        "eligible_train_weight_group_count": train[weight_group_column].nunique(),
+        "eligible_train_split_group_count": train[split_group_column].nunique(),
+        "test_split_group_count": len(test_groups),
+        "excluded_train_same_split_group_row_count": int(excluded_same_split_group.sum()),
+        "latest_train_resolution_time_ms": (
+            int(train[config.resolution_time_column].max()) if not train.empty else pd.NA
+        ),
+    }
+
+    def skipped(reason: str) -> _WeeklyBuildPart:
+        return _WeeklyBuildPart(
+            prediction=None,
+            metadata={**base_metadata, "status": "SKIPPED", "reason": reason},
+            importance=(),
+            frozen_model=None,
+        )
+
+    if len(train) < config.min_train_rows:
+        return skipped("min_train_rows")
+    split = _chronological_group_split(train, config)
+    if isinstance(split, str):
+        return skipped(split)
+    fit, validation, calibration = split
+    invalid_reason = _split_support_reason(fit, validation, calibration, config)
+    if invalid_reason:
+        return skipped(invalid_reason)
+    active_numeric, active_categorical, dropped = _active_features(fit, config)
+    active_features = (*active_numeric, *active_categorical)
+    if not active_features:
+        return skipped("no_active_features")
+    x_fit = _model_matrix(fit, active_numeric, active_categorical)
+    x_validation = _model_matrix(validation, active_numeric, active_categorical)
+    x_calibration = _model_matrix(calibration, active_numeric, active_categorical)
+    x_test = _model_matrix(test, active_numeric, active_categorical)
+    y_fit = fit[config.label_column].to_numpy(dtype=np.int8)
+    y_validation = validation[config.label_column].to_numpy(dtype=np.int8)
+    y_calibration = calibration[config.label_column].to_numpy(dtype=np.int8)
+    cat_indices = [x_fit.columns.get_loc(name) for name in active_categorical]
+    model = CatBoostClassifier(
+        loss_function="Logloss",
+        eval_metric="Logloss",
+        iterations=config.catboost_iterations,
+        depth=config.catboost_depth,
+        learning_rate=config.catboost_learning_rate,
+        l2_leaf_reg=config.catboost_l2_leaf_reg,
+        random_seed=config.random_seed,
+        thread_count=config.catboost_thread_count,
+        allow_writing_files=False,
+        verbose=False,
+    )
+    model.fit(
+        x_fit,
+        y_fit,
+        cat_features=cat_indices,
+        sample_weight=_event_normalized_weights(fit, weight_group_column),
+        eval_set=(x_validation, y_validation),
+        early_stopping_rounds=config.catboost_early_stopping_rounds,
+        use_best_model=True,
+        verbose=False,
+    )
+    baseline = float(
+        np.average(
+            train[config.label_column].to_numpy(dtype=float),
+            weights=_event_normalized_weights(train, weight_group_column),
+        )
+    )
+    raw_calibration = model.predict_proba(x_calibration)[:, 1]
+    raw_validation = model.predict_proba(x_validation)[:, 1]
+    calibrator = _fit_isotonic_calibrator(
+        raw_calibration,
+        y_calibration,
+        weights=_event_normalized_weights(calibration, weight_group_column),
+        baseline=baseline,
+        config=config,
+    )
+    raw_test = model.predict_proba(x_test)[:, 1]
+    calibrated_test = np.asarray(calibrator.predict(raw_test), dtype=float)
+    model_id = f"{config.protocol_freeze_id}:{test_week}"
+    prediction = _prediction_frame(
+        test,
+        config=config,
+        test_week=test_week,
+        freeze_ms=freeze_ms,
+        model_id=model_id,
+        raw=raw_test,
+        calibrated=calibrated_test,
+        baseline=baseline,
+    )
+    metadata = {
+        **base_metadata,
+        "status": "FROZEN_AND_SCORED",
+        "reason": "",
+        "model_id": model_id,
+        "fit_row_count": len(fit),
+        "validation_row_count": len(validation),
+        "calibration_row_count": len(calibration),
+        "fit_group_count": fit[config.group_column].nunique(),
+        "validation_group_count": validation[config.group_column].nunique(),
+        "calibration_group_count": calibration[config.group_column].nunique(),
+        "fit_positive_rate": float(fit[config.label_column].mean()),
+        "validation_positive_rate": float(validation[config.label_column].mean()),
+        "calibration_positive_rate": float(calibration[config.label_column].mean()),
+        "weekly_frozen_baseline_probability": baseline,
+        "best_iteration": int(model.get_best_iteration()),
+        "validation_raw_log_loss": float(
+            log_loss(y_validation, raw_validation, labels=[0, 1])
+        ),
+        "calibration_raw_log_loss": float(
+            log_loss(y_calibration, raw_calibration, labels=[0, 1])
+        ),
+        "calibration_isotonic_log_loss": float(
+            log_loss(
+                y_calibration,
+                np.asarray(calibrator.predict(raw_calibration), dtype=float),
+                labels=[0, 1],
+            )
+        ),
+        "active_features": ";".join(active_features),
+        "dropped_constant_or_all_missing_features": ";".join(dropped),
+        "calibrator_knot_count": len(calibrator.X_thresholds_),
+        "calibration_method": config.calibration_method,
+    }
+    importance = tuple(
+        {
+            "test_week": test_week,
+            "model_id": model_id,
+            "feature_name": name,
+            "importance": float(value),
+        }
+        for name, value in zip(active_features, model.get_feature_importance())
+    )
+    frozen_model = FrozenWeeklyBinaryModel(
+        test_week=test_week,
+        model_id=model_id,
+        model=model,
+        calibrator=calibrator,
+        feature_names=tuple(active_features),
+        categorical_feature_names=tuple(active_categorical),
+    )
+    return _WeeklyBuildPart(prediction, metadata, importance, frozen_model)
 
 
 def validate_binary_probability_frame(

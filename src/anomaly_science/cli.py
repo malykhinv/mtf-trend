@@ -677,6 +677,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     binary_probability.add_argument("--out", required=True, help="Output artifact directory.")
     binary_probability.add_argument(
+        "--weekly-jobs",
+        type=int,
+        default=1,
+        help="Independent calendar weeks to fit concurrently; model settings are unchanged.",
+    )
+    binary_probability.add_argument(
         "--allow-dirty-development",
         action="store_true",
         help="Write explicitly UNFROZEN dirty-worktree artifacts; forbidden for evidence runs.",
@@ -1052,6 +1058,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             out_dir=Path(args.out),
             config=load_binary_weekly_walk_forward_config(Path(args.config)),
             allow_dirty_development=args.allow_dirty_development,
+            weekly_jobs=args.weekly_jobs,
         )
         print(f"binary weekly probability artifacts written: {output_dir}")
         return 0

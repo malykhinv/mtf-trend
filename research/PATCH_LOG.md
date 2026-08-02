@@ -1875,3 +1875,15 @@ Changes:
   complete causal model, with absolute and incremental probability gates.
 - Keeps 2026 physically unread and explicitly forbids PnL work until calibrated
   causal separation passes.
+
+## performance: parallelize independent weekly probability fits
+
+Status: APPLIED; numerical protocol unchanged.
+
+Changes:
+- Adds bounded thread-level concurrency across independent calendar-week model
+  freezes while leaving CatBoost parameters, seed, train eligibility, splits,
+  calibration, and prediction order unchanged.
+- Records the execution-only weekly job count in probability artifacts.
+- Adds a deterministic regression proving sequential and parallel predictions,
+  metadata, feature importance, and model ordering are identical.

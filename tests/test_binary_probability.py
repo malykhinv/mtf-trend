@@ -114,6 +114,18 @@ def test_weekly_binary_probability_is_frozen_and_causal() -> None:
     assert result.predictions["calibrated_probability"].between(0.0, 1.0).all()
 
 
+def test_parallel_week_fits_are_identical_to_sequential_fits() -> None:
+    sequential = build_binary_weekly_walk_forward(_rows(), _config(), weekly_jobs=1)
+    parallel = build_binary_weekly_walk_forward(_rows(), _config(), weekly_jobs=2)
+
+    pd.testing.assert_frame_equal(sequential.predictions, parallel.predictions)
+    pd.testing.assert_frame_equal(sequential.weekly_metadata, parallel.weekly_metadata)
+    pd.testing.assert_frame_equal(sequential.feature_importance, parallel.feature_importance)
+    assert [model.model_id for model in sequential.frozen_models] == [
+        model.model_id for model in parallel.frozen_models
+    ]
+
+
 def test_split_groups_isolate_recurrence_chains_across_week_boundaries() -> None:
     frame = _rows()
     day_block = (
@@ -255,6 +267,7 @@ def test_binary_probability_runner_writes_models_and_audits(tmp_path: Path) -> N
     assert list((out_dir / "weekly_models").glob("*.cbm"))
     protocol = json.loads((out_dir / "frozen_probability_protocol.json").read_text(encoding="utf-8"))
     assert protocol["within_week_refit"] is False
+    assert protocol["weekly_parallel_jobs"] == 1
     assert protocol["post_hoc_gate_changes_forbidden"] is True
 
 

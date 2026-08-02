@@ -31,6 +31,7 @@ def run_binary_weekly_walk_forward(
     out_dir: Path,
     config: BinaryWeeklyWalkForwardConfig,
     allow_dirty_development: bool = False,
+    weekly_jobs: int = 1,
 ) -> Path:
     revision, dirty = _repository_state()
     if dirty and not allow_dirty_development:
@@ -43,7 +44,7 @@ def run_binary_weekly_walk_forward(
             f"output directory must be absent or empty to prevent stale model artifacts: {out_dir}"
         )
     frame = pd.read_parquet(input_path) if input_path.suffix.lower() == ".parquet" else pd.read_csv(input_path)
-    result = build_binary_weekly_walk_forward(frame, config)
+    result = build_binary_weekly_walk_forward(frame, config, weekly_jobs=weekly_jobs)
     metrics = build_prediction_metrics(result.predictions, config)
     reliability = build_reliability_rows(result.predictions, config)
     null_tests = build_null_test_rows(result.predictions, config)
@@ -106,6 +107,7 @@ def run_binary_weekly_walk_forward(
             "model_freeze_cadence": "one CatBoost and one isotonic calibrator per ISO week",
             "class_order": [0, 1],
             "within_week_refit": False,
+            "weekly_parallel_jobs": weekly_jobs,
             "post_hoc_gate_changes_forbidden": True,
             "scientific_scope": "calibrated binary probability only; no EV, trade, or PnL claim",
         },
@@ -119,6 +121,7 @@ def run_binary_weekly_walk_forward(
             "input_row_count": len(frame),
             "oos_prediction_row_count": len(result.predictions),
             "frozen_week_count": len(result.frozen_models),
+            "weekly_parallel_jobs": weekly_jobs,
             "skipped_week_count": int((result.weekly_metadata.get("status") == "SKIPPED").sum())
             if not result.weekly_metadata.empty
             else 0,
