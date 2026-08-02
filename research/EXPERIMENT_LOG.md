@@ -1091,3 +1091,25 @@ This is explicitly post-selection IS evidence. Passing can authorize the next
 mechanics stage but cannot establish deployable edge without frozen forward
 confirmation. Failing closes the branch without same-sample retuning. The 2026
 partition remains physically untouched.
+
+## 2026-08-03 — structural protection EV result
+
+Status: `IS_STRUCTURAL_PROTECTION_EV_GATES_FAIL`.
+
+The immutable causal join contained 27,560 rows and passed every timing and OOS
+audit. The primary 3→6 state had 19,821 rows (12,228 HOLD; 7,593 EXIT). At the
+frozen 25 bps cost, policy mean return was -1.4436% versus -1.2718% for
+unconditional 48-hour hold, so the protection worsened mean EV by 0.1718
+percentage points. Policy return was positive on 25.59% of rows and 29.05% of
+148 trading days; all five months were negative.
+
+Adjusted one-sided lower bounds were negative by both ISO week and symbol for
+absolute policy EV and improvement over hold. The policy improved CVaR5 from
+-38.13% to -32.37%, but this tail reduction did not compensate for the worse
+mean. Secondary 5→10 and 10→20 states were also negative, and all states stayed
+negative at the optimistic 10 bps sensitivity.
+
+This is a clean rejection, not a tuning invitation. The fixed policy has no
+validated EV, the execution/portfolio stage is forbidden, and neither the 0.92
+cutoff nor the exact states may be retuned on these rows. OOS 2026 remains
+untouched.

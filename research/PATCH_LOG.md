@@ -1982,3 +1982,13 @@ Pre-result schema audit amendment:
   must equal the Stage-1 cutoff, while both the Stage-1 cutoff and Stage-0
   trigger cutoff must be no later than the snapshot. No result, threshold,
   state, endpoint, or gate was opened or changed.
+
+Frozen IS result:
+- 27,560 joined EV rows; all temporal/OOS audits PASS and no 2026 row read.
+- Primary 3→6 policy mean at 25 bps was -1.4436%, worse than unconditional
+  48-hour hold at -1.2718% by 0.1718 percentage points.
+- Week- and symbol-cluster adjusted lower bounds were negative for absolute EV
+  and improvement; 0/5 months were positive.
+- CVaR5 improved, but mean EV, stability, and concentration gates failed.
+- Final status `IS_STRUCTURAL_PROTECTION_EV_GATES_FAIL`; no execution or
+  portfolio simulation authorized and same-sample retuning forbidden.

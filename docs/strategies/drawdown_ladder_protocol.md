@@ -485,6 +485,40 @@ pass authorizes design of those mechanics under structural anchors; it does not
 establish a deployable edge or authorize access to 2026. A fail closes this
 structural-protection branch without retuning it on the same rows.
 
+### Frozen structural-protection EV result
+
+Status: `IS_STRUCTURAL_PROTECTION_EV_GATES_FAIL`.
+
+The causal join produced 27,560 immutable decision rows. All horizons ended
+before 2026, every weekly model was frozen before its decision, the temporal
+audit passed, and no 2026 row was read. The primary 3→6 state contained 19,821
+rows: 12,228 HOLD decisions and 7,593 protective EXIT decisions.
+
+At the frozen 25 bps cost:
+
+```text
+policy mean return: -1.4436%
+unconditional 48h-hold mean return: -1.2718%
+policy-minus-hold mean: -0.1718 percentage points
+policy positive-row rate: 25.59%
+positive trading-day fraction: 29.05% across 148 days
+policy CVaR5: -32.37%; unconditional-hold CVaR5: -38.13%
+positive months: 0/5
+top-trade removal fraction to non-positive: 0% (already non-positive)
+```
+
+The selection-adjusted lower bounds were negative under both dependence views.
+For absolute policy return they were -2.332% by ISO week and -1.917% by symbol;
+for improvement over hold they were -1.062 and -0.685 percentage points. The
+secondary 5→10 and 10→20 states also had negative means at 25 bps (-1.94% and
+-5.79%), and all three states remained negative even at the 10 bps sensitivity.
+
+The protection reduced extreme left-tail loss but worsened average EV. That is
+risk transformation, not edge. Because absolute EV, relative EV, inference,
+month stability, and concentration gates failed, no TP/SL, execution, leverage,
+or portfolio stage is authorized for this policy. The 0.92 cutoff and exact
+states may not be retuned on these rows. The 2026 partition remains untouched.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,
