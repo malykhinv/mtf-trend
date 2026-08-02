@@ -90,6 +90,7 @@ def _matched_control_fixture() -> pd.DataFrame:
             "quote_volume": 1_000.0,
         }
     )
+    frame.loc[10, "quote_volume"] = np.nan
     for day in pd.date_range("2025-07-02", "2025-08-07", freq="D", tz="UTC"):
         bar_time = int((day + pd.Timedelta(hours=8, minutes=1)).value // 1_000_000)
         index = int(np.searchsorted(timestamps, bar_time))
@@ -445,6 +446,7 @@ def test_prior_non_drawdown_control_is_causal_resolved_and_outcome_blind(
     ].iloc[0]
 
     assert stats.matched_rows > 0
+    assert stats.missing_quote_volume_rows == 1
     assert bool(five["control_is_strictly_prior"])
     assert bool(five["control_outcome_resolved_before_signal"])
     assert bool(five["control_has_no_3pct_drawdown"])

@@ -271,6 +271,12 @@ Holm correction across the three frozen primary states, match-quality/reuse
 diagnostics, and calendar-month stability. A low-coverage primary stratum cannot
 support an edge claim.
 
+Missing or non-finite raw `quote_volume` is never imputed. Every trailing
+60-minute feature window containing such a row is unavailable, so affected
+signal/control snapshots cannot enter a match; raw missing-row counts are
+written to the build manifest and symbol coverage artifact. Negative finite
+quote volume is a hard data error.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

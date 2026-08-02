@@ -158,6 +158,7 @@ class SymbolMatchedControlStats:
     matched_rows: int
     no_prior_pool_rows: int
     failed_caliper_rows: int
+    missing_quote_volume_rows: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,8 +254,9 @@ def _causal_features(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if bool((~np.isfinite(close)).any()) or bool((close <= 0.0).any()):
         raise MatchedControlError("matched-control close must be finite and positive")
-    if bool((~np.isfinite(quote_volume)).any()) or bool((quote_volume < 0.0).any()):
-        raise MatchedControlError("matched-control quote volume must be finite and non-negative")
+    finite_quote = np.isfinite(quote_volume)
+    if bool((finite_quote & (quote_volume < 0.0)).any()):
+        raise MatchedControlError("matched-control quote volume cannot be negative")
     log_return = np.empty(len(close), dtype=float)
     log_return[0] = np.nan
     log_return[1:] = np.diff(np.log(close))
@@ -333,7 +335,7 @@ def build_symbol_prior_non_drawdown_controls(
             _typed_frame([], matched_outcome_columns(stage0_spec)),
             Path(output_outcomes_path),
         )
-        return SymbolMatchedControlStats(symbol, 0, 0, 0, 0)
+        return SymbolMatchedControlStats(symbol, 0, 0, 0, 0, 0)
     if set(signal["symbol"].astype(str).str.upper()) != {symbol}:
         raise MatchedControlError("signal shard symbol does not match source symbol")
     minute = read_is_symbol_minutes(
@@ -554,6 +556,7 @@ def build_symbol_prior_non_drawdown_controls(
         matched_rows=len(candidates),
         no_prior_pool_rows=no_pool,
         failed_caliper_rows=failed_caliper,
+        missing_quote_volume_rows=int((~np.isfinite(quote_volume)).sum()),
     )
 
 
@@ -820,6 +823,9 @@ def build_prior_non_drawdown_controls(
         "matched_coverage": total_matched / total_signals if total_signals else None,
         "no_prior_pool_rows": sum(item.no_prior_pool_rows for item in stats),
         "failed_caliper_rows": sum(item.failed_caliper_rows for item in stats),
+        "missing_quote_volume_rows": sum(
+            item.missing_quote_volume_rows for item in stats
+        ),
         "artifacts": {
             "candidates": str(candidates_path),
             "outcomes": str(outcomes_path),
