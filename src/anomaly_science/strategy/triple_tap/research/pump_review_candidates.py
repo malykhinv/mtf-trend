@@ -18,6 +18,7 @@ from anomaly_science.annotation.ohlcv import load_ohlcv_parquet, resample_ohlcv_
 from anomaly_science.annotation.schemas import ANNOTATION_CANDIDATE_SCHEMA_VERSION
 from anomaly_science.strategy.pump_long.research.context import DEV_END_MS
 from anomaly_science.strategy.triple_tap.detect import CACHE_1M
+from anomaly_science.strategy.triple_tap.research.brkcap_foundations import FOUNDATION_POLICY
 from anomaly_science.strategy.triple_tap.research.economics import RES
 
 REVIEW_DIR = RES / "manual_pump_review"
@@ -34,6 +35,10 @@ MIN_PUMP_PCT = 0.14
 MAX_SLEEP_RANGE_PCT = 0.12
 MIN_PUMP_VOL_OVER_SLEEP = 2.0
 MIN_PUMP_TRADES_OVER_SLEEP = 1.5
+# A transient low below an established base is a dump->rebound, not a pump.
+# This is unconditional: a large rebound does not retroactively turn the dump
+# into sleep. The threshold is shared with the versioned foundation contract.
+MAX_DUMP_BELOW_BASE = FOUNDATION_POLICY.max_start_below_sleep_median_pct
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,17 @@ def _path_eff(close: np.ndarray, start: int, end: int) -> float:
 
 def _ratio(a: float, b: float) -> float:
     return a / b if np.isfinite(a) and np.isfinite(b) and b > 0 else np.nan
+
+
+def _is_dump_rebound(pump_low: float, sleep_close: np.ndarray) -> bool:
+    """Whether the proposed start is a dump below the established sleep base."""
+
+    if len(sleep_close) == 0:
+        return True
+    base_ref = float(np.median(sleep_close))
+    if not (np.isfinite(base_ref) and base_ref > 0 and np.isfinite(pump_low) and pump_low > 0):
+        return True
+    return (base_ref - pump_low) / base_ref > MAX_DUMP_BELOW_BASE
 
 
 def _suggest_level(high: np.ndarray, low: np.ndarray, start: int, end: int, culmination: float) -> float:
@@ -133,6 +149,9 @@ def _scan_symbol_tf(
         sleep_high = float(np.max(high[sl0:p_idx]))
         sleep_range = (sleep_high - sleep_low) / sleep_low if sleep_low > 0 else np.nan
         if not (np.isfinite(sleep_range) and sleep_range <= MAX_SLEEP_RANGE_PCT):
+            continue
+        # Measure the pump from the established pre-pump base, not the dump wick.
+        if _is_dump_rebound(pump_low, close[sl0:p_idx]):
             continue
         vol_step = _ratio(float(np.mean(qv[p_idx:c_idx + 1])), float(np.mean(qv[sl0:p_idx])))
         trade_step = _ratio(float(np.mean(tc[p_idx:c_idx + 1])), float(np.mean(tc[sl0:p_idx])))

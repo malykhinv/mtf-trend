@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from anomaly_science.annotation.ohlcv import load_ohlcv_parquet, resample_ohlcv_np
+from anomaly_science.annotation.desk.candidates import json_candidate_row
 
 
 @dataclass(slots=True)
@@ -36,12 +37,32 @@ class OhlcvWindowService:
         ts = frame["timestamp"]
         a = int(np.searchsorted(ts, int(row.review_start_ms), side="left"))
         b = int(np.searchsorted(ts, int(row.review_end_ms), side="right"))
-        event = row.replace({np.nan: None}).to_dict()
+        event = json_candidate_row(row.replace({np.nan: None}).to_dict())
         event["source_tf"] = source_tf
         event["tf"] = selected_tf
         marker_cols = [c for c in row.index if c.endswith("_ms") or c.endswith("_price")]
         event["marker_columns"] = {c: event.get(c) for c in marker_cols if event.get(c) is not None}
-        return {"event": event, "candles": _frame_slice(frame, a, b)}
+        return {"event": event, "candles": _frame_slice(frame, a, b),
+                "data_start_ms": int(ts[0]) if len(ts) else None,
+                "data_end_ms": int(ts[-1]) if len(ts) else None}
+
+    def candles_range(self, symbol: str, tf: str, start_ms: int, end_ms: int,
+                      max_bars: int = 6000) -> dict[str, Any]:
+        """Arbitrary [start_ms, end_ms] slice of a symbol's cached history, for
+        lazy loading more candles when the user pans the chart. Capped to max_bars
+        and annotated with the full cache bounds so the client stops at the edges."""
+        frame = self.frame(symbol, tf)
+        ts = frame["timestamp"]
+        a = int(np.searchsorted(ts, int(start_ms), side="left"))
+        b = int(np.searchsorted(ts, int(end_ms), side="right"))
+        b = max(b, a + 1)
+        if b - a > max_bars:  # keep the edge nearest the pan direction bounded
+            b = a + max_bars
+        return {
+            "candles": _frame_slice(frame, a, b),
+            "data_start_ms": int(ts[0]) if len(ts) else None,
+            "data_end_ms": int(ts[-1]) if len(ts) else None,
+        }
 
     def trade_payload(
         self,

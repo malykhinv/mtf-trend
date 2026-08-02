@@ -6,6 +6,7 @@ import argparse
 import json
 import threading
 import traceback
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,12 +15,15 @@ from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 
+from anomaly_science.annotation.boundary.repository import BoundaryReviewRepository
+from anomaly_science.annotation.boundary.ui import BOUNDARY_LABELER_HTML
 from anomaly_science.annotation.desk.candidates import DEFAULT_TF_MINUTES, build_annotation_groups, validate_candidates
 from anomaly_science.annotation.desk.candles import OhlcvWindowService
 from anomaly_science.annotation.desk.clock import utc_stamp
 from anomaly_science.annotation.desk.iterations import IterationArtifactRepository
 from anomaly_science.annotation.desk.labels import LabelStore, label_for_group
 from anomaly_science.annotation.desk.result_annotations import ResultAnnotationStore
+from anomaly_science.annotation.desk.structural_trades import StructuralTradeRepository
 from anomaly_science.annotation.desk.ui import LABELER_HTML, LAUNCHER_HTML
 from anomaly_science.annotation.schemas import ANNOTATION_CANDIDATE_SCHEMA_VERSION
 
@@ -33,30 +37,47 @@ def json_response(handler: BaseHTTPRequestHandler, payload: object, status: int 
     handler.wfile.write(body)
 
 
+@dataclass
+class StrategyContext:
+    strategy_id: str
+    title: str
+    candidates: pd.DataFrame
+    by_event: pd.DataFrame
+    groups: list
+    group_by_id: dict
+    allowed_event_ids: set
+    label_store: LabelStore
+    seed_marks: dict[str, dict[str, Any]]
+    iteration_artifacts: IterationArtifactRepository
+
+
 class LevelLabelerServer(ThreadingHTTPServer):
     def __init__(
         self,
         server_address,
         handler_cls,
         *,
-        candidates_path: Path,
-        labels_path: Path,
+        apps: list[tuple] | None = None,
         cache_dir: Path,
         tf_minutes: dict[str, int],
-        strategy_id: str = "manual_level_annotation",
-        strategy_title: str = "Manual level annotation",
+        default_strategy_id: str | None = None,
         show_launcher: bool = False,
         project_root: Path | None = None,
+        candidates_path: Path | None = None,
+        labels_path: Path | None = None,
+        strategy_id: str = "manual_level_annotation",
+        strategy_title: str = "Manual level annotation",
     ):
         super().__init__(server_address, handler_cls)
-        self.candidates_path = candidates_path
-        self.labels_path = labels_path
+        if apps is None:  # legacy single-strategy construction
+            if candidates_path is None or labels_path is None:
+                raise ValueError("provide apps or candidates_path+labels_path")
+            apps = [(strategy_id, strategy_title, candidates_path, labels_path)]
         self.cache_dir = cache_dir
         self.tf_minutes = tf_minutes
-        self.strategy_id = strategy_id
-        self.strategy_title = strategy_title
         self.show_launcher = show_launcher
         self.project_root = (project_root or Path.cwd()).resolve()
+        self.structural_trades = StructuralTradeRepository(self.project_root)
 
         self.iteration_status: dict[str, object] = {
             "state": "idle",
@@ -71,19 +92,51 @@ class LevelLabelerServer(ThreadingHTTPServer):
         self.iteration_thread: threading.Thread | None = None
         self.labels_lock = threading.Lock()
         self.result_annotations_lock = threading.Lock()
-
-        self.label_store = LabelStore(labels_path)
-        self.iteration_artifacts = IterationArtifactRepository(self.project_root, self.strategy_id)
+        self.boundary_labels_lock = threading.Lock()
         self.ohlcv = OhlcvWindowService(cache_dir, tf_minutes)
+        boundary_root = self.project_root / ".output" / "research" / "visible_resistance_is_2025_v1"
+        self.boundary = BoundaryReviewRepository(
+            candidates_path=boundary_root / "candidates.parquet",
+            labels_path=boundary_root / "labels.jsonl",
+            ohlcv=self.ohlcv,
+        )
 
-        self.candidates = pd.read_parquet(candidates_path)
-        validate_candidates(self.candidates)
-        if "candidate_schema_version" not in self.candidates.columns:
-            self.candidates["candidate_schema_version"] = ANNOTATION_CANDIDATE_SCHEMA_VERSION
-        self.by_event = self.candidates.set_index("event_id", drop=False)
-        self.groups = build_annotation_groups(self.candidates, self.tf_minutes)
-        self.group_by_id = {str(g["event_id"]): g for g in self.groups}
-        self.allowed_event_ids = set(str(x) for x in self.by_event.index) | set(self.group_by_id)
+        self.strategies: dict[str, StrategyContext] = {}
+        self.strategy_order: list[str] = []
+        for app_spec in apps:
+            if len(app_spec) not in (4, 5):
+                raise ValueError("app must provide strategy id, title, candidates path, labels path, and optional marks path")
+            strategy_id, title, candidates_path, labels_path = app_spec[:4]
+            marks_path = app_spec[4] if len(app_spec) == 5 else None
+            candidates = pd.read_parquet(candidates_path)
+            validate_candidates(candidates)
+            if "candidate_schema_version" not in candidates.columns:
+                candidates["candidate_schema_version"] = ANNOTATION_CANDIDATE_SCHEMA_VERSION
+            by_event = candidates.set_index("event_id", drop=False)
+            groups = build_annotation_groups(candidates, self.tf_minutes)
+            group_by_id = {str(g["event_id"]): g for g in groups}
+            seed_marks = LabelStore(marks_path).read_effective() if marks_path is not None and marks_path.exists() else {}
+            self.strategies[strategy_id] = StrategyContext(
+                strategy_id=strategy_id,
+                title=title,
+                candidates=candidates,
+                by_event=by_event,
+                groups=groups,
+                group_by_id=group_by_id,
+                allowed_event_ids=set(str(x) for x in by_event.index) | set(group_by_id),
+                label_store=LabelStore(labels_path),
+                seed_marks=seed_marks,
+                iteration_artifacts=IterationArtifactRepository(self.project_root, strategy_id),
+            )
+            self.strategy_order.append(strategy_id)
+        if not self.strategy_order:
+            raise ValueError("at least one annotation strategy is required")
+        self.default_strategy_id = default_strategy_id or self.strategy_order[0]
+
+    def strategy(self, strategy_id: str | None) -> StrategyContext:
+        if strategy_id and strategy_id in self.strategies:
+            return self.strategies[strategy_id]
+        return self.strategies[self.default_strategy_id]
 
     def available_tfs(self) -> list[str]:
         return [
@@ -92,14 +145,15 @@ class LevelLabelerServer(ThreadingHTTPServer):
             if int(minutes) > 0
         ]
 
-    def strategy_payload(self) -> dict[str, Any]:
+    def strategy_payload(self, ctx: StrategyContext) -> dict[str, Any]:
         return {
-            "strategy_id": self.strategy_id,
-            "title": self.strategy_title,
-            "candidate_count": len(self.groups),
-            "candidate_rows": int(len(self.candidates)),
+            "strategy_id": ctx.strategy_id,
+            "title": ctx.title,
+            "candidate_count": len(ctx.groups),
+            "candidate_rows": int(len(ctx.candidates)),
             "available_tfs": self.available_tfs(),
-            "labels_path": str(self.labels_path),
+            "labels_path": str(ctx.label_store.path),
+            "seed_marks": len(ctx.seed_marks),
             "inputs": [
                 {"id": "level_price", "label": "horizontal level price", "required_for_level": True},
                 {"id": "level_start_ms", "label": "level start time", "required_for_level": True},
@@ -119,13 +173,21 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         print(fmt % args, flush=True)
 
+    def _resolve_ctx(self, parsed) -> None:
+        strategy_id = parse_qs(parsed.query).get("strategy", [None])[0]
+        self.ctx = self.server.strategy(strategy_id)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        self._resolve_ctx(parsed)
         if parsed.path == "/":
             self._html_response(LAUNCHER_HTML if self.server.show_launcher else LABELER_HTML)
             return
         if parsed.path == "/labeler":
             self._html_response(LABELER_HTML)
+            return
+        if parsed.path == "/boundary":
+            self._html_response(BOUNDARY_LABELER_HTML)
             return
         if parsed.path == "/plotly.min.js":
             self._plotly_response()
@@ -136,7 +198,9 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             )
             return
         if parsed.path == "/api/strategies":
-            json_response(self, {"strategies": [self.server.strategy_payload()]})
+            json_response(self, {"strategies": [
+                self.server.strategy_payload(self.server.strategy(sid)) for sid in self.server.strategy_order
+            ]})
             return
         if parsed.path == "/api/labels":
             self._json_or_error(self._labels_payload)
@@ -146,26 +210,56 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
                 json_response(self, dict(self.server.iteration_status))
             return
         if parsed.path == "/api/iteration/latest":
-            self._json_or_error(self.server.iteration_artifacts.latest_payload)
+            self._json_or_error(self.ctx.iteration_artifacts.latest_payload)
             return
         if parsed.path == "/api/iteration/trades":
-            self._json_or_error(lambda: {"trades": self.server.iteration_artifacts.latest_trades()})
+            self._json_or_error(lambda: {"trades": self.ctx.iteration_artifacts.latest_trades()})
             return
         if parsed.path == "/api/iteration/trade_candles":
             self._handle_trade_candles(parsed.query)
             return
+        if parsed.path == "/api/futures_structural/trades":
+            self._json_or_error(
+                lambda: {
+                    "trades": self.server.structural_trades.list_rows(),
+                    "summary": self.server.structural_trades.summary(),
+                }
+            )
+            return
+        if parsed.path == "/api/futures_structural/trade_candles":
+            self._handle_structural_trade_candles(parsed.query)
+            return
+        if parsed.path == "/api/boundary/candidates":
+            self._json_or_error(self.server.boundary.list_payload)
+            return
+        if parsed.path == "/api/boundary/candles":
+            self._handle_boundary_candles(parsed.query)
+            return
         if parsed.path == "/api/candles":
             self._handle_event_candles(parsed.query)
+            return
+        if parsed.path == "/api/candles_range":
+            self._handle_candles_range(parsed.query)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        self._resolve_ctx(parsed)
         if parsed.path == "/api/iteration/start":
             self._start_iteration()
             return
         if parsed.path == "/api/result_annotation":
             self._save_result_annotation()
+            return
+        if parsed.path == "/api/futures_structural/review":
+            self._save_structural_trade_review()
+            return
+        if parsed.path == "/api/boundary/label":
+            self._save_boundary_label()
+            return
+        if parsed.path == "/api/boundary/unlabel":
+            self._unlabel_boundary()
             return
         if parsed.path == "/api/unlabel":
             self._unlabel_event()
@@ -211,18 +305,20 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
 
     def _labels_payload(self) -> dict[str, Any]:
         with self.server.labels_lock:
-            labels = self.server.label_store.read_effective_list()
+            labels = self.ctx.label_store.read_effective_list()
         return {"labels": labels}
 
     def _candidate_payloads(self) -> list[dict[str, Any]]:
         with self.server.labels_lock:
-            labels = self.server.label_store.read_effective()
+            labels = self.ctx.label_store.read_effective()
         payload = []
-        for group in self.server.groups:
+        for group in self.ctx.groups:
             row = dict(group)
             label = label_for_group(row, labels)
+            seed_label = label_for_group(row, self.ctx.seed_marks)
             row["labeled"] = label is not None
             row["label"] = label
+            row["seed_label"] = seed_label
             payload.append(row)
         return payload
 
@@ -236,6 +332,29 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.server.ohlcv.event_payload(row, tf=tf or None)
+        except ValueError as exc:
+            json_response(self, {"error": str(exc)}, 400)
+            return
+        except (OSError, KeyError, TypeError) as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
+        json_response(self, payload)
+
+    def _handle_candles_range(self, query: str) -> None:
+        qs = parse_qs(query)
+        symbol = qs.get("symbol", [""])[0]
+        tf = qs.get("tf", [""])[0]
+        if not symbol or not tf:
+            json_response(self, {"error": "symbol and tf are required"}, 400)
+            return
+        try:
+            start_ms = int(qs.get("start_ms", ["0"])[0])
+            end_ms = int(qs.get("end_ms", ["0"])[0])
+        except ValueError:
+            json_response(self, {"error": "start_ms/end_ms must be integers"}, 400)
+            return
+        try:
+            payload = self.server.ohlcv.candles_range(symbol, tf, start_ms, end_ms)
         except ValueError as exc:
             json_response(self, {"error": str(exc)}, 400)
             return
@@ -263,6 +382,44 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             return
         json_response(self, payload)
 
+    def _handle_structural_trade_candles(self, query: str) -> None:
+        trade_id = parse_qs(query).get("trade_id", [""])[0]
+        if not trade_id:
+            json_response(self, {"error": "trade_id is required"}, 400)
+            return
+        try:
+            trade = self.server.structural_trades.trade_by_id(trade_id)
+            if trade is None:
+                json_response(self, {"error": "unknown structural trade_id"}, 404)
+                return
+            with self.server.result_annotations_lock:
+                review = self.server.structural_trades.review_for_trade(trade_id)
+            payload = self.server.ohlcv.trade_payload(trade=trade, result_annotation=review)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
+        json_response(self, payload)
+
+    def _handle_boundary_candles(self, query: str) -> None:
+        qs = parse_qs(query)
+        event_id = qs.get("event_id", [""])[0]
+        tf = qs.get("tf", [""])[0]
+        if not event_id:
+            json_response(self, {"error": "event_id is required"}, 400)
+            return
+        try:
+            payload = self.server.boundary.candle_payload(event_id, tf)
+        except ValueError as exc:
+            json_response(self, {"error": str(exc)}, 400)
+            return
+        except (OSError, KeyError, TypeError) as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
+        if payload is None:
+            json_response(self, {"error": "unknown boundary event_id"}, 404)
+            return
+        json_response(self, payload)
+
     def _start_iteration(self) -> None:
         with self.server.iteration_lock:
             if self.server.iteration_status.get("state") == "running":
@@ -278,6 +435,8 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
                 "steps": [{"at": utc_stamp(), "message": "queued"}],
             }
 
+        iteration_strategy_id = self.ctx.strategy_id
+
         def worker() -> None:
             try:
                 with self.server.iteration_lock:
@@ -288,7 +447,7 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
                 paths = run_annotation_iteration(
                     AnnotationIterationConfig(
                         project_root=self.server.project_root,
-                        strategy_id=self.server.strategy_id,
+                        strategy_id=iteration_strategy_id,
                         run_trade_report=True,
                     )
                 )
@@ -328,7 +487,7 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             event_id = str(payload.get("event_id") or "")
             event_ids = self._event_ids_for_unlabel(event_id)
             with self.server.labels_lock:
-                self.server.label_store.append_unlabels(event_ids, allowed_event_ids=self.server.allowed_event_ids)
+                self.ctx.label_store.append_unlabels(event_ids, allowed_event_ids=self.ctx.allowed_event_ids)
         except (ValueError, KeyError) as exc:
             json_response(self, {"error": str(exc)}, 400)
             return
@@ -341,7 +500,7 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_payload()
             with self.server.labels_lock:
-                row = self.server.label_store.append_label(payload, allowed_event_ids=self.server.allowed_event_ids)
+                row = self.ctx.label_store.append_label(payload, allowed_event_ids=self.ctx.allowed_event_ids)
         except ValueError as exc:
             json_response(self, {"error": str(exc)}, 400)
             return
@@ -352,11 +511,11 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
 
     def _save_result_annotation(self) -> None:
         try:
-            run_dir = self.server.iteration_artifacts.latest_run_dir()
+            run_dir = self.ctx.iteration_artifacts.latest_run_dir()
             if run_dir is None:
                 raise ValueError("no iteration run exists")
             payload = self._read_payload()
-            trades = self.server.iteration_artifacts.read_trades(run_dir)
+            trades = self.ctx.iteration_artifacts.read_trades(run_dir)
             known_trade_ids = {str(trade.get("trade_id")) for trade in trades}
             with self.server.result_annotations_lock:
                 row = ResultAnnotationStore.for_run_dir(run_dir).append(payload, known_trade_ids=known_trade_ids)
@@ -368,17 +527,57 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             return
         json_response(self, {"ok": True, "annotation": row})
 
+    def _save_structural_trade_review(self) -> None:
+        try:
+            payload = self._read_payload()
+            with self.server.result_annotations_lock:
+                row = self.server.structural_trades.save_review(payload)
+        except ValueError as exc:
+            json_response(self, {"error": str(exc)}, 400)
+            return
+        except OSError as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
+        json_response(self, {"ok": True, "review": row})
+
+    def _save_boundary_label(self) -> None:
+        try:
+            payload = self._read_payload()
+            with self.server.boundary_labels_lock:
+                row = self.server.boundary.save(payload)
+        except ValueError as exc:
+            json_response(self, {"error": str(exc)}, 400)
+            return
+        except (OSError, KeyError, TypeError) as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
+        json_response(self, {"ok": True, "label": row})
+
+    def _unlabel_boundary(self) -> None:
+        try:
+            payload = self._read_payload()
+            event_id = str(payload.get("event_id") or "")
+            with self.server.boundary_labels_lock:
+                row = self.server.boundary.unlabel(event_id)
+        except ValueError as exc:
+            json_response(self, {"error": str(exc)}, 400)
+            return
+        except OSError as exc:
+            json_response(self, {"error": str(exc)}, 500)
+            return
+        json_response(self, {"ok": True, "label": row})
+
     def _event_ids_for_unlabel(self, event_id: str) -> list[str]:
-        if event_id not in self.server.allowed_event_ids:
+        if event_id not in self.ctx.allowed_event_ids:
             raise ValueError("unknown event_id")
         event_ids = [event_id]
-        if event_id in self.server.group_by_id:
-            event_ids.extend(str(x) for x in self.server.group_by_id[event_id].get("source_event_ids", []))
+        if event_id in self.ctx.group_by_id:
+            event_ids.extend(str(x) for x in self.ctx.group_by_id[event_id].get("source_event_ids", []))
         return list(dict.fromkeys(event_ids))
 
     def _candidate_row(self, event_id: str, tf: str) -> pd.Series | None:
-        if event_id in self.server.group_by_id:
-            group = self.server.group_by_id[event_id]
+        if event_id in self.ctx.group_by_id:
+            group = self.ctx.group_by_id[event_id]
             variants = group.get("variants", [])
             selected = None
             if tf:
@@ -388,18 +587,18 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
             if selected is None:
                 return None
             source_id = str(selected["event_id"])
-            if source_id not in self.server.by_event.index:
+            if source_id not in self.ctx.by_event.index:
                 return None
-            row = self.server.by_event.loc[source_id].copy()
+            row = self.ctx.by_event.loc[source_id].copy()
             row["review_start_ms"] = group["review_start_ms"]
             row["review_end_ms"] = group["review_end_ms"]
             return row
-        if event_id in self.server.by_event.index:
-            return self.server.by_event.loc[event_id]
+        if event_id in self.ctx.by_event.index:
+            return self.ctx.by_event.loc[event_id]
         return None
 
     def _trade_candles_payload(self, trade_id: str) -> dict[str, Any] | None:
-        found = self.server.iteration_artifacts.latest_trade_by_id(trade_id)
+        found = self.ctx.iteration_artifacts.latest_trade_by_id(trade_id)
         if found is None:
             return None
         run_dir, trade = found
@@ -410,8 +609,8 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
 
 def serve_level_labeler(
     *,
-    candidates_path: Path,
-    labels_path: Path,
+    candidates_path: Path | None = None,
+    labels_path: Path | None = None,
     cache_dir: Path,
     host: str = "127.0.0.1",
     port: int = 8765,
@@ -420,22 +619,33 @@ def serve_level_labeler(
     strategy_title: str = "Manual level annotation",
     show_launcher: bool = False,
     project_root: Path | None = None,
+    apps: list[tuple] | None = None,
+    default_strategy_id: str | None = None,
 ) -> None:
+    """Serve one or more annotation strategies from a single desk.
+
+    Pass ``apps`` (list of ``(strategy_id, title, candidates_path, labels_path,
+    optional_marks_path)``) for a multi-strategy desk switchable in the UI; or the single
+    ``candidates_path``/``labels_path`` form for a one-strategy desk.
+    """
+    if apps is None:
+        if candidates_path is None or labels_path is None:
+            raise ValueError("provide either apps or candidates_path+labels_path")
+        apps = [(strategy_id, strategy_title, candidates_path, labels_path)]
     server = LevelLabelerServer(
         (host, port),
         LevelLabelerHandler,
-        candidates_path=candidates_path,
-        labels_path=labels_path,
+        apps=apps,
         cache_dir=cache_dir,
         tf_minutes=tf_minutes or DEFAULT_TF_MINUTES,
-        strategy_id=strategy_id,
-        strategy_title=strategy_title,
+        default_strategy_id=default_strategy_id,
         show_launcher=show_launcher,
         project_root=project_root,
     )
     print(f"serving level labeler on http://{host}:{port}", flush=True)
-    print(f"candidates: {candidates_path}", flush=True)
-    print(f"labels append-only JSONL: {labels_path}", flush=True)
+    for app_spec in apps:
+        sid, _title, cpath, lpath = app_spec[:4]
+        print(f"  strategy {sid}: candidates={cpath}  labels={lpath}", flush=True)
     server.serve_forever()
 
 

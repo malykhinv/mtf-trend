@@ -65,7 +65,7 @@ def _drawings_payload(row: dict[str, Any]) -> Any:
 def normalize_result_drawings(raw: Any, *, allow_legacy_unknown: bool = False) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("drawings must be an object")
-    allowed = {"level", "pump", "exitPoint", "zigzag", "sl"}
+    allowed = {"level", "pump", "zigzag", "sl"}
     unknown = sorted(str(key) for key in raw if key not in allowed)
     if unknown and not allow_legacy_unknown:
         raise ValueError(f"drawings contains unknown keys: {unknown}")
@@ -74,8 +74,6 @@ def normalize_result_drawings(raw: Any, *, allow_legacy_unknown: bool = False) -
         drawings["level"] = _normalize_level(raw["level"], "drawings.level")
     if raw.get("pump") is not None:
         drawings["pump"] = _normalize_pump(raw["pump"])
-    if raw.get("exitPoint") is not None:
-        drawings["exitPoint"] = _normalize_point(raw["exitPoint"], "drawings.exitPoint")
     if raw.get("zigzag") is not None:
         drawings["zigzag"] = _normalize_zigzag(raw["zigzag"])
     if raw.get("sl") is not None:

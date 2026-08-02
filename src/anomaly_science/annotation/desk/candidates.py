@@ -16,8 +16,10 @@ DEFAULT_TF_MINUTES = {
     "5m": 5,
     "10m": 10,
     "15m": 15,
+    "30m": 30,
     "1h": 60,
     "4h": 240,
+    "1d": 1_440,
 }
 
 
@@ -42,7 +44,7 @@ def make_group_id(symbol: str, start_ms: int, end_ms: int, event_ids: list[str])
 def build_annotation_groups(frame: pd.DataFrame, tf_minutes_by_id: dict[str, int]) -> list[dict[str, Any]]:
     """Group rows that represent the same market event on multiple TFs."""
 
-    records = frame.replace({np.nan: None}).to_dict("records")
+    records = [json_candidate_row(row) for row in frame.replace({np.nan: None}).to_dict("records")]
     if "annotation_group_id" in frame.columns:
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in records:
@@ -57,7 +59,8 @@ def build_annotation_groups(frame: pd.DataFrame, tf_minutes_by_id: dict[str, int
         for _, part in sorted_frame.groupby("symbol", sort=False):
             current: list[dict[str, Any]] = []
             current_culm: int | None = None
-            for row in part.replace({np.nan: None}).to_dict("records"):
+            for raw_row in part.replace({np.nan: None}).to_dict("records"):
+                row = json_candidate_row(raw_row)
                 culm = int(row.get("culmination_ms") or row.get("anchor_time_ms") or row["review_start_ms"])
                 if current and current_culm is not None and abs(culm - current_culm) > tolerance_ms:
                     groups.append(current)
@@ -76,6 +79,34 @@ def build_annotation_groups(frame: pd.DataFrame, tf_minutes_by_id: dict[str, int
         return [_group_payload(None, rows, tf_minutes_by_id) for rows in groups]
 
     return [_group_payload(str(row["event_id"]), [row], tf_minutes_by_id) for row in records]
+
+
+def json_candidate_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert a Parquet candidate record to the explicit JSON API contract.
+
+    Pandas preserves list-valued Parquet columns as ``numpy.ndarray``.  Those
+    columns carry meaningful diagnostics (for example discovered touch times),
+    so they must be represented as JSON arrays instead of leaking a NumPy value
+    into the HTTP response.
+    """
+
+    return {str(key): _json_value(value) for key, value in row.items()}
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, np.ndarray):
+        return [_json_value(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return _json_value(value.item())
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    return value
 
 
 def _group_payload(group_id: str | None, rows: list[dict[str, Any]], tf_minutes_by_id: dict[str, int]) -> dict[str, Any]:

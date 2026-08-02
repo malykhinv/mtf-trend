@@ -17,21 +17,15 @@ class AnnotationStrategyApp:
     candidates_path: Path
     labels_path: Path
     cache_dir: Path
+    marks_path: Path | None = None
 
 
 def default_annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
-    """Return annotation workflows that have concrete local artifacts."""
+    """Return locally materialized apps declared at the strategy registry boundary."""
 
-    base = project_root / ".output" / "results" / "triple_tap_v1" / "manual_pump_review"
-    cache_dir = project_root / ".output" / "market" / "binance_vision" / "um_futures" / "enriched_1m"
-    app = AnnotationStrategyApp(
-        strategy_id="triple_tap_manual_pump_review",
-        title="Triple-tap pump review: cap / breakout level labeling",
-        candidates_path=base / "pump_review_candidates.parquet",
-        labels_path=base / "pump_level_labels.jsonl",
-        cache_dir=cache_dir,
-    )
-    return (app,) if app.candidates_path.exists() and app.cache_dir.exists() else ()
+    from anomaly_science.strategy.registry import annotation_apps
+
+    return annotation_apps(project_root)
 
 
 def choose_app(apps: tuple[AnnotationStrategyApp, ...], strategy_id: str | None) -> AnnotationStrategyApp:
@@ -53,22 +47,25 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-open", action="store_true", help="Start the server without opening the system browser.")
+    parser.add_argument("--solo", action="store_true",
+                        help="Serve ONLY --strategy: no other tabs, no launcher, opens straight into the desk.")
     args = parser.parse_args()
 
     project_root = args.project_root.resolve()
-    app = choose_app(default_annotation_apps(project_root), args.strategy)
+    apps = default_annotation_apps(project_root)
+    default = choose_app(apps, args.strategy)  # validates the requested id + picks default
+    if args.solo:
+        apps = (default,)
     url = f"http://{args.host}:{args.port}/"
     if not args.no_open:
         webbrowser.open(url)
     serve_level_labeler(
-        candidates_path=app.candidates_path,
-        labels_path=app.labels_path,
-        cache_dir=app.cache_dir,
+        apps=[(a.strategy_id, a.title, a.candidates_path, a.labels_path, a.marks_path) for a in apps],
+        default_strategy_id=default.strategy_id,
+        cache_dir=default.cache_dir,
         host=args.host,
         port=args.port,
-        strategy_id=app.strategy_id,
-        strategy_title=app.title,
-        show_launcher=True,
+        show_launcher=not args.solo,
         project_root=project_root,
     )
 

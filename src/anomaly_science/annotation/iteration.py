@@ -136,6 +136,7 @@ def summarize_annotation_state(app: AnnotationStrategyApp) -> tuple[dict[str, An
     labels = LabelStore(app.labels_path).read_effective()
 
     labeled_groups = 0
+    no_setup_groups = 0
     has_level_groups = 0
     no_level_groups = 0
     no_transition_groups = 0
@@ -153,6 +154,10 @@ def summarize_annotation_state(app: AnnotationStrategyApp) -> tuple[dict[str, An
         labeled_groups += 1
         if str(label.get("event_id")) != str(group["event_id"]):
             source_label_hits += 1
+        # Explicit "reviewed, no setup" negative carries no setups to tally.
+        if label.get("no_setup"):
+            no_setup_groups += 1
+            continue
         setups = _label_setups(label)
         setup_total += len(setups)
         if any(bool(s.get("has_level")) for s in setups):
@@ -184,6 +189,7 @@ def summarize_annotation_state(app: AnnotationStrategyApp) -> tuple[dict[str, An
         "strategy_id": app.strategy_id,
         "effective_label_rows": int(len(labels)),
         "labeled_groups": int(labeled_groups),
+        "no_setup_groups": int(no_setup_groups),
         "unlabeled_groups": int(len(groups) - labeled_groups),
         "label_coverage_pct": float(100 * labeled_groups / len(groups)) if groups else 0.0,
         "has_level_groups": int(has_level_groups),
@@ -240,6 +246,7 @@ def _render_report(
         f"| Candidate groups | {candidate_summary['candidate_groups']} |",
         f"| Candidate rows | {candidate_summary['candidate_rows']} |",
         f"| Labeled groups | {label_progress['labeled_groups']} |",
+        f"| Reviewed, no setup | {label_progress.get('no_setup_groups', 0)} |",
         f"| Unlabeled groups | {label_progress['unlabeled_groups']} |",
         f"| Coverage | {label_progress['label_coverage_pct']:.1f}% |",
         f"| Has level | {label_progress['has_level_groups']} |",

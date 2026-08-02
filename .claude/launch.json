@@ -12,6 +12,30 @@
       "runtimeExecutable": ".venv\\Scripts\\python.exe",
       "runtimeArgs": ["run_annotation_browser.py", "--no-open", "--port", "8799"],
       "port": 8799
+    },
+    {
+      "name": "bot-sb-review",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeArgs": ["run_annotation_browser.py", "--no-open", "--strategy", "bot_sb_review", "--port", "8798"],
+      "port": 8798
+    },
+    {
+      "name": "session-pump-review",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeArgs": ["run_annotation_browser.py", "--no-open", "--strategy", "s5_session_pump", "--port", "8797"],
+      "port": 8797
+    },
+    {
+      "name": "knife-catch-review",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeArgs": ["run_annotation_browser.py", "--no-open", "--solo", "--strategy", "s6_knife_catch", "--port", "8796"],
+      "port": 8796
+    },
+    {
+      "name": "dump-trades-review",
+      "runtimeExecutable": ".venv\\Scripts\\python.exe",
+      "runtimeArgs": ["run_annotation_browser.py", "--no-open", "--solo", "--strategy", "s7_dump_trades", "--port", "8795"],
+      "port": 8795
     }
   ]
 }

@@ -10,11 +10,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from anomaly_science.annotation.app import AnnotationStrategyApp
 from anomaly_science.annotation.desk.result_annotations import ResultAnnotationStore
+from anomaly_science.annotation.desk.structural_trades import StructuralTradeRepository
 from anomaly_science.annotation.iteration import AnnotationIterationConfig, run_annotation_iteration, summarize_annotation_state
 from anomaly_science.annotation.level_labeler import DEFAULT_TF_MINUTES, LABELER_HTML, LevelLabelerHandler, LevelLabelerServer
+from anomaly_science.annotation.schemas import validate_label_payload
 
 
 def _candidate_rows() -> list[dict[str, object]]:
@@ -64,6 +67,110 @@ def _write_fixture_project(root: Path) -> AnnotationStrategyApp:
         labels_path=labels,
         cache_dir=cache,
     )
+
+
+def test_structural_trade_repository_exposes_protected_stop_ledger(tmp_path: Path) -> None:
+    root = tmp_path / ".output" / "research" / "binance_usdm_trend_is_2025_v1"
+    root.mkdir(parents=True)
+    trade = {
+        "trade_id": "BTCUSDT:event:15m",
+        "symbol": "BTCUSDT",
+        "tf": "15m",
+        "fill_time_ms": int(pd.Timestamp("2025-09-01 09:30:00Z").timestamp() * 1_000),
+        "entry_price": 100.0,
+        "crossing_minute_of_day": 570,
+        "stop_updates": [{"kind": "initial", "price": 99.0, "time_ms": 1}],
+    }
+    (root / "structural_protected_stop_trades.json").write_text(
+        json.dumps([trade]), encoding="utf-8"
+    )
+    pd.DataFrame([{"tf": "15m", "trades": 1, "mean_net_r": 0.2}]).to_csv(
+        root / "structural_protected_stop_policy_audit.csv", index=False
+    )
+
+    repository = StructuralTradeRepository(tmp_path)
+    loaded = repository.trades()
+
+    assert len(loaded) == 1
+    assert loaded[0]["setup_family"] == "structural_swing_low"
+    assert loaded[0]["session"] == "europe"
+    assert loaded[0]["month"] == "2025-09"
+    assert repository.trade_by_id(trade["trade_id"]) == loaded[0]
+    assert repository.list_rows()[0]["trade_id"] == trade["trade_id"]
+    assert "stop_updates" not in repository.list_rows()[0]
+    assert repository.summary()[0]["trades"] == 1
+
+
+def test_structural_trade_review_is_separate_and_causal(tmp_path: Path) -> None:
+    root = tmp_path / ".output" / "research" / "binance_usdm_trend_is_2025_v1"
+    root.mkdir(parents=True)
+    fill_time_ms = int(pd.Timestamp("2025-09-01 09:30:00Z").timestamp() * 1_000)
+    trade = {
+        "trade_id": "BTCUSDT:event:15m",
+        "symbol": "BTCUSDT",
+        "tf": "15m",
+        "fill_time_ms": fill_time_ms,
+        "entry_price": 100.0,
+    }
+    (root / "structural_protected_stop_trades.json").write_text(json.dumps([trade]), encoding="utf-8")
+    repository = StructuralTradeRepository(tmp_path)
+
+    saved = repository.save_review(
+        {
+            "trade_id": trade["trade_id"],
+            "comment": "mechanical stop is inside the visible swing",
+            "correct_sl": {"anchor_time_ms": fill_time_ms - 60_000, "price": 97.0},
+        }
+    )
+
+    assert saved["structural_trade_review_schema_version"] == "structural_trade_review_v1"
+    assert repository.review_for_trade(trade["trade_id"])["correct_sl"]["price"] == 97.0
+    assert repository.list_rows()[0]["has_result_annotation"] is True
+    assert (root / "structural_trade_reviews.jsonl").exists()
+    assert not (root / "result_trade_annotations.jsonl").exists()
+
+    with pytest.raises(ValueError, match="before trade entry"):
+        repository.save_review(
+            {
+                "trade_id": trade["trade_id"],
+                "comment": "future candle must be rejected",
+                "correct_sl": {"anchor_time_ms": fill_time_ms, "price": 96.0},
+            }
+        )
+    with pytest.raises(ValueError, match="below long entry"):
+        repository.save_review(
+            {
+                "trade_id": trade["trade_id"],
+                "comment": "not a long stop",
+                "correct_sl": {"anchor_time_ms": fill_time_ms - 60_000, "price": 101.0},
+            }
+        )
+
+
+def test_desk_structural_trade_tab_draws_risk_reward_and_every_stop_update() -> None:
+    assert '<nav id="workspaceTabs" role="tablist"' in LABELER_HTML
+    assert 'id="workspaceTabLabeling" role="tab"' in LABELER_HTML
+    assert 'id="workspaceTabResults" role="tab"' in LABELER_HTML
+    assert 'id="workspaceTabFutures" role="tab"' in LABELER_HTML
+    assert "function setWorkspaceMode(mode)" in LABELER_HTML
+    assert "body.workspace-futures #eventPanel" in LABELER_HTML
+    assert "body.workspace-futures .iteration-review-only" in LABELER_HTML
+    assert "grid-template-columns: 430px minmax(0, 1fr)" in LABELER_HTML
+    assert "showFuturesStructural()" in LABELER_HTML
+    assert "/api/futures_structural/trades" in LABELER_HTML
+    assert "resultTrade.initial_stop" in LABELER_HTML
+    assert "resultTrade.mfe_price" in LABELER_HTML
+    assert "fillcolor:'rgba(209,132,149,.18)'" in LABELER_HTML
+    assert "fillcolor:'rgba(125,187,145,.14)'" in LABELER_HTML
+    assert "resultTrade.stop_updates.slice(1).forEach" in LABELER_HTML
+    assert "text:`SL" in LABELER_HTML
+    assert "${fmtPrice(Number(update.price))}`" in LABELER_HTML
+    assert 'id="futuresReviewComment"' in LABELER_HTML
+    assert 'id="correctSlBtn"' in LABELER_HTML
+    assert "function saveStructuralTradeReview()" in LABELER_HTML
+    assert "/api/futures_structural/review" in LABELER_HTML
+    assert "anchorTimeMs >= Number(resultTrade && resultTrade.fill_time_ms)" in LABELER_HTML
+    assert "CORRECT SL" in LABELER_HTML
 
 
 def test_annotation_iteration_summarizes_group_labels_and_tombstones(tmp_path: Path) -> None:
@@ -238,12 +345,14 @@ def test_event_candles_can_switch_to_any_available_timeframe(tmp_path: Path) -> 
     cache_dir.mkdir()
     pd.DataFrame(
         [
-            {
-                "event_id": "evt_15m",
-                "symbol": "AAAUSDT",
-                "tf": "15m",
-                "review_start_ms": 0,
-                "review_end_ms": 300_000,
+        {
+            "event_id": "evt_15m",
+            "symbol": "AAAUSDT",
+            "tf": "15m",
+            "review_start_ms": 0,
+            "review_end_ms": 300_000,
+            "discovery_touch_times_ms": np.array([60_000, 180_000], dtype=np.int64),
+            "discovery_quality_flags": np.array([], dtype=object),
             }
         ]
     ).to_parquet(candidates_path, index=False)
@@ -273,13 +382,15 @@ def test_event_candles_can_switch_to_any_available_timeframe(tmp_path: Path) -> 
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         candidates_payload = _json_request(f"{base}/api/candidates")
-        assert candidates_payload["available_tfs"] == ["1m", "3m", "5m", "10m", "15m", "1h", "4h"]
+        assert candidates_payload["available_tfs"] == ["1m", "3m", "5m", "10m", "15m", "30m", "1h", "4h", "1d"]
         assert candidates_payload["candidates"][0]["default_tf"] == "15m"
 
         candles = _json_request(f"{base}/api/candles?event_id=evt_15m&tf=1m")
         assert candles["event"]["event_id"] == "evt_15m"
         assert candles["event"]["source_tf"] == "15m"
         assert candles["event"]["tf"] == "1m"
+        assert candles["event"]["discovery_touch_times_ms"] == [60_000, 180_000]
+        assert candles["event"]["discovery_quality_flags"] == []
         assert candles["candles"]["timestamp"] == [0, 60_000, 120_000, 180_000, 240_000, 300_000]
 
         try:
@@ -290,6 +401,41 @@ def test_event_candles_can_switch_to_any_available_timeframe(tmp_path: Path) -> 
             assert "unknown tf" in body["error"]
         else:  # pragma: no cover - the assertion above is the expected path
             raise AssertionError("unsupported timeframe must be rejected")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_candidate_api_serializes_parquet_array_diagnostics(tmp_path: Path) -> None:
+    candidates_path = tmp_path / "candidates.parquet"
+    labels_path = tmp_path / "labels.jsonl"
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    row = _candidate_rows()[0]
+    row.update(
+        {
+            "discovery_touch_times_ms": np.array([2_000, 3_000], dtype=np.int64),
+            "discovery_quality_flags": np.array([], dtype=object),
+        }
+    )
+    pd.DataFrame([row]).to_parquet(candidates_path, index=False)
+
+    server = LevelLabelerServer(
+        ("127.0.0.1", 0),
+        LevelLabelerHandler,
+        candidates_path=candidates_path,
+        labels_path=labels_path,
+        cache_dir=cache_dir,
+        tf_minutes=DEFAULT_TF_MINUTES,
+        project_root=tmp_path,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        candidate = _json_request(f"{base}/api/candidates")["candidates"][0]
+        assert candidate["discovery_touch_times_ms"] == [2_000, 3_000]
+        assert candidate["discovery_quality_flags"] == []
     finally:
         server.shutdown()
         server.server_close()
@@ -375,7 +521,6 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
         )
         second_drawings = {
             "level": {"startMs": 0, "endMs": 120_000, "price": 1.2},
-            "exitPoint": {"ms": 120_000, "price": 1.35},
             "sl": {"price": 1.05, "hit_ms": 120_000, "end_ms": 180_000},
         }
         _json_request(
@@ -432,6 +577,19 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
                 {
                     "trade_id": "trd_00000",
                     "comment": "bad",
+                    "drawings": {"exitPoint": {"ms": 60_000, "price": 1.2}},
+                },
+            )
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+        else:  # pragma: no cover - the assertion above is the expected path
+            raise AssertionError("removed exit drawing must be rejected")
+        try:
+            _json_request(
+                f"{base}/api/result_annotation",
+                {
+                    "trade_id": "trd_00000",
+                    "comment": "bad",
                     "drawings": {"level": {"startMs": 0.5, "endMs": 120_000, "price": 1.0}},
                 },
             )
@@ -462,7 +620,6 @@ def test_result_trade_drawings_are_saved_and_reloaded(tmp_path: Path) -> None:
         assert candles["result_annotation"]["result_annotation_schema_version"] == "result_trade_annotation_v1"
         assert candles["result_annotation"]["drawings"] == {
             "level": {"start_ms": 0, "end_ms": 120_000, "price": 1.2, "broken": False},
-            "exitPoint": {"ms": 120_000, "price": 1.35},
             "sl": {"price": 1.05, "hit_ms": 120_000, "end_ms": 180_000},
         }
         assert len(candles["candles"]["timestamp"]) == 3
@@ -537,10 +694,44 @@ def test_read_api_errors_do_not_poison_browser_state() -> None:
     assert "function clearChart()" in LABELER_HTML
     assert "clearChart();\n    toast(data.error, 4200);" in LABELER_HTML
     assert "if (payload.error) {\n    current = null;" in LABELER_HTML
-    assert "level = null; pump = null; entry = null; sl = null; exitPoint = null; zigzag = null; zzDraft = null; setups = [];" in LABELER_HTML
+    assert "level = null; pump = null; entry = null; sl = null; zigzag = null; zzDraft = null; setups = [];" in LABELER_HTML
     assert "clearChart();\n    toast(payload.error, 4200);" in LABELER_HTML
-    assert "if (payload.error) {\n    toast(payload.error, 4200);\n    refreshSelect(document.getElementById('tfSelect'));" in LABELER_HTML
+    assert "if (payload.error) {\n    selectedTf = previousTf;\n    toast(payload.error, 4200);\n    populateTfButtons(group);" in LABELER_HTML
     assert "document.getElementById('iterationStatus').innerHTML = `<b>error</b>" in LABELER_HTML
+
+
+def test_timeframe_switcher_uses_buttons_and_preserves_keyboard_navigation() -> None:
+    assert '<div id="tfButtons" class="tf-switcher"' in LABELER_HTML
+    assert "grid-template-columns:repeat(4, minmax(0, 1fr))" in LABELER_HTML
+    assert "grid-template-rows:repeat(2, 26px)" in LABELER_HTML
+    assert "function populateTfButtons(group)" in LABELER_HTML
+    assert "button.dataset.tf = tf;" in LABELER_HTML
+    assert "changeTf(eventTfs[next]);" in LABELER_HTML
+    assert 'id="tfSelect"' not in LABELER_HTML
+
+
+def test_drawing_toolbar_removes_exit_and_previews_zone_snapping() -> None:
+    assert 'id="toolExit"' not in LABELER_HTML
+    assert "exitPoint" not in LABELER_HTML
+    assert ">Auto SL<" not in LABELER_HTML
+    assert 'id="slBtn"' in LABELER_HTML
+    assert 'id="toolZone"' in LABELER_HTML
+    assert "function zoneExtreme(ms, y)" in LABELER_HTML
+    assert "function zoneDraft(first, second)" in LABELER_HTML
+    assert "boundary_mode:'extrema'" in LABELER_HTML
+    assert 'id="zoneBoundary"' not in LABELER_HTML
+    assert "click to place" in LABELER_HTML
+    assert "if (k === 'o') toggleTool('zone');" in LABELER_HTML
+
+
+def test_discovery_candidates_are_ranked_before_warned_candidates() -> None:
+    assert "const discoveryTierRank = {A:0, B:1, C:2};" in LABELER_HTML
+    assert "if (leftTier !== rightTier) return leftTier - rightTier;" in LABELER_HTML
+
+
+def test_discovery_support_metrics_are_visible_in_the_event_tape() -> None:
+    assert "discovery_support_contact_count" in LABELER_HTML
+    assert "discovery_body_above_support_share" in LABELER_HTML
 
 
 def test_overlay_uses_plotly_axis_transforms_not_manual_range_math() -> None:
@@ -590,9 +781,9 @@ def test_annotation_fields_are_grouped_and_search_has_its_own_panel() -> None:
 
 def test_family_and_quality_are_loaded_per_setup() -> None:
     # family/quality are a per-setup assessment: applying a setup reflects its saved
-    # values and defaults to cap/good, so nothing carries over between setups/events.
-    assert "fam.value = s.family || 'cap'" in LABELER_HTML
-    assert "qual.value = s.quality || 'good'" in LABELER_HTML
+    # values and defaults to unknown/bad, so nothing carries over between setups/events.
+    assert "fam.value = s.family || 'unknown'" in LABELER_HTML
+    assert "qual.value = s.quality || 'bad'" in LABELER_HTML
 
 
 def test_structure_break_family_and_zigzag_tool_exist() -> None:
@@ -669,13 +860,19 @@ def test_level_labeler_autosaves_and_navigation_flushes_edits() -> None:
     # slow manual save / fast navigation click can append labels out of order and
     # make the UI appear to ignore clicks or lose recently drawn objects.
     assert "let saveQueue = Promise.resolve()" in LABELER_HTML
+    assert "let seedSignatures = new Map();" in LABELER_HTML
+    assert "seedSignatures.get(eventId) === sig" in LABELER_HTML
     assert "const AUTOSAVE_DELAY_MS" in LABELER_HTML
     assert "function scheduleAutosave()" in LABELER_HTML
     assert "async function flushAutosave" in LABELER_HTML
     assert "await flushAutosave({finishDraft:true, quiet:false})" in LABELER_HTML
     assert "function navigateToEventId" in LABELER_HTML
     assert "function currentVisibleIndex()" in LABELER_HTML
-    assert "const target = visible[currentVisibleIndex() + delta];" in LABELER_HTML
+    # Back-to-back clicks must accumulate: deltas base off the optimistic pending
+    # target (updated synchronously) rather than the still-stale current position,
+    # which only refreshes after the async flush + candle fetch settle.
+    assert "let pendingNavIndex = null;" in LABELER_HTML
+    assert "pendingNavIndex != null ? pendingNavIndex : currentVisibleIndex()" in LABELER_HTML
     assert "d.onclick = () => navigateToEventId(c.event_id);" in LABELER_HTML
     assert "loadEvent(idx + 1)" not in LABELER_HTML
 
@@ -685,6 +882,18 @@ def test_level_labeler_timeframe_dropdown_uses_all_available_tfs() -> None:
     assert "for (const tf of availableTfs)" in LABELER_HTML
     assert "for (const v of variants)" in LABELER_HTML
     assert "selected_tf: e.tf" in LABELER_HTML
+
+
+def test_daily_top_hold_focus_is_explicit_and_deterministic() -> None:
+    # Outside the plot, context is muted and the pump plus accepted top hold
+    # remains legible. Hovering the price plot restores the full context.
+    assert "function dailyHoldFocusTrace(candles, range)" in LABELER_HTML
+    assert "daily-hold-focus-candles" in LABELER_HTML
+    assert "function setDailyHoldFocus(active)" in LABELER_HTML
+    assert "wrap.addEventListener('pointermove', () => {" in LABELER_HTML
+    assert "wrap.addEventListener('pointerleave', () => {" in LABELER_HTML
+    assert "Plotly.restyle(chart, {opacity:active ? 1 : 0.24}, [0]);" in LABELER_HTML
+    assert "Plotly.restyle(chart, {opacity:active ? 0 : 1}, [2]);" in LABELER_HTML
 
 
 def test_level_labeler_ignores_stale_async_candle_loads() -> None:
@@ -708,3 +917,47 @@ def test_level_segment_is_cut_by_a_candle_that_closes_above_it() -> None:
     body = match.group("body")
     assert "c.close[i] > price" in body
     assert "candleBodyCrosses" not in LABELER_HTML
+
+
+def test_manual_level_touches_are_toggleable_and_persisted() -> None:
+    # A new level begins with its anchor as a touch; subsequent left-clicks
+    # toggle candles and RMB closes the touch-selection phase.
+    assert "touches: [anchor.ms]" in LABELER_HTML
+    assert "tool === 'level_touches'" in LABELER_HTML
+    assert "function finishLevelTouches()" in LABELER_HTML
+    assert "level_touch_times_ms" in LABELER_HTML
+    assert "finishLevelTouches();" in LABELER_HTML
+
+
+def test_lower_support_uses_only_retraces_between_neighbouring_level_touches() -> None:
+    assert "function pullbackLows(touches)" in LABELER_HTML
+    assert "for (let pair = 1; pair < ordered.length; pair++)" in LABELER_HTML
+    assert "for (let i = lowIdx + 1; i < right.i; i++)" in LABELER_HTML
+    assert "terminal pullback" in LABELER_HTML
+    assert "if (c.low[lowIdx] < level.price)" in LABELER_HTML
+    assert "const lows = pullbackLows(tt), fit = fitSlope(lows);" in LABELER_HTML
+
+
+def test_manual_level_touch_schema_requires_sorted_timestamps_inside_level() -> None:
+    payload = {
+        "event_id": "e1_5m",
+        "symbol": "AAAUSDT",
+        "tf": "5m",
+        "setups": [
+            {
+                "family": "breakout",
+                "quality": "ok",
+                "has_level": True,
+                "has_pump_transition": False,
+                "has_structure_break": False,
+                "level_price": 1.2,
+                "level_start_ms": 1_000,
+                "level_end_ms": 5_000,
+                "level_touch_times_ms": [1_000, 3_000, 5_000],
+            }
+        ],
+    }
+    validate_label_payload(payload)
+    payload["setups"][0]["level_touch_times_ms"] = [3_000, 1_000]
+    with pytest.raises(ValueError, match="strictly increasing"):
+        validate_label_payload(payload)

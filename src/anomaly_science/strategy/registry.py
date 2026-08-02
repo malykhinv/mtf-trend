@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from anomaly_science.contracts.horizons import validate_supported_research_horizon
 from anomaly_science.strategy.anomaly_config import BroadAnomalyDetectorConfig
@@ -17,6 +17,9 @@ from anomaly_science.strategy.anomaly import (
     make_post_pump_distribution_strategy,
 )
 from anomaly_science.contracts.strategy import BaseStrategy
+
+if TYPE_CHECKING:
+    from anomaly_science.annotation.app import AnnotationStrategyApp
 
 
 class StrategyRegistryError(ValueError):
@@ -212,3 +215,77 @@ def annotation_iteration_hooks() -> dict[str, Callable[[Path], dict[str, Any]]]:
     from anomaly_science.strategy.triple_tap.annotation_iteration import run_trade_report_iteration
 
     return {"triple_tap_manual_pump_review": run_trade_report_iteration}
+
+
+def annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
+    """Declare strategy-owned annotation artifacts without coupling Core to strategies."""
+
+    from anomaly_science.annotation.app import AnnotationStrategyApp
+
+    cache_dir = project_root / ".output" / "market" / "binance_vision" / "um_futures" / "enriched_1m"
+    session_root = project_root / ".output" / "results" / "session_break"
+    knife_root = project_root / ".output" / "results" / "knife_catch"
+    triple_root = project_root / ".output" / "results" / "triple_tap_v1" / "manual_pump_review"
+
+    apps = (
+        AnnotationStrategyApp(
+            strategy_id="triple_tap_manual_pump_review",
+            title="Triple-tap pump review",
+            candidates_path=triple_root / "pump_review_candidates.parquet",
+            labels_path=triple_root / "pump_level_labels.jsonl",
+            cache_dir=cache_dir,
+        ),
+        AnnotationStrategyApp(
+            strategy_id="s1_reclaim_held_level",
+            title="S1 - Reclaim held-level short",
+            candidates_path=session_root / "reclaim_review" / "candidates.parquet",
+            labels_path=session_root / "reclaim_review" / "review_comments.jsonl",
+            cache_dir=cache_dir,
+        ),
+        AnnotationStrategyApp(
+            strategy_id="s2_return_to_range",
+            title="S2 - Return to distant prior range",
+            candidates_path=session_root / "return_range_review" / "candidates.parquet",
+            labels_path=session_root / "return_range_review" / "review_comments.jsonl",
+            cache_dir=cache_dir,
+        ),
+        AnnotationStrategyApp(
+            strategy_id="s3_session_streak",
+            title="S3 - Session-streak momentum",
+            candidates_path=session_root / "streak_review" / "candidates.parquet",
+            labels_path=session_root / "streak_review" / "review_comments.jsonl",
+            cache_dir=cache_dir,
+        ),
+        AnnotationStrategyApp(
+            strategy_id="s4_pump_fade",
+            title="S4 - Anomaly fade short",
+            candidates_path=session_root / "pump_fade_review" / "candidates.parquet",
+            labels_path=session_root / "pump_fade_review" / "review_comments.jsonl",
+            cache_dir=cache_dir,
+        ),
+        AnnotationStrategyApp(
+            strategy_id="s5_session_pump",
+            title="S5 - Inter-session pump anomaly",
+            candidates_path=session_root / "session_pump_review" / "candidates.parquet",
+            labels_path=session_root / "session_pump_review" / "review_labels.jsonl",
+            cache_dir=cache_dir,
+            marks_path=session_root / "session_pump_review" / "marks.jsonl",
+        ),
+        AnnotationStrategyApp(
+            strategy_id="s6_knife_catch",
+            title="S6 - Knife-catch dump",
+            candidates_path=knife_root / "dump_review" / "candidates.parquet",
+            labels_path=knife_root / "dump_review" / "review_labels.jsonl",
+            cache_dir=cache_dir,
+            marks_path=knife_root / "dump_review" / "marks.jsonl",
+        ),
+        AnnotationStrategyApp(
+            strategy_id="s7_dump_trades",
+            title="S7 - Dump trades excluding crash week",
+            candidates_path=knife_root / "dump_trade_review" / "candidates.parquet",
+            labels_path=knife_root / "dump_trade_review" / "review_labels.jsonl",
+            cache_dir=cache_dir,
+            marks_path=knife_root / "dump_trade_review" / "marks.jsonl",
+        ),
+    )
+    return tuple(app for app in apps if app.candidates_path.exists() and app.cache_dir.exists())

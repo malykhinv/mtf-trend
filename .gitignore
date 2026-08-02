@@ -12,5 +12,8 @@ __pycache__/
 */__pycache__/
 *.py[cod]
 *.log
+*.egg-info/
+*.lnk
+catboost_info/
 .patches/*.patch
 !.patches/README.md

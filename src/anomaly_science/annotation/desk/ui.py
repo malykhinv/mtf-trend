@@ -100,6 +100,17 @@ LABELER_HTML = r"""<!doctype html>
       border-bottom: 1px solid rgba(42,46,54,.95);
       position: sticky; top: 0; z-index: 2;
     }
+    #workspaceTabs {
+      height: 42px; display:flex; align-items:flex-end; gap:4px; padding:0 14px;
+      background:rgba(17,19,24,.96); border-bottom:1px solid rgba(42,46,54,.95);
+      position:sticky; top:62px; z-index:2;
+    }
+    .workspace-tab {
+      height:41px; padding:0 14px; border-radius:0; color:var(--muted);
+      background:transparent; box-shadow:none; border-bottom:2px solid transparent;
+    }
+    .workspace-tab:hover { background:transparent; color:var(--text); }
+    .workspace-tab[aria-selected="true"] { color:var(--accent); border-bottom-color:var(--accent); }
     .brand {
       display: flex; align-items: center; gap: 10px; letter-spacing: -.015em;
       font-size: 15px; color: var(--text); font-weight: 760;
@@ -128,9 +139,28 @@ LABELER_HTML = r"""<!doctype html>
     button.primary { background: var(--accent); color: #101217; box-shadow: none; }
     button.primary:hover { background: #9aaddf; }
     button.danger { background: #251922; color: var(--red); box-shadow: inset 0 0 0 1px rgba(209,132,149,.20); }
-    #wrap { display: grid; grid-template-columns: 370px minmax(0, 1fr); height: calc(100vh - 62px); }
-    #side { overflow: auto; background: rgba(17,19,24,.60); padding: 12px; }
-    #chartwrap { position: relative; height: calc(100vh - 62px); min-width: 0; overflow:hidden; }
+    #wrap { display: grid; grid-template-columns: 660px minmax(0, 1fr); height: calc(100vh - 104px); }
+    #side { overflow: hidden; background: rgba(17,19,24,.60); padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: stretch; }
+    .side-col { min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+    .side-col > .panel { margin-bottom: 0; }
+    #sideMain { overflow: auto; }
+    #annotationPanel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    #notesField { flex: 1 1 auto; min-height: 90px; display: flex; flex-direction: column; margin-bottom: 10px; }
+    #notesField textarea { flex: 1 1 auto; height: auto; min-height: 60px; resize: none; }
+    #sideList { overflow: hidden; }
+    #sideList .panel { flex: 0 0 auto; }
+    #sideList #list { flex: 1 1 auto; min-height: 0; overflow: auto; }
+    body.workspace-results #wrap, body.workspace-futures #wrap { grid-template-columns: 430px minmax(0, 1fr); }
+    body.workspace-results #side, body.workspace-futures #side { grid-template-columns:1fr; }
+    body.workspace-results #sideList, body.workspace-futures #sideList { display:none; }
+    body.workspace-results #eventPanel, body.workspace-results #annotationPanel,
+    body.workspace-futures #eventPanel, body.workspace-futures #annotationPanel { display:none; }
+    body.workspace-results .labeling-actions, body.workspace-futures .labeling-actions { display:none; }
+    body.workspace-futures .dataset-context,
+    body.workspace-futures #strategySelect + .select-ui { display:none; }
+    #workspaceContext { display:none; color:var(--muted); font-size:12px; }
+    body.workspace-futures #workspaceContext { display:block; }
+    #chartwrap { position: relative; height: calc(100vh - 104px); min-width: 0; overflow:hidden; }
     #chart { position:absolute; inset:0; cursor: grab; }
     #chart:active { cursor: grabbing; }
     #ovl { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:3; touch-action:none; }
@@ -177,6 +207,7 @@ LABELER_HTML = r"""<!doctype html>
     .row-head { display:flex; justify-content:space-between; gap:8px; font-weight:760; }
     .row-badges { display:flex; gap:8px; margin-top:5px; flex-wrap:wrap; }
     .badge { font-size:10px; color:var(--faint); }
+    .badge.good { color:var(--green); }
     .badge.hot { color: var(--orange); }
     .small { font-size: 12px; color: var(--muted); }
     .quiet-help { font-size:10px; color:var(--faint); line-height:1.35; }
@@ -197,6 +228,10 @@ LABELER_HTML = r"""<!doctype html>
     .manual-item button { width:22px; height:22px; padding:0; box-shadow:none; background:transparent; color:var(--faint); }
     .manual-item .auto-tag { font-size:9px; color:var(--faint); text-transform:uppercase; letter-spacing:.05em; }
     .event-controls { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+    .tf-switcher { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); grid-template-rows:repeat(2, 26px); flex:1 1 auto; gap:3px; padding:3px; border-radius:8px; background:var(--surface-2); box-shadow:inset 0 0 0 1px rgba(42,46,54,.95); }
+    .tf-button { width:100%; min-width:0; height:26px; padding:0 4px; border:0; border-radius:5px; background:transparent; box-shadow:none; color:var(--muted); font-size:11px; font-weight:760; letter-spacing:.01em; }
+    .tf-button:hover { color:var(--text); background:rgba(255,255,255,.045); }
+    .tf-button.active { color:var(--accent); background:var(--accent-soft); box-shadow:inset 0 0 0 1px rgba(138,160,216,.48); }
     .hover-zone { color:var(--faint); background:var(--surface-2); border-radius:7px; padding:7px 9px; font-size:11px; user-select:none; }
     .hover-zone.active { color:var(--text); background:var(--accent-soft); }
     .native-select-hidden { display:none !important; }
@@ -209,16 +244,26 @@ LABELER_HTML = r"""<!doctype html>
     .select-option:hover { background:var(--surface-2); color:var(--text); }
     .select-option.selected { color:var(--accent); background:var(--accent-soft); }
     .workbench-panel { display:none; }
-    body.results-mode .workbench-panel { display:block; }
-    body.results-mode #list, body.results-mode .search-panel { display:none; }
-    body.results-mode #setupsHeading, body.results-mode #setupTabs { display:none; }
+    body.workspace-results .workbench-panel, body.workspace-futures .workbench-panel {
+      display:flex; flex-direction:column; min-height:0; height:100%; margin:0;
+    }
+    body.workspace-results #sideMain, body.workspace-futures #sideMain { overflow:hidden; }
+    .review-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+    .review-heading { min-width:0; }
+    .review-heading .panel-title { margin-bottom:4px; }
+    body.workspace-futures .iteration-review-only { display:none; }
+    .futures-review-only { display:none; }
+    body.workspace-futures .futures-review-only { display:block; }
+    .futures-review-panel { margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+    .futures-review-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .futures-review-state { margin-top:7px; min-height:16px; color:var(--faint); font-size:11px; line-height:1.35; }
     .status-box { border-radius:8px; background:var(--surface-2); padding:9px; color:var(--muted); font-size:12px; line-height:1.45; margin-bottom:10px; }
     .status-box b { color:var(--text); }
     .slice-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:8px 0 10px; }
     .slice-card { background:var(--surface-2); border-radius:7px; padding:7px; font-size:11px; color:var(--muted); }
     .slice-card b { display:block; color:var(--text); margin-bottom:3px; }
     .trade-filters { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
-    .trade-list { display:flex; flex-direction:column; gap:5px; max-height:320px; overflow:auto; }
+    .trade-list { display:flex; flex-direction:column; gap:5px; flex:1 1 auto; min-height:160px; overflow:auto; }
     .trade-row { border-radius:7px; padding:8px; background:var(--surface-2); color:var(--muted); font-size:11px; }
     .trade-row.active { background:var(--accent-soft); color:var(--text); box-shadow: inset 2px 0 0 var(--accent); }
     .trade-row.win { box-shadow: inset 2px 0 0 var(--green); }
@@ -235,18 +280,21 @@ LABELER_HTML = r"""<!doctype html>
       #top { grid-template-columns: 1fr auto; height: auto; }
       .center { grid-column: 1 / -1; order: 3; }
       #wrap { grid-template-columns: 360px minmax(360px, 1fr); }
+      body.workspace-results #wrap, body.workspace-futures #wrap { grid-template-columns:380px minmax(360px, 1fr); }
     }
   </style>
 </head>
-<body>
+<body class="workspace-labeling">
   <div id="top">
     <div class="brand">Level desk</div>
     <div class="center">
-      <div id="title" class="title"></div>
-      <span id="progress" class="pill progress"></span>
+      <select id="strategySelect" class="pill dataset-context" style="max-width:220px" onchange="switchStrategy(this.value)" title="Switch dataset / strategy"></select>
+      <div id="title" class="title dataset-context"></div>
+      <span id="progress" class="pill progress dataset-context"></span>
+      <span id="workspaceContext">Binance USD-M futures · IS 2025</span>
     </div>
     <div class="actions">
-      <div class="action-group">
+      <div class="action-group labeling-actions">
         <button class="ghost icon" onclick="prevEvent()" title="Previous candidate  Left">
           <svg viewBox="0 0 20 20"><path d="M12.5 4L6.5 10l6 6"/></svg>
         </button>
@@ -258,21 +306,24 @@ LABELER_HTML = r"""<!doctype html>
         </button>
         <span class="action-spacer"></span>
         <button class="ghost text-action" id="unlabelBtn" onclick="unlabelEvent()" disabled title="Make this event unlabeled again">Unlabel</button>
+        <button class="ghost text-action" id="noSetupBtn" onclick="saveNoSetup()" title="Reviewed this event - no valid setup here. Records an explicit negative (distinct from a skipped event).  N">No setup</button>
         <button class="primary text-action" onclick="saveLabel()" title="Save this event annotation  S">Save</button>
-        <span class="action-spacer"></span>
-        <button class="ghost text-action" onclick="showLabeling()">Labeling</button>
-        <button class="ghost text-action" onclick="showResults()">Results</button>
-        <button class="primary text-action" id="runIterationBtn" onclick="startIteration()">Run</button>
       </div>
     </div>
   </div>
+  <nav id="workspaceTabs" role="tablist" aria-label="Desk workspace">
+    <button class="workspace-tab" id="workspaceTabLabeling" role="tab" aria-selected="true" onclick="showLabeling()">Labeling</button>
+    <button class="workspace-tab" id="workspaceTabResults" role="tab" aria-selected="false" onclick="showResults()">Iteration results</button>
+    <button class="workspace-tab" id="workspaceTabFutures" role="tab" aria-selected="false" onclick="showFuturesStructural()">Futures IS</button>
+  </nav>
   <div id="wrap">
     <div id="side">
-      <div class="panel">
+      <div class="side-col" id="sideMain">
+      <div class="panel" id="eventPanel">
         <div class="panel-title">Event tape</div>
         <div class="event-controls">
           <input id="jump" type="number" min="1" style="display:none" onkeydown="jumpKey(event)">
-          <select id="tfSelect" onchange="changeTf()"></select>
+          <div id="tfButtons" class="tf-switcher" role="group" aria-label="Chart timeframe"></div>
           <div id="defaultLinesHover" class="hover-zone">auto lines</div>
         </div>
         <div id="metricbar" class="metricbar"></div>
@@ -280,12 +331,12 @@ LABELER_HTML = r"""<!doctype html>
           Wheel = zoom X at cursor · Shift = Y · Ctrl = both · LMB-drag an axis to scale it · double-click axis to auto-fit.
         </div>
       </div>
-      <div class="panel">
+      <div class="panel" id="annotationPanel">
         <div class="panel-title">Annotation</div>
-        <div id="setupsHeading" class="field-group-label">setups <span class="quiet-help" style="text-transform:none;letter-spacing:0">— one event can carry several trades</span></div>
+        <div id="setupsHeading" class="field-group-label">setups <span class="quiet-help" style="text-transform:none;letter-spacing:0">— one event can carry several trades</span><span id="noSetupTag" class="badge" style="display:none;color:var(--red);margin-left:6px">reviewed · no setup</span></div>
         <div id="setupTabs" class="setup-tabs"></div>
         <div class="tool-row">
-          <button class="ghost icon tool" id="toolLevel" onclick="toggleTool('level')" title="Level: one click snaps start to candle high; end is the first later candle that closes above the level, or chart end.  L">
+          <button class="ghost icon tool" id="toolLevel" onclick="toggleTool('level')" title="Level: click the anchor high, then left-click candles to add/remove manual touches; right-click finishes.  L">
             <svg viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.4" fill="currentColor" stroke="none"/><path d="M6 10h11"/></svg>
           </button>
           <button class="ghost icon tool" id="toolPump" onclick="toggleTool('pump')" title="Pump: click start candle (snaps to low), click culmination candle (snaps to high).  P">
@@ -294,38 +345,44 @@ LABELER_HTML = r"""<!doctype html>
           <button class="ghost icon tool" id="toolZigzag" onclick="toggleTool('zigzag')" title="Swing zigzag: left-click to drop points (snap to nearest high/low), right-click to finish.  G">
             <svg viewBox="0 0 20 20"><path d="M2 14l4-8 4 6 4-8 4 6"/></svg>
           </button>
-          <button class="ghost icon tool" id="toolExit" onclick="toggleTool('exit')" disabled title="Draw a level first, then mark the possible exit point.  E">
-            <svg viewBox="0 0 20 20"><path d="M5 5l10 10"/><path d="M15 5L5 15"/></svg>
+          <button class="ghost icon tool" id="toolZone" onclick="toggleTool('zone')" title="Zone: click two price extremes. Each click snaps to the nearest high or low.  O">
+            <svg viewBox="0 0 20 20"><rect x="3" y="5" width="14" height="10" rx="1"/><path d="M3 8h14M3 12h14"/><path d="M6 3v14M14 3v14"/></svg>
           </button>
-          <button class="text-action" id="slBtn" onclick="setOptimalSl()" disabled title="Auto stop-loss: low of the entry candle, ray cut at first touch  X">Auto SL</button>
+          <button class="text-action" id="slBtn" onclick="setOptimalSl()" disabled title="Set stop-loss at the structural anchor.  X">SL</button>
           <span class="tool-spacer"></span>
-          <button class="danger icon" id="clearDrawingsBtn" onclick="resetAnnotations()" disabled title="Clear level, pump, stop, exit and zigzag for this setup.  Z">
+          <button class="danger icon" id="clearDrawingsBtn" onclick="resetAnnotations()" disabled title="Clear level, pump, stop, zone and zigzag for this setup.  Z">
             <svg viewBox="0 0 20 20"><path d="M5 6h10"/><path d="M8 6V4h4v2"/><path d="M7 8l.5 8h5L13 8"/><path d="M9.2 10v4M10.8 10v4"/></svg>
           </button>
         </div>
         <div class="quiet-help" style="margin-bottom:10px">
-          Level is a one-click high-wick anchor; its segment ends at the first later candle that closes above it, or at chart end if none does.
+          Level starts on a high wick and ends at the first later close above it. After anchoring, left-click candles to add/remove the touches you see; right-click finishes.
         </div>
         <div class="field-group">
           <div class="field-group-label">event assessment</div>
           <div class="grid">
-            <div class="field"><label>family</label><select id="family" onchange="onSetupFieldChange()"><option value="cap">cap</option><option value="breakout">breakout</option><option value="structure_break">structure break</option><option value="unknown">unknown</option></select></div>
-            <div class="field"><label>quality</label><select id="quality" onchange="onSetupFieldChange()"><option value="good">good</option><option value="ok">ok</option><option value="bad">bad</option></select></div>
+            <div class="field"><label>family</label><select id="family" onchange="onSetupFieldChange()"><option value="cap">cap</option><option value="breakout">breakout</option><option value="structure_break">structure break</option><option value="unknown" selected>unknown</option></select></div>
+            <div class="field"><label>quality</label><select id="quality" onchange="onSetupFieldChange()"><option value="good">good</option><option value="ok">ok</option><option value="bad" selected>bad</option></select></div>
           </div>
         </div>
         <div class="field-group">
           <div class="field-group-label">chart</div>
           <div class="grid">
             <div class="field"><label>price snap</label><select id="snapMode"><option value="wick">wick</option><option value="ohlc">OHLC</option><option value="off">off</option></select></div>
-            <div class="field"><label>show only</label><select id="filter" onchange="renderList()"><option value="all">all</option><option value="unlabeled">unlabeled</option><option value="labeled">labeled</option></select></div>
+            <div class="field"><label>show only</label><select id="filter" onchange="onListFilterChange()"><option value="all">all</option><option value="unlabeled">unlabeled</option><option value="labeled">labeled</option></select></div>
           </div>
         </div>
-        <div class="field"><label>notes</label><textarea id="notes" placeholder="why valid / what you see; missing pump/level is inferred from drawings" oninput="onSetupFieldChange()"></textarea></div>
-        <div class="field"><label>latest saved comment</label><textarea id="savedNotes" readonly></textarea></div>
+        <div class="field" id="notesField"><label>notes</label><textarea id="notes" placeholder="why valid / what you see; missing pump/level is inferred from drawings" oninput="onSetupFieldChange()"></textarea></div>
+        <div class="field" style="display:none"><label>latest saved comment</label><textarea id="savedNotes" readonly></textarea></div>
         <div class="hint" id="objectsText"></div>
       </div>
       <div class="panel workbench-panel">
-        <div class="panel-title">Run / Results</div>
+        <div class="review-toolbar">
+          <div class="review-heading">
+            <div class="panel-title" id="reviewTitle">Iteration results</div>
+            <div class="quiet-help" id="reviewSubtitle">Latest run for the selected annotation strategy.</div>
+          </div>
+          <button class="primary text-action iteration-review-only" id="runIterationBtn" onclick="startIteration()">Run iteration</button>
+        </div>
         <div class="status-box" id="iterationStatus">No run loaded.</div>
         <div class="slice-grid" id="resultSlices"></div>
         <div class="trade-filters">
@@ -337,14 +394,26 @@ LABELER_HTML = r"""<!doctype html>
           <select id="filterWeek" onchange="renderTrades()"><option value="">week</option></select>
         </div>
         <div class="trade-list" id="tradeList"></div>
-        <div class="field" style="margin-top:10px"><label>trade comment</label><textarea id="resultComment" placeholder="comment on selected result trade"></textarea></div>
-        <button class="primary text-action" onclick="saveResultAnnotation()" id="saveResultAnnotationBtn" disabled>Save trade note/drawings</button>
+        <div class="field iteration-review-only" style="margin-top:10px"><label>trade comment</label><textarea id="resultComment" placeholder="comment on selected result trade"></textarea></div>
+        <button class="primary text-action iteration-review-only" onclick="saveResultAnnotation()" id="saveResultAnnotationBtn" disabled>Save trade note/drawings</button>
+        <div class="futures-review-only futures-review-panel">
+          <div class="field"><label>research comment</label><textarea id="futuresReviewComment" placeholder="Why this trade is valid or noise; what is wrong with the mechanical stop"></textarea></div>
+          <div class="futures-review-actions">
+            <button class="ghost text-action tool" id="correctSlBtn" onclick="toggleCorrectSlTool()">Mark correct SL</button>
+            <button class="ghost text-action" id="clearCorrectSlBtn" onclick="clearCorrectSl()" disabled>Clear SL</button>
+            <button class="primary text-action" id="saveStructuralReviewBtn" onclick="saveStructuralTradeReview()" disabled>Save review</button>
+          </div>
+          <div class="futures-review-state" id="futuresReviewState">Select a trade, then mark a pre-entry swing low on the chart.</div>
+        </div>
       </div>
+      </div>
+      <div class="side-col" id="sideList">
       <div class="panel search-panel">
         <div class="panel-title">Find candidate</div>
         <div class="field" style="margin-bottom:0"><input id="search" placeholder="symbol / TF, e.g. AVNT 15m" oninput="renderList()"></div>
       </div>
       <div id="list"></div>
+      </div>
     </div>
     <div id="chartwrap">
       <div id="chart"></div>
@@ -354,7 +423,7 @@ LABELER_HTML = r"""<!doctype html>
         <div id="keysPop">
           <div class="keys-heading">Drawing</div>
           <div class="keys-panel">
-            <div class="k-row"><span class="k">L</span><span>level segment (1 click)</span></div>
+            <div class="k-row"><span class="k">L</span><span>level, then touch candles (RMB ends)</span></div>
             <div class="k-row"><span class="k">P</span><span>pump rectangle (2 clicks)</span></div>
             <div class="k-row"><span class="k">G</span><span>swing zigzag (RMB ends)</span></div>
             <div class="k-row"><span class="k">E</span><span>exit point</span></div>
@@ -379,6 +448,7 @@ LABELER_HTML = r"""<!doctype html>
             <div class="k-row"><span class="k">U</span><span>next unlabeled</span></div>
             <div class="k-row"><span class="k">[ ]</span><span>cycle timeframe</span></div>
             <div class="k-row"><span class="k">S</span><span>save event annotation</span></div>
+            <div class="k-row"><span class="k">N</span><span>reviewed · no setup</span></div>
           </div>
         </div>
       </div>
@@ -388,32 +458,43 @@ LABELER_HTML = r"""<!doctype html>
   </div>
   <div id="toast"></div>
 <script>
-let candidates = [], visible = [], idx = 0, current = null, selectedTf = null, availableTfs = [];
+const STRATEGY = new URLSearchParams(location.search).get('strategy') || '';
+function api(u) { return STRATEGY ? u + (u.includes('?') ? '&' : '?') + 'strategy=' + encodeURIComponent(STRATEGY) : u; }
+let candidates = [], visible = [], idx = 0, current = null, selectedTf = null, availableTfs = [], eventTfs = [];
 let xRange = null, yRange = null, yAuto = true, barMs = 60000;
 let tool = null, drawStep = 0, pending = null;
 let level = null;       // {price, start_ms, end_ms(auto body-cross or chart end), broken}
 let pump = null;        // {start:{idx,ms,price}, high:{idx,ms,price}}
 let entry = null;       // auto: {idx,ms,price}
 let sl = null;          // {price, hit_ms|null, end_ms}
-let exitPoint = null;   // {ms, price}
 let zigzag = null;      // {points:[{ms,price}]} - swing zigzag of the active setup
+let zones = [];         // Seiden base rectangles of the active setup
 let zzDraft = null;     // in-progress zigzag being drawn (before RMB finishes)
 let setups = [];        // per-event list of independent setups (see emptySetup)
 let activeSetup = 0;    // index of the setup currently shown in the workspace
 let selectedObj = null;
-let showDefaultLines = false;
+let showDefaultLines = true;
 let relayoutGuard = false;
+let extendingCandles = false;   // guard: one lazy candle fetch at a time
 let chartHandlersAttached = false;
 let resultMode = false;
 let resultTrade = null;
 let resultTrades = [];
 let selectedTradeId = null;
+let tradeSource = 'iteration';
+let structuralReview = {comment:'', correct_sl:null};
 let iterationPoll = null;
 let loadToken = 0;
 let navigationSerial = 0;
+// Target row a navigation is heading toward. loadEvent updates `idx`/`current`
+// only after an async flush + candle fetch, so back-to-back clicks would all
+// recompute from the stale current position and collapse into a single step.
+// Basing deltas on this pending target keeps successive clicks additive.
+let pendingNavIndex = null;
 let autosaveTimer = null;
 let saveQueue = Promise.resolve();
 let savedSignatures = new Map();
+let seedSignatures = new Map();
 const AUTOSAVE_DELAY_MS = 350;
 
 function gd() { return document.getElementById('chart'); }
@@ -551,6 +632,67 @@ function levelShapeEndMs(lvl) {
   if (!lvl) return chartDataEndMs();
   return Number.isFinite(Number(lvl.end_ms)) ? Number(lvl.end_ms) : levelAutoEndMs(lvl.price, lvl.start_ms);
 }
+function rangeMs(v) { return typeof v === 'number' ? v : (v != null ? new Date(v).getTime() : NaN); }
+// volume axis scaled 0..max of the VISIBLE window (recomputed on pan/zoom)
+function volAxisRange() {
+  const c = current && current.candles;
+  if (!c || !c.quote_volume || !c.timestamp.length) return null;
+  let a = -Infinity, b = Infinity;
+  if (xRange) { a = rangeMs(xRange[0]); b = rangeMs(xRange[1]); }
+  let mx = 0;
+  for (let i = 0; i < c.timestamp.length; i++) {
+    const t = c.timestamp[i];
+    if (t >= a && t <= b) { const v = Number(c.quote_volume[i]); if (v > mx) mx = v; }
+  }
+  return mx > 0 ? [0, mx * 1.08] : null;
+}
+function mergeCandleParts(parts) {
+  const map = new Map();
+  for (const c of parts) {
+    if (!c || !c.timestamp) continue;
+    for (let i = 0; i < c.timestamp.length; i++) {
+      map.set(c.timestamp[i], [c.open[i], c.high[i], c.low[i], c.close[i], c.quote_volume[i]]);
+    }
+  }
+  const ts = [...map.keys()].sort((a, b) => a - b);
+  const out = {timestamp: ts, open: [], high: [], low: [], close: [], quote_volume: []};
+  for (const t of ts) { const v = map.get(t); out.open.push(v[0]); out.high.push(v[1]); out.low.push(v[2]); out.close.push(v[3]); out.quote_volume.push(v[4]); }
+  return out;
+}
+// Pan/zoom past the loaded window -> pull more candles from the cache and merge,
+// so the chart is never chopped off. Bounded by the symbol's cache extent.
+async function maybeExtendCandles() {
+  if (extendingCandles || !current || !current.candles || !xRange) return;
+  const c = current.candles;
+  if (!c.timestamp || c.timestamp.length < 2) return;
+  const visA = rangeMs(xRange[0]), visB = rangeMs(xRange[1]);
+  if (!Number.isFinite(visA) || !Number.isFinite(visB)) return;
+  const loadedA = c.timestamp[0], loadedB = c.timestamp[c.timestamp.length - 1];
+  const cacheA = Number.isFinite(Number(current.data_start_ms)) ? Number(current.data_start_ms) : loadedA;
+  const cacheB = Number.isFinite(Number(current.data_end_ms)) ? Number(current.data_end_ms) : loadedB;
+  const span = Math.max(visB - visA, barMs * 30);
+  const margin = span * 0.25, pad = span;   // fetch a screenful of headroom
+  let want = null;
+  if (visA < loadedA + margin && loadedA > cacheA) {
+    want = [Math.max(cacheA, Math.round(visA - pad)), loadedA];
+  } else if (visB > loadedB - margin && loadedB < cacheB) {
+    want = [loadedB, Math.min(cacheB, Math.round(visB + pad))];
+  }
+  if (!want || want[1] - want[0] < barMs) return;
+  extendingCandles = true;
+  const sym = current.event && current.event.symbol, tf = current.event && current.event.tf;
+  try {
+    const r = await fetch(api('/api/candles_range?symbol=' + encodeURIComponent(sym) +
+      '&tf=' + encodeURIComponent(tf) + '&start_ms=' + want[0] + '&end_ms=' + want[1]));
+    const p = await r.json();
+    if (p && p.candles && current && current.event && current.event.symbol === sym && current.event.tf === tf) {
+      const before = current.candles.timestamp.length;
+      current.candles = mergeCandleParts([current.candles, p.candles]);
+      if (current.candles.timestamp.length > before) { computeBarMs(); draw(); }
+    }
+  } catch (e) { /* offline / transient: leave the chart as-is */ }
+  finally { extendingCandles = false; }
+}
 function levelAutoEndMs(price, startMs) {
   if (!current) return startMs + barMs;
   const c = current.candles;
@@ -567,7 +709,28 @@ function makeLevelFromAnchor(anchor) {
     price: anchor.price,
     start_ms: anchor.ms,
     end_ms: levelAutoEndMs(anchor.price, anchor.ms),
-    broken: false
+    broken: false,
+    touches: [anchor.ms]
+  };
+}
+function zoneExtreme(ms, y) {
+  const c = current.candles, idx = nearestCandle(ms);
+  const high = c.high[idx], low = c.low[idx];
+  const price = Math.abs(y - high) <= Math.abs(y - low) ? high : low;
+  return {
+    idx, ms:c.timestamp[idx],
+    price, kind:price === high ? 'high' : 'low'
+  };
+}
+function zoneDraft(first, second) {
+  const c = current.candles;
+  const startIdx = Math.min(first.idx, second.idx), endIdx = Math.max(first.idx, second.idx);
+  const baseStartMs = c.timestamp[startIdx], baseEndMs = c.timestamp[endIdx];
+  return {
+    startIdx, endIdx, baseStartMs, baseEndMs,
+    lowerPrice:Math.min(first.price, second.price), upperPrice:Math.max(first.price, second.price),
+    first, second, boundary_mode:'extrema',
+    ...inferZonePattern(baseStartMs, baseEndMs)
   };
 }
 function pumpPreviewState(toIdx) {
@@ -698,7 +861,7 @@ function updateSlButton() {
   document.getElementById('slBtn').disabled = !(entry || zzOk);
 }
 function hasDrawings() {
-  return !!(level || pump || sl || exitPoint || (zigzag && zigzag.points && zigzag.points.length));
+  return !!(level || pump || sl || (zigzag && zigzag.points && zigzag.points.length) || zones.length);
 }
 function updateDrawingButton() {
   const btn = document.getElementById('clearDrawingsBtn');
@@ -710,6 +873,12 @@ function updateEventButton() {
   const group = visible.length ? visible[idx] : null;
   btn.disabled = !(group && group.labeled);
 }
+function updateNoSetupTag() {
+  const tag = document.getElementById('noSetupTag');
+  if (!tag) return;
+  const group = current && current.group ? current.group : (visible.length ? visible[idx] : null);
+  tag.style.display = (group && group.label && group.label.no_setup) ? 'inline-block' : 'none';
+}
 function updateUiButtons() {
   updateSlButton();
   updateDrawingButton();
@@ -718,17 +887,18 @@ function updateUiButtons() {
 
 /* ---------- tools ---------- */
 function toggleTool(name) {
-  if (name === 'exit' && !level) { toast('draw a level first - exit is tied to an existing level'); return; }
-  const turningOn = tool !== name;
+  const levelToolActive = tool === 'level' || tool === 'level_touches';
+  const turningOn = name === 'level' ? !levelToolActive : tool !== name;
   tool = turningOn ? name : null;
   drawStep = 0; pending = null;
   zzDraft = (name === 'zigzag' && turningOn) ? {points: []} : null;
   clearGhost();
   syncToolButtons();
-  if (tool === 'level') toast('level: one click on the start high');
+  if (tool === 'level') toast('level: click the anchor high, then click touch candles; right-click finishes');
   if (tool === 'pump') toast('pump: click the start candle, then the culmination');
   if (tool === 'zigzag') toast('zigzag: left-click swing points, right-click to finish');
-  if (tool === 'exit') toast('exit: click the exit point');
+  if (tool === 'zone') toast('zone: click the first price extreme, then the opposite extreme');
+  if (tool === 'correct_sl') toast('correct SL: click the pre-entry swing-low candle');
 }
 function cancelTool() {
   captureVisibleRanges();
@@ -740,17 +910,45 @@ function cancelTool() {
   redrawStable(true);
 }
 function syncToolButtons() {
-  const map = {level:'toolLevel', pump:'toolPump', zigzag:'toolZigzag', exit:'toolExit'};
-  if (!level && tool === 'exit') { tool = null; drawStep = 0; pending = null; clearGhost(); }
+  const map = {level:'toolLevel', pump:'toolPump', zigzag:'toolZigzag', zone:'toolZone', correct_sl:'correctSlBtn'};
   for (const [name, id] of Object.entries(map)) {
     const btn = document.getElementById(id);
-    const disabled = name === 'exit' && !level;
-    btn.disabled = disabled;
-    btn.classList.toggle('active', !disabled && tool === name);
-    const pending = drawStep === 1 || (name === 'zigzag' && zzDraft && zzDraft.points.length > 0);
-    btn.classList.toggle('pending', !disabled && tool === name && pending);
+    if (!btn) continue;
+    const disabled = false;
+    btn.disabled = false;
+    const active = name === 'level' ? (tool === 'level' || tool === 'level_touches') : tool === name;
+    btn.classList.toggle('active', !disabled && active);
+    const pending = drawStep === 1 || tool === 'level_touches' || (name === 'zigzag' && zzDraft && zzDraft.points.length > 0);
+    btn.classList.toggle('pending', !disabled && active && pending);
   }
   document.body.classList.toggle('drawing', tool !== null);
+}
+
+function toggleCorrectSlTool() {
+  if (tradeSource !== 'futures_structural' || !selectedTradeId) {
+    toast('select a Futures IS trade first');
+    return;
+  }
+  toggleTool('correct_sl');
+}
+
+function clearCorrectSl() {
+  structuralReview.correct_sl = null;
+  if (tool === 'correct_sl') finishTool();
+  renderStructuralReviewState();
+  redrawStable(false);
+}
+
+function renderStructuralReviewState() {
+  const review = structuralReview.correct_sl;
+  const state = document.getElementById('futuresReviewState');
+  const clear = document.getElementById('clearCorrectSlBtn');
+  const save = document.getElementById('saveStructuralReviewBtn');
+  clear.disabled = !review;
+  save.disabled = !selectedTradeId;
+  state.textContent = review
+    ? `Correct SL ${fmtPrice(review.price)} · anchor ${iso(review.anchor_time_ms)} · pre-entry only`
+    : 'Mark the structural low that was visible at entry; future candles cannot be selected.';
 }
 
 /* ---------- coordinate transforms ---------- */
@@ -822,7 +1020,6 @@ function hitObject(ev) {
   function near(x,y) { return Math.hypot(pt.px - x, pt.py - y) <= threshold; }
   // Level and pump are intentionally not grabbable: once placed they can only be
   // deleted (object list / reset), never dragged. A press on them pans the chart.
-  if (exitPoint && near(xToPx(exitPoint.ms), yToPx(exitPoint.price))) return {id:'exit', part:'exit'};
   if (sl && Math.abs(pt.py - yToPx(sl.price)) <= threshold && pt.px >= xToPx(slStartMs())-threshold && pt.px <= xToPx(slEndMs())+threshold) return {id:'sl', part:'sl'};
   return null;
 }
@@ -830,19 +1027,14 @@ let dragObj = null;
 function applyDrag(hit, ev) {
   const pt = eventDataPoint(ev);
   if (!pt || !pt.inPrice) return;
-  const c = current.candles;
   selectedObj = hit.id;
-  let needsFullDraw = false;
-  if (hit.part === 'exit' && exitPoint) {
-    const i = nearestCandle(pt.ms);
-    exitPoint = {ms:c.timestamp[i], price:snapPrice(pt.ms, pt.price)};
-  } else if (hit.part === 'sl' && sl) {
+  if (hit.part === 'sl' && sl) {
     sl.price = Math.max(0, pt.price);
     recomputeSlRay();
   }
   commitActiveSetup();
   renderObjects();
-  redrawStable(needsFullDraw);
+  redrawStable(false);
   scheduleAutosave();
 }
 
@@ -873,6 +1065,13 @@ function renderGhost(pt) {
     html += `<line x1="${ax}" y1="${y0}" x2="${ax}" y2="${y1}" stroke="rgba(138,160,216,.30)" stroke-width="1"/>`;
     html += ghostDot(ax, gy, '#8aa0d8');
     html += `<text x="${ax+6}" y="${gy-6}" fill="#8aa0d8" font-size="11">level ${fmtPrice(anchor.price)}</text>`;
+  }
+  if (tool === 'level_touches' && level) {
+    const i = nearestCandle(pt.ms);
+    const ms = c.timestamp[i], gx = xToPx(ms), gy = yToPx(c.high[i]);
+    const chosen = Array.isArray(level.touches) && level.touches.includes(ms);
+    html += ghostDot(gx, gy, chosen ? '#d46a6a' : '#8aa0d8');
+    html += `<text x="${gx+6}" y="${gy-6}" fill="#8aa0d8" font-size="11">${chosen ? 'remove touch' : 'add touch'}</text>`;
   }
   if (tool === 'zigzag') {
     const i = nearestCandle(pt.ms);
@@ -921,12 +1120,43 @@ function renderGhost(pt) {
       }
     }
   }
-  if (tool === 'exit') {
+  if (tool === 'correct_sl') {
     const i = nearestCandle(pt.ms);
-    const price = snapPrice(pt.ms, pt.price);
-    const gx = xToPx(c.timestamp[i]), gy = yToPx(price);
-    html += ghostDot(gx, gy, '#a597d6');
-    html += `<text x="${gx+8}" y="${gy+4}" fill="#a597d6" font-size="11">${fmtPrice(price)}</text>`;
+    const ms = c.timestamp[i], price = c.low[i];
+    const fillMs = Number(resultTrade && resultTrade.fill_time_ms);
+    const valid = Number.isFinite(fillMs) && ms < fillMs && price < Number(resultTrade.entry_price);
+    const color = valid ? '#c99a62' : '#d18495';
+    const gx = xToPx(ms), gy = yToPx(price);
+    html += `<line x1="${gx}" y1="${y0}" x2="${gx}" y2="${y1}" stroke="${color}" stroke-width="1" stroke-dasharray="3 3" opacity=".55"/>`;
+    html += ghostDot(gx, gy, color);
+    html += `<text x="${gx+8}" y="${gy+14}" fill="${color}" font-size="11">${valid ? 'correct SL '+fmtPrice(price) : 'choose a low before entry'}</text>`;
+  }
+  if (tool === 'zone') {
+    const extreme = zoneExtreme(pt.ms, pt.price);
+    const gx = xToPx(extreme.ms), gy = yToPx(extreme.price);
+    const firstColor = '#d9c27a';
+    html += `<line x1="${gx}" y1="${y0}" x2="${gx}" y2="${y1}" stroke="rgba(217,194,122,.38)" stroke-width="1" stroke-dasharray="3 3"/>`;
+    if (drawStep === 0) {
+      html += ghostDot(gx, gy, firstColor);
+      html += `<text x="${gx+8}" y="${gy-6}" fill="${firstColor}" font-size="11">${extreme.kind} extreme · ${fmtPrice(extreme.price)}</text>`;
+    } else {
+      const firstX = xToPx(pending.ms);
+      const firstY = yToPx(pending.price);
+      const draft = zoneDraft(pending, extreme);
+      if (draft.lowerPrice === draft.upperPrice) {
+        html += ghostDot(firstX, firstY, '#d18495') + ghostDot(gx, gy, '#d18495');
+        html += `<text x="${gx+8}" y="${gy-6}" fill="#d18495" font-size="11">choose the opposite price extreme</text>`;
+      } else {
+        const supply = draft.kind === 'supply';
+        const color = draft.kind === 'unknown' ? '#d9c27a' : (supply ? '#d18495' : '#7dbb91');
+        const rx0 = Math.min(firstX, gx), rx1 = Math.max(firstX, gx);
+        const ry0 = yToPx(draft.upperPrice), ry1 = yToPx(draft.lowerPrice);
+        html += `<line x1="${firstX}" y1="${y0}" x2="${firstX}" y2="${y1}" stroke="${color}" stroke-width="1" stroke-dasharray="3 3"/>`;
+        html += `<rect x="${rx0}" y="${ry0}" width="${Math.max(1, rx1-rx0)}" height="${Math.max(1, ry1-ry0)}" fill="${supply ? 'rgba(209,132,149,.12)' : 'rgba(125,187,145,.12)'}" stroke="${color}" stroke-width="1.4" stroke-dasharray="5 3"/>`;
+        html += ghostDot(firstX, firstY, color) + ghostDot(gx, gy, color);
+        html += `<text x="${rx1+6}" y="${ry0-6}" fill="${color}" font-size="11">${pending.kind} → ${extreme.kind} · ${draft.pattern.toUpperCase()} → ${draft.kind} · click to place</text>`;
+      }
+    }
   }
   document.getElementById('ovl').innerHTML = html;
 }
@@ -936,11 +1166,50 @@ function handleToolClick(pt) {
   const c = current.candles;
   let needsFullDraw = false;
   captureVisibleRanges();
-  if (tool === 'level') {
+  if (tool === 'correct_sl') {
+    const i = nearestCandle(pt.ms);
+    const anchorTimeMs = Number(c.timestamp[i]);
+    const price = Number(c.low[i]);
+    if (anchorTimeMs >= Number(resultTrade && resultTrade.fill_time_ms)) {
+      toast('correct SL must be visible before entry');
+      return;
+    }
+    if (!(price < Number(resultTrade && resultTrade.entry_price))) {
+      toast('correct SL must be below the long entry');
+      return;
+    }
+    structuralReview.correct_sl = {anchor_time_ms:anchorTimeMs, price};
+    finishTool();
+    renderStructuralReviewState();
+    redrawStable(false);
+    toast('correct SL marked; save the review');
+    return;
+  } else if (tool === 'level') {
     level = makeLevelFromAnchor(levelHighAnchor(pt.ms));
     selectedObj = 'level';
-    finishTool();
+    tool = 'level_touches';
+    drawStep = 1;
     computeEntry();
+    toast('level anchored — click candles to add/remove touches; right-click when done');
+  } else if (tool === 'level_touches') {
+    const i = nearestCandle(pt.ms);
+    const touchMs = c.timestamp[i];
+    if (!level || touchMs < levelShapeStartMs(level) || touchMs > levelShapeEndMs(level)) {
+      toast('a touch must be inside the level segment');
+      return;
+    }
+    const touches = Array.isArray(level.touches) ? level.touches.slice() : [];
+    const at = touches.indexOf(touchMs);
+    if (at >= 0) {
+      touches.splice(at, 1);
+      toast('touch removed');
+    } else {
+      touches.push(touchMs);
+      touches.sort((a,b) => a - b);
+      toast('touch added (' + touches.length + ')');
+    }
+    level.touches = touches;
+    selectedObj = 'level';
   } else if (tool === 'zigzag') {
     const i = nearestCandle(pt.ms);
     if (!zzDraft) zzDraft = {points: []};
@@ -950,6 +1219,34 @@ function handleToolClick(pt) {
     syncToolButtons();
     renderGhost(pt);
     return;
+  } else if (tool === 'zone') {
+    const extreme = zoneExtreme(pt.ms, pt.price);
+    if (drawStep === 0) {
+      pending = extreme;
+      drawStep = 1;
+      syncToolButtons();
+      toast(`zone: ${extreme.kind} ${fmtPrice(extreme.price)} snapped; click the opposite price extreme`);
+      renderGhost(pt);
+      return;
+    }
+    const draft = zoneDraft(pending, extreme);
+    if (draft.lowerPrice === draft.upperPrice) {
+      toast('zone needs two different price extremes');
+      return;
+    }
+    if (draft.baseStartMs === draft.baseEndMs) {
+      toast('choose the second extreme on another candle');
+      return;
+    }
+    zones.push({
+      pattern:draft.pattern, kind:draft.kind,
+      base_start_ms:draft.baseStartMs, base_end_ms:draft.baseEndMs,
+      lower_price:draft.lowerPrice, upper_price:draft.upperPrice,
+      end_ms:zoneAutoEndMs(draft.baseEndMs, draft.lowerPrice, draft.upperPrice, draft.kind),
+      boundary_mode:draft.boundary_mode
+    });
+    selectedObj = `zone:${zones.length - 1}`;
+    finishTool();
   } else if (tool === 'pump') {
     const i = nearestCandle(pt.ms);
     if (drawStep === 0) {
@@ -971,11 +1268,6 @@ function handleToolClick(pt) {
       high:  state.high
     };
     selectedObj = 'pump';
-    finishTool();
-  } else if (tool === 'exit') {
-    const i = nearestCandle(pt.ms);
-    exitPoint = {ms: c.timestamp[i], price: snapPrice(pt.ms, pt.price)};
-    selectedObj = 'exit';
     finishTool();
   }
   commitActiveSetup();
@@ -1006,11 +1298,43 @@ function finishZigzag() {
   redrawStable(true);
   scheduleAutosave();
 }
+function inferZonePattern(baseStartMs, baseEndMs) {
+  const c = current.candles, start = nearestCandle(baseStartMs), end = nearestCandle(baseEndMs);
+  if (start < 1 || end + 1 >= c.close.length) return {pattern:'unknown', kind:'unknown'};
+  const before = c.close[start] / c.close[start - 1] - 1, after = c.close[end + 1] / c.close[end] - 1;
+  if (Math.abs(before) < 0.002 || Math.abs(after) < 0.002) return {pattern:'unknown', kind:'unknown'};
+  if (before > 0 && after > 0) return {pattern:'rbr', kind:'demand'};
+  if (before < 0 && after > 0) return {pattern:'dbr', kind:'demand'};
+  if (before > 0 && after < 0) return {pattern:'rbd', kind:'supply'};
+  return {pattern:'dbd', kind:'supply'};
+}
+function zoneAutoEndMs(baseEndMs, lowerPrice, upperPrice, kind) {
+  const c = current.candles, from = nearestCandle(baseEndMs);
+  for (let i=from + 1; i<c.timestamp.length; i++) {
+    if (kind === 'demand' && c.low[i] < lowerPrice) return c.timestamp[i];
+    if (kind === 'supply' && c.high[i] > upperPrice) return c.timestamp[i];
+  }
+  return chartDataEndMs();
+}
+function finishLevelTouches() {
+  if (tool !== 'level_touches') return;
+  captureVisibleRanges();
+  const count = level && Array.isArray(level.touches) ? level.touches.length : 0;
+  finishTool();
+  commitActiveSetup();
+  renderObjects();
+  redrawStable(false);
+  scheduleAutosave();
+  toast('level touches saved (' + count + ')');
+}
 
 /* ---------- object list / selection / delete ---------- */
 function renderObjects() {
   const rows = [];
-  if (level) rows.push({id:'level', del:true, label:`level ${fmtPrice(level.price)} · ${iso(level.start_ms)} -> ${iso(levelShapeEndMs(level))}`});
+  if (level) {
+    const touchLabel = Array.isArray(level.touches) ? ` · ${level.touches.length} manual touch` : '';
+    rows.push({id:'level', del:true, label:`level ${fmtPrice(level.price)} · ${iso(level.start_ms)} -> ${iso(levelShapeEndMs(level))}${touchLabel}`});
+  }
   if (pump) {
     const move = pump.start.price > 0 ? pump.high.price/pump.start.price - 1 : NaN;
     rows.push({id:'pump', del:true, label:`pump +${fmtPct(move)} · ${fmtPrice(pump.start.price)} -> ${fmtPrice(pump.high.price)}`});
@@ -1021,13 +1345,18 @@ function renderObjects() {
     const hit = sl.hit_ms ? `hit ${iso(sl.hit_ms)}` : 'not hit';
     rows.push({id:'sl', del:true, label:`stop ${fmtPrice(sl.price)} · risk ${fmtPct(risk)} · ${hit}`});
   }
-  if (exitPoint) rows.push({id:'exit', del:true, label:`exit ${iso(exitPoint.ms)} @ ${fmtPrice(exitPoint.price)}`});
+  zones.forEach((zone, index) => {
+    rows.push({
+      id:`zone:${index}`, del:true,
+      label:`zone ${index + 1} · ${String(zone.pattern || 'unknown').toUpperCase()} ${zone.kind || 'unknown'} · ${zone.boundary_mode || 'wicks'} · ${fmtPrice(zone.lower_price)}–${fmtPrice(zone.upper_price)}`
+    });
+  });
   if (zigzag && zigzag.points && zigzag.points.length) {
     rows.push({id:'zigzag', del:true, label:`zigzag · ${zigzag.points.length} swings`});
   }
   const el = document.getElementById('objectsText');
   updateDrawingButton();
-  if (!rows.length) { el.innerText = 'No drawings for this setup yet.'; return; }
+  if (!rows.length) { el.innerText = ''; return; }
   el.innerHTML = `<div class="manual-list">${rows.map(row => `
     <div class="manual-item ${selectedObj === row.id ? 'active' : ''}" onclick="selectObj('${row.id}')">
       <span>${esc(row.label)}</span>
@@ -1044,11 +1373,14 @@ function selectObj(id) {
 }
 function deleteObj(id) {
   captureVisibleRanges();
-  if (id === 'level') { level = null; exitPoint = null; computeEntry(); }
+  if (id === 'level') { level = null; computeEntry(); }
   if (id === 'pump') pump = null;
   if (id === 'sl') sl = null;
-  if (id === 'exit') exitPoint = null;
   if (id === 'zigzag') { zigzag = null; computeEntry(); }
+  if (id.startsWith('zone:')) {
+    const index = Number(id.slice('zone:'.length));
+    if (Number.isInteger(index) && index >= 0 && index < zones.length) zones.splice(index, 1);
+  }
   if (selectedObj === id) selectedObj = null;
   commitActiveSetup();
   renderObjects();
@@ -1062,8 +1394,8 @@ function resetAnnotations() {
   pump = null;
   entry = null;
   sl = null;
-  exitPoint = null;
   zigzag = null;
+  zones = [];
   zzDraft = null;
   selectedObj = null;
   tool = null; drawStep = 0; pending = null;
@@ -1079,7 +1411,7 @@ function resetAnnotations() {
 
 /* ---------- setups: multiple independent trade ideas per event ---------- */
 function emptySetup() {
-  return {family:'cap', quality:'good', notes:'', level:null, pump:null, exitPoint:null, slPrice:null, zigzag:null};
+  return {family:'unknown', quality:'bad', notes:'', level:null, pump:null, slPrice:null, zigzag:null, zones:[]};
 }
 function commitActiveSetup() {
   if (resultMode) return;   // result review shares the drawing globals but has no setups
@@ -1090,17 +1422,17 @@ function commitActiveSetup() {
   s.notes = document.getElementById('notes').value;
   s.level = level;
   s.pump = pump;
-  s.exitPoint = exitPoint;
   s.zigzag = zigzag;
+  s.zones = zones;
   s.slPrice = sl ? sl.price : null;
 }
 function applySetup(i) {
   const s = setups[i] || emptySetup();
   activeSetup = i;
-  level = s.level; pump = s.pump; exitPoint = s.exitPoint; zigzag = s.zigzag;
+  level = s.level; pump = s.pump; zigzag = s.zigzag; zones = Array.isArray(s.zones) ? s.zones : [];
   sl = null; entry = null; zzDraft = null; tool = null; drawStep = 0; pending = null; selectedObj = null;
-  const fam = document.getElementById('family'); fam.value = s.family || 'cap'; refreshSelect(fam);
-  const qual = document.getElementById('quality'); qual.value = s.quality || 'good'; refreshSelect(qual);
+  const fam = document.getElementById('family'); fam.value = s.family || 'unknown'; refreshSelect(fam);
+  const qual = document.getElementById('quality'); qual.value = s.quality || 'bad'; refreshSelect(qual);
   document.getElementById('notes').value = s.notes || '';
   document.getElementById('savedNotes').value = s.notes || '';
   computeEntry();
@@ -1170,28 +1502,32 @@ function deleteSetup(i) {
 }
 function setupFromLabel(s) {
   const out = emptySetup();
-  out.family = s.family || 'cap';
-  out.quality = s.quality || 'good';
+  out.family = s.family || 'unknown';
+  out.quality = s.quality || 'bad';
   out.notes = s.notes || '';
   out.level = (s.level_price != null && s.level_start_ms != null)
     ? {price:+s.level_price, start_ms:+s.level_start_ms,
        end_ms: s.level_end_ms != null ? +s.level_end_ms : levelAutoEndMs(+s.level_price, +s.level_start_ms), broken:false}
     : null;
+  if (out.level && Array.isArray(s.level_touch_times_ms)) {
+    out.level.touches = [...new Set(s.level_touch_times_ms.map(Number).filter(Number.isFinite))].sort((a,b) => a - b);
+  }
   out.pump = (s.pump_start_ms != null && s.pump_start_price != null && s.culmination_ms != null && s.culmination_price != null)
     ? {start:{idx:nearestCandle(+s.pump_start_ms), ms:+s.pump_start_ms, price:+s.pump_start_price},
        high:{idx:nearestCandle(+s.culmination_ms), ms:+s.culmination_ms, price:+s.culmination_price}}
     : null;
-  out.exitPoint = (s.exit_ms != null && s.exit_price != null) ? {ms:+s.exit_ms, price:+s.exit_price} : null;
   out.slPrice = s.sl_price != null ? +s.sl_price : null;
   const zpts = Array.isArray(s.zigzag_points)
     ? s.zigzag_points.filter(p => p && Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.price)))
                      .map(p => ({ms:Number(p.ms), price:Number(p.price)}))
     : [];
   out.zigzag = zpts.length ? {points: zpts.sort((a,b) => a.ms - b.ms)} : null;
+  out.zones = Array.isArray(s.zones) ? s.zones.map(z => ({...z})) : [];
   return out;
 }
 function setupsFromSavedLabel(saved) {
   if (!saved) return [emptySetup()];
+  if (saved.no_setup) return [emptySetup()];
   if (Array.isArray(saved.setups) && saved.setups.length) return saved.setups.map(setupFromLabel);
   // legacy flat label -> one setup (ignore old swing_points; zigzag replaces them)
   if (saved.level_price != null || saved.family || saved.has_level != null) return [setupFromLabel(saved)];
@@ -1199,33 +1535,73 @@ function setupsFromSavedLabel(saved) {
 }
 
 /* ---------- workbench: run + result review ---------- */
+function setWorkspaceMode(mode) {
+  for (const name of ['labeling', 'results', 'futures']) {
+    document.body.classList.toggle(`workspace-${name}`, name === mode);
+    const tab = document.getElementById(
+      name === 'labeling' ? 'workspaceTabLabeling' :
+      (name === 'results' ? 'workspaceTabResults' : 'workspaceTabFutures')
+    );
+    if (tab) tab.setAttribute('aria-selected', name === mode ? 'true' : 'false');
+  }
+  const title = document.getElementById('reviewTitle');
+  const subtitle = document.getElementById('reviewSubtitle');
+  if (mode === 'results') {
+    title.textContent = 'Iteration results';
+    subtitle.textContent = 'Latest run for the selected annotation strategy.';
+  } else if (mode === 'futures') {
+    title.textContent = 'Futures IS 2025';
+    subtitle.textContent = 'Causal crossing trades with intraday structural-stop diagnostics.';
+  }
+}
 function showLabeling() {
-  document.body.classList.remove('results-mode');
+  setWorkspaceMode('labeling');
   resultMode = false;
   resultTrade = null;
   selectedTradeId = null;
+  tradeSource = 'iteration';
   if (visible.length) loadEvent(idx);
 }
 async function showResults() {
   const ok = await flushAutosave({finishDraft:true, quiet:false});
   if (!ok) return;
-  document.body.classList.add('results-mode');
+  setWorkspaceMode('results');
   resultMode = true;
+  resultTrade = null;
+  selectedTradeId = null;
+  tradeSource = 'iteration';
   await loadLatestIteration();
+  await loadTrades();
+}
+async function showFuturesStructural() {
+  const ok = await flushAutosave({finishDraft:true, quiet:false});
+  if (!ok) return;
+  setWorkspaceMode('futures');
+  resultMode = true;
+  resultTrade = null;
+  selectedTradeId = null;
+  tradeSource = 'futures_structural';
+  document.getElementById('iterationStatus').textContent = 'Loading research ledger…';
+  document.getElementById('resultComment').value = '';
+  document.getElementById('saveResultAnnotationBtn').disabled = true;
+  document.getElementById('futuresReviewComment').value = '';
+  structuralReview = {comment:'', correct_sl:null};
+  renderStructuralReviewState();
   await loadTrades();
 }
 async function startIteration() {
   const ok = await flushAutosave({finishDraft:true, quiet:false});
   if (!ok) return;
-  document.body.classList.add('results-mode');
+  setWorkspaceMode('results');
   resultMode = true;
+  tradeSource = 'iteration';
   const btn = document.getElementById('runIterationBtn');
   btn.disabled = true;
-  await fetch('/api/iteration/start', {method:'POST'});
+  await fetch(api('/api/iteration/start'), {method:'POST'});
   pollIterationStatus(true);
 }
 async function pollIterationStatus(keep=false) {
-  const r = await fetch('/api/iteration/status');
+  const r = await fetch(api('/api/iteration/status'));
   const status = await r.json();
   renderIterationStatus(status);
   const running = status.state === 'running';
@@ -1247,7 +1623,7 @@ function renderIterationStatus(status) {
     (steps ? `<br>${steps}` : '');
 }
 async function loadLatestIteration() {
-  const r = await fetch('/api/iteration/latest');
+  const r = await fetch(api('/api/iteration/latest'));
   const data = await r.json();
   if (data.error) {
     document.getElementById('iterationStatus').innerHTML = `<b>error</b><br><span style="color:var(--red)">${esc(data.error)}</span>`;
@@ -1283,7 +1659,10 @@ function renderDashboardSlices(dashboard) {
   root.innerHTML = cards.join('');
 }
 async function loadTrades() {
-  const r = await fetch('/api/iteration/trades');
+  const endpoint = tradeSource === 'futures_structural'
+    ? '/api/futures_structural/trades'
+    : api('/api/iteration/trades');
+  const r = await fetch(endpoint);
   const data = await r.json();
   if (data.error) {
     resultTrades = [];
@@ -1293,8 +1672,24 @@ async function loadTrades() {
     return;
   }
   resultTrades = data.trades || [];
+  if (tradeSource === 'futures_structural') {
+    document.getElementById('iterationStatus').textContent = `${resultTrades.length.toLocaleString()} trades across four stop timeframes.`;
+    renderStructuralSummary(data.summary || []);
+  }
   populateTradeFilters();
   renderTrades();
+  if (!selectedTradeId && resultTrades.length) {
+    await selectTrade(String(resultTrades[0].trade_id));
+  }
+}
+function renderStructuralSummary(summary) {
+  const root = document.getElementById('resultSlices');
+  root.innerHTML = summary.map(row => `
+    <div class="slice-card"><b>${esc(row.tf)}</b>
+      ${row.trades} trades · WR ${(100*Number(row.win_rate || 0)).toFixed(1)}%<br>
+      stop ${(100*Number(row.stop_hit_rate || 0)).toFixed(1)}% · recovered ${(100*Number(row.stopped_then_recovered_entry_share || 0)).toFixed(1)}%<br>
+      risk ${(100*Number(row.median_initial_risk_pct || 0)).toFixed(2)}% · ${Number(row.mean_net_r || 0).toFixed(2)}R
+    </div>`).join('');
 }
 function populateTradeFilters() {
   const mapping = {
@@ -1346,7 +1741,7 @@ function renderTrades() {
 }
 function drawingsPayload() {
   return {
-    level, pump, exitPoint, zigzag,
+    level, pump, zigzag,
     sl: sl ? {price:sl.price, hit_ms:sl.hit_ms ?? null, end_ms:slEndMs()} : null,
   };
 }
@@ -1354,7 +1749,6 @@ function loadResultDrawings(annotation) {
   const d = annotation && annotation.drawings ? annotation.drawings : {};
   level = d.level || null;
   pump = d.pump || null;
-  exitPoint = d.exitPoint || null;
   zigzag = (d.zigzag && Array.isArray(d.zigzag.points)) ? d.zigzag : null;
   const savedSl = d.sl && Number.isFinite(Number(d.sl.price)) ? d.sl : null;
   zzDraft = null;
@@ -1364,10 +1758,24 @@ function loadResultDrawings(annotation) {
   if (sl && entry) recomputeSlRay();
   selectedObj = null;
 }
+function loadStructuralReview(review) {
+  structuralReview = {
+    comment: review ? (review.comment || '') : '',
+    correct_sl: review && review.correct_sl ? {
+      anchor_time_ms:Number(review.correct_sl.anchor_time_ms),
+      price:Number(review.correct_sl.price),
+    } : null,
+  };
+  document.getElementById('futuresReviewComment').value = structuralReview.comment;
+  renderStructuralReviewState();
+}
 async function selectTrade(tradeId) {
   selectedTradeId = tradeId;
   renderTrades();
-  const r = await fetch('/api/iteration/trade_candles?trade_id=' + encodeURIComponent(tradeId));
+  const endpoint = tradeSource === 'futures_structural'
+    ? '/api/futures_structural/trade_candles?trade_id=' + encodeURIComponent(tradeId)
+    : api('/api/iteration/trade_candles?trade_id=' + encodeURIComponent(tradeId));
+  const r = await fetch(endpoint);
   const payload = await r.json();
   if (payload.error) { toast(payload.error, 3000); return; }
   resultMode = true;
@@ -1377,9 +1785,15 @@ async function selectTrade(tradeId) {
   computeBarMs();
   xRange = null; yRange = null; yAuto = true;
   tool = null; drawStep = 0; pending = null;
-  loadResultDrawings(payload.result_annotation);
-  document.getElementById('resultComment').value = payload.result_annotation ? (payload.result_annotation.comment || '') : '';
-  document.getElementById('saveResultAnnotationBtn').disabled = false;
+  if (tradeSource === 'futures_structural') {
+    loadResultDrawings(null);
+    loadStructuralReview(payload.result_annotation);
+    document.getElementById('resultComment').value = '';
+  } else {
+    loadResultDrawings(payload.result_annotation);
+    document.getElementById('resultComment').value = payload.result_annotation ? (payload.result_annotation.comment || '') : '';
+  }
+  document.getElementById('saveResultAnnotationBtn').disabled = tradeSource === 'futures_structural';
   clearGhost();
   syncToolButtons();
   renderObjects();
@@ -1393,7 +1807,7 @@ async function saveResultAnnotation() {
     comment: document.getElementById('resultComment').value,
     drawings: drawingsPayload(),
   };
-  const r = await fetch('/api/result_annotation', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const r = await fetch(api('/api/result_annotation'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
   const j = await r.json();
   if (!j.ok) { toast(j.error || 'save failed', 3000); return; }
   toast('trade annotation saved');
@@ -1402,7 +1816,7 @@ async function saveResultAnnotation() {
 
 /* ---------- candidates list ---------- */
 async function loadCandidates() {
-  const r = await fetch('/api/candidates');
+  const r = await fetch(api('/api/candidates'));
   const data = await r.json();
   if (data.error) {
     candidates = [];
@@ -1424,6 +1838,7 @@ async function loadCandidates() {
 }
 function labelNoteText(label) {
   if (!label) return '';
+  if (label.no_setup) return 'no setup';
   if (Array.isArray(label.setups)) {
     const parts = label.setups.map(s => s && s.notes).filter(Boolean);
     if (parts.length) return parts.join(' | ');
@@ -1435,7 +1850,40 @@ function labelNoteText(label) {
 function filtered() {
   const f = document.getElementById('filter').value;
   const q = document.getElementById('search').value.trim().toLowerCase();
-  return candidates.filter(c => (f==='all' || (f==='labeled' ? c.labeled : !c.labeled)) && (!q || searchBlob(c).includes(q)));
+  const discoveryTierRank = {A:0, B:1, C:2};
+  return candidates
+    .filter(c => (f==='all' || (f==='labeled' ? c.labeled : !c.labeled)) && (!q || searchBlob(c).includes(q)))
+    .slice()
+    .sort((left, right) => {
+      const leftTier = discoveryTierRank[String(left.discovery_quality_tier || '')] ?? 3;
+      const rightTier = discoveryTierRank[String(right.discovery_quality_tier || '')] ?? 3;
+      if (leftTier !== rightTier) return leftTier - rightTier;
+      return Number(right.score || 0) - Number(left.score || 0);
+    });
+}
+async function saveStructuralTradeReview() {
+  if (tradeSource !== 'futures_structural' || !selectedTradeId) { toast('select a Futures IS trade first'); return; }
+  const payload = {
+    trade_id:selectedTradeId,
+    comment:document.getElementById('futuresReviewComment').value,
+    correct_sl:structuralReview.correct_sl,
+  };
+  const r = await fetch('/api/futures_structural/review', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!j.ok) { toast(j.error || 'save failed', 3000); return; }
+  structuralReview.comment = j.review.comment || '';
+  structuralReview.correct_sl = j.review.correct_sl || null;
+  renderStructuralReviewState();
+  toast('Futures review saved');
+  await loadTrades();
+}
+function onListFilterChange() {
+  // The visible set is about to change, so a positional pending target no longer
+  // means the same event. Drop it and let the next click recompute from scratch.
+  pendingNavIndex = null;
+  renderList();
 }
 function renderList() {
   visible = filtered();
@@ -1447,12 +1895,16 @@ function renderList() {
     d.onclick = () => navigateToEventId(c.event_id);
     const variants = c.variants || [c];
     const pumpBadge = c.pump_pct == null ? '' : `<span class="badge hot">${fmtPct(c.pump_pct)}</span>`;
+    const holdBadge = c.daily_next_close_position_pct == null ? '' : `<span class="badge hot">hold ${(Number(c.daily_next_close_position_pct) * 100).toFixed(0)}%</span>`;
+    const outcomeClass = c.outcome_label === 'new_range' ? 'good' : (c.outcome_label === 'fade' ? 'bad' : '');
+    const outcomeBadge = c.outcome_label ? `<span class="badge ${outcomeClass}">${esc(String(c.outcome_label).replace('_', ' '))}</span>` : '';
+    const discoveryBadge = c.discovery_quality_tier ? `<span class="badge ${c.discovery_quality_tier === 'A' ? 'good' : 'hot'}">tier ${esc(c.discovery_quality_tier)}</span>` : '';
     const tfs = variants.map(v => esc(v.tf)).join('/');
-    const noteText = labelNoteText(c.label);
+    const noteText = labelNoteText(c.label || c.seed_label);
     const note = noteText ? `<div class="small">note: ${esc(noteText.slice(0,90))}</div>` : '';
     const multi = variants.length > 1 ? tfs : variants[0].tf;
     d.innerHTML = `<div class="row-head"><span>${i+1}. ${esc(displaySymbol(c.symbol))}</span><span class="small">${esc(multi)}</span></div>
-      <div class="row-badges">${pumpBadge}<span class="badge">${iso(c.review_start_ms)}</span></div>${note}`;
+      <div class="row-badges">${pumpBadge}${holdBadge}${outcomeBadge}${discoveryBadge}<span class="badge">${iso(c.review_start_ms)}</span></div>${note}`;
     el.appendChild(d);
   });
   document.getElementById('progress').innerText = `${candidates.filter(c=>c.labeled).length}/${candidates.length} labeled`;
@@ -1464,23 +1916,23 @@ async function loadEvent(i) {
   resultMode = false;
   resultTrade = null;
   selectedTradeId = null;
-  document.body.classList.remove('results-mode');
+  setWorkspaceMode('labeling');
   idx = Math.max(0, Math.min(i, visible.length - 1));
   renderList();
   document.getElementById('side').scrollTop = 0;
   const group = visible[idx];
   if (!group) return;
   selectedTf = group.default_tf || (group.variants && group.variants[0] && group.variants[0].tf) || group.tf;
-  populateTfSelect(group);
+  populateTfButtons(group);
   xRange = null; yRange = null; yAuto = true;
   tool = null; drawStep = 0; pending = null; selectedObj = null;
   clearGhost();
-  const r = await fetch('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf));
+  const r = await fetch(api('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf)));
   const payload = await r.json();
   if (token !== loadToken) return;
   if (payload.error) {
     current = null;
-    level = null; pump = null; entry = null; sl = null; exitPoint = null; zigzag = null; zzDraft = null; setups = [];
+    level = null; pump = null; entry = null; sl = null; zigzag = null; zzDraft = null; setups = [];
     renderObjects();
     clearChart();
     toast(payload.error, 4200);
@@ -1491,9 +1943,15 @@ async function loadEvent(i) {
   computeBarMs();
   // Build the per-event setups from the saved label (or one empty setup) and show
   // the first one. Each setup carries its own family/quality/level/pump/exit/SL/zigzag.
-  setups = setupsFromSavedLabel(group.label);
+  const displayedMark = group.label || group.seed_label;
+  setups = setupsFromSavedLabel(displayedMark);
   applySetup(0);
+  const seededUnreviewed = !group.label && !!group.seed_label;
+  const botReviewed = !!group.label && /^bot_.*_detector$/.test(String(group.label.source || ''));
+  captureBotSnap(seededUnreviewed || botReviewed);
   renderSetupTabs();
+  updateNoSetupTag();
+  resetHistory();
   document.getElementById('jump').value = String(idx + 1);
   syncToolButtons();
   updateUiButtons();
@@ -1501,10 +1959,21 @@ async function loadEvent(i) {
   updateMetrics();
   draw();
   const baseline = currentLabelPayload({finishDraft:false});
-  if (baseline) savedSignatures.set(baseline.event_id, labelSignature(baseline));
+  // A seed is a visible hypothesis, not an expert label. It must be explicitly
+  // saved before it counts as confirmation, even when the expert leaves it intact.
+  if (baseline && group.label) {
+    savedSignatures.set(baseline.event_id, labelSignature(baseline));
+    seedSignatures.delete(baseline.event_id);
+  } else if (baseline && group.seed_label) {
+    savedSignatures.delete(baseline.event_id);
+    seedSignatures.set(baseline.event_id, labelSignature(baseline));
+  } else if (baseline) {
+    savedSignatures.delete(baseline.event_id);
+    seedSignatures.delete(baseline.event_id);
+  }
 }
-function populateTfSelect(group) {
-  const el = document.getElementById('tfSelect');
+function populateTfButtons(group) {
+  const el = document.getElementById('tfButtons');
   el.innerHTML = '';
   const variants = group.variants || [group];
   const byTf = new Map(variants.map(v => [String(v.tf), v]));
@@ -1515,28 +1984,35 @@ function populateTfSelect(group) {
     if (!ordered.includes(tf)) ordered.push(tf);
   }
   if (selectedTf && !ordered.includes(String(selectedTf))) ordered.push(String(selectedTf));
+  eventTfs = ordered;
   for (const tf of ordered) {
     const v = byTf.get(tf);
-    const opt = document.createElement('option');
-    opt.value = tf;
-    opt.textContent = v ? `${tf}  ${fmtPct(v.pump_pct)}` : tf;
-    el.appendChild(opt);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tf-button' + (tf === selectedTf ? ' active' : '');
+    button.dataset.tf = tf;
+    button.setAttribute('aria-pressed', String(tf === selectedTf));
+    button.title = v && v.pump_pct != null ? `${tf}: ${fmtPct(v.pump_pct)} event` : `${tf} chart`;
+    button.textContent = tf.endsWith('d') ? tf.slice(0, -1) + 'D' : tf;
+    button.addEventListener('click', () => changeTf(tf));
+    el.appendChild(button);
   }
-  el.value = selectedTf;
-  refreshSelect(el);
 }
-async function changeTf() {
+async function changeTf(nextTf = null) {
   if (!visible.length) return;
+  const previousTf = selectedTf;
+  if (nextTf != null) selectedTf = String(nextTf);
+  if (!eventTfs.includes(selectedTf)) return;
   const token = ++loadToken;
-  selectedTf = document.getElementById('tfSelect').value;
   const group = visible[idx];
   commitActiveSetup();
-  const r = await fetch('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf));
+  const r = await fetch(api('/api/candles?event_id=' + encodeURIComponent(group.event_id) + '&tf=' + encodeURIComponent(selectedTf)));
   const payload = await r.json();
   if (token !== loadToken) return;
   if (payload.error) {
+    selectedTf = previousTf;
     toast(payload.error, 4200);
-    refreshSelect(document.getElementById('tfSelect'));
+    populateTfButtons(group);
     return;
   }
   current = payload;
@@ -1547,31 +2023,38 @@ async function changeTf() {
   if (keepSl != null && entry) { sl = {price: keepSl}; recomputeSlRay(); }
   commitActiveSetup();
   updateMetrics();
-  refreshSelect(document.getElementById('tfSelect'));
+  populateTfButtons(group);
   if (yAuto) { draw(); fitY(); } else draw();
   renderObjects();
   scheduleAutosave();
 }
 function changeTfBy(delta) {
-  const el = document.getElementById('tfSelect');
-  if (!el.options.length) return;
-  const next = Math.max(0, Math.min(el.options.length - 1, el.selectedIndex + delta));
-  if (next === el.selectedIndex) return;
-  el.selectedIndex = next;
-  changeTf();
+  const currentIndex = eventTfs.indexOf(selectedTf);
+  if (currentIndex < 0) return;
+  const next = Math.max(0, Math.min(eventTfs.length - 1, currentIndex + delta));
+  if (next === currentIndex) return;
+  changeTf(eventTfs[next]);
 }
 function initDefaultLineHover() {
   const el = document.getElementById('defaultLinesHover');
   if (!el || el.dataset.ready) return;
   el.dataset.ready = '1';
-  el.addEventListener('mouseenter', () => { showDefaultLines = true; el.classList.add('active'); draw(); });
-  el.addEventListener('mouseleave', () => { showDefaultLines = false; el.classList.remove('active'); draw(); });
+  el.classList.toggle('active', showDefaultLines);
+  // click = persistent toggle (session shading + level lines stay on while reviewing)
+  el.addEventListener('click', () => { showDefaultLines = !showDefaultLines; el.classList.toggle('active', showDefaultLines); draw(); });
 }
 function updateMetrics() {
   if (!current) return;
   const g = current.group || visible[idx], e = current.event;
   const variantTfs = (g.variants || [g]).map(v => v.tf).join('/');
-  const items = [
+  const items = resultTrade ? [
+    ['sym', displaySymbol(e.symbol)],
+    ['SL TF', resultTrade.tf],
+    ['R', Number(resultTrade.net_r || 0).toFixed(2)],
+    ['return', fmtPct(Number(resultTrade.return_pct || 0))],
+    ['exit', resultTrade.exit_reason || resultTrade.outcome],
+    ['trail', String(Number(resultTrade.stop_update_count || 0))],
+  ] : [
     ['sym', displaySymbol(e.symbol)],
     ['tf', e.tf],
     ['src TFs', variantTfs],
@@ -1579,10 +2062,59 @@ function updateMetrics() {
     ['vol', 'x' + Number(e.pump_over_sleep_vol || 0).toFixed(1)],
     ['trd', 'x' + Number(e.pump_over_sleep_trades || 0).toFixed(1)]
   ];
+  if (Number.isFinite(Number(e.discovery_support_contact_count))) {
+    items.push(['support', String(Number(e.discovery_support_contact_count)) + ' contact']);
+  }
+  if (Number.isFinite(Number(e.discovery_body_above_support_share))) {
+    items.push(['body above', fmtPct(Number(e.discovery_body_above_support_share))]);
+  }
+  // held-level metrics for the reclaim setup
+  if (Number.isFinite(Number(e.interv_hold_bars))) {
+    items.push(['held', Number(e.interv_hold_bars) + 'b']);
+    items.push(['touch', String(Number(e.interv_touch_count || 0))]);            // approaches within 10% of level
+    items.push(['poke', Number(e.interv_poke_count || 0) + '×' + Number(e.interv_poke_depth || 0).toFixed(2)]); // tolerated wicks × depth
+    items.push(['swing', Number(e.level_swing || 0).toFixed(1) + 'atr']);        // noise vs sweeping rise-fall
+    items.push(['approach', Number(e.approach_from || 0).toFixed(2)]);           // came from deep(→1) vs hugging(→0)
+    if (Number(e.interv_below_low)) items.push(['exp↓', Number(e.interv_min_frac || 0).toFixed(2)]); // range expanded down
+    if (e.outcome_MID != null) items.push(['out', Number(e.outcome_MID) === 1 ? 'MID✓' : 'above✗']);
+  }
+  if (Number.isFinite(Number(e.streak_len))) {                                   // S3 session-streak
+    items.push(['streak', Number(e.streak_len) + '×down']);
+    items.push(['streak_ret', (Number(e.streak_ret || 0) * 100).toFixed(1) + '%']);
+    items.push(['cont', Number(e.cont) === 1 ? 'yes✓' : 'no✗']);
+  }
+  if (Number.isFinite(Number(e.r1_over_r2))) {                                   // S2 return-to-range
+    items.push(['dir', Number(e.direction) > 0 ? 'LONG↑' : 'SHORT↓']);
+    items.push(['gap', Number(e.gap_atr || 0).toFixed(1) + 'atr']);
+    items.push(['R1/R2', Number(e.r1_over_r2 || 0).toFixed(2)]);
+    items.push(['ret', Number(e.returned) === 1 ? 'returned✓' : 'no✗']);
+  }
+  if (Number(e.show_anomaly_fade_metrics) === 1) {
+    items.push(['pair', String(e.pair || '')]);
+    items.push(['vol_z', Number(e.vol_z || 0).toFixed(1)]);
+    items.push(['pump', (Number(e.p_ret || 0) * 100).toFixed(1) + '%']);
+    items.push(['closePos', Number(e.p_close_pos || 0).toFixed(2)]);
+    items.push(['idio', (Number(e.idio_ret || 0) * 100).toFixed(1) + '%']);
+    items.push(['out', Number(e.outcome_win) === 1 ? 'WIN✓' : 'loss✗']);
+  }
   document.getElementById('metricbar').innerHTML = items.map(([k,v]) => `<span class="metric">${esc(k)} <b>${esc(v)}</b></span>`).join('');
 }
 
 /* ---------- chart shapes & annotations ---------- */
+const BOT_COLOR = '#7f8794';   // muted: bot-drawn objects the user hasn't changed
+let botSnap = null;            // per-object snapshot of the bot's original drawing
+function objKey(type) {
+  if (type === 'level') return level ? JSON.stringify([+level.price, +level.start_ms]) : '';
+  if (type === 'pump') return pump ? JSON.stringify([+pump.start.ms, +pump.high.ms, +pump.start.price, +pump.high.price]) : '';
+  if (type === 'sl') return sl ? String(+sl.price) : '';
+  if (type === 'zigzag') return zigzag ? JSON.stringify((zigzag.points || []).map(p => [Math.round(p.ms), +p.price])) : '';
+  return '';
+}
+function isBot(type) { return botSnap && botSnap[type] && botSnap[type] === objKey(type); }
+function captureBotSnap(isBotLabel) {
+  // called after a setup is applied; if it came from the bot, remember each object
+  botSnap = isBotLabel ? {level:objKey('level'), pump:objKey('pump'), sl:objKey('sl'), zigzag:objKey('zigzag')} : null;
+}
 function shapes() {
   if (!current) return [];
   const e = current.event, out = [];
@@ -1595,6 +2127,60 @@ function shapes() {
     }
     if (Number.isFinite(Number(e.suggested_level)) && Number.isFinite(Number(e.suggested_level_start_ms)) && Number.isFinite(Number(e.suggested_level_end_ms))) {
       add({type:'line', layer:'below', editable:false, x0:new Date(e.suggested_level_start_ms), x1:new Date(e.suggested_level_end_ms), y0:Number(e.suggested_level), y1:Number(e.suggested_level), line:{color:'#5f6673', width:1}});
+    }
+    // session shading (UTC blocks) + boundaries, behind the candles
+    const cc = current.candles;
+    if (cc && cc.timestamp && cc.timestamp.length) {
+      const HR = 3600000, t0 = cc.timestamp[0], t1 = cc.timestamp[cc.timestamp.length-1] + barMs;
+      const blockOf = (ms) => { const h = Math.floor(((ms % 86400000) + 86400000) % 86400000 / HR); return h<8?0:h<13?1:h<16?2:h<21?3:4; };
+      const FILL = ['rgba(70,110,160,.07)','rgba(60,150,60,.07)','rgba(215,150,30,.10)','rgba(190,70,70,.07)','rgba(120,70,150,.07)'];
+      let segStart = t0, cur = blockOf(t0);
+      for (let ms = Math.ceil(t0/HR)*HR; ms <= t1; ms += HR) {
+        const b = blockOf(ms);
+        if (b !== cur) {
+          add({type:'rect', layer:'below', editable:false, x0:new Date(segStart), x1:new Date(ms), yref:'paper', y0:0, y1:1, line:{width:0}, fillcolor:FILL[cur]});
+          add({type:'line', layer:'below', editable:false, x0:new Date(ms), x1:new Date(ms), yref:'paper', y0:0, y1:1, line:{color:'rgba(150,150,150,.35)', width:1, dash:'dot'}});
+          segStart = ms; cur = b;
+        }
+      }
+      add({type:'rect', layer:'below', editable:false, x0:new Date(segStart), x1:new Date(t1), yref:'paper', y0:0, y1:1, line:{width:0}, fillcolor:FILL[cur]});
+    }
+    // HIGHLIGHTED setup sessions (anomaly / entry / streak) on top of the generic shading
+    const hs = e.hl_start_ms, he = e.hl_end_ms, hk = e.hl_kind;
+    if (Array.isArray(hs) && Array.isArray(he)) {
+      const HLF = {anomaly:'rgba(214,90,90,.18)', entry:'rgba(90,140,214,.20)', streak:'rgba(150,110,200,.16)'};
+      const HLL = {anomaly:'#d05a5a', entry:'#5a8cd6', streak:'#9a70c8'};
+      for (let i = 0; i < hs.length && i < he.length; i++) {
+        const k = (hk && hk[i]) || 'entry';
+        add({type:'rect', layer:'below', editable:false, x0:new Date(Number(hs[i])), x1:new Date(Number(he[i])),
+          yref:'paper', y0:0, y1:1, line:{width:1.2, color:HLL[k] || '#5a8cd6'}, fillcolor:HLF[k] || 'rgba(90,140,214,.18)'});
+      }
+    }
+    // deep-revert context levels: mid = take (blue), low = deep target (teal), poke high (orange)
+    const rightMs = chartDataEndMs();
+    const leftMs = Number.isFinite(Number(e.suggested_level_start_ms)) ? Number(e.suggested_level_start_ms)
+                   : (cc && cc.timestamp && cc.timestamp.length ? cc.timestamp[0] : rightMs);
+    const hline = (price, color, dash) => {
+      const p = Number(price);
+      if (!Number.isFinite(p) || p <= 0) return;
+      add({type:'line', layer:'below', editable:false, x0:new Date(leftMs), x1:new Date(rightMs), y0:p, y1:p, line:{color, width:1, dash}});
+    };
+    hline(e.range_mid, '#1565c0', 'dash');
+    hline(e.range_low, '#00897b', 'dot');
+    hline(e.poke_high, '#ef6c00', 'dot');
+    // realized trade: entry (short) -> exit, plus the stop
+    const eTs = Number(e.entry_ts), ePx = Number(e.entry_px);
+    const xTs = Number(e.exit_ts), xPx = Number(e.exit_px), stopPx = Number(e.stop_px);
+    const win = (e.exit_reason === 'low' || e.exit_reason === 'mid');
+    if (Number.isFinite(eTs) && Number.isFinite(ePx) && ePx > 0) {
+      add({type:'line', layer:'above', editable:false, x0:new Date(eTs), x1:new Date(eTs), yref:'paper', y0:0, y1:1, line:{color:'rgba(46,125,50,.45)', width:1}});
+      if (Number.isFinite(stopPx) && stopPx > 0) {
+        add({type:'line', layer:'below', editable:false, x0:new Date(eTs), x1:new Date(Number.isFinite(xTs)?xTs:rightMs), y0:stopPx, y1:stopPx, line:{color:'#c62828', width:1, dash:'dash'}});
+      }
+      if (Number.isFinite(xTs) && Number.isFinite(xPx) && xPx > 0) {
+        add({type:'line', layer:'above', editable:false, x0:new Date(eTs), x1:new Date(xTs), y0:ePx, y1:xPx, line:{color: win?'#2e7d32':'#c62828', width:2}});
+        add({type:'line', layer:'above', editable:false, x0:new Date(xTs), x1:new Date(xTs), yref:'paper', y0:0, y1:1, line:{color: win?'rgba(46,125,50,.35)':'rgba(198,40,40,.35)', width:1, dash:'dot'}});
+      }
     }
   }
   if (resultTrade) {
@@ -1609,25 +2195,78 @@ function shapes() {
         x0:new Date(left), x1:new Date(right), y0:p, y1:p,
         line:{color, width:1}});
     }
-    addTradeLine(resultTrade.level, '#8aa0d8', 'level');
-    addTradeLine(resultTrade.entry_price, '#7dbb91', 'entry');
-    addTradeLine(resultTrade.stop, '#d18495', 'stop');
-    addTradeLine(resultTrade.take, '#7dbb91', 'take');
+    const structural = Array.isArray(resultTrade.stop_updates) && resultTrade.stop_updates.length;
+    if (structural) {
+      const entryPrice = Number(resultTrade.entry_price);
+      const initialStop = Number(resultTrade.initial_stop);
+      const mfePrice = Math.max(entryPrice, Number(resultTrade.mfe_price));
+      if (Number.isFinite(entryPrice) && Number.isFinite(initialStop) && initialStop < entryPrice) {
+        add({type:'rect', layer:'below', editable:false,
+          x0:new Date(left), x1:new Date(right), y0:initialStop, y1:entryPrice,
+          line:{width:0}, fillcolor:'rgba(209,132,149,.18)'});
+      }
+      if (Number.isFinite(entryPrice) && Number.isFinite(mfePrice) && mfePrice > entryPrice) {
+        add({type:'rect', layer:'below', editable:false,
+          x0:new Date(left), x1:new Date(right), y0:entryPrice, y1:mfePrice,
+          line:{width:0}, fillcolor:'rgba(125,187,145,.14)'});
+      }
+      addTradeLine(resultTrade.level, '#8aa0d8', 'level');
+      addTradeLine(entryPrice, '#7dbb91', 'entry');
+      const updates = resultTrade.stop_updates;
+      updates.forEach((update, index) => {
+        const segmentStart = Math.max(left, Number(update.time_ms));
+        const segmentEnd = Math.min(right, index + 1 < updates.length ? Number(updates[index+1].time_ms) : right);
+        const price = Number(update.price);
+        if (!Number.isFinite(price) || segmentEnd < segmentStart) return;
+        add({type:'line', layer:'above', editable:false,
+          x0:new Date(segmentStart), x1:new Date(segmentEnd), y0:price, y1:price,
+          line:{color:'#e08a9d', width:1.6}});
+        if (index > 0) {
+          const oldPrice = Number(updates[index-1].price);
+          add({type:'line', layer:'above', editable:false,
+            x0:new Date(segmentStart), x1:new Date(segmentStart), y0:oldPrice, y1:price,
+            line:{color:'#e08a9d', width:1, dash:'dot'}});
+        }
+      });
+    } else {
+      addTradeLine(resultTrade.level, '#8aa0d8', 'level');
+      addTradeLine(resultTrade.entry_price, '#7dbb91', 'entry');
+      addTradeLine(resultTrade.stop, '#d18495', 'stop');
+      addTradeLine(resultTrade.take, '#7dbb91', 'take');
+    }
     if (Number.isFinite(Number(resultTrade.exit_time_ms))) {
       add({type:'line', layer:'above', editable:false,
         x0:new Date(Number(resultTrade.exit_time_ms)), x1:new Date(Number(resultTrade.exit_time_ms)),
         yref:'paper', y0:0.24, y1:1,
         line:{color:'#a597d6', width:1}});
     }
+    const correctSl = structuralReview && structuralReview.correct_sl;
+    if (tradeSource === 'futures_structural' && correctSl) {
+      const price = Number(correctSl.price);
+      if (Number.isFinite(price) && price > 0) {
+        add({type:'line', layer:'above', editable:false,
+          x0:new Date(left), x1:new Date(right), y0:price, y1:price,
+          line:{color:'#c99a62', width:2, dash:'dash'}});
+      }
+    }
   }
   if (pump) {
-    const sel = selectedObj === 'pump';
+    const sel = selectedObj === 'pump'; const bot = isBot('pump');
       add({type:'rect', layer:'below', editable:false,
       x0:new Date(Math.min(pump.start.ms, pump.high.ms)), x1:new Date(Math.max(pump.start.ms, pump.high.ms)),
       y0:Math.min(pump.start.price, pump.high.price), y1:Math.max(pump.start.price, pump.high.price),
-      line:{color: sel ? '#a9d8b9' : '#7dbb91', width: 1},
+      line:{color: bot ? BOT_COLOR : (sel ? '#a9d8b9' : '#7dbb91'), width: 1, dash: bot ? 'dot' : 'solid'},
       fillcolor:'rgba(125,187,145,.08)'});
   }
+  zones.forEach((zone, index) => {
+    const supply = zone.kind === 'supply';
+    const selected = selectedObj === `zone:${index}`;
+    add({type:'rect', layer:'below', editable:false,
+      x0:new Date(zone.base_start_ms), x1:new Date(zone.end_ms || zoneAutoEndMs(zone.base_end_ms, zone.lower_price, zone.upper_price, zone.kind)),
+      y0:zone.lower_price, y1:zone.upper_price,
+      line:{color:supply ? '#d18495' : '#7dbb91', width:selected ? 2 : 1, dash:'dot'},
+      fillcolor:supply ? 'rgba(209,132,149,.10)' : 'rgba(125,187,145,.10)'});
+  });
   const sbAnchor = (!level && document.getElementById('family').value === 'structure_break') ? structureBreakAnchorFrom(zigzag) : null;
   if (sbAnchor) {
     add({type:'line', layer:'above', editable:false,
@@ -1636,36 +2275,32 @@ function shapes() {
       line:{color:'#d9c27a', width:1, dash:'dot'}});
   }
   if (level) {
-    const sel = selectedObj === 'level';
+    const sel = selectedObj === 'level'; const bot = isBot('level');
     add({type:'line', layer:'above', editable:false,
       x0:new Date(levelShapeStartMs(level)), x1:new Date(levelShapeEndMs(level)),
       y0:level.price, y1:level.price,
-      line:{color: sel ? '#c8d4ff' : '#8aa0d8', width: 1}});
+      line:{color: bot ? BOT_COLOR : (sel ? '#c8d4ff' : '#8aa0d8'), width: 1, dash: bot ? 'dot' : 'solid'}});
+    const fit = fitSlope(pullbackLows(levelTouches())); // pairwise retraces plus a completed terminal pullback
+    if (fit) {
+      const s = levelShapeStartMs(level), en = levelShapeEndMs(level);
+      add({type:'line', layer:'above', editable:false,
+        x0:new Date(s), x1:new Date(en), y0:fit.lineAt(s), y1:fit.lineAt(en),
+        line:{color: bot ? BOT_COLOR : SLOPE_COLOR, width: 1, dash:'dash'}});
+    }
   }
   if (sl) {
-    const sel = selectedObj === 'sl';
+    const sel = selectedObj === 'sl'; const bot = isBot('sl');
     add({type:'line', layer:'above', editable:false,
       x0:new Date(slStartMs()), x1:new Date(slEndMs()),
       y0:sl.price, y1:sl.price,
-      line:{color: sel ? '#e7a9b6' : '#d18495', width: 1, dash:'solid'}});
-  }
-  if (exitPoint) {
-    const sel = selectedObj === 'exit';
-    const c = current.candles;
-    const yr = Math.max(...c.high) - Math.min(...c.low);
-    const dy = Math.max(Math.abs(exitPoint.price) * 0.0015, yr * 0.006);
-    const dx = Math.max(barMs * 0.5, 2*60000);
-    add({type:'circle', layer:'above', editable:false,
-      x0:new Date(exitPoint.ms - dx), x1:new Date(exitPoint.ms + dx),
-      y0:exitPoint.price - dy, y1:exitPoint.price + dy,
-      line:{color: sel ? '#c9bdf0' : '#a597d6', width: 1}, fillcolor:'rgba(165,151,214,.10)'});
+      line:{color: bot ? BOT_COLOR : (sel ? '#e7a9b6' : '#d18495'), width: 1, dash: bot ? 'dot' : 'solid'}});
   }
   return out;
 }
 function zigzagTrace() {
   const pts = (zigzag && Array.isArray(zigzag.points)) ? [...zigzag.points].sort((a,b) => a.ms - b.ms) : [];
   const sel = selectedObj === 'zigzag';
-  const color = sel ? '#f0dc96' : '#d9c27a';
+  const color = isBot('zigzag') ? BOT_COLOR : (sel ? '#f0dc96' : '#d9c27a');
   return {
     type:'scatter',
     mode:'lines+markers',
@@ -1680,23 +2315,214 @@ function zigzagTrace() {
     marker:{size: sel ? 8 : 6, symbol:'circle', color, line:{width:1, color:'#171a20'}, opacity:0.95}
   };
 }
+const TOUCH_BAND = 0.006;   // legacy automatic touch = a local high within 0.6% of the level line
+function levelTouches() {
+  if (!level || !current || !(level.price > 0)) return [];
+  const c = current.candles, n = c.timestamp.length;
+  const start = levelShapeStartMs(level), end = levelShapeEndMs(level);
+  const lp = level.price;
+  // Manual touches are authoritative. Legacy bot marks have no ``touches``
+  // property and retain the old inferred display until explicitly edited.
+  if (Array.isArray(level.touches)) {
+    return [...new Set(level.touches.map(Number))]
+      .filter(ms => Number.isFinite(ms) && ms >= start && ms <= end)
+      .sort((a,b) => a - b)
+      .map(ms => {
+        const i = nearestCandle(ms);
+        return {i, ms:c.timestamp[i], high:c.high[i], manual:true};
+      });
+  }
+  const minSep = Math.max(1, Math.round((12*60000) / (barMs || 60000)));  // merge peaks < ~12min apart
+  const cand = [];
+  for (let i = 1; i < n - 1; i++) {
+    const t = c.timestamp[i];
+    if (t < start || t > end) continue;
+    const h = c.high[i];
+    if (Math.abs(h - lp) / lp > TOUCH_BAND) continue;         // near the level
+    if (!(h >= c.high[i-1] && h >= c.high[i+1])) continue;    // local peak (a distinct tap)
+    cand.push({i, ms:t, high:h});
+  }
+  const touches = [];
+  for (const p of cand) {
+    const last = touches[touches.length - 1];
+    if (last && (p.i - last.i) < minSep) { if (p.high > last.high) touches[touches.length-1] = p; }
+    else touches.push(p);
+  }
+  return touches;
+}
+function touchTrace(touches) {
+  const c = current.candles;
+  const yr = (Math.max(...c.high) - Math.min(...c.low)) || (level.price * 0.02);
+  const dy = yr * 0.014;
+  const bot = isBot('level');
+  const color = bot ? BOT_COLOR : (selectedObj === 'level' ? '#c8d4ff' : '#8aa0d8');
+  return {
+    type:'scatter', mode:'markers',
+    x: touches.map(p => new Date(p.ms)),
+    y: touches.map(p => Math.max(p.high, level.price) + dy),   // above max(touch high, level)
+    xaxis:'x', yaxis:'y', name:'touches', hoverinfo:'none', hovertemplate:'<extra></extra>',
+    marker:{symbol:'triangle-down', size:10, color, line:{width:1, color:'#171a20'}, opacity:0.95}
+  };
+}
+const SLOPE_COLOR = '#c99a62';   // sloped support built from retrace lows
+// Every neighbouring pair of horizontal-level touches defines exactly one
+// retrace: the lowest candle strictly between those two touches.  If price
+// then pulls back after the final touch before the level ends, that terminal
+// retrace is also structural and belongs on the lower support.
+function pullbackLows(touches) {
+  if (!level || !current || !Array.isArray(touches)) return [];
+  const c = current.candles;
+  const ordered = [...touches]
+    .map(t => ({i:Number(t.i), ms:Number(t.ms)}))
+    .filter(t => Number.isInteger(t.i) && t.i >= 0 && t.i < c.timestamp.length)
+    .sort((a,b) => a.i - b.i)
+    .filter((t, i, all) => i === 0 || t.i !== all[i-1].i);
+  const lows = [];
+  for (let pair = 1; pair < ordered.length; pair++) {
+    const left = ordered[pair - 1], right = ordered[pair];
+    if (right.i <= left.i + 1) continue;
+    let lowIdx = left.i + 1;
+    for (let i = lowIdx + 1; i < right.i; i++) if (c.low[i] < c.low[lowIdx]) lowIdx = i;
+    lows.push({i:lowIdx, ms:c.timestamp[lowIdx], low:c.low[lowIdx], left_touch_ms:left.ms, right_touch_ms:right.ms});
+  }
+  const last = ordered[ordered.length - 1];
+  if (last) {
+    const endMs = levelShapeEndMs(level);
+    let stopIdx = -1;
+    for (let i = last.i + 1; i < c.timestamp.length && c.timestamp[i] <= endMs; i++) stopIdx = i;
+    // A closing breakout is the level's endpoint, not a finished pullback.
+    if (stopIdx > last.i && c.close[stopIdx] > level.price) stopIdx -= 1;
+    if (stopIdx > last.i) {
+      let lowIdx = last.i + 1;
+      for (let i = lowIdx + 1; i <= stopIdx; i++) if (c.low[i] < c.low[lowIdx]) lowIdx = i;
+      if (c.low[lowIdx] < level.price) {
+        lows.push({i:lowIdx, ms:c.timestamp[lowIdx], low:c.low[lowIdx], left_touch_ms:last.ms, right_touch_ms:null, terminal:true});
+      }
+    }
+  }
+  return lows;
+}
+// Averaged (least-squares) support line through the retrace lows.
+function fitSlope(lows) {
+  if (!lows || lows.length < 2) return null;
+  const t0 = lows[0].ms; let sx=0, sy=0, sxx=0, sxy=0; const nn = lows.length;
+  for (const p of lows) { const x = (p.ms - t0)/60000, y = p.low; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+  const den = nn*sxx - sx*sx; if (Math.abs(den) < 1e-12) return null;
+  const a = (nn*sxy - sx*sy)/den, b = (sy - a*sx)/nn;
+  return {lineAt:(ms) => a*((ms - t0)/60000) + b};
+}
+function lowTouchTrace(lows, fit) {
+  const c = current.candles;
+  const yr = (Math.max(...c.high) - Math.min(...c.low)) || (level.price * 0.02);
+  const dy = yr * 0.014;
+  return {
+    type:'scatter', mode:'markers',
+    x: lows.map(p => new Date(p.ms)),
+    y: lows.map(p => Math.min(p.low, fit.lineAt(p.ms)) - dy), // pairwise retraces and a terminal pullback when present
+    xaxis:'x', yaxis:'y', name:'low-touches', hoverinfo:'none', hovertemplate:'<extra></extra>',
+    marker:{symbol:'triangle-up', size:10, color:SLOPE_COLOR, line:{width:1, color:'#171a20'}, opacity:0.95}
+  };
+}
 function annotations() {
   if (!current) return [];
   const out = [];
+  if (showDefaultLines) {
+    const e = current.event, cc = current.candles;
+    // session-block name labels along the top
+    if (cc && cc.timestamp && cc.timestamp.length) {
+      const HR = 3600000, t0 = cc.timestamp[0], t1 = cc.timestamp[cc.timestamp.length-1] + barMs;
+      const NAMES = ['ASIA','EU','OVERLAP','US','LATE'];
+      const blockOf = (ms) => { const h = Math.floor(((ms % 86400000) + 86400000) % 86400000 / HR); return h<8?0:h<13?1:h<16?2:h<21?3:4; };
+      let segStart = t0, cur = blockOf(t0);
+      const emit = (a,b,blk) => out.push({x:new Date((a+b)/2), y:1, yref:'paper', text:NAMES[blk],
+        showarrow:false, yanchor:'top', yshift:-2, font:{size:9, color:'#8a8f98'}});
+      for (let ms = Math.ceil(t0/HR)*HR; ms <= t1; ms += HR) {
+        const b = blockOf(ms);
+        if (b !== cur) { emit(segStart, ms, cur); segStart = ms; cur = b; }
+      }
+      emit(segStart, t1, cur);
+    }
+    // labels for the highlighted setup sessions
+    const hs = e.hl_start_ms, he = e.hl_end_ms, hk = e.hl_kind;
+    if (Array.isArray(hs) && Array.isArray(he)) {
+      const HLL = {anomaly:'#e08080', entry:'#8ab0e6', streak:'#b79ae0'};
+      const TXT = {anomaly:'ANOMALY', entry:'ENTRY SESSION', streak:'STREAK'};
+      for (let i = 0; i < hs.length && i < he.length; i++) {
+        const k = (hk && hk[i]) || 'entry';
+        out.push({x:new Date((Number(hs[i]) + Number(he[i])) / 2), y:0.98, yref:'paper', text:TXT[k] || k,
+          showarrow:false, yanchor:'top', yshift:-12, font:{size:9, color:HLL[k] || '#8ab0e6'}});
+      }
+    }
+    // level labels at the right edge
+    const rightMs = chartDataEndMs();
+    const lab = (price, text, color) => { const p = Number(price);
+      if (!Number.isFinite(p) || p <= 0) return;
+      out.push({x:new Date(rightMs), y:p, text, showarrow:false, xanchor:'left', xshift:4,
+        font:{size:9, color}, bgcolor:'rgba(17,19,24,.7)', borderpad:1}); };
+    lab(e.suggested_level, 'HIGH (level)', '#aab0bd');
+    lab(e.range_mid, 'mid = take', '#5b8fd6');
+    lab(e.range_low, 'range low', '#26a69a');
+    lab(e.poke_high, 'poke', '#ef6c00');
+    // entry / exit markers on the realized trade
+    if (Number.isFinite(Number(e.entry_ts)) && Number.isFinite(Number(e.entry_px))) {
+      out.push({x:new Date(Number(e.entry_ts)), y:Number(e.entry_px), text:'▼ ENTRY (short)', showarrow:false,
+        xanchor:'left', xshift:3, yanchor:'bottom', yshift:3, font:{size:9, color:'#2e7d32'}, bgcolor:'rgba(17,19,24,.72)', borderpad:1});
+    }
+    if (Number.isFinite(Number(e.exit_ts)) && Number.isFinite(Number(e.exit_px))) {
+      const win = (e.exit_reason === 'low' || e.exit_reason === 'mid');
+      out.push({x:new Date(Number(e.exit_ts)), y:Number(e.exit_px), text:'EXIT · ' + (e.exit_reason || ''), showarrow:false,
+        xanchor:'left', xshift:3, yanchor:'top', yshift:-3, font:{size:9, color: win?'#2e7d32':'#c62828'}, bgcolor:'rgba(17,19,24,.72)', borderpad:1});
+    }
+  }
   if (resultTrade) {
     const x = new Date(Number(resultTrade.fill_time_ms));
-    const fields = [
-      ['ENTRY', resultTrade.entry_price, '#7dbb91', -18],
-      ['STOP', resultTrade.stop, '#d18495', 16],
-      ['TAKE', resultTrade.take, '#7dbb91', -18],
-      ['LEVEL', resultTrade.level, '#8aa0d8', 16],
-    ];
-    for (const [label, price, color, shift] of fields) {
-      const p = Number(price);
-      if (!Number.isFinite(p) || p <= 0) continue;
-      out.push({x, y:p, text:`${label} ${fmtPrice(p)}`,
-        showarrow:false, xanchor:'right', yanchor:'middle', xshift:-6, yshift:shift,
-        font:{size:10, color}, bgcolor:'rgba(17,19,24,.78)', borderpad:2});
+    const structural = Array.isArray(resultTrade.stop_updates) && resultTrade.stop_updates.length;
+    if (structural) {
+      const fields = [
+        ['ENTRY', resultTrade.entry_price, '#7dbb91', -18],
+        ['SL₀', resultTrade.initial_stop, '#d18495', 16],
+        ['LEVEL', resultTrade.level, '#8aa0d8', 16],
+      ];
+      for (const [label, price, color, shift] of fields) {
+        const p = Number(price); if (!Number.isFinite(p) || p <= 0) continue;
+        out.push({x, y:p, text:`${label} ${fmtPrice(p)}`, showarrow:false,
+          xanchor:'right', yanchor:'middle', xshift:-6, yshift:shift,
+          font:{size:10, color}, bgcolor:'rgba(17,19,24,.78)', borderpad:2});
+      }
+      resultTrade.stop_updates.slice(1).forEach(update => {
+        out.push({x:new Date(Number(update.time_ms)), y:Number(update.price), text:`SL↑ ${fmtPrice(Number(update.price))}`,
+          showarrow:true, arrowhead:2, arrowsize:.6, arrowwidth:1, arrowcolor:'#d18495', ax:0, ay:18,
+          font:{size:9,color:'#e7a9b6'}, bgcolor:'rgba(17,19,24,.72)', borderpad:1});
+      });
+      out.push({x:new Date(Number(resultTrade.exit_time_ms)), y:Number(resultTrade.exit_price),
+        text:`EXIT ${fmtPrice(Number(resultTrade.exit_price))} · ${esc(resultTrade.exit_reason)}`,
+        showarrow:true, arrowhead:2, arrowcolor:'#a597d6', ax:0, ay:-24,
+        font:{size:10,color:'#c8bdea'}, bgcolor:'rgba(17,19,24,.82)', borderpad:2});
+    } else {
+      const fields = [
+        ['ENTRY', resultTrade.entry_price, '#7dbb91', -18],
+        ['STOP', resultTrade.stop, '#d18495', 16],
+        ['TAKE', resultTrade.take, '#7dbb91', -18],
+        ['LEVEL', resultTrade.level, '#8aa0d8', 16],
+      ];
+      for (const [label, price, color, shift] of fields) {
+        const p = Number(price);
+        if (!Number.isFinite(p) || p <= 0) continue;
+        out.push({x, y:p, text:`${label} ${fmtPrice(p)}`,
+          showarrow:false, xanchor:'right', yanchor:'middle', xshift:-6, yshift:shift,
+          font:{size:10, color}, bgcolor:'rgba(17,19,24,.78)', borderpad:2});
+      }
+    }
+    const correctSl = structuralReview && structuralReview.correct_sl;
+    if (tradeSource === 'futures_structural' && correctSl) {
+      const price = Number(correctSl.price);
+      const anchorMs = Number(correctSl.anchor_time_ms);
+      const entryPrice = Number(resultTrade.entry_price);
+      const risk = Number.isFinite(entryPrice) && entryPrice > 0 ? (entryPrice - price) / entryPrice : NaN;
+      out.push({x:new Date(anchorMs), y:price,
+        text:`CORRECT SL ${fmtPrice(price)}${Number.isFinite(risk) ? ' · -'+(risk*100).toFixed(2)+'%' : ''}`,
+        showarrow:true, arrowhead:2, arrowcolor:'#c99a62', ax:0, ay:26,
+        font:{size:10,color:'#e4bd8e'}, bgcolor:'rgba(38,31,24,.88)', borderpad:2});
     }
   }
   const sbAnchor = (!level && document.getElementById('family').value === 'structure_break') ? structureBreakAnchorFrom(zigzag) : null;
@@ -1706,7 +2532,8 @@ function annotations() {
       font:{size:11, color:'#d9c27a'}, bgcolor:'rgba(17,19,24,.75)', borderpad:3});
   }
   if (level) {
-    out.push({x:new Date(levelShapeEndMs(level)), y:level.price, text:fmtPrice(level.price),
+    const nt = levelTouches().length;
+    out.push({x:new Date(levelShapeEndMs(level)), y:level.price, text:`${fmtPrice(level.price)}${nt ? '  •  ' + nt + ' touch' : ''}`,
       showarrow:false, xanchor:'left', yanchor:'middle', xshift:6,
       font:{size:11, color:'#8aa0d8'}, bgcolor:'rgba(34,43,69,.80)', borderpad:3});
   }
@@ -1729,6 +2556,33 @@ function annotations() {
   }
   return out;
 }
+function dailyHoldRange(event) {
+  const start = Number(event && event.pump_start_ms);
+  const end = Number(event && (event.daily_hold_end_ms || event.proposal_time_ms));
+  return Number.isFinite(start) && Number.isFinite(end) && end >= start ? {start, end} : null;
+}
+function dailyHoldFocusTrace(candles, range) {
+  const keep = candles.timestamp.map(ms => ms >= range.start && ms <= range.end);
+  const masked = values => values.map((value, index) => keep[index] ? value : null);
+  return {
+    type:'candlestick', x:candles.timestamp.map(ms => new Date(ms)),
+    open:masked(candles.open), high:masked(candles.high), low:masked(candles.low), close:masked(candles.close),
+    name:'daily hold focus', meta:'daily-hold-focus-candles', xaxis:'x', yaxis:'y',
+    increasing:{line:{color:'#7dbb91', width:1}, fillcolor:'rgba(125,187,145,.42)'},
+    decreasing:{line:{color:'#c99a62', width:1}, fillcolor:'rgba(201,154,98,.40)'},
+    hoverinfo:'none', hovertemplate:'<extra></extra>'
+  };
+}
+function setDailyHoldFocus(active) {
+  const chart = gd();
+  // draw() owns the trace order for this mode: all candles, volume, then the
+  // opaque pump+hold overlay.  Do not depend on Plotly's private DOM state.
+  if (!chart || chart.dataset.dailyHoldFocus == null) return;
+  if (chart.dataset.dailyHoldFocus === String(active)) return;
+  chart.dataset.dailyHoldFocus = String(active);
+  Plotly.restyle(chart, {opacity:active ? 1 : 0.24}, [0]);
+  Plotly.restyle(chart, {opacity:active ? 0 : 1}, [2]);
+}
 function draw() {
   if (!current) return;
   const c = current.candles, x = c.timestamp.map(t => new Date(t)), e = current.event;
@@ -1738,11 +2592,26 @@ function draw() {
     decreasing:{line:{color:'#c99a62', width:1}, fillcolor:'rgba(201,154,98,.40)'},
     hoverinfo:'none', hovertemplate:'<extra></extra>'};
   const vol = {type:'bar', x, y:c.quote_volume, name:'volume', marker:{color:'#6f7890'}, xaxis:'x', yaxis:'y2', opacity:0.32, hoverinfo:'none', hovertemplate:'<extra></extra>'};
+  const holdRange = dailyHoldRange(e);
+  if (holdRange) {
+    candle.meta = 'daily-hold-all-candles';
+    candle.opacity = 0.24;
+    gd().dataset.dailyHoldFocus = 'false';
+  }
   const traces = [candle, vol];
+  if (holdRange) traces.push(dailyHoldFocusTrace(c, holdRange));
   if (zigzag && zigzag.points && zigzag.points.length) traces.push(zigzagTrace());
+  if (level) {
+    const tt = levelTouches(); if (tt.length) traces.push(touchTrace(tt));
+    const lows = pullbackLows(tt), fit = fitSlope(lows);
+    if (fit) traces.push(lowTouchTrace(lows, fit));
+  }
+  const dailyHoldTitle = Number.isFinite(Number(e.daily_pump_total_close_to_close_pct))
+    ? `1D sleep->pump ${Number(e.daily_pump_candle_count || 2)}d +${fmtPct(e.daily_pump_total_close_to_close_pct)} / volume x${Number(e.daily_pump_first_volume_ratio || 0).toFixed(1)} + x${Number(e.daily_pump_second_volume_ratio || 0).toFixed(1)} / compact hold ${Number(e.daily_hold_candle_count || 1)}d, low ${(Number(e.daily_hold_min_low_position) * 100).toFixed(0)}-${(Number(e.daily_hold_max_low_position) * 100).toFixed(0)}%, max high ${(Number(e.daily_hold_max_high_position) * 100).toFixed(0)}%`
+    : null;
   const title = resultTrade
     ? `${displaySymbol(e.symbol)} ${e.tf} / ${resultTrade.outcome} / ${Number(resultTrade.net_r || 0).toFixed(2)}R`
-    : `pump ${fmtPct(e.pump_pct)} / vol x${Number(e.pump_over_sleep_vol||0).toFixed(1)} / trades x${Number(e.pump_over_sleep_trades||0).toFixed(1)}`;
+    : (dailyHoldTitle || `pump ${fmtPct(e.pump_pct)} / vol x${Number(e.pump_over_sleep_vol||0).toFixed(1)} / trades x${Number(e.pump_over_sleep_trades||0).toFixed(1)}`);
   const spike = {showspikes:true, spikemode:'across', spikesnap:'cursor', spikedash:'dot', spikethickness:1, spikecolor:'#4a5160'};
   const layout = {
     paper_bgcolor:'#111318', plot_bgcolor:'#171a20', font:{color:'#e7e3d8'},
@@ -1753,6 +2622,7 @@ function draw() {
     yaxis2:{domain:[0,0.17], gridcolor:'#252a32', linecolor:'#2a2e36', zeroline:false, title:'volume', hoverformat:'.4g', rangemode:'tozero', fixedrange:true},
     shapes: shapes(), annotations: annotations(), showlegend:false, bargap:0.42
   };
+  const _vr = volAxisRange(); if (_vr) layout.yaxis2.range = _vr;
   if (xRange) layout.xaxis.range = xRange;
   if (yRange) layout.yaxis.range = yRange;
   Plotly.react('chart', traces, layout, {responsive:true, displayModeBar:false, displaylogo:false, scrollZoom:false, editable:false, edits:{shapePosition:false}});
@@ -1908,6 +2778,7 @@ function chartWheelZoom(ev) {
   }
   guardedRelayout(update);
   if (zoomX && !zoomY && yAuto) fitY();
+  if (zoomX) maybeExtendCandles();
 }
 /* ---------- chart event wiring ---------- */
 let downPos = null;
@@ -1932,7 +2803,9 @@ function attachChartHandlers() {
     if (ev['xaxis.autorange']) { xRange = null; yAuto = true; }
     if (ev['yaxis.autorange']) { yRange = null; yAuto = true; }
     if (xChanged && yAuto) fitY();
+    if (xChanged) { const vr = volAxisRange(); if (vr) guardedRelayout({'yaxis2.range': vr}); }
     positionZones();
+    if (xChanged) maybeExtendCandles();
   });
   const wrap = document.getElementById('chartwrap');
   const surface = document.getElementById('ovl');
@@ -2009,14 +2882,24 @@ function attachChartHandlers() {
     if (!pt || !pt.inPrice) { toast('click inside the price panel'); return; }
     handleToolClick(pt);
   }, true);
+  wrap.addEventListener('pointermove', () => {
+    setDailyHoldFocus(true);
+  }, true);
+  wrap.addEventListener('pointerenter', () => setDailyHoldFocus(true), true);
+  wrap.addEventListener('pointerleave', () => {
+    if (!downPos) setDailyHoldFocus(false);
+  }, true);
   surface.addEventListener('pointermove', e => {
     if (!tool || !current) return;
     renderGhost(eventDataPoint(e));
   }, true);
   surface.addEventListener('pointerleave', () => { if (tool && !downPos) clearGhost(); }, true);
-  // right-click finishes the zigzag (and never opens the browser context menu while drawing)
+  // Right-click finishes multi-click drawing and never opens the browser context menu.
   surface.addEventListener('contextmenu', e => {
-    if (tool === 'zigzag') { e.preventDefault(); e.stopPropagation(); finishZigzag(); }
+    if (tool === 'zigzag' || tool === 'level_touches') {
+      e.preventDefault(); e.stopPropagation();
+      if (tool === 'zigzag') finishZigzag(); else finishLevelTouches();
+    }
   }, true);
   bindAxisZone(document.getElementById('yzone'), 'y');
   bindAxisZone(document.getElementById('xzone'), 'x');
@@ -2049,6 +2932,9 @@ function serializeSetup(s) {
     level_start_ms: withLevel ? lvl.start_ms : null,
     level_end_ms: withLevel ? levelShapeEndMs(lvl) : null,
     level_broken: withLevel ? !!entryObj : null,
+    level_touch_times_ms: withLevel && Array.isArray(lvl.touches)
+      ? [...new Set(lvl.touches.map(Number).filter(Number.isFinite))].sort((a,b) => a - b)
+      : null,
     pump_start_ms: hasPump ? s.pump.start.ms : null,
     pump_start_price: hasPump ? s.pump.start.price : null,
     culmination_ms: hasPump ? s.pump.high.ms : null,
@@ -2061,14 +2947,13 @@ function serializeSetup(s) {
     entry_price: entryObj ? entryObj.price : null,
     entry_auto: entryObj ? true : null,
     entry_source: entryObj ? (withLevel ? 'level_break' : 'structure_break') : null,
-    exit_ms: s.exitPoint ? s.exitPoint.ms : null,
-    exit_price: s.exitPoint ? s.exitPoint.price : null,
     sl_price: slRay ? slRay.price : null,
     sl_ms: slRay ? entryObj.ms : null,
     sl_hit_ms: slRay ? slRay.hit_ms : null,
     sl_auto: slRay ? true : null,
     sl_source: slRay ? (structure && s.slPrice == null ? 'last_swing_low' : 'annotated') : null,
     zigzag_points: zpts.map(p => ({ms:Math.round(p.ms), price:Number(p.price)})),
+    zones: (s.zones || []).map(z => ({...z, base_start_ms:Math.round(z.base_start_ms), base_end_ms:Math.round(z.base_end_ms), end_ms:z.end_ms == null ? null : Math.round(z.end_ms), lower_price:Number(z.lower_price), upper_price:Number(z.upper_price)})),
   };
 }
 function baseLabel(serializedSetups) {
@@ -2107,7 +2992,7 @@ function currentLabelPayload(options={}) {
 async function sendLabelPayload(payload, {quiet=false}={}) {
   let j;
   try {
-    const r = await fetch('/api/label', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    const r = await fetch(api('/api/label'), {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     j = await r.json();
   } catch (err) {
     if (!quiet) toast('save failed: request error', 3200);
@@ -2122,7 +3007,7 @@ async function sendLabelPayload(payload, {quiet=false}={}) {
 function queueLabelSave(payload, {advance=false, force=false, quiet=false, advanceSerial=null}={}) {
   const eventId = payload.event_id;
   const sig = labelSignature(payload);
-  if (!force && savedSignatures.get(eventId) === sig) {
+  if (!force && (savedSignatures.get(eventId) === sig || seedSignatures.get(eventId) === sig)) {
     if (advance) navigateAfterManualSave(eventId, advanceSerial);
     return Promise.resolve(true);
   }
@@ -2130,6 +3015,7 @@ function queueLabelSave(payload, {advance=false, force=false, quiet=false, advan
     const res = await sendLabelPayload(payload, {quiet});
     if (!res.ok) return false;
     savedSignatures.set(eventId, sig);
+    seedSignatures.delete(eventId);
     updateCandidateLabel(eventId, res.label);
     renderList();
     updateEventButton();
@@ -2140,8 +3026,33 @@ function queueLabelSave(payload, {advance=false, force=false, quiet=false, advan
   saveQueue = saveQueue.then(task, task);
   return saveQueue;
 }
+let undoHist = [], undoIdx = -1;
+function snapshotHistory() {
+  if (resultMode) return;
+  commitActiveSetup();
+  const snap = JSON.stringify({setups: setups, activeSetup: activeSetup});
+  if (undoIdx >= 0 && undoHist[undoIdx] === snap) return;   // no change
+  undoHist = undoHist.slice(0, undoIdx + 1);
+  undoHist.push(snap);
+  if (undoHist.length > 200) undoHist.shift();
+  undoIdx = undoHist.length - 1;
+}
+function resetHistory() { undoHist = []; undoIdx = -1; snapshotHistory(); }
+function undo() {
+  if (resultMode) return;
+  if (undoIdx <= 0) { toast('nothing to undo'); return; }
+  undoIdx--;
+  const st = JSON.parse(undoHist[undoIdx]);
+  setups = st.setups; activeSetup = st.activeSetup;
+  applySetup(activeSetup); renderSetupTabs(); updateMetrics(); draw();
+  if (current) queueLabelSave(currentLabelPayload({finishDraft:false}), {quiet:true, force:true});
+  toast('undo');
+}
 function scheduleAutosave() {
   if (resultMode || !current) return;
+  const tag = document.getElementById('noSetupTag');
+  if (tag) tag.style.display = 'none';   // an edit means there is a setup after all
+  snapshotHistory();
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
     autosaveTimer = null;
@@ -2162,7 +3073,7 @@ async function unlabelEvent() {
   if (!group || !group.labeled) { toast('event is already unlabeled'); return; }
   let j;
   try {
-    const r = await fetch('/api/unlabel', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({event_id: group.event_id})});
+    const r = await fetch(api('/api/unlabel'), {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({event_id: group.event_id})});
     j = await r.json();
   } catch (err) {
     toast('unlabel failed: request error', 3200);
@@ -2177,6 +3088,7 @@ async function unlabelEvent() {
   group.labeled = false;
   group.label = null;
   savedSignatures.delete(group.event_id);
+  seedSignatures.delete(group.event_id);
   toast('event is unlabeled');
   renderList();
   const pos = findVisibleIndexByEventId(group.event_id);
@@ -2187,6 +3099,28 @@ function saveLabel() {
   if (!payload) { toast('nothing to save'); return; }
   if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
   queueLabelSave(payload, {advance:true, force:true, quiet:false, advanceSerial:navigationSerial});
+}
+function noSetupLabel() {
+  const e = current.event;
+  const group = current.group || visible[idx];
+  return {
+    event_id: group.event_id, symbol: e.symbol, tf: e.tf,
+    source_event_id: e.event_id,
+    source_event_ids: group.source_event_ids || [e.event_id],
+    selected_tf: e.tf,
+    no_setup: true,
+    has_level: false, has_pump_transition: false,
+    setups: [],
+    source: 'browser_level_labeler',
+  };
+}
+// Explicit "I reviewed this event and there is no setup here" -> a reliable
+// negative. Distinct from an event left at the default that was never opened.
+function saveNoSetup() {
+  if (resultMode) { toast('result review mode'); return; }
+  if (!current) { toast('nothing to mark'); return; }
+  if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
+  queueLabelSave(noSetupLabel(), {advance:true, force:true, quiet:false, advanceSerial:navigationSerial});
 }
 
 /* ---------- navigation ---------- */
@@ -2200,25 +3134,31 @@ function currentVisibleIndex() {
 }
 async function navigateToEventId(eventId) {
   if (!eventId) return;
+  const pos = findVisibleIndexByEventId(eventId);
+  if (pos < 0) return;
+  pendingNavIndex = pos;            // reflect the intended target synchronously
   navigationSerial += 1;
   const ok = await flushAutosave({finishDraft:true, quiet:false});
-  if (!ok) return;
-  const pos = findVisibleIndexByEventId(eventId);
-  if (pos >= 0) loadEvent(pos);
+  if (!ok) { if (pendingNavIndex === pos) pendingNavIndex = null; return; }
+  await loadEvent(pos);
+  if (pendingNavIndex === pos) pendingNavIndex = null;
 }
 async function navigateByDelta(delta) {
   if (!visible.length) return;
-  const target = visible[currentVisibleIndex() + delta];
+  const base = pendingNavIndex != null ? pendingNavIndex : currentVisibleIndex();
+  const targetIdx = Math.max(0, Math.min(base + delta, visible.length - 1));
+  if (targetIdx === base) return;   // already at the edge, nothing to do
+  const target = visible[targetIdx];
   if (!target) return;
   await navigateToEventId(target.event_id);
 }
 function navigateAfterManualSave(savedEventId, advanceSerial) {
   if (advanceSerial !== navigationSerial) return;
   const pos = findVisibleIndexByEventId(savedEventId);
-  if (pos >= 0 && pos < visible.length - 1) { loadEvent(pos + 1); return; }
+  if (pos >= 0 && pos < visible.length - 1) { pendingNavIndex = pos + 1; loadEvent(pos + 1); return; }
   if (pos < 0) {
     const fallback = Math.min(idx, visible.length - 1);
-    if (fallback >= 0) { loadEvent(fallback); return; }
+    if (fallback >= 0) { pendingNavIndex = fallback; loadEvent(fallback); return; }
   }
   toast('saved');
 }
@@ -2237,13 +3177,14 @@ function jumpKey(e) {
 }
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
   if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelected(); return; }
   if (e.key === 'Escape') { cancelTool(); return; }
   const k = e.key.toLowerCase();
   if (k === 'l') toggleTool('level');
   if (k === 'p') toggleTool('pump');
+  if (k === 'o') toggleTool('zone');
   if (k === 'g') { if (tool === 'zigzag' && zzDraft && zzDraft.points.length) finishZigzag(); else toggleTool('zigzag'); }
-  if (k === 'e') toggleTool('exit');
   if (k === 'x') setOptimalSl();
   if (k === 'z') resetAnnotations();
   if (e.key === '[') changeTfBy(-1);
@@ -2251,8 +3192,27 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowRight') nextEvent();
   if (e.key === 'ArrowLeft') prevEvent();
   if (k === 's') saveLabel();
+  if (k === 'n') saveNoSetup();
   if (k === 'u') nextUnlabeled();
 });
+function switchStrategy(v) {
+  if (v === STRATEGY) return;
+  location.href = '/labeler?strategy=' + encodeURIComponent(v);
+}
+async function loadStrategies() {
+  try {
+    const r = await fetch('/api/strategies');
+    const j = await r.json();
+    const sel = document.getElementById('strategySelect');
+    if (!sel || !j.strategies) return;
+    const hideWidget = () => { sel.style.display = 'none'; const w = sel.nextElementSibling; if (w && w.classList.contains('select-ui')) w.style.display = 'none'; };
+    if (j.strategies.length < 2) { hideWidget(); return; }
+    sel.innerHTML = j.strategies.map(s => `<option value="${esc(s.strategy_id)}">${esc(s.title)}</option>`).join('');
+    sel.value = STRATEGY || j.strategies[0].strategy_id;
+    refreshSelect(sel);   // rebuild the custom dropdown now that options exist
+  } catch (e) { /* single-strategy desk */ }
+}
+loadStrategies();
 loadCandidates();
 </script>
 </body>
