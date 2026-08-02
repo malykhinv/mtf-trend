@@ -54,9 +54,9 @@ def _frame() -> pd.DataFrame:
     return pd.DataFrame(
         [
             _row("a", chain="chain-a", ignition_ms=start, anchor=110.0),
-            _row("b", chain="chain-a", ignition_ms=start + HOUR_MS, anchor=116.0),
-            _row("c", chain="chain-a", ignition_ms=start + 2 * HOUR_MS, anchor=121.0),
-            _row("d", chain="chain-a", ignition_ms=start + 3 * HOUR_MS, anchor=123.0),
+            _row("b", chain="chain-a", ignition_ms=start + HOUR_MS, anchor=116.0, base=104.0),
+            _row("c", chain="chain-a", ignition_ms=start + 2 * HOUR_MS, anchor=121.0, base=108.0),
+            _row("d", chain="chain-a", ignition_ms=start + 3 * HOUR_MS, anchor=123.0, base=110.0),
             _row("other", chain="chain-b", ignition_ms=start, symbol="OTHERUSDT"),
         ],
         columns=SOURCE_COLUMNS,
@@ -98,6 +98,20 @@ def test_future_tail_rows_cannot_change_existing_wave_candidates() -> None:
     pd.testing.assert_frame_equal(original, mutated)
 
 
+def test_return_to_first_base_starts_a_new_strategy_episode() -> None:
+    frame = _frame()
+    frame.loc[frame["event_id"].eq("c"), "base_level"] = 99.0
+    frame.loc[frame["event_id"].eq("c"), "anchor_high"] = 108.0
+    frame.loc[frame["event_id"].eq("d"), "base_level"] = 104.0
+    frame.loc[frame["event_id"].eq("d"), "anchor_high"] = 112.0
+
+    population = build_wave_population(frame)
+
+    assert population["source_event_id"].tolist() == ["b", "d"]
+    assert population["wave_ordinal"].tolist() == [2, 2]
+    assert population["pump_pct"].gt(0.0).all()
+
+
 def test_future_columns_are_rejected_instead_of_silently_ignored() -> None:
     frame = _frame().assign(y=1)
 
@@ -118,6 +132,7 @@ def test_review_sample_is_deterministic_and_stratified_without_outcomes() -> Non
                     ignition_ms=start + chain_index * 4 * HOUR_MS + ordinal * HOUR_MS,
                     symbol=f"S{chain_index}",
                     anchor=110.0 + ordinal,
+                    base=100.0 + ordinal,
                 )
             )
     population = build_wave_population(pd.DataFrame(rows, columns=SOURCE_COLUMNS))

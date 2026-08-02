@@ -102,7 +102,11 @@ class PumpWaveReviewConfig:
             raise ValueError("sampling_salt is required")
 
 
-def load_online_source(path: Path) -> pd.DataFrame:
+def load_online_source(
+    path: Path,
+    *,
+    is_end_exclusive_ms: int = IS_END_EXCLUSIVE_MS,
+) -> pd.DataFrame:
     """Read only the preregistered causal column allowlist."""
 
     available = set(pq.ParquetFile(path).schema_arrow.names)
@@ -112,7 +116,11 @@ def load_online_source(path: Path) -> pd.DataFrame:
     forbidden = sorted(FORBIDDEN_FUTURE_COLUMNS & available)
     if forbidden:
         raise ValueError(f"online-state source contains forbidden future columns: {forbidden}")
-    return pd.read_parquet(path, columns=list(SOURCE_COLUMNS))
+    return pd.read_parquet(
+        path,
+        columns=list(SOURCE_COLUMNS),
+        filters=[("snapshot_time_ms", "<", is_end_exclusive_ms)],
+    )
 
 
 def build_wave_population(
@@ -156,15 +164,19 @@ def build_wave_population(
     anchors["wave_ordinal"] = anchors.groupby("recurrence_chain_id", sort=False).cumcount() + 1
 
     rows: list[dict[str, Any]] = []
-    for _, chain in anchors.groupby("recurrence_chain_id", sort=False):
-        records = chain.to_dict(orient="records")
-        for index, current in enumerate(records):
-            ordinal = index + 1
+    for source_chain_id, chain in anchors.groupby("recurrence_chain_id", sort=False):
+        source_records = chain.to_dict(orient="records")
+        episode: list[dict[str, Any]] = []
+        for current in source_records:
+            if episode and float(current["base_level"]) <= float(episode[0]["base_level"]):
+                episode = []
+            episode.append(current)
+            ordinal = len(episode)
             if ordinal not in cfg.wave_ordinals:
                 continue
-            first = records[0]
-            previous = records[index - 1]
-            second = records[1]
+            first = episode[0]
+            previous = episode[-2]
+            second = episode[1]
             snapshot_ms = int(current["snapshot_time_ms"])
             month = pd.Timestamp(snapshot_ms, unit="ms", tz="UTC").strftime("%Y-%m")
             source_event_id = str(current["event_id"])
@@ -175,7 +187,8 @@ def build_wave_population(
                     "protocol_freeze_id": PUMP_WAVE_PROTOCOL_FREEZE_ID,
                     "event_id": _candidate_id(source_event_id, ordinal),
                     "source_event_id": source_event_id,
-                    "recurrence_chain_id": str(current["recurrence_chain_id"]),
+                    "recurrence_chain_id": str(source_chain_id),
+                    "wave_episode_id": f"{source_chain_id}|{first['event_id']}",
                     "symbol": str(current["symbol"]),
                     "tf": cfg.chart_timeframe,
                     "review_start_ms": max(
@@ -281,7 +294,7 @@ def run_wave_review_build(
     refresh_existing_labels: bool = False,
 ) -> Path:
     cfg = config or PumpWaveReviewConfig()
-    source = load_online_source(input_path)
+    source = load_online_source(input_path, is_end_exclusive_ms=cfg.is_end_exclusive_ms)
     population = build_wave_population(source, config=cfg)
     queue = sample_wave_review_queue(population, config=cfg)
 

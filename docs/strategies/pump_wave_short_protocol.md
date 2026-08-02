@@ -53,7 +53,15 @@ component for the same symbol: a new qualified event joins the preceding chain
 only when its ignition is no more than 48 hours after the preceding qualified
 event. No future event is needed to assign an existing event to its chain.
 
-Within each chain, events are ordered by ignition time. The first event is wave
+That source chain is deliberately broader than the strategy's economic episode.
+Inside it, the strategy starts a new episode whenever the causal base of a new
+qualified event is at or below the first event's base. A return to the initial
+base means the earlier pump thesis has structurally completed; a later anomaly
+cannot be called its next wave merely because it occurred within 48 hours. This
+reset was registered before any manual review label or future outcome was
+inspected.
+
+Within each resulting episode, events are ordered by ignition time. The first event is wave
 one, the next is wave two, and the next is wave three. At this discovery stage
 `wave` means recurrence ordinal of a qualified anomaly event; it is deliberately
 not yet claimed to be the final economic wave definition. Human review must
