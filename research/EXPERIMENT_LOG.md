@@ -1033,3 +1033,38 @@ numeric gates are recorded in `docs/strategies/drawdown_ladder_protocol.md`.
 
 No 2026 data, trading simulation, TP/SL selection, leverage, or portfolio sizing
 is admissible at this stage.
+
+## 2026-08-03 — drawdown ladder Stage 1 result
+
+Status: `IS_CAUSAL_CONTEXT_INCREMENTAL_HYPOTHESIS_REJECTED`.
+
+Build and audit:
+
+```text
+214,992 causal feature rows; 213,528 complete labels
+168,102 internal weekly walk-forward predictions
+263 declared model features
+22/22 weeks frozen and scored
+temporal audit PASS; OOS 2026 rows read = 0
+```
+
+The full causal model passed all corrected absolute gates (AUC 0.71196,
+log-loss improvement 0.03143, Brier improvement 0.002825, ECE 0.02151,
+permutation p=0.001). However, the frozen 20-field structural control was
+strictly better (AUC 0.74384, log loss 0.22545, Brier 0.05950).
+
+The pre-registered full-minus-structural comparison failed all nine incremental
+gates. AUC delta was -0.03188 (ISO-week 95% CI -0.04942 to -0.00262), log-loss
+improvement was -0.00989 (CI -0.01961 to -0.00124), and Brier improvement was
+-0.000566 (CI -0.001831 to +0.000426). The broad causal context therefore added
+temporal overfit rather than stable signal.
+
+Post-gate diagnostics found failures across 594/605 symbols, with only 7.86% of
+failures in the top ten contributors. The full model improved log loss for only
+22.7% of 450 adequately supported diagnostic symbols and was worse in four of
+five months and four of five sessions. Geometry dominated importance; broad
+market/BTC features received substantial train importance but harmed frozen
+weeks. These diagnostics have no filter authority.
+
+No PnL, TP/SL, leverage, protection, or portfolio optimization is authorized.
+The pristine 2026 partition remains untouched.

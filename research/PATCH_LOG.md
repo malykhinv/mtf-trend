@@ -1944,3 +1944,13 @@ Changes:
   Brier by symbol, week, month, session, and exact ladder state.
 - Marks all outputs as post-gate associations that cannot rescue the failed
   incremental hypothesis or become IS trading filters.
+
+Frozen IS result:
+- Full arm passed all 12 corrected absolute probability gates, but the
+  structural control was better on AUC, log loss, and Brier.
+- Full-minus-structural AUC was -0.03188 (95% CI -0.04942 to -0.00262),
+  log-loss improvement -0.00989, and Brier improvement -0.000566.
+- All nine incremental gates failed; status is
+  `IS_CAUSAL_CONTEXT_INCREMENTAL_HYPOTHESIS_REJECTED`.
+- Post-gate diagnostics confirm broad symbol/time degradation rather than one
+  removable bad coin. No execution or PnL stage was opened.

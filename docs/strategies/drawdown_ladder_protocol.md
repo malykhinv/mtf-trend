@@ -375,6 +375,61 @@ Stage 1 writes the full feature catalog, missingness, temporal audit, both model
 configs, and the paired-comparison config before fitting. No threshold, feature,
 state, session, or probability cutoff may be retuned after the result is seen.
 
+### Frozen Stage 1 result
+
+Status: `IS_CAUSAL_CONTEXT_INCREMENTAL_HYPOTHESIS_REJECTED`.
+
+```text
+feature rows: 214,992
+complete labels: 213,528
+internal weekly OOS rows: 168,102
+parent events: 106,922
+source perpetual symbols: 796; symbols with filled states: 609
+model features: 263 declared; 15 liquidation derivatives unavailable/all-missing
+weekly models: 22/22 frozen and scored
+temporal audit: PASS
+OOS 2026 rows read: 0
+```
+
+The full causal arm passed every absolute prediction gate: AUC 0.712, log-loss
+gain 0.0314, Brier gain 0.00283, ECE 0.0215, and both within-week permutation
+p-values 0.001. Its probability-at-least-0.92 cohort contained 127,201 rows and
+recovered 95.67%, with a Wilson lower bound of 95.55%.
+
+The pre-registered structural control was better: AUC 0.744, log loss 0.2255
+versus 0.2353, and Brier 0.05950 versus 0.06007. Frozen paired full-minus-
+structural inference was:
+
+```text
+AUC delta: -0.03188; ISO-week bootstrap 95% CI -0.04942 .. -0.00262
+log-loss improvement: -0.00989; 95% CI -0.01961 .. -0.00124
+Brier improvement: -0.000566; 95% CI -0.001831 .. +0.000426
+all 9 incremental gates: FAIL
+```
+
+Therefore recovery is predictable from the shape, depth, and timing of the fall,
+but the broad EMA/activity/OI/BTC/breadth/event-memory context does not add
+stable weekly information and degrades the frozen prediction. Absolute success
+of the full arm cannot override failure against the negative control.
+
+One implementation audit found that the frozen high-probability gate was 0.92
+while the display reliability list ended at 0.90. The original gate lookup would
+therefore fail mechanically. Core was corrected to always include every gate
+threshold; immutable amendment artifacts reused identical frozen predictions,
+metrics, null tests, and input hashes. No model or gate value changed.
+
+Post-gate diagnostics are explanatory only. Failures were diffuse across 594 of
+605 evaluated symbols; the largest symbol contributed 1.24% of all failures,
+the top ten 7.86%, and the top fifty 23.52%. Among 450 symbols with at least 100
+states and at least ten outcomes in each class, the full model improved AUC for
+18.9%, log loss for 22.7%, and Brier for 37.6%. It was worse in four of five
+months and four of five UTC sessions. Losses were associated with deeper falls,
+more filled levels, later session progress, and greater distance below blended
+entry. These are viewed-IS associations and may not be converted into filters.
+
+This result closes the broad-context rescue hypothesis. Gate 3 EV, execution,
+TP/SL, leverage, and portfolio simulation remain unauthorized for this version.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,
