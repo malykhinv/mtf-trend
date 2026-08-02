@@ -81,6 +81,9 @@ from anomaly_science.strategy.drawdown_ladder.stage1_build import (
     Stage1BuildConfig,
     build_stage1_is as build_drawdown_ladder_stage1_is,
 )
+from anomaly_science.strategy.drawdown_ladder.stage1_analysis import (
+    build_stage1_probability_comparison,
+)
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
 from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
 from anomaly_science.strategy.drawdown_ladder.matched_control import (
@@ -952,6 +955,15 @@ def build_parser() -> argparse.ArgumentParser:
     drawdown_ladder_stage1.add_argument("--max-inflight-symbols", type=int, default=None)
     drawdown_ladder_stage1.add_argument("--limit-symbols", type=int, default=None)
 
+    drawdown_stage1_comparison = subparsers.add_parser(
+        "compare-drawdown-ladder-stage1-probability",
+        help="Compare frozen full-causal and structural Stage-1 probability arms.",
+    )
+    drawdown_stage1_comparison.add_argument("--structural", required=True)
+    drawdown_stage1_comparison.add_argument("--full", required=True)
+    drawdown_stage1_comparison.add_argument("--config", required=True)
+    drawdown_stage1_comparison.add_argument("--out", required=True)
+
 
     return parser
 
@@ -1040,6 +1052,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress=lambda message: print(message, flush=True),
         )
         print(f"drawdown-ladder Stage-1 artifacts written: {result.output_dir}")
+        return 0
+
+    if args.command == "compare-drawdown-ladder-stage1-probability":
+        output_dir = build_stage1_probability_comparison(
+            structural_dir=Path(args.structural),
+            full_dir=Path(args.full),
+            comparison_config_path=Path(args.config),
+            output_dir=Path(args.out),
+        )
+        print(f"drawdown-ladder Stage-1 probability comparison written: {output_dir}")
         return 0
 
     if args.command == "run-causal-regime-atlas":

@@ -1887,3 +1887,15 @@ Changes:
 - Records the execution-only weekly job count in probability artifacts.
 - Adds a deterministic regression proving sequential and parallel predictions,
   metadata, feature importance, and model ordering are identical.
+
+## science: attest frozen drawdown Stage 1 paired comparison
+
+Status: APPLIED; paired result not opened before implementation.
+
+Changes:
+- Adds an immutable runner for the pre-registered full-causal versus structural
+  probability comparison.
+- Requires both inputs to be frozen, pristine-holdout-free, protocol-matched,
+  and temporally audited before comparison.
+- Persists paired metrics, ISO-week bootstrap/sign-flip inference, frozen gates,
+  input hashes, code revision, report, and artifact manifest.
