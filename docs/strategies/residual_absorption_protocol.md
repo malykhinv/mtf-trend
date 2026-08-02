@@ -234,6 +234,15 @@ and high-probability reliability. Failure stops progression to EV, execution,
 SL/TP, PnL, and the untouched 2026 OOS; it cannot be rescued by symbol or
 context cherry-picking.
 
+Observed after this freeze: all 22 weeks produced 77,635 internal-IS
+walk-forward predictions with event-normalized training weights. AUC was
+0.523367, log-loss improvement over the frozen weekly baseline was 0.000937,
+Brier improvement was 0.000468, and ECE was 0.002600. The two permutation
+tests passed, showing a detectable non-random association, but all three
+minimum-effect gates failed and no calibrated prediction reached 0.60. The
+full coarse probability hypothesis therefore fails. This research branch stops
+before EV, execution, structural SL/TP, PnL simulation, and 2026 OOS access.
+
 ### Registered symbol reliability and context attribution
 
 This post-primary analysis distinguishes ex-post diagnosis from online memory.
