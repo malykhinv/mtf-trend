@@ -35,6 +35,9 @@ from anomaly_science.strategy.residual_absorption.stage1_robustness import (
 from anomaly_science.strategy.residual_absorption.stage1_response_build import (
     central_factor_order_statistics,
 )
+from anomaly_science.strategy.residual_absorption.stage2_local_features import (
+    compute_local_window_features,
+)
 from anomaly_science.strategy.residual_absorption.spec import (
     MarketImpulseSpec,
     ResidualResponseSpec,
@@ -586,3 +589,44 @@ def test_within_event_placebo_breaks_symbol_pairing() -> None:
     assert result["observed_spearman"] == pytest.approx(1.0)
     assert result["observed_spearman"] > result["null_spearman_95th_percentile"]
     assert result["spearman_one_sided_randomization_p"] < 0.01
+
+
+def test_local_activity_window_is_invariant_to_future_tail() -> None:
+    snapshot = _ms("2025-08-03T08:30:00Z")
+    rows = []
+    for offset in range(-30, 6):
+        rows.append(
+            {
+                "timestamp": snapshot + offset * 60_000,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0 + offset / 100.0,
+                "quote_volume": 1_000.0 if offset < 0 else 10**12,
+                "trade_count": 10.0,
+                "taker_buy_quote_volume": 600.0,
+                "open_interest": 1_000.0 + offset,
+                "long_liquidations_vol": 0.0,
+                "short_liquidations_vol": 1.0,
+                "oi_available": True,
+                "missing_oi_flag": False,
+                "liquidation_available": True,
+                "missing_liquidation_flag": False,
+            }
+        )
+    frame = pd.DataFrame(rows)
+    base = compute_local_window_features(
+        frame.loc[frame["timestamp"].lt(snapshot)],
+        snapshot_time_ms=snapshot,
+        window_minutes=15,
+    )
+    replay = compute_local_window_features(
+        frame,
+        snapshot_time_ms=snapshot,
+        window_minutes=15,
+    )
+
+    assert replay == base
+    assert replay["local_15m_minute_count"] == 15
+    assert replay["local_15m_quote_volume"] == 15_000.0
+    assert replay["local_15m_taker_imbalance"] == pytest.approx(0.2)

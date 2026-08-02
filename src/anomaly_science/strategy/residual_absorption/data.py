@@ -59,9 +59,50 @@ def read_is_symbol_minutes(
     return frame.sort_values("timestamp", kind="mergesort").reset_index(drop=True)
 
 
+def read_is_event_window_minutes(
+    path: str | Path,
+    *,
+    snapshot_times_ms: Iterable[int],
+    window_minutes: int,
+    columns: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    """Physically read the union of closed IS minutes needed by event windows."""
+
+    if window_minutes <= 0:
+        raise ResidualAbsorptionDataError("window_minutes must be positive")
+    snapshots = tuple(sorted({int(value) for value in snapshot_times_ms}))
+    if not snapshots:
+        return pd.DataFrame(columns=("timestamp", *(columns or ())))
+    for snapshot in snapshots:
+        RESIDUAL_ABSORPTION_RESEARCH_SPLIT.require_is_timestamp_ms(snapshot)
+    offsets = range(window_minutes, 0, -1)
+    required_times = sorted(
+        {
+            snapshot - offset * ONE_MINUTE_MS
+            for snapshot in snapshots
+            for offset in offsets
+        }
+    )
+    requested = None if columns is None else tuple(dict.fromkeys(("timestamp", *columns)))
+    table = pq.read_table(
+        Path(path),
+        columns=None if requested is None else list(requested),
+        filters=[
+            ("timestamp", ">=", RESIDUAL_ABSORPTION_RESEARCH_SPLIT.is_start_time_ms),
+            ("timestamp", "<", is_last_open_time_ms_exclusive()),
+            ("timestamp", "in", required_times),
+        ],
+    )
+    frame = table.to_pandas().sort_values("timestamp", kind="mergesort").reset_index(drop=True)
+    if not frame.empty and not frame["timestamp"].isin(required_times).all():
+        raise ResidualAbsorptionDataError("event-window reader returned an unrequested minute")
+    return frame
+
+
 __all__ = [
     "ResidualAbsorptionDataError",
     "is_last_open_time_ms_exclusive",
+    "read_is_event_window_minutes",
     "read_is_parquet_schema",
     "read_is_symbol_minutes",
 ]
