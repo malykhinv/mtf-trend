@@ -70,6 +70,7 @@ class BinaryWeeklyWalkForwardConfig:
     required_true_columns: tuple[str, ...] = ()
     required_finite_columns: tuple[str, ...] = ()
     group_column: str = "group"
+    weight_group_column: str = ""
     split_group_column: str = ""
     symbol_column: str = "symbol"
     snapshot_time_column: str = "snapshot_time_ms"

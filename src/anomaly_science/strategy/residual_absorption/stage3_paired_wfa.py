@@ -74,7 +74,7 @@ def build_paired_wfa_input(*, stage1_dir: str | Path) -> tuple[pd.DataFrame, tup
     if bool((frame["event_snapshot_time_ms"] != frame["snapshot_time_ms"]).any()):
         raise ValueError("WFA labels do not align to feature snapshots")
     frame = frame.loc[frame["aggtrades_primary_complete"].astype(bool)].copy()
-    recurrence = _event_recurrence_chains(frame[["event_id", "snapshot_time_ms"]])
+    recurrence = event_recurrence_chains(frame[["event_id", "snapshot_time_ms"]])
     frame = frame.merge(recurrence, on="event_id", how="left", validate="many_to_one")
     frame["group"] = frame["event_id"].astype(str) + "|" + frame["symbol"].astype(str)
     frame["nature_future_start_time_ms"] = frame["snapshot_time_ms"] + 5 * 60_000
@@ -84,15 +84,7 @@ def build_paired_wfa_input(*, stage1_dir: str | Path) -> tuple[pd.DataFrame, tup
     frame["nature_label_schema_version"] = LABEL_SCHEMA_VERSION
     frame["is_nature_anchor"] = True
 
-    numeric = tuple(
-        sorted(
-            column
-            for column in features.columns
-            if column not in _FORBIDDEN_MODEL_COLUMNS
-            and not column.startswith("aggtrades_")
-            and pd.api.types.is_numeric_dtype(features[column])
-        )
-    )
+    numeric = select_coarse_numeric_features(features)
     high_resolution = tuple(
         sorted(
             column
@@ -111,7 +103,19 @@ def build_paired_wfa_input(*, stage1_dir: str | Path) -> tuple[pd.DataFrame, tup
     return frame, numeric, high_resolution
 
 
-def _event_recurrence_chains(events: pd.DataFrame) -> pd.DataFrame:
+def select_coarse_numeric_features(features: pd.DataFrame) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            column
+            for column in features.columns
+            if column not in _FORBIDDEN_MODEL_COLUMNS
+            and not column.startswith("aggtrades_")
+            and pd.api.types.is_numeric_dtype(features[column])
+        )
+    )
+
+
+def event_recurrence_chains(events: pd.DataFrame) -> pd.DataFrame:
     ordered = events.drop_duplicates("event_id").sort_values(
         ["snapshot_time_ms", "event_id"], kind="mergesort"
     )
@@ -127,7 +131,7 @@ def _event_recurrence_chains(events: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _config(*, arm: str, numeric_features: tuple[str, ...]) -> BinaryWeeklyWalkForwardConfig:
+def paired_wfa_config(*, arm: str, numeric_features: tuple[str, ...]) -> BinaryWeeklyWalkForwardConfig:
     return BinaryWeeklyWalkForwardConfig(
         protocol_freeze_id=f"{PROTOCOL_FREEZE_ID}:{arm}",
         strategy_name="residual_absorption",
@@ -193,8 +197,8 @@ def run_stage3_paired_wfa(*, stage1_dir: str | Path) -> Path:
     frame, coarse_features, high_resolution_features = build_paired_wfa_input(
         stage1_dir=root
     )
-    coarse_config = _config(arm="coarse", numeric_features=coarse_features)
-    augmented_config = _config(
+    coarse_config = paired_wfa_config(arm="coarse", numeric_features=coarse_features)
+    augmented_config = paired_wfa_config(
         arm="coarse_plus_aggtrades",
         numeric_features=(*coarse_features, *high_resolution_features),
     )
@@ -307,7 +311,13 @@ def main() -> None:
     print(run_stage3_paired_wfa(stage1_dir=args.stage1_dir))
 
 
-__all__ = ["build_paired_wfa_input", "run_stage3_paired_wfa"]
+__all__ = [
+    "build_paired_wfa_input",
+    "event_recurrence_chains",
+    "paired_wfa_config",
+    "run_stage3_paired_wfa",
+    "select_coarse_numeric_features",
+]
 
 
 if __name__ == "__main__":

@@ -55,6 +55,7 @@ def build_binary_weekly_walk_forward(
     frozen_models: list[FrozenWeeklyBinaryModel] = []
 
     split_group_column = config.split_group_column or config.group_column
+    weight_group_column = config.weight_group_column or config.group_column
     for test_week, test in oos.groupby("test_week", sort=True):
         freeze_ms = _week_start_ms(str(test_week))
         test = test.sort_values(
@@ -80,6 +81,7 @@ def build_binary_weekly_walk_forward(
             "oos_row_count": len(test),
             "eligible_train_row_count": len(train),
             "eligible_train_group_count": train[config.group_column].nunique(),
+            "eligible_train_weight_group_count": train[weight_group_column].nunique(),
             "eligible_train_split_group_count": train[split_group_column].nunique(),
             "test_split_group_count": len(test_groups),
             "excluded_train_same_split_group_row_count": int(
@@ -131,7 +133,7 @@ def build_binary_weekly_walk_forward(
             x_fit,
             y_fit,
             cat_features=cat_indices,
-            sample_weight=_event_normalized_weights(fit, config.group_column),
+            sample_weight=_event_normalized_weights(fit, weight_group_column),
             eval_set=(x_validation, y_validation),
             early_stopping_rounds=config.catboost_early_stopping_rounds,
             use_best_model=True,
@@ -140,7 +142,7 @@ def build_binary_weekly_walk_forward(
         baseline = float(
             np.average(
                 train[config.label_column].to_numpy(dtype=float),
-                weights=_event_normalized_weights(train, config.group_column),
+                weights=_event_normalized_weights(train, weight_group_column),
             )
         )
         raw_calibration = model.predict_proba(x_calibration)[:, 1]
@@ -148,7 +150,7 @@ def build_binary_weekly_walk_forward(
         calibrator = _fit_isotonic_calibrator(
             raw_calibration,
             y_calibration,
-            weights=_event_normalized_weights(calibration, config.group_column),
+            weights=_event_normalized_weights(calibration, weight_group_column),
             baseline=baseline,
             config=config,
         )
@@ -260,6 +262,8 @@ def validate_binary_probability_frame(
     }
     if config.split_group_column:
         required.add(config.split_group_column)
+    if config.weight_group_column:
+        required.add(config.weight_group_column)
     if config.population_minimum_column:
         required.add(config.population_minimum_column)
     if config.population_exact_column:

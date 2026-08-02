@@ -136,6 +136,23 @@ def test_split_groups_isolate_recurrence_chains_across_week_boundaries() -> None
     ).all()
 
 
+def test_weight_groups_normalize_cross_section_without_breaking_unique_row_groups() -> None:
+    frame = _rows()
+    frame["market_event_id"] = (frame["snapshot_time_ms"] // 86_400_000).astype(str)
+    config = replace(_config(), weight_group_column="market_event_id")
+
+    result = build_binary_weekly_walk_forward(frame, config)
+
+    scored = result.weekly_metadata.loc[
+        result.weekly_metadata["status"] == "FROZEN_AND_SCORED"
+    ]
+    assert not scored.empty
+    assert (
+        scored["eligible_train_weight_group_count"]
+        < scored["eligible_train_group_count"]
+    ).all()
+
+
 def test_unresolved_labels_at_freeze_cannot_change_first_week_model() -> None:
     original = _rows()
     changed = original.copy()

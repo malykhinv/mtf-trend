@@ -204,6 +204,36 @@ All comparisons use identical prediction keys and weekly freeze times. Failure
 means aggTrades are rejected from the response-probability model rather than
 retuned on the same IS predictions.
 
+Observed after this freeze: all 22 weeks and 19,487 identical prediction rows
+were scored in both arms. Coarse AUC was 0.507273 and augmented AUC was
+0.509071; delta 0.001797 had ISO-week bootstrap 95% CI
+[-0.004849, 0.009310] and sign-flip p=0.28. Augmented log loss and Brier score
+were slightly worse. All nine incremental gates failed, so aggTrades are
+rejected from this model family without retuning.
+
+### Registered full-population coarse weekly walk-forward
+
+The full-population coarse WFA was locked after rejection of the paired
+aggTrades arm and before any full-population CatBoost predictions were made.
+It uses all causal coarse event/symbol rows rather than the non-random
+aggTrades-covered subset. Calendar boundaries, recurrence-chain isolation,
+feature families, CatBoost settings, calibration, and absolute probability
+gates remain exactly those registered for the coarse paired arm.
+
+Because market impulses contain different numbers of symbols, CatBoost fit and
+calibration weights are normalized by market event: every event has equal
+total weight irrespective of its cross-section size. The event/symbol row id
+remains unique for prediction pairing, while the separate weight-group field is
+the market event id. This is a strategy-neutral capability of the shared binary
+WFA engine and is covered by its contract tests.
+
+The full coarse probability hypothesis passes only if every preregistered
+absolute gate passes, including AUC at least 0.60, log-loss improvement at least
+0.005, Brier improvement at least 0.002, ECE at most 0.05, permutation tests,
+and high-probability reliability. Failure stops progression to EV, execution,
+SL/TP, PnL, and the untouched 2026 OOS; it cannot be rescued by symbol or
+context cherry-picking.
+
 ### Registered symbol reliability and context attribution
 
 This post-primary analysis distinguishes ex-post diagnosis from online memory.
