@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from anomaly_science.contracts.time import SnapshotTiming
-from anomaly_science.market_context.sessions import session_instance_for_ms
+from anomaly_science.market_context.sessions import feature_session_instance_for_snapshot
 from anomaly_science.strategy.residual_absorption.market_impulse import MarketImpulseEvent
 from anomaly_science.strategy.residual_absorption.spec import (
     RESIDUAL_ABSORPTION_RESEARCH_SPLIT,
@@ -194,7 +194,7 @@ def build_residual_response_profiles(
 
 def _attach_session_coordinates(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
-    instances = [session_instance_for_ms(int(value)) for value in result["snapshot_time_ms"]]
+    instances = [feature_session_instance_for_snapshot(int(value)) for value in result["snapshot_time_ms"]]
     result["utc_day"] = [item.utc_day for item in instances]
     result["session_seq"] = [item.block.seq for item in instances]
     return result

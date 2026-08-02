@@ -15,6 +15,7 @@ from anomaly_science.data.event_scoped import causal_event_enrichment_view
 from anomaly_science.market_context.sessions import (
     UTC_SESSION_CALENDAR_VERSION,
     block_seq_for_ms,
+    feature_session_instance_for_snapshot,
     session_instance_for_ms,
 )
 from anomaly_science.strategy.residual_absorption.spec import (
@@ -131,6 +132,7 @@ def test_shared_session_calendar_preserves_existing_five_blocks() -> None:
     instance = session_instance_for_ms(_ms("2025-08-04T08:10:00Z"))
     assert instance.block.name == "EU"
     assert instance.elapsed_minutes_at(_ms("2025-08-04T08:10:00Z")) == 10
+    assert feature_session_instance_for_snapshot(_ms("2025-08-04T08:00:00Z")).block.name == "ASIA"
 
 
 def test_session_universe_uses_prior_same_type_sessions_and_elapsed_slice() -> None:

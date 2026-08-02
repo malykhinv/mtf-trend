@@ -107,6 +107,15 @@ def session_instance_for_ms(timestamp_ms: int) -> UtcSessionInstance:
     )
 
 
+def feature_session_instance_for_snapshot(snapshot_time_ms: int) -> UtcSessionInstance:
+    """Session containing the closed interval that ends at a decision snapshot."""
+
+    validate_timestamp_ms(snapshot_time_ms, field_name="snapshot_time_ms")
+    if snapshot_time_ms == 0:
+        raise ValueError("snapshot_time_ms must be positive for a closed feature interval")
+    return session_instance_for_ms(snapshot_time_ms - 1)
+
+
 def session_bounds_ms(*, utc_day: int, seq: int) -> tuple[int, int]:
     if utc_day < 0:
         raise ValueError("utc_day must be non-negative")
@@ -146,6 +155,7 @@ __all__ = [
     "UtcSessionBlock",
     "UtcSessionInstance",
     "block_seq_for_ms",
+    "feature_session_instance_for_snapshot",
     "predecessor_same_type",
     "predecessor_sequential",
     "session_bounds_ms",

@@ -60,6 +60,7 @@ from anomaly_science.market_context.sessions import (
     UTC_SESSION_CALENDAR_VERSION,
     UtcSessionBlock,
     UtcSessionInstance,
+    feature_session_instance_for_snapshot,
     session_instance_for_ms,
 )
 
@@ -107,5 +108,6 @@ __all__ = [
     "UTC_SESSION_CALENDAR_VERSION",
     "UtcSessionBlock",
     "UtcSessionInstance",
+    "feature_session_instance_for_snapshot",
     "session_instance_for_ms",
 ]

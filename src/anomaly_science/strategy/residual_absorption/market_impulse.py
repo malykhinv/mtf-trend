@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from anomaly_science.contracts.time import SnapshotTiming
-from anomaly_science.market_context.sessions import session_instance_for_ms
+from anomaly_science.market_context.sessions import feature_session_instance_for_snapshot
 from anomaly_science.strategy.residual_absorption.spec import (
     RESIDUAL_ABSORPTION_RESEARCH_SPLIT,
     MarketImpulseSpec,
@@ -133,7 +133,7 @@ def build_market_factor_snapshots(
         if core.empty:
             continue
         primary = core[f"return_{spec.primary_return_window_minutes}m"].to_numpy(dtype=float)
-        instance = session_instance_for_ms(snapshot_ms)
+        instance = feature_session_instance_for_snapshot(snapshot_ms)
         factor = {
             window: float(core[f"return_{window}m"].median())
             for window in spec.factor_return_windows_minutes
@@ -161,6 +161,72 @@ def build_market_factor_snapshots(
             }
         )
 
+    return _finalize_raw_factor_rows(raw_rows, spec=spec)
+
+
+def finalize_market_factor_aggregates(
+    aggregates: pd.DataFrame,
+    *,
+    spec: MarketImpulseSpec = MarketImpulseSpec(),
+) -> list[MarketFactorSnapshotRow]:
+    """Apply the causal prior-session baseline to pre-aggregated factor rows."""
+
+    required = {
+        "snapshot_time_ms",
+        "feature_cutoff_time_ms",
+        "utc_day",
+        "session_seq",
+        "cross_section_symbol_count",
+        "alt_median_return_5m",
+        "alt_median_return_15m",
+        "alt_median_return_30m",
+        "directional_breadth_up_15m",
+        "directional_breadth_down_15m",
+        "btc_return_15m",
+        "eth_return_15m",
+    }
+    missing = sorted(required.difference(aggregates.columns))
+    if missing:
+        raise MarketImpulseContractError(f"factor aggregates missing columns: {missing}")
+    raw_rows: list[dict[str, object]] = []
+    for raw in aggregates.sort_values("snapshot_time_ms", kind="mergesort").itertuples(index=False):
+        snapshot = int(raw.snapshot_time_ms)
+        RESIDUAL_ABSORPTION_RESEARCH_SPLIT.require_is_timestamp_ms(snapshot)
+        cutoff = int(raw.feature_cutoff_time_ms)
+        if cutoff > snapshot:
+            raise MarketImpulseContractError("factor aggregate cutoff exceeds snapshot")
+        instance = feature_session_instance_for_snapshot(snapshot)
+        if int(raw.utc_day) != instance.utc_day or int(raw.session_seq) != instance.block.seq:
+            raise MarketImpulseContractError("factor aggregate session coordinates are inconsistent")
+        raw_rows.append(
+            {
+                "snapshot_time_ms": snapshot,
+                "feature_cutoff_time_ms": cutoff,
+                "utc_day": int(raw.utc_day),
+                "session_seq": int(raw.session_seq),
+                "session_name": instance.block.name,
+                "cross_section_symbol_count": int(raw.cross_section_symbol_count),
+                "factor": {
+                    5: float(raw.alt_median_return_5m),
+                    15: float(raw.alt_median_return_15m),
+                    30: float(raw.alt_median_return_30m),
+                },
+                "breadth_up": float(raw.directional_breadth_up_15m),
+                "breadth_down": float(raw.directional_breadth_down_15m),
+                "reference_returns": {
+                    "BTCUSDT": _optional_finite(raw.btc_return_15m),
+                    "ETHUSDT": _optional_finite(raw.eth_return_15m),
+                },
+            }
+        )
+    return _finalize_raw_factor_rows(raw_rows, spec=spec)
+
+
+def _finalize_raw_factor_rows(
+    raw_rows: list[dict[str, object]],
+    *,
+    spec: MarketImpulseSpec,
+) -> list[MarketFactorSnapshotRow]:
     history_by_seq: dict[int, OrderedDict[int, list[float]]] = {
         seq: OrderedDict() for seq in range(5)
     }
@@ -306,6 +372,13 @@ def _symbol_value(frame: pd.DataFrame, *, symbol: str, column: str) -> float | N
     return value if math.isfinite(value) else None
 
 
+def _optional_finite(value: object) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 def _explicit_bool(series: pd.Series) -> pd.Series:
     if pd.api.types.is_bool_dtype(series.dtype):
         return series.astype(bool)
@@ -321,4 +394,5 @@ __all__ = [
     "MarketImpulseEvent",
     "build_market_factor_snapshots",
     "detect_market_impulse_events",
+    "finalize_market_factor_aggregates",
 ]
