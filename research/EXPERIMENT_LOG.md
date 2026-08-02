@@ -954,3 +954,62 @@ threshold even more often. Neither side has positive EV proof. Continue to the
 frozen prior non-drawdown matched control; do not select a side, TP, or filter
 from the mirror result.
 ```
+
+## 2026-08-02 — prior non-drawdown matched control
+
+Status: `IS_GATE_0C_REJECTS_NAIVE_LONG_EDGE`.
+
+The control builder and paired statistics were frozen in commits `2c689958`,
+`9069e4a4`, and the explicit missing-activity audit amendment `125fcc57` before
+the full paired result was opened.
+
+Build/audit result:
+
+```text
+long ladder-state signals: 214,992
+causal prior matched controls: 162,548
+overall matched coverage: 75.61%
+no-prior-pool rows: 8,397
+failed-caliper rows: 44,047
+IS raw quote_volume missing rows: 67,659 across five affected symbols
+temporal audit: PASS
+controls strictly prior: PASS
+control 48h outcome resolved before signal: PASS
+future start > control snapshot: PASS
+OOS rows read: 0
+```
+
+Frozen primary paired results:
+
+```text
+3% grid through 6%:
+  matched 18,512 / 24,718 (74.89%); eligible
+  signal recovery 87.01%; control recovery 97.57%; delta -10.56 pp
+  symbol-week 95% CI -11.08 .. -10.03 pp
+  symbol 95% CI -11.15 .. -10.01 pp
+  signed 48h return delta -2.48 pp
+  week 95% CI -3.42 .. -1.60 pp; symbol 95% CI -4.52 .. -1.14 pp
+
+5% grid through 10%:
+  matched 2,896 / 7,438 (38.94%); ineligible by frozen 70% coverage gate
+
+10% grid through 20%:
+  matched 109 / 1,337 (8.15%); ineligible by frozen coverage/support gates
+```
+
+For the eligible 3→6% state, recovery delta was negative in every one of seven
+calendar months. Signed-return delta was negative in five months, positive in
+June, and approximately flat in December. Control reuse was negligible:
+99.86% of paired 3→6% rows used a unique symbol/timestamp control.
+
+Interpretation:
+
+```text
+The naive unconditional long ladder has no validated edge. Even after a better
+limit entry, the 3→6% anomaly population recovers less often and has worse 48h
+return than causally matched ordinary market states. Deeper states cannot be
+declared positive or negative because a genuinely non-drawdown control cannot
+be matched with adequate coverage. Gate 0C does not authorize execution or PnL
+optimization. The only admissible continuation is to test whether success and
+tail failure inside the anomaly population are predictably separable online.
+```

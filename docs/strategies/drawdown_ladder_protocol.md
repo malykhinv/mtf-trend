@@ -277,6 +277,16 @@ signal/control snapshots cannot enter a match; raw missing-row counts are
 written to the build manifest and symbol coverage artifact. Negative finite
 quote volume is a hard data error.
 
+Frozen Stage 0C result (2026-08-02): the mirrored short control rejected a
+long-specific recovery effect, and the eligible prior-control 3→6% state was
+materially worse than ordinary matched market time in both 25 bps recovery and
+signed 48-hour return. The 5→10% and 10→20% primary states failed matched-control
+coverage and remain unidentified rather than being promoted from sparse data.
+The formal status is `IS_GATE_0C_REJECTS_NAIVE_LONG_EDGE`. This closes the naive
+unconditional ladder hypothesis. Further work may only ask whether causal
+features predict recovery and tail failure within the anomaly population; it
+may not optimize PnL or claim that raw mean reversion is an edge.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

@@ -1837,3 +1837,26 @@ Full IS diagnostic:
   106,922 parent symbol/session events.
 - Temporal audit PASS; this run is not a trade simulation and makes no edge or
   PnL claim.
+
+## science: add mirrored and prior non-drawdown ladder controls
+
+Status: APPLIED; naive unconditional long edge rejected on IS.
+
+Changes:
+- Extends the generic recovery index to signed short recovery without changing
+  frozen long artifacts.
+- Adds the mechanically identical rally/short mirror, exact-stratum cluster
+  bootstrap, frozen primary states, Holm correction, and month stability.
+- Adds strictly prior same-symbol/session/minute non-drawdown controls matched
+  on causal volatility, quote volume, and return with fail-closed calipers.
+- Audits missing activity without imputation, control-outcome resolution before
+  each signal, unique pair keys, feature timing, future timing, and zero OOS
+  access.
+
+Full IS result:
+- Mirror: 238,585 ladder states; temporal audit PASS. Short recovery was higher
+  but its adverse tail was worse; no short edge claim.
+- Prior control: 162,548 / 214,992 matched pairs (75.61%); temporal audit PASS.
+  The eligible 3→6% state underperformed matched ordinary market time by 10.56
+  percentage points in recovery and 2.48 percentage points in signed 48-hour
+  return. Deeper primary states failed coverage and remain unidentified.
