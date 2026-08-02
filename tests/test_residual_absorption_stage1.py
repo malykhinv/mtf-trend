@@ -20,6 +20,15 @@ from anomaly_science.strategy.residual_absorption.response_memory import (
 from anomaly_science.strategy.residual_absorption.response_outcomes import (
     build_response_outcome_records,
 )
+from anomaly_science.strategy.residual_absorption.stage1_outcome_build import (
+    build_symbol_outcome_records,
+)
+from anomaly_science.strategy.residual_absorption.stage1_falsification import (
+    cluster_bootstrap_primary,
+)
+from anomaly_science.strategy.residual_absorption.stage1_response_build import (
+    central_factor_order_statistics,
+)
 from anomaly_science.strategy.residual_absorption.spec import (
     MarketImpulseSpec,
     ResidualResponseSpec,
@@ -470,3 +479,73 @@ def test_response_outcome_ignores_prices_after_registered_resolution() -> None:
     )
 
     assert [asdict(row) for row in replay] == [asdict(row) for row in base]
+
+
+def test_scalable_response_outcome_matches_direct_frozen_factor_path() -> None:
+    current = _current_response_profile()
+    frame = _future_price_fixture()
+    direct = build_response_outcome_records(
+        frame,
+        profiles=[current],
+        spec=ResponseOutcomeSpec(minimum_factor_symbols=2),
+    )[0]
+    event_prices = frame.loc[
+        frame["snapshot_time_ms"].eq(current.snapshot_time_ms)
+    ].set_index("symbol")["close"]
+    rows: list[dict[str, object]] = []
+    for path_time, group in frame.loc[
+        frame["snapshot_time_ms"].gt(current.snapshot_time_ms)
+    ].groupby("snapshot_time_ms"):
+        factor_returns = [
+            float(row.close / event_prices.loc[row.symbol] - 1.0)
+            for row in group.itertuples(index=False)
+        ]
+        rows.append(
+            {
+                "path_time_ms": int(path_time),
+                **central_factor_order_statistics(factor_returns),
+            }
+        )
+    aaa_prices = frame.loc[frame["symbol"].eq("AAAUSDT")].set_index(
+        "snapshot_time_ms"
+    )["close"]
+    scalable = build_symbol_outcome_records(
+        pd.DataFrame([asdict(current)]),
+        prices=aaa_prices,
+        factor_path_stats={
+            current.snapshot_time_ms: pd.DataFrame(rows).set_index("path_time_ms")
+        },
+        core_event_times={current.snapshot_time_ms},
+        spec=ResponseOutcomeSpec(minimum_factor_symbols=2),
+    )[0]
+
+    for name, expected in asdict(direct).items():
+        actual = getattr(scalable, name)
+        if isinstance(expected, float):
+            assert actual == pytest.approx(expected)
+        else:
+            assert actual == expected
+
+
+def test_cluster_bootstrap_resamples_whole_clusters() -> None:
+    frame = pd.DataFrame(
+        {
+            "direction_adjusted_underreaction_15m": [
+                value for value in range(1, 21) for _ in range(2)
+            ],
+            "catchup_residual_change_60m": [
+                value / 10_000 for value in range(1, 21) for _ in range(2)
+            ],
+            "utc_day": [cluster for cluster in range(10) for _ in range(4)],
+        }
+    )
+    result = cluster_bootstrap_primary(
+        frame,
+        cluster_column="utc_day",
+        repetitions=200,
+        seed=7,
+    )
+
+    assert result["cluster_count"] == 10
+    assert result["spearman_95pct_percentile_ci"][0] > 0.99
+    assert result["positive_underreaction_median_60m_95pct_percentile_ci"][0] > 0.0
