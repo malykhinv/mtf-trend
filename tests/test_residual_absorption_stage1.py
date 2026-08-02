@@ -35,6 +35,9 @@ from anomaly_science.strategy.residual_absorption.stage1_robustness import (
 from anomaly_science.strategy.residual_absorption.stage1_response_build import (
     central_factor_order_statistics,
 )
+from anomaly_science.strategy.residual_absorption.stage1_symbol_context import (
+    build_causal_symbol_context_memory,
+)
 from anomaly_science.strategy.residual_absorption.stage2_local_features import (
     compute_local_window_features,
 )
@@ -630,3 +633,51 @@ def test_local_activity_window_is_invariant_to_future_tail() -> None:
     assert replay["local_15m_minute_count"] == 15
     assert replay["local_15m_quote_volume"] == 15_000.0
     assert replay["local_15m_taker_imbalance"] == pytest.approx(0.2)
+
+
+def test_causal_symbol_memory_uses_only_resolved_prior_outcomes(tmp_path) -> None:
+    root = tmp_path / "stage1"
+    root.mkdir()
+    event_times = [
+        _ms("2025-08-01T08:00:00Z"),
+        _ms("2025-08-01T11:00:00Z"),
+        _ms("2025-08-01T14:00:00Z"),
+    ]
+    profiles = pd.DataFrame(
+        [
+            {
+                "event_id": f"event-{index}",
+                "symbol": "AAAUSDT",
+                "snapshot_time_ms": timestamp,
+                "impulse_direction": 1,
+                "session_seq": 1,
+            }
+            for index, timestamp in enumerate(event_times)
+        ]
+    )
+    outcomes = pd.DataFrame(
+        [
+            {
+                "event_id": f"event-{index}",
+                "symbol": "AAAUSDT",
+                "resolution_time_ms": timestamp + 120 * 60_000,
+                "impulse_direction": 1,
+                "session_seq": 1,
+                "catchup_residual_change_60m": value,
+            }
+            for index, (timestamp, value) in enumerate(
+                zip(event_times, (0.01, -0.02, 999.0), strict=True)
+            )
+        ]
+    )
+    profiles.to_parquet(root / "residual_response_profiles_is.parquet", index=False)
+    outcomes.to_parquet(root / "response_outcomes_is.parquet", index=False)
+
+    path = build_causal_symbol_context_memory(stage1_dir=root)
+    memory = pd.read_parquet(path).sort_values("snapshot_time_ms")
+
+    assert memory.iloc[0]["prior_resolved_count_all"] == 0
+    assert memory.iloc[1]["prior_resolved_count_all"] == 1
+    assert memory.iloc[1]["median_catchup_60m_last_20"] == pytest.approx(0.01)
+    assert memory.iloc[2]["prior_resolved_count_all"] == 2
+    assert memory.iloc[2]["maximum_resolution_time_used_ms"] <= event_times[2]
