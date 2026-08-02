@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
@@ -80,6 +81,7 @@ class PumpWaveReviewConfig:
     is_end_exclusive_ms: int = IS_END_EXCLUSIVE_MS
     wave_ordinals: tuple[int, ...] = (2, 3)
     per_month_ordinal: int = 30
+    pilot_per_month_ordinal: int = 5
     review_lead_minutes: int = 4 * 60
     review_tail_minutes: int = 24 * 60
     chart_timeframe: str = "5m"
@@ -94,6 +96,10 @@ class PumpWaveReviewConfig:
             raise ValueError("wave_ordinals must be unique")
         if self.per_month_ordinal <= 0:
             raise ValueError("per_month_ordinal must be positive")
+        if not 0 < self.pilot_per_month_ordinal <= self.per_month_ordinal:
+            raise ValueError(
+                "pilot_per_month_ordinal must be positive and no larger than per_month_ordinal"
+            )
         if self.review_lead_minutes <= 0 or self.review_tail_minutes <= 0:
             raise ValueError("review context windows must be positive")
         if not self.chart_timeframe:
@@ -273,17 +279,25 @@ def sample_wave_review_queue(
     missing = sorted(required - set(population.columns))
     if missing:
         raise ValueError(f"wave population is missing sampling columns: {missing}")
-    queue = (
+    sample = (
         population.sort_values(
             ["sampling_stratum", "sampling_hash", "event_id"], kind="mergesort"
         )
         .groupby("sampling_stratum", sort=True, group_keys=False)
         .head(cfg.per_month_ordinal)
-        .sort_values(["selection_snapshot_time_ms", "symbol", "wave_ordinal"], kind="mergesort")
         .reset_index(drop=True)
     )
-    queue["review_sample_selected"] = True
-    return queue
+    sample["review_stratum_rank"] = sample.groupby("sampling_stratum", sort=False).cumcount() + 1
+    sample["review_phase"] = np.where(
+        sample["review_stratum_rank"].le(cfg.pilot_per_month_ordinal),
+        "pilot",
+        "reserved",
+    )
+    sample["review_sample_selected"] = True
+    return sample.sort_values(
+        ["review_phase", "sampling_month", "wave_ordinal", "sampling_hash"],
+        kind="mergesort",
+    ).reset_index(drop=True)
 
 
 def run_wave_review_build(
@@ -296,7 +310,8 @@ def run_wave_review_build(
     cfg = config or PumpWaveReviewConfig()
     source = load_online_source(input_path, is_end_exclusive_ms=cfg.is_end_exclusive_ms)
     population = build_wave_population(source, config=cfg)
-    queue = sample_wave_review_queue(population, config=cfg)
+    review_sample = sample_wave_review_queue(population, config=cfg)
+    queue = review_sample.loc[review_sample["review_phase"].eq("pilot")].copy()
 
     labels_path = output_dir / "review_labels.jsonl"
     if labels_path.is_file() and labels_path.stat().st_size:
@@ -313,10 +328,12 @@ def run_wave_review_build(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     population_path = output_dir / "population.parquet"
+    review_sample_path = output_dir / "review_sample.parquet"
     candidates_path = output_dir / "candidates.parquet"
     marks_path = output_dir / "marks.jsonl"
     report_path = output_dir / "report.json"
     _write_parquet_atomic(population, population_path)
+    _write_parquet_atomic(review_sample, review_sample_path)
     _write_parquet_atomic(queue, candidates_path)
     _write_jsonl_atomic([_seed_mark(row) for row in queue.to_dict(orient="records")], marks_path)
     labels_path.touch(exist_ok=True)
@@ -327,7 +344,7 @@ def run_wave_review_build(
         .rename("population_count")
         .reset_index()
         .merge(
-            queue.groupby(["sampling_month", "wave_ordinal"], sort=True)
+            review_sample.groupby(["sampling_month", "wave_ordinal"], sort=True)
             .size()
             .rename("review_count")
             .reset_index(),
@@ -346,7 +363,10 @@ def run_wave_review_build(
         "source_online_schema_version": str(source["online_state_schema_version"].iloc[0]),
         "accepted_source_online_schema_versions": sorted(SOURCE_ONLINE_SCHEMA_VERSIONS),
         "population_count": len(population),
+        "review_sample_count": len(review_sample),
         "review_queue_count": len(queue),
+        "reserved_review_count": int(review_sample["review_phase"].eq("reserved").sum()),
+        "review_queue_symbol_count": int(queue["symbol"].nunique()),
         "population_symbol_count": int(population["symbol"].nunique()),
         "population_chain_count": int(population["recurrence_chain_id"].nunique()),
         "top_10_symbol_population_share": float(symbol_counts.head(10).sum() / len(population)),
@@ -373,7 +393,13 @@ def run_wave_review_build(
     _write_json_atomic(report, report_path)
     manifest = build_manifest(
         run_id="pump-wave-stage0-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
-        artifact_paths=[population_path, candidates_path, marks_path, report_path],
+        artifact_paths=[
+            population_path,
+            review_sample_path,
+            candidates_path,
+            marks_path,
+            report_path,
+        ],
         root=output_dir,
     )
     write_manifest(output_dir / "manifest.json", manifest)
@@ -508,12 +534,16 @@ def main() -> None:
         default=Path(".output/results/pump_wave_short_v1/wave_review"),
     )
     parser.add_argument("--per-month-ordinal", type=int, default=30)
+    parser.add_argument("--pilot-per-month-ordinal", type=int, default=5)
     parser.add_argument("--refresh-existing-labels", action="store_true")
     args = parser.parse_args()
     output = run_wave_review_build(
         input_path=args.input,
         output_dir=args.out_dir,
-        config=PumpWaveReviewConfig(per_month_ordinal=args.per_month_ordinal),
+        config=PumpWaveReviewConfig(
+            per_month_ordinal=args.per_month_ordinal,
+            pilot_per_month_ordinal=args.pilot_per_month_ordinal,
+        ),
         refresh_existing_labels=args.refresh_existing_labels,
     )
     print(output)

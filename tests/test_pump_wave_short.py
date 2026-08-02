@@ -136,11 +136,12 @@ def test_review_sample_is_deterministic_and_stratified_without_outcomes() -> Non
                 )
             )
     population = build_wave_population(pd.DataFrame(rows, columns=SOURCE_COLUMNS))
-    config = PumpWaveReviewConfig(per_month_ordinal=3)
+    config = PumpWaveReviewConfig(per_month_ordinal=3, pilot_per_month_ordinal=1)
 
     first = sample_wave_review_queue(population, config=config)
     second = sample_wave_review_queue(population.sample(frac=1.0, random_state=91), config=config)
 
     assert len(first) == 6
     assert first.groupby("wave_ordinal").size().to_dict() == {2: 3, 3: 3}
+    assert first["review_phase"].value_counts().to_dict() == {"reserved": 4, "pilot": 2}
     assert first["event_id"].tolist() == second["event_id"].tolist()

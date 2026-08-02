@@ -73,6 +73,16 @@ event in 2025. The desk queue is a reproducible, outcome-blind sample of at most
 of the immutable source event id. The complete population remains an artifact,
 so sampling cannot hide detector coverage or symbol concentration.
 
+Only the first five hash-ranked rows in each stratum enter the active Stage 0A
+pilot desk: 70 rows when all seven 2025 months are present. The remaining 25 per
+stratum are materialized as a reserved sample but are not served by the desk.
+The pilot is detector-development data, not confirmatory evidence. It passes the
+feasibility gate only if at least 50% of all pilot rows, at least 50% of ordinal-
+two rows, and at least 50% of ordinal-three rows are manually marked as genuine
+later waves. Failure stops this formulation. Passing permits one explicit
+morphology revision using recorded failure reasons, after which a new detector
+must be frozen before the reserved sample is opened.
+
 Charts may display up to four hours before the first wave and 24 hours after the
 current candidate snapshot. That future tail is presentation-only. It cannot
 change membership, wave ordinal, stored causal features, or sampling hash. The
@@ -100,6 +110,12 @@ rewrite the detector artifact.
 
 No short signal, winner/loser label, TP, SL, future return, or PnL is part of
 Stage 0.
+
+Observed after the initial freeze and before manual labels: the IS-filtered
+source contained 90,643 online rows. The structural episode builder produced
+5,723 ordinal-two/three candidates across 579 symbols. The frozen stratified
+sample contains 420 rows; 70 are the active pilot and 350 remain reserved. The
+build took about 17 seconds. All temporal and future-column audits passed.
 
 ## Time partitions and holdout status
 
