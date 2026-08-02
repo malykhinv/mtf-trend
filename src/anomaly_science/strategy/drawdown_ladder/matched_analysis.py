@@ -14,6 +14,19 @@ class MatchedComparisonError(ValueError):
     """Raised when signal/control artifacts violate the paired contract."""
 
 
+def _require_passed_audit(root: Path, *, protocol_freeze_id: str) -> None:
+    audit_path = root / "temporal_audit.json"
+    if not audit_path.is_file():
+        raise MatchedComparisonError(f"required temporal audit is missing: {audit_path}")
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    if audit.get("status") != "PASS":
+        raise MatchedComparisonError(f"temporal audit is not PASS: {audit_path}")
+    if audit.get("protocol_freeze_id") != protocol_freeze_id:
+        raise MatchedComparisonError(f"unexpected temporal-audit protocol: {audit_path}")
+    if int(audit.get("untouched_2026_rows_used", 0)) != 0:
+        raise MatchedComparisonError(f"temporal audit reports OOS access: {audit_path}")
+
+
 @dataclass(frozen=True, slots=True)
 class MatchedComparisonSpec:
     protocol_freeze_id: str = "drawdown_prior_control_comparison_20260802_v1"
@@ -140,6 +153,10 @@ def _load_pairs(
     signal_for_join = all_signal.rename(
         columns={
             "candidate_id": "signal_candidate_id",
+            "symbol": "expected_signal_symbol",
+            "grid_step_pct": "expected_grid_step_pct",
+            "deepest_filled_level_pct": "expected_deepest_filled_level_pct",
+            "snapshot_time_ms": "expected_signal_snapshot_time_ms",
             "horizon_complete": "signal_horizon_complete",
             f"break_even_{cost_bps}bps_reached": "signal_recovered",
             "future_return_2880m": "signal_return_48h",
@@ -149,6 +166,10 @@ def _load_pairs(
         signal_for_join[
             [
                 "signal_candidate_id",
+                "expected_signal_symbol",
+                "expected_grid_step_pct",
+                "expected_deepest_filled_level_pct",
+                "expected_signal_snapshot_time_ms",
                 "signal_horizon_complete",
                 "signal_recovered",
                 "signal_return_48h",
@@ -169,6 +190,18 @@ def _load_pairs(
     required = ["signal_recovered", "control_recovered", "signal_horizon_complete"]
     if any(bool(pairs[column].isna().any()) for column in required):
         raise MatchedComparisonError("paired signal/control join is incomplete")
+    equality_checks = (
+        pairs["symbol"].astype(str).eq(pairs["expected_signal_symbol"].astype(str)),
+        pairs["grid_step_pct"].eq(pairs["expected_grid_step_pct"]),
+        pairs["deepest_filled_level_pct"].eq(
+            pairs["expected_deepest_filled_level_pct"]
+        ),
+        pairs["signal_snapshot_time_ms"].eq(
+            pairs["expected_signal_snapshot_time_ms"]
+        ),
+    )
+    if any(not bool(check.all()) for check in equality_checks):
+        raise MatchedComparisonError("matched controls do not preserve signal identity")
     signal_time = pd.to_datetime(pairs["signal_snapshot_time_ms"], unit="ms", utc=True)
     iso = signal_time.dt.isocalendar()
     pairs["calendar_month"] = signal_time.dt.strftime("%Y-%m")
@@ -204,9 +237,19 @@ def build_matched_control_comparison(
     output_dir: str | Path,
     spec: MatchedComparisonSpec = MatchedComparisonSpec(),
 ) -> Path:
+    long_root = Path(long_stage0_dir)
+    control_root = Path(control_dir)
+    _require_passed_audit(
+        long_root,
+        protocol_freeze_id="drawdown_ladder_stage0_20260802_v1",
+    )
+    _require_passed_audit(
+        control_root,
+        protocol_freeze_id="prior_non_drawdown_control_20260802_v1",
+    )
     all_signal, pairs = _load_pairs(
-        long_stage0_dir=Path(long_stage0_dir),
-        control_dir=Path(control_dir),
+        long_stage0_dir=long_root,
+        control_dir=control_root,
         cost_bps=spec.recovery_cost_bps,
     )
     root = Path(output_dir)

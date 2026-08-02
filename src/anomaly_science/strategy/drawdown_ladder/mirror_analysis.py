@@ -15,6 +15,24 @@ class MirrorComparisonError(ValueError):
     """Raised when mirror artifacts cannot satisfy the comparison contract."""
 
 
+def _require_passed_stage0(root: Path, *, protocol_freeze_id: str) -> None:
+    audit_path = root / "temporal_audit.json"
+    if not audit_path.is_file():
+        raise MirrorComparisonError(f"Stage-0 temporal audit is missing: {audit_path}")
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    if audit.get("status") != "PASS":
+        raise MirrorComparisonError(f"Stage-0 temporal audit is not PASS: {audit_path}")
+    if audit.get("protocol_freeze_id") != protocol_freeze_id:
+        raise MirrorComparisonError(f"unexpected Stage-0 protocol: {audit_path}")
+    if audit.get("checks"):
+        used = sum(
+            int(check.get("untouched_2026_rows_used", -1))
+            for check in audit["checks"].values()
+        )
+        if used != 0:
+            raise MirrorComparisonError(f"Stage-0 audit reports OOS access: {audit_path}")
+
+
 @dataclass(frozen=True, slots=True)
 class MirrorComparisonSpec:
     protocol_freeze_id: str = "drawdown_vs_mirrored_rally_20260802_v1"
@@ -188,9 +206,19 @@ def build_mirror_comparison(
     spec: MirrorComparisonSpec = MirrorComparisonSpec(),
     progress: Callable[[str], None] | None = None,
 ) -> Path:
-    long = _load_arm(Path(long_stage0_dir), arm="long_drawdown", cost_bps=spec.recovery_cost_bps)
+    long_root = Path(long_stage0_dir)
+    short_root = Path(mirror_stage0_dir)
+    _require_passed_stage0(
+        long_root,
+        protocol_freeze_id="drawdown_ladder_stage0_20260802_v1",
+    )
+    _require_passed_stage0(
+        short_root,
+        protocol_freeze_id="mirrored_rally_stage0_20260802_v1",
+    )
+    long = _load_arm(long_root, arm="long_drawdown", cost_bps=spec.recovery_cost_bps)
     short = _load_arm(
-        Path(mirror_stage0_dir), arm="short_rally_mirror", cost_bps=spec.recovery_cost_bps
+        short_root, arm="short_rally_mirror", cost_bps=spec.recovery_cost_bps
     )
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)

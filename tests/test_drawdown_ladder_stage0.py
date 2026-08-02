@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -358,6 +359,23 @@ def _write_comparison_arm(
     )
     candidates.to_parquet(root / "ladder_state_candidates.parquet", index=False)
     outcomes.to_parquet(root / "ladder_state_outcomes.parquet", index=False)
+    protocol = (
+        "mirrored_rally_stage0_20260802_v1"
+        if prefix == "short"
+        else "drawdown_ladder_stage0_20260802_v1"
+    )
+    (root / "temporal_audit.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "protocol_freeze_id": protocol,
+                "checks": {
+                    "ladder_state": {"untouched_2026_rows_used": 0},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_mirror_comparison_uses_frozen_strata_cluster_bootstrap_and_holm(
@@ -488,6 +506,16 @@ def test_matched_comparison_is_paired_clustered_and_multiplicity_adjusted(
     )
     controls.to_parquet(control_root / "matched_candidates.parquet", index=False)
     control_outcomes.to_parquet(control_root / "matched_outcomes.parquet", index=False)
+    (control_root / "temporal_audit.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "protocol_freeze_id": "prior_non_drawdown_control_20260802_v1",
+                "untouched_2026_rows_used": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     report = build_matched_control_comparison(
         long_stage0_dir=long_root,
