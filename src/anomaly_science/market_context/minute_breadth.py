@@ -78,6 +78,8 @@ def _update_from_frame(
     quote = pd.to_numeric(frame["quote_volume"], errors="coerce").to_numpy(float)
     if len(timestamp) and (bool((np.diff(timestamp) <= 0).any()) or bool((close <= 0.0).any())):
         raise MinuteBreadthError("minute breadth timestamps/prices are invalid")
+    if bool((quote[np.isfinite(quote)] < 0.0).any()):
+        raise MinuteBreadthError("minute breadth quote volume cannot be negative")
     open_times = snapshot_times_ms - MS_PER_MINUTE
     index = np.searchsorted(timestamp, open_times, side="left")
     exact = (index < len(timestamp))
@@ -108,29 +110,41 @@ def _update_from_frame(
         accumulator[prefix + "up_3pct"][finite] += values[finite] >= 0.03
     window = spec.activity_window_minutes
     baseline = spec.activity_baseline_minutes
-    for output_index in np.flatnonzero(exact):
-        end = int(index[output_index])
-        activity_start = end - window + 1
-        baseline_stop = activity_start
-        baseline_start = baseline_stop - baseline
-        if baseline_start < 0:
-            continue
-        if timestamp[end] - timestamp[activity_start] != (window - 1) * MS_PER_MINUTE:
-            continue
-        if timestamp[baseline_stop - 1] - timestamp[baseline_start] != (baseline - 1) * MS_PER_MINUTE:
-            continue
-        current = quote[activity_start : end + 1]
-        prior = quote[baseline_start:baseline_stop]
-        if not bool(np.isfinite(current).all()) or not bool(np.isfinite(prior).all()):
-            continue
-        denominator = float(np.mean(prior) * window)
-        if denominator <= 0.0:
-            continue
-        ratio = float(np.sum(current) / denominator)
-        accumulator["activity_count"][output_index] += 1
-        accumulator["activity_sum"][output_index] += ratio
-        accumulator["activity_gt_3x"][output_index] += ratio >= 3.0
-        accumulator["activity_gt_10x"][output_index] += ratio >= 10.0
+    quote_series = pd.Series(quote)
+    current_sum = quote_series.rolling(window, min_periods=window).sum().to_numpy(float)
+    prior_mean = (
+        quote_series.shift(window)
+        .rolling(baseline, min_periods=baseline)
+        .mean()
+        .to_numpy(float)
+    )
+    output_positions = np.flatnonzero(exact)
+    ends = index[output_positions]
+    activity_starts = ends - window + 1
+    baseline_ends = ends - window
+    baseline_starts = baseline_ends - baseline + 1
+    in_bounds = baseline_starts >= 0
+    output_positions = output_positions[in_bounds]
+    ends = ends[in_bounds]
+    activity_starts = activity_starts[in_bounds]
+    baseline_ends = baseline_ends[in_bounds]
+    baseline_starts = baseline_starts[in_bounds]
+    contiguous = (
+        (timestamp[ends] - timestamp[activity_starts] == (window - 1) * MS_PER_MINUTE)
+        & (
+            timestamp[baseline_ends] - timestamp[baseline_starts]
+            == (baseline - 1) * MS_PER_MINUTE
+        )
+    )
+    sums = current_sum[ends]
+    means = prior_mean[ends]
+    valid = contiguous & np.isfinite(sums) & np.isfinite(means) & (means > 0.0)
+    output_positions = output_positions[valid]
+    ratios = sums[valid] / (means[valid] * window)
+    accumulator["activity_count"][output_positions] += 1
+    accumulator["activity_sum"][output_positions] += ratios
+    accumulator["activity_gt_3x"][output_positions] += ratios >= 3.0
+    accumulator["activity_gt_10x"][output_positions] += ratios >= 10.0
 
 
 def _build_partition(
