@@ -171,6 +171,39 @@ causal coarse covariates. High-resolution value is tested only as a paired
 coarse-only versus coarse-plus-aggTrades ablation on identical covered rows.
 The result is exploratory IS evidence and cannot rescue a failed coarse model.
 
+### Registered paired weekly walk-forward aggTrades ablation
+
+The paired model ablation was locked after the univariate aggTrades report and
+before any weekly CatBoost predictions were generated. It is an internal IS
+walk-forward exercise, not the untouched 2026 OOS. Development begins on
+2025-06-03; frozen weekly evaluation begins on Monday 2025-08-04 and ends
+before 2026-01-01. A label may train a weekly model only when its 120-minute
+resolution time is strictly earlier than that week's Monday freeze. Models and
+calibrators are frozen for the complete ISO week.
+
+Both arms use exactly the rows with complete trailing-15-minute aggTrades
+coverage. The baseline contains every numeric causal stage-1, causal symbol
+memory, and registered one-minute local-activity feature plus registered coarse
+categoricals. The augmented arm adds all non-missingness aggTrades measurements
+from the locked 5/15-minute grid. Symbol identity, ex-post symbol diagnosis,
+future outcomes, calendar month labels, and context winners are forbidden model
+features. Event recurrence chains whose event gaps are no more than 120 minutes
+are kept exclusive across a weekly test fold and its training history.
+
+Each arm uses the shared binary weekly walk-forward engine, CatBoost log loss,
+event-time chronological 60/20/20 fit/validation/calibration partitions,
+early stopping, and quantile-binned beta-isotonic calibration. CatBoost and the
+calibrator are fit once per ISO week. The target is positive direction-adjusted
+60-minute residual catch-up; it is not an executed or net-of-cost trade label.
+
+Incremental aggTrades value is accepted only if the paired arm improves AUC by
+at least 0.01, log loss by at least 0.002, and Brier score by at least 0.001;
+for all three metrics the ISO-week cluster-bootstrap 95% lower bound must be
+positive and the week-level sign-flip familywise p-value must not exceed 1/60.
+All comparisons use identical prediction keys and weekly freeze times. Failure
+means aggTrades are rejected from the response-probability model rather than
+retuned on the same IS predictions.
+
 ### Registered symbol reliability and context attribution
 
 This post-primary analysis distinguishes ex-post diagnosis from online memory.
