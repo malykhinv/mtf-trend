@@ -243,6 +243,43 @@ minimum-effect gates failed and no calibrated prediction reached 0.60. The
 full coarse probability hypothesis therefore fails. This research branch stops
 before EV, execution, structural SL/TP, PnL simulation, and 2026 OOS access.
 
+### Registered exploratory event-level ranking hypothesis
+
+This is a materially different post-failure IS hypothesis, registered before
+any rank-model predictions. The binary gate remains failed and cannot be
+rescued by this analysis. The new question is whether, conditional on the same
+already observed market impulse, causal features can rank coins by their future
+60-minute direction-adjusted residual catch-up. The label is the within-event
+percentile rank of that future catch-up; raw future catch-up is retained only
+for evaluation. Every label starts after the snapshot and resolves at the
+existing 120-minute outcome boundary.
+
+The primary model uses the complete 156-feature causal coarse matrix and all six
+registered coarse categoricals. No feature is removed using binary-model
+importance or rank outcomes. Symbol identity, calendar month, ex-post symbol
+diagnosis, aggTrades, and all future fields remain forbidden. Feature-family
+ablations are allowed only after the full ranker is frozen and cannot rescue a
+failed full-model gate.
+
+Weekly walk-forward boundaries remain 2025-06-03 development,
+2025-08-04 first frozen evaluation week, and an exclusive 2026-01-01 end. A
+training label must resolve strictly before the Monday freeze. Recurrence chains
+are isolated from the corresponding test week. Within every fit, validation,
+and test pool, query id is the market event and each event receives equal total
+weight. CatBoost uses QueryRMSE, at most 180 depth-five trees, learning rate
+0.05, eight CPU threads, and 20-round early stopping on the latest chronological
+20% of eligible recurrence chains. The model is fit once per ISO week.
+
+The locked non-ML baseline ranks coins by causal event-relative underreaction.
+Primary equal-event metrics are within-event Spearman correlation, mean raw
+catch-up spread between predicted top and bottom quintiles, and their response
+win-rate gap. The full ranker must achieve respectively at least 0.05, 0.0010
+(10 bps), and 0.03; it must also improve the baseline by at least 0.01, 0.0002
+(2 bps), and 0.01. Each effect and each improvement must have an ISO-week
+cluster-bootstrap 95% lower bound above zero and a week-level sign-flip
+p-value at most 0.05. Failure stops before EV/PnL and cannot be repaired by
+post-hoc direction, session, symbol, or feature-family selection.
+
 ### Registered symbol reliability and context attribution
 
 This post-primary analysis distinguishes ex-post diagnosis from online memory.
