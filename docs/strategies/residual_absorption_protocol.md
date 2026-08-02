@@ -115,6 +115,32 @@ months. Continuous traits remain continuous. This report may prioritize
 feature-family ablations and monotonic constraints, but it may not manufacture
 an outcome-derived trading threshold or filter the training population.
 
+### Registered stage-2 coarse local-activity grid
+
+This feature grid was locked after the post-primary stage-1 trait report and
+before local-flow/OI features were associated with response outcomes. For each
+already selected event/symbol, complete one-minute bars in the trailing
+5/15/30-minute windows ending at the selection snapshot are used. No row whose
+close is after the snapshot is admissible.
+
+Each window records log return, quote volume, trade count, signed taker quote
+volume, taker imbalance, high-low range, realized one-minute volatility, path
+efficiency, return per million quote volume, OI start/end/absolute/relative
+change and availability coverage, long/short liquidation volume, liquidation
+imbalance, and missingness. Raw components are retained so CatBoost does not
+depend on a hand-crafted absorption formula.
+
+The 15-minute primary window additionally reports price/flow alignment,
+direction-adjusted taker imbalance, direction-adjusted OI change, OI change per
+unit signed flow, and low-impact aggressive-flow magnitude. Divisions use an
+explicit data-scale floor and expose a separate denominator-validity flag; no
+silent fallback or infinity replacement is allowed.
+
+Stage-2 features are joined to the causal feature matrix but outcomes remain in
+a physically separate label artifact. Win/loss trait stability uses the same
+forward-month rules above. High-resolution enrichment remains a later paired
+ablation and cannot change the coarse population.
+
 ## Stage order and gates
 
 1. Data, time, sessions, point-in-time universe, and enrichment provenance.
