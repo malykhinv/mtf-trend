@@ -7,7 +7,9 @@ from typing import Any
 
 ANNOTATION_CANDIDATE_SCHEMA_VERSION = "ohlcv_level_candidate_v1"
 # v2 introduces multiple independent setups per event (label["setups"]).
-LEVEL_LABEL_SCHEMA_VERSION = "manual_level_annotation_v3"
+# v4 lets one setup carry an ordered sequence of pump waves and the sideways
+# intervals deterministically implied between adjacent waves.
+LEVEL_LABEL_SCHEMA_VERSION = "manual_level_annotation_v4"
 
 REQUIRED_CANDIDATE_COLUMNS = (
     "event_id",
@@ -80,9 +82,83 @@ def _validate_setup(setup: dict[str, Any], where: str) -> None:
     elif any(setup.get(key) is not None for key in ("level_price", "level_start_ms", "level_end_ms", "level_touch_times_ms")):
         raise ValueError(f"{where}: level fields require has_level=true")
 
-    pump_complete = all(setup.get(key) is not None for key in ("pump_start_ms", "pump_start_price", "culmination_ms", "culmination_price"))
+    legacy_pump_keys = ("pump_start_ms", "pump_start_price", "culmination_ms", "culmination_price")
+    legacy_pump_complete = all(setup.get(key) is not None for key in legacy_pump_keys)
+    if any(setup.get(key) is not None for key in legacy_pump_keys) and not legacy_pump_complete:
+        raise ValueError(f"{where}: legacy pump fields must be either complete or absent")
+    pump_waves = setup.get("pump_waves")
+    if pump_waves is not None:
+        if not isinstance(pump_waves, list):
+            raise ValueError(f"{where}: pump_waves must be a list")
+        previous_end: int | None = None
+        for index, wave in enumerate(pump_waves):
+            wave_where = f"{where}: pump wave {index + 1}"
+            if not isinstance(wave, dict):
+                raise ValueError(f"{wave_where} must be an object")
+            required = {"wave_ordinal", "start_ms", "start_price", "culmination_ms", "culmination_price"}
+            missing = required - set(wave)
+            if missing:
+                raise ValueError(f"{wave_where} missing {sorted(missing)}")
+            if int(wave["wave_ordinal"]) != index + 1:
+                raise ValueError(f"{where}: pump wave ordinals must be contiguous from 1")
+            start_ms = int(wave["start_ms"])
+            culmination_ms = int(wave["culmination_ms"])
+            start_price = float(wave["start_price"])
+            culmination_price = float(wave["culmination_price"])
+            if start_ms >= culmination_ms:
+                raise ValueError(f"{wave_where} must run forward in time")
+            if start_price <= 0 or culmination_price <= start_price:
+                raise ValueError(f"{wave_where} must rise from a positive start price")
+            if previous_end is not None and start_ms <= previous_end:
+                raise ValueError(f"{where}: pump waves must be strictly separated in time")
+            previous_end = culmination_ms
+
+        sideways = setup.get("sideways_segments")
+        if sideways is None:
+            sideways = []
+        if not isinstance(sideways, list):
+            raise ValueError(f"{where}: sideways_segments must be a list")
+        if len(sideways) != max(0, len(pump_waves) - 1):
+            raise ValueError(f"{where}: sideways_segments must match adjacent pump waves")
+        for index, segment in enumerate(sideways):
+            segment_where = f"{where}: sideways segment {index + 1}"
+            if not isinstance(segment, dict):
+                raise ValueError(f"{segment_where} must be an object")
+            required = {"after_wave_ordinal", "start_ms", "end_ms", "lower_price", "upper_price"}
+            missing = required - set(segment)
+            if missing:
+                raise ValueError(f"{segment_where} missing {sorted(missing)}")
+            left = pump_waves[index]
+            right = pump_waves[index + 1]
+            if int(segment["after_wave_ordinal"]) != index + 1:
+                raise ValueError(f"{where}: sideways ordinals must match pump waves")
+            if int(segment["start_ms"]) != int(left["culmination_ms"]):
+                raise ValueError(f"{segment_where} must start at the previous culmination")
+            if int(segment["end_ms"]) != int(right["start_ms"]):
+                raise ValueError(f"{segment_where} must end at the next pump start")
+            if float(segment["lower_price"]) <= 0 or float(segment["upper_price"]) < float(segment["lower_price"]):
+                raise ValueError(f"{segment_where} has invalid price bounds")
+
+        if pump_waves:
+            first_wave = pump_waves[0]
+            legacy_values = (
+                setup.get("pump_start_ms"),
+                setup.get("pump_start_price"),
+                setup.get("culmination_ms"),
+                setup.get("culmination_price"),
+            )
+            expected_values = (
+                first_wave["start_ms"],
+                first_wave["start_price"],
+                first_wave["culmination_ms"],
+                first_wave["culmination_price"],
+            )
+            if legacy_pump_complete and tuple(map(float, legacy_values)) != tuple(map(float, expected_values)):
+                raise ValueError(f"{where}: legacy pump fields must mirror pump wave 1")
+
+    pump_complete = bool(pump_waves) if pump_waves is not None else legacy_pump_complete
     if has_pump_transition != pump_complete:
-        raise ValueError(f"{where}: has_pump_transition must match pump_start/culmination fields")
+        raise ValueError(f"{where}: has_pump_transition must match pump wave fields")
 
     structure_complete = all(
         setup.get(key) is not None

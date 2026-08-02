@@ -226,7 +226,7 @@ def annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
     session_root = project_root / ".output" / "results" / "session_break"
     knife_root = project_root / ".output" / "results" / "knife_catch"
     triple_root = project_root / ".output" / "results" / "triple_tap_v1" / "manual_pump_review"
-    pump_wave_root = project_root / ".output" / "results" / "pump_wave_short_v1" / "wave_review"
+    pump_wave_root = project_root / ".output" / "results" / "pump_wave_short_v1" / "lifecycle_review"
 
     apps = (
         AnnotationStrategyApp(
@@ -289,8 +289,8 @@ def annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
             marks_path=knife_root / "dump_trade_review" / "marks.jsonl",
         ),
         AnnotationStrategyApp(
-            strategy_id="recurrent_pump_wave_review",
-            title="Recurrent pump wave 2/3 review",
+            strategy_id="pump_lifecycle_review",
+            title="Sleep → pump waves → dump review",
             candidates_path=pump_wave_root / "candidates.parquet",
             labels_path=pump_wave_root / "review_labels.jsonl",
             cache_dir=cache_dir,

@@ -119,6 +119,9 @@ def _label_setups(label: dict[str, Any]) -> list[dict[str, Any]]:
 def _setup_has_pump_transition(setup: dict[str, Any]) -> bool:
     if "has_pump_transition" in setup:
         return bool(setup.get("has_pump_transition"))
+    waves = setup.get("pump_waves")
+    if isinstance(waves, list):
+        return bool(waves)
     return all(
         setup.get(key) is not None
         for key in ("pump_start_ms", "pump_start_price", "culmination_ms", "culmination_price")

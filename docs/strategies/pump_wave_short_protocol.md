@@ -1,144 +1,103 @@
-# Recurrent pump-wave short research protocol
+# Pump-lifecycle short research protocol
 
-This document freezes the first discovery stage before manual review labels or
-short-entry outcomes are inspected.
-
-Canonical identity:
+This document freezes the visual discovery stage before any dump outcome,
+short signal, or PnL is used.
 
 ```text
-strategy_name = recurrent_pump_wave_short_v1
+strategy_name = pump_lifecycle_short_v1
 strategy_family = pump_wave_short
-candidate_schema_version = recurrent_pump_wave_candidate_v1
-source_online_schema_versions = pump_fade_online_state_v3 | pump_fade_online_state_v4
+candidate_schema_version = pump_lifecycle_candidate_v1
+protocol_freeze_id = pump_lifecycle_stage0_20250802_v1
 live_trading_strategy = false
 ```
 
-## Plain-language hypothesis
+## Hypothesis in plain language
 
-A first activity anomaly attracts attention and lifts price. A second or third
-causally detected anomaly in the same coin and recurrence episode may represent
-another distribution wave. The strategy will eventually consider a short only
-after that later wave and only after a separately defined causal bearish
-structure signal. It does not short merely because price rose or because an
-anomaly ordinal is two or three.
-
-## Scientific stages
-
-1. Validate whether the machine's second/third anomaly-wave candidates match
-   human-visible second/third waves.
-2. Freeze the admissible causal short-signal family using only reviewed 2025
-   development examples.
-3. Test whether the signal predicts future dump nature and whether prediction
-   becomes available early enough.
-4. Only after prediction, timing, and conditional EV pass may structural trade
-   simulation, fees, slippage, funding, and account risk be evaluated.
-
-Failure at any stage stops every downstream stage. Manual review cannot delete
-unattractive candidates after their future path is seen; reviewed negatives are
-part of the evidence.
-
-## Stage 0 recurrence-wave contract
-
-The source is an already materialized causal `pump_fade_online_state_v3` or
-`pump_fade_online_state_v4` artifact. Version 3 is the available 2025 lifecycle
-build; version 4 adds unrelated online feature families but preserves the
-recurrence and time columns consumed here. The builder reads an explicit
-allowlist of shared online columns and rejects
-label, resolution, future-peak, event-end, and outcome columns. It selects one
-row per source event: the first causally qualified new-high state marked
-`is_nature_anchor=true`.
-
-The existing source builder defines `recurrence_chain_id` as a causal connected
-component for the same symbol: a new qualified event joins the preceding chain
-only when its ignition is no more than 48 hours after the preceding qualified
-event. No future event is needed to assign an existing event to its chain.
-
-That source chain is deliberately broader than the strategy's economic episode.
-Inside it, the strategy starts a new episode whenever the causal base of a new
-qualified event is at or below the first event's base. A return to the initial
-base means the earlier pump thesis has structurally completed; a later anomaly
-cannot be called its next wave merely because it occurred within 48 hours. This
-reset was registered before any manual review label or future outcome was
-inspected.
-
-Within each resulting episode, events are ordered by ignition time. The first event is wave
-one, the next is wave two, and the next is wave three. At this discovery stage
-`wave` means recurrence ordinal of a qualified anomaly event; it is deliberately
-not yet claimed to be the final economic wave definition. Human review must
-measure how often that operational definition matches visible wave morphology.
-
-The complete causal population contains every ordinal-two and ordinal-three
-event in 2025. The desk queue is a reproducible, outcome-blind sample of at most
-30 rows per `(calendar month, wave ordinal)` stratum, selected by a frozen hash
-of the immutable source event id. The complete population remains an artifact,
-so sampling cannot hide detector coverage or symbol concentration.
-
-Only the first five hash-ranked rows in each stratum enter the active Stage 0A
-pilot desk: 70 rows when all seven 2025 months are present. The remaining 25 per
-stratum are materialized as a reserved sample but are not served by the desk.
-The pilot is detector-development data, not confirmatory evidence. It passes the
-feasibility gate only if at least 50% of all pilot rows, at least 50% of ordinal-
-two rows, and at least 50% of ordinal-three rows are manually marked as genuine
-later waves. Failure stops this formulation. Passing permits one explicit
-morphology revision using recorded failure reasons, after which a new detector
-must be frozen before the reserved sample is opened.
-
-Charts may display up to four hours before the first wave and 24 hours after the
-current candidate snapshot. That future tail is presentation-only. It cannot
-change membership, wave ordinal, stored causal features, or sampling hash. The
-candidate materializes `selection_snapshot_time_ms` and
-`feature_cutoff_time_ms`, with the invariant:
+We seek one continuous market episode:
 
 ```text
-feature_cutoff_time_ms <= selection_snapshot_time_ms < review_end_ms
+sleep at the pump base -> wave 1 -> sideways -> wave 2
+                       -> [sideways -> wave 3] -> distribution/dump
 ```
 
-The review tail is clipped strictly before 2026-01-01.
+The first wave wakes a coin from a quiet base and attracts attention. Later
+waves may distribute inventory into that attention. A future strategy may short
+only after a separate causal bearish signal. A rise, a third wave, or an EMA
+cross alone is not an entry.
 
-## Manual-review question
+The earlier experiment that called separate recurrence events “wave 2/3” is
+withdrawn. An event ordinal is not market morphology. All waves in this protocol
+are segments of one manually reviewable lifecycle.
 
-For each desk card, the reviewer answers only:
+## Stage 0: first-wave population and manual morphology
 
-> Does the marked ordinal-two/three recurrence look like a genuine second or
-> third pump wave of the same market episode?
+The source is the existing outcome-free `sleep_pump_review` candidate artifact.
+That detector first requires a quiet pre-pump base, then proposes the pump start
+and a locally confirmed culmination. Its proposal time occurs after the four-bar
+culmination confirmation; no later lifecycle candle participates in membership.
 
-`Save` with quality `good` means yes. `No setup` means no. Notes may describe
-why: unrelated anomaly, one continuous wave split twice, wrong base, weak
-reactivation, already completed dump, data defect, or another explicit reason.
-The pre-drawn zigzag is an aid and may be corrected, but corrections never
-rewrite the detector artifact.
+The new desk seed contains exactly one `pump` object, shown as wave 1. The expert
+may correct or delete it and may draw the same `pump` tool repeatedly. Pump
+objects are sorted and numbered W1, W2, W3, ... . They must not overlap.
 
-No short signal, winner/loser label, TP, SL, future return, or PnL is part of
-Stage 0.
+For adjacent waves, the desk automatically defines:
 
-Observed after the initial freeze and before manual labels: the IS-filtered
-source contained 90,643 online rows. The structural episode builder produced
-5,723 ordinal-two/three candidates across 579 symbols. The frozen stratified
-sample contains 420 rows; 70 are the active pilot and 350 remain reserved. The
-build took about 17 seconds. All temporal and future-column audits passed.
+```text
+sideways i = [culmination of wave i, start of wave i+1]
+```
 
-## Time partitions and holdout status
+Its price bounds are the minimum low and maximum high observed inside that
+interval. The manual wave boundaries are primary evidence; the sideways box is
+a deterministic derivative saved with the label for auditability.
 
-Development candidates are restricted to snapshots before 2026-01-01. No 2026
-row may enter Stage 0 artifacts.
+The initial pilot is a frozen hash sample of at most ten candidates per 2025
+calendar month. Hash sampling uses only immutable source event identity. The
+full source population is retained separately. Cards show six hours before the
+proposed wave start and up to 72 hours after its first culmination, clipped
+strictly before 2026. At least 24 hours of IS tail must be available. The right
+tail is display-only and cannot alter candidate selection or causal fields.
 
-The BULLA-2026 example was known when this hypothesis was proposed. Therefore
-2026 cannot honestly be called a pristine holdout for this strategy, even if it
-is excluded from development. It may later be reported only as known subsequent
-evidence under a frozen protocol. A `PRISTINE_VERIFIED` claim requires market
-data first observed after this protocol and all subsequent signal/model choices
-are frozen.
+Required invariants:
 
-## Mandatory Stage 0 audits
+```text
+feature_cutoff_time_ms = proposal_time_ms
+feature_cutoff_time_ms <= selection_snapshot_time_ms < review_end_ms
+review_end_ms < 2026-01-01T00:00:00Z
+```
 
-- Source schema is the online-only schema and forbidden future columns are
-  absent.
-- Feature cutoff never exceeds the candidate snapshot.
-- Candidate membership and fields are invariant to mutation or addition of
-  rows strictly after the candidate snapshot.
-- Wave ordinal is computed only from current and earlier events in the same
-  causal recurrence chain.
-- Review sampling uses no market outcome or future-path field.
-- The review tail ends before 2026 and is never used as a feature.
-- Population, desk sample, sampling coverage, symbol concentration, and source
-  hashes are retained even when the visual precision is poor.
+No outcome, return, entry, exit, win/loss, TP, SL, or PnL column may enter the
+Stage-0 source or sampling function.
+
+## What the expert marks
+
+For each card:
+
+1. Correct or reject the seeded sleep-to-W1 boundary.
+2. Add every visually distinct later pump wave with the same `pump` tool.
+3. Leave the automatically generated sideways intervals untouched.
+4. Record why the episode is convincing or noisy in notes. At this stage the
+   important distinctions are continuation of one wave versus real restart,
+   loss/retention of the elevated base, self-driven activity versus broad-market
+   movement, and whether distribution/dump is visible.
+
+The dump boundary and causal short trigger are deliberately not automated yet.
+First we need a reproducible wave ontology. After enough manual examples exist,
+we compare causal separators, including EMA-fan expansion during waves and
+compression/crossing during sideways. EMA behavior is a tested feature family,
+not a definition chosen after seeing winners.
+
+## Scientific sequence after Stage 0
+
+1. Audit manual consistency and identify common traits of clean versus noisy
+   wave sequences, including symbol and context concentration.
+2. Freeze and validate a causal online wave-separation model on 2025 only.
+3. Freeze a causal bearish signal after W2/W3 and test nature prediction and
+   timing.
+4. Prove conditional EV before any trade simulation.
+5. Only then evaluate structural SL/TP variants, fees, slippage, funding,
+   drawdown, trading-day consistency, top-trade dependence, and 2–5% risk.
+
+The BULLA-2026 example inspired the hypothesis, so 2026 is not a pristine
+holdout for this strategy. Development artifacts remain restricted to 2025;
+honest confirmation requires forward data observed only after the full protocol
+and model are frozen.

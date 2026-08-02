@@ -339,7 +339,7 @@ LABELER_HTML = r"""<!doctype html>
           <button class="ghost icon tool" id="toolLevel" onclick="toggleTool('level')" title="Level: click the anchor high, then left-click candles to add/remove manual touches; right-click finishes.  L">
             <svg viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.4" fill="currentColor" stroke="none"/><path d="M6 10h11"/></svg>
           </button>
-          <button class="ghost icon tool" id="toolPump" onclick="toggleTool('pump')" title="Pump: click start candle (snaps to low), click culmination candle (snaps to high).  P">
+          <button class="ghost icon tool" id="toolPump" onclick="toggleTool('pump')" title="Pump wave: draw repeatedly; waves are numbered and sideways intervals are automatic.  P">
             <svg viewBox="0 0 20 20"><path d="M4 16L16 4"/><path d="M4 16v-5"/><path d="M16 4h-5"/><rect x="4" y="4" width="12" height="12" stroke-dasharray="2 2" opacity=".45"/></svg>
           </button>
           <button class="ghost icon tool" id="toolZigzag" onclick="toggleTool('zigzag')" title="Swing zigzag: left-click to drop points (snap to nearest high/low), right-click to finish.  G">
@@ -424,7 +424,7 @@ LABELER_HTML = r"""<!doctype html>
           <div class="keys-heading">Drawing</div>
           <div class="keys-panel">
             <div class="k-row"><span class="k">L</span><span>level, then touch candles (RMB ends)</span></div>
-            <div class="k-row"><span class="k">P</span><span>pump rectangle (2 clicks)</span></div>
+            <div class="k-row"><span class="k">P</span><span>add pump wave (2 clicks); repeat for W2/W3</span></div>
             <div class="k-row"><span class="k">G</span><span>swing zigzag (RMB ends)</span></div>
             <div class="k-row"><span class="k">E</span><span>exit point</span></div>
             <div class="k-row"><span class="k">X</span><span>auto stop-loss</span></div>
@@ -464,7 +464,8 @@ let candidates = [], visible = [], idx = 0, current = null, selectedTf = null, a
 let xRange = null, yRange = null, yAuto = true, barMs = 60000;
 let tool = null, drawStep = 0, pending = null;
 let level = null;       // {price, start_ms, end_ms(auto body-cross or chart end), broken}
-let pump = null;        // {start:{idx,ms,price}, high:{idx,ms,price}}
+let pumps = [];         // ordered waves: [{start:{idx,ms,price}, high:{idx,ms,price}}]
+let pump = null;        // result-review compatibility drawing (not a labeling wave)
 let entry = null;       // auto: {idx,ms,price}
 let sl = null;          // {price, hit_ms|null, end_ms}
 let zigzag = null;      // {points:[{ms,price}]} - swing zigzag of the active setup
@@ -745,6 +746,48 @@ function pumpPreviewState(toIdx) {
   return {valid:true, reason:null, start:pending, high:hi, endIdx:toIdx};
 }
 
+function normalizedPumps(values) {
+  return (Array.isArray(values) ? values : [])
+    .filter(p => p && p.start && p.high)
+    .slice()
+    .sort((a,b) => Number(a.start.ms) - Number(b.start.ms));
+}
+function sidewaysSegments(values=pumps) {
+  const ordered = normalizedPumps(values), c = current && current.candles, out = [];
+  if (!c || !c.timestamp) return out;
+  for (let i=0; i+1<ordered.length; i++) {
+    const startMs = Number(ordered[i].high.ms), endMs = Number(ordered[i+1].start.ms);
+    let lower = Infinity, upper = -Infinity;
+    for (let j=0; j<c.timestamp.length; j++) {
+      if (c.timestamp[j] < startMs || c.timestamp[j] > endMs) continue;
+      lower = Math.min(lower, Number(c.low[j]));
+      upper = Math.max(upper, Number(c.high[j]));
+    }
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) {
+      lower = Math.min(Number(ordered[i].high.price), Number(ordered[i+1].start.price));
+      upper = Math.max(Number(ordered[i].high.price), Number(ordered[i+1].start.price));
+    }
+    out.push({after_wave_ordinal:i+1, start_ms:startMs, end_ms:endMs, lower_price:lower, upper_price:upper});
+  }
+  return out;
+}
+function sleepSegment(values=pumps) {
+  const ordered = normalizedPumps(values), c = current && current.candles;
+  if (!ordered.length || !c || !c.timestamp) return null;
+  const endMs = Number(ordered[0].start.ms);
+  const eventStart = Number(current.event && current.event.sleep_start_ms);
+  const startMs = Number.isFinite(eventStart) ? Math.min(eventStart, endMs - barMs) : endMs - 120 * barMs;
+  let lower = Infinity, upper = -Infinity;
+  for (let i=0; i<c.timestamp.length; i++) {
+    if (c.timestamp[i] < startMs || c.timestamp[i] >= endMs) continue;
+    lower = Math.min(lower, Number(c.low[i]));
+    upper = Math.max(upper, Number(c.high[i]));
+  }
+  return Number.isFinite(lower) && Number.isFinite(upper)
+    ? {start_ms:startMs, end_ms:endMs, lower_price:lower, upper_price:upper}
+    : null;
+}
+
 /* ---------- derived objects: level end + entry + stop ---------- */
 function levelBreakIdx(price, startMs, afterMs=null) {
   const c = current.candles;
@@ -815,7 +858,7 @@ function zigzagExtremeFrom(z, kind) {
 function zigzagExtreme(kind) { return zigzagExtremeFrom(zigzag, kind); }
 function zigzagLastSwingLow() { return zigzagExtreme('low'); }
 function zigzagLastSwingHigh() { return zigzagExtreme('high'); }
-function setupHasPump(s) { return !!(s && s.pump && s.pump.start && s.pump.high); }
+function setupHasPump(s) { return normalizedPumps(s && s.pumps).length > 0; }
 function structureBreakAnchorFrom(z) {
   const high = zigzagExtremeFrom(z, 'high');
   if (!high) return null;
@@ -861,7 +904,7 @@ function updateSlButton() {
   document.getElementById('slBtn').disabled = !(entry || zzOk);
 }
 function hasDrawings() {
-  return !!(level || pump || sl || (zigzag && zigzag.points && zigzag.points.length) || zones.length);
+  return !!(level || pumps.length || pump || sl || (zigzag && zigzag.points && zigzag.points.length) || zones.length);
 }
 function updateDrawingButton() {
   const btn = document.getElementById('clearDrawingsBtn');
@@ -895,7 +938,7 @@ function toggleTool(name) {
   clearGhost();
   syncToolButtons();
   if (tool === 'level') toast('level: click the anchor high, then click touch candles; right-click finishes');
-  if (tool === 'pump') toast('pump: click the start candle, then the culmination');
+  if (tool === 'pump') toast(`pump wave ${pumps.length + 1}: click the start candle, then the culmination`);
   if (tool === 'zigzag') toast('zigzag: left-click swing points, right-click to finish');
   if (tool === 'zone') toast('zone: click the first price extreme, then the opposite extreme');
   if (tool === 'correct_sl') toast('correct SL: click the pre-entry swing-low candle');
@@ -1263,11 +1306,21 @@ function handleToolClick(pt) {
       renderGhost(pt);
       return;
     }
-    pump = {
+    const nextPump = {
       start: {idx: pending.idx, ms: pending.ms, price: pending.price},
       high:  state.high
     };
-    selectedObj = 'pump';
+    const ordered = normalizedPumps([...pumps, nextPump]);
+    const nextIndex = ordered.indexOf(nextPump);
+    const prior = nextIndex > 0 ? ordered[nextIndex - 1] : null;
+    const following = nextIndex + 1 < ordered.length ? ordered[nextIndex + 1] : null;
+    if ((prior && nextPump.start.ms <= prior.high.ms) || (following && nextPump.high.ms >= following.start.ms)) {
+      toast('waves may not overlap; leave a sideways interval between them');
+      renderGhost(pt);
+      return;
+    }
+    pumps = ordered;
+    selectedObj = `pump:${nextIndex}`;
     finishTool();
   }
   commitActiveSetup();
@@ -1335,10 +1388,16 @@ function renderObjects() {
     const touchLabel = Array.isArray(level.touches) ? ` · ${level.touches.length} manual touch` : '';
     rows.push({id:'level', del:true, label:`level ${fmtPrice(level.price)} · ${iso(level.start_ms)} -> ${iso(levelShapeEndMs(level))}${touchLabel}`});
   }
-  if (pump) {
-    const move = pump.start.price > 0 ? pump.high.price/pump.start.price - 1 : NaN;
-    rows.push({id:'pump', del:true, label:`pump +${fmtPct(move)} · ${fmtPrice(pump.start.price)} -> ${fmtPrice(pump.high.price)}`});
-  }
+  const sideways = sidewaysSegments();
+  pumps.forEach((wave, index) => {
+    const move = wave.start.price > 0 ? wave.high.price/wave.start.price - 1 : NaN;
+    rows.push({id:`pump:${index}`, del:true, label:`wave ${index + 1} · pump +${fmtPct(move)} · ${fmtPrice(wave.start.price)} -> ${fmtPrice(wave.high.price)}`});
+    if (sideways[index]) {
+      const segment = sideways[index];
+      rows.push({id:`sideways:${index}`, del:false, auto:true,
+        label:`sideways ${index + 1} · ${iso(segment.start_ms)} -> ${iso(segment.end_ms)}`});
+    }
+  });
   if (entry) rows.push({id:'entry', del:false, auto:true, label:`entry ${iso(entry.ms)} @ ${fmtPrice(entry.price)}`});
   if (sl) {
     const risk = entry && entry.price > 0 ? (entry.price - sl.price) / entry.price : NaN;
@@ -1374,7 +1433,10 @@ function selectObj(id) {
 function deleteObj(id) {
   captureVisibleRanges();
   if (id === 'level') { level = null; computeEntry(); }
-  if (id === 'pump') pump = null;
+  if (id.startsWith('pump:')) {
+    const index = Number(id.slice('pump:'.length));
+    if (Number.isInteger(index) && index >= 0 && index < pumps.length) pumps.splice(index, 1);
+  }
   if (id === 'sl') sl = null;
   if (id === 'zigzag') { zigzag = null; computeEntry(); }
   if (id.startsWith('zone:')) {
@@ -1391,6 +1453,7 @@ function deleteSelected() { if (selectedObj && selectedObj !== 'entry') deleteOb
 function resetAnnotations() {
   captureVisibleRanges();
   level = null;
+  pumps = [];
   pump = null;
   entry = null;
   sl = null;
@@ -1411,7 +1474,7 @@ function resetAnnotations() {
 
 /* ---------- setups: multiple independent trade ideas per event ---------- */
 function emptySetup() {
-  return {family:'unknown', quality:'bad', notes:'', level:null, pump:null, slPrice:null, zigzag:null, zones:[]};
+  return {family:'unknown', quality:'bad', notes:'', level:null, pumps:[], slPrice:null, zigzag:null, zones:[]};
 }
 function commitActiveSetup() {
   if (resultMode) return;   // result review shares the drawing globals but has no setups
@@ -1421,7 +1484,7 @@ function commitActiveSetup() {
   s.quality = document.getElementById('quality').value;
   s.notes = document.getElementById('notes').value;
   s.level = level;
-  s.pump = pump;
+  s.pumps = normalizedPumps(pumps);
   s.zigzag = zigzag;
   s.zones = zones;
   s.slPrice = sl ? sl.price : null;
@@ -1429,7 +1492,7 @@ function commitActiveSetup() {
 function applySetup(i) {
   const s = setups[i] || emptySetup();
   activeSetup = i;
-  level = s.level; pump = s.pump; zigzag = s.zigzag; zones = Array.isArray(s.zones) ? s.zones : [];
+  level = s.level; pumps = normalizedPumps(s.pumps); pump = null; zigzag = s.zigzag; zones = Array.isArray(s.zones) ? s.zones : [];
   sl = null; entry = null; zzDraft = null; tool = null; drawStep = 0; pending = null; selectedObj = null;
   const fam = document.getElementById('family'); fam.value = s.family || 'unknown'; refreshSelect(fam);
   const qual = document.getElementById('quality'); qual.value = s.quality || 'bad'; refreshSelect(qual);
@@ -1512,10 +1575,15 @@ function setupFromLabel(s) {
   if (out.level && Array.isArray(s.level_touch_times_ms)) {
     out.level.touches = [...new Set(s.level_touch_times_ms.map(Number).filter(Number.isFinite))].sort((a,b) => a - b);
   }
-  out.pump = (s.pump_start_ms != null && s.pump_start_price != null && s.culmination_ms != null && s.culmination_price != null)
-    ? {start:{idx:nearestCandle(+s.pump_start_ms), ms:+s.pump_start_ms, price:+s.pump_start_price},
-       high:{idx:nearestCandle(+s.culmination_ms), ms:+s.culmination_ms, price:+s.culmination_price}}
-    : null;
+  const savedWaves = Array.isArray(s.pump_waves) ? s.pump_waves : [];
+  out.pumps = savedWaves.map(w => ({
+    start:{idx:nearestCandle(+w.start_ms), ms:+w.start_ms, price:+w.start_price},
+    high:{idx:nearestCandle(+w.culmination_ms), ms:+w.culmination_ms, price:+w.culmination_price}
+  }));
+  if (!out.pumps.length && s.pump_start_ms != null && s.pump_start_price != null && s.culmination_ms != null && s.culmination_price != null) {
+    out.pumps = [{start:{idx:nearestCandle(+s.pump_start_ms), ms:+s.pump_start_ms, price:+s.pump_start_price},
+      high:{idx:nearestCandle(+s.culmination_ms), ms:+s.culmination_ms, price:+s.culmination_price}}];
+  }
   out.slPrice = s.sl_price != null ? +s.sl_price : null;
   const zpts = Array.isArray(s.zigzag_points)
     ? s.zigzag_points.filter(p => p && Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.price)))
@@ -1932,7 +2000,7 @@ async function loadEvent(i) {
   if (token !== loadToken) return;
   if (payload.error) {
     current = null;
-    level = null; pump = null; entry = null; sl = null; zigzag = null; zzDraft = null; setups = [];
+    level = null; pumps = []; pump = null; entry = null; sl = null; zigzag = null; zzDraft = null; setups = [];
     renderObjects();
     clearChart();
     toast(payload.error, 4200);
@@ -1942,7 +2010,7 @@ async function loadEvent(i) {
   current.group = group;
   computeBarMs();
   // Build the per-event setups from the saved label (or one empty setup) and show
-  // the first one. Each setup carries its own family/quality/level/pump/exit/SL/zigzag.
+  // the first one. Each setup carries its own family/quality/level/pump waves/exit/SL/zigzag.
   const displayedMark = group.label || group.seed_label;
   setups = setupsFromSavedLabel(displayedMark);
   applySetup(0);
@@ -2105,7 +2173,7 @@ const BOT_COLOR = '#7f8794';   // muted: bot-drawn objects the user hasn't chang
 let botSnap = null;            // per-object snapshot of the bot's original drawing
 function objKey(type) {
   if (type === 'level') return level ? JSON.stringify([+level.price, +level.start_ms]) : '';
-  if (type === 'pump') return pump ? JSON.stringify([+pump.start.ms, +pump.high.ms, +pump.start.price, +pump.high.price]) : '';
+  if (type === 'pumps') return JSON.stringify(normalizedPumps(pumps).map(p => [+p.start.ms, +p.high.ms, +p.start.price, +p.high.price]));
   if (type === 'sl') return sl ? String(+sl.price) : '';
   if (type === 'zigzag') return zigzag ? JSON.stringify((zigzag.points || []).map(p => [Math.round(p.ms), +p.price])) : '';
   return '';
@@ -2113,7 +2181,7 @@ function objKey(type) {
 function isBot(type) { return botSnap && botSnap[type] && botSnap[type] === objKey(type); }
 function captureBotSnap(isBotLabel) {
   // called after a setup is applied; if it came from the bot, remember each object
-  botSnap = isBotLabel ? {level:objKey('level'), pump:objKey('pump'), sl:objKey('sl'), zigzag:objKey('zigzag')} : null;
+  botSnap = isBotLabel ? {level:objKey('level'), pumps:objKey('pumps'), sl:objKey('sl'), zigzag:objKey('zigzag')} : null;
 }
 function shapes() {
   if (!current) return [];
@@ -2250,13 +2318,33 @@ function shapes() {
       }
     }
   }
-  if (pump) {
-    const sel = selectedObj === 'pump'; const bot = isBot('pump');
+  const sideways = sidewaysSegments();
+  const sleep = sleepSegment();
+  if (sleep) {
+    add({type:'rect', layer:'below', editable:false,
+      x0:new Date(sleep.start_ms), x1:new Date(sleep.end_ms),
+      y0:sleep.lower_price, y1:sleep.upper_price,
+      line:{color:'#7f8794', width:1, dash:'dot'}, fillcolor:'rgba(127,135,148,.09)'});
+  }
+  sideways.forEach((segment, index) => {
+    add({type:'rect', layer:'below', editable:false,
+      x0:new Date(segment.start_ms), x1:new Date(segment.end_ms),
+      y0:segment.lower_price, y1:segment.upper_price,
+      line:{color:'#c99a62', width:1, dash:'dot'}, fillcolor:'rgba(201,154,98,.10)'});
+  });
+  pumps.forEach((wave, index) => {
+    const sel = selectedObj === `pump:${index}`; const bot = isBot('pumps');
       add({type:'rect', layer:'below', editable:false,
-      x0:new Date(Math.min(pump.start.ms, pump.high.ms)), x1:new Date(Math.max(pump.start.ms, pump.high.ms)),
-      y0:Math.min(pump.start.price, pump.high.price), y1:Math.max(pump.start.price, pump.high.price),
+      x0:new Date(Math.min(wave.start.ms, wave.high.ms)), x1:new Date(Math.max(wave.start.ms, wave.high.ms)),
+      y0:Math.min(wave.start.price, wave.high.price), y1:Math.max(wave.start.price, wave.high.price),
       line:{color: bot ? BOT_COLOR : (sel ? '#a9d8b9' : '#7dbb91'), width: 1, dash: bot ? 'dot' : 'solid'},
       fillcolor:'rgba(125,187,145,.08)'});
+  });
+  if (pump) {
+    add({type:'rect', layer:'below', editable:false,
+      x0:new Date(Math.min(pump.start.ms, pump.high.ms)), x1:new Date(Math.max(pump.start.ms, pump.high.ms)),
+      y0:Math.min(pump.start.price, pump.high.price), y1:Math.max(pump.start.price, pump.high.price),
+      line:{color:'#7dbb91', width:1}, fillcolor:'rgba(125,187,145,.08)'});
   }
   zones.forEach((zone, index) => {
     const supply = zone.kind === 'supply';
@@ -2426,6 +2514,12 @@ function lowTouchTrace(lows, fit) {
 function annotations() {
   if (!current) return [];
   const out = [];
+  const sleep = sleepSegment();
+  if (sleep) {
+    out.push({x:new Date((sleep.start_ms + sleep.end_ms) / 2), y:sleep.upper_price, text:'SLEEP',
+      showarrow:false, xanchor:'center', yanchor:'bottom',
+      font:{size:10, color:'#9ba2ae'}, bgcolor:'rgba(17,19,24,.65)', borderpad:2});
+  }
   if (showDefaultLines) {
     const e = current.event, cc = current.candles;
     // session-block name labels along the top
@@ -2537,6 +2631,13 @@ function annotations() {
       showarrow:false, xanchor:'left', yanchor:'middle', xshift:6,
       font:{size:11, color:'#8aa0d8'}, bgcolor:'rgba(34,43,69,.80)', borderpad:3});
   }
+  pumps.forEach((wave, index) => {
+    if (!(wave.start.price > 0)) return;
+    const move = wave.high.price / wave.start.price - 1;
+    out.push({x:new Date(wave.high.ms + barMs), y:wave.high.price, text:`W${index + 1} +${(move*100).toFixed(1)}%`,
+      showarrow:false, xanchor:'left', yanchor:'bottom',
+      font:{size:11, color:'#7dbb91'}, bgcolor:'rgba(23,36,29,.80)', borderpad:3});
+  });
   if (pump && pump.start.price > 0) {
     const move = pump.high.price / pump.start.price - 1;
     out.push({x:new Date(pump.high.ms + barMs), y:pump.high.price, text:`+${(move*100).toFixed(1)}%`,
@@ -2923,6 +3024,17 @@ function serializeSetup(s) {
   const slRay = (stopPrice != null && entryObj) ? slRayFor(entryObj, stopPrice) : null;
   const zpts = (s.zigzag && Array.isArray(s.zigzag.points)) ? s.zigzag.points : [];
   const hasPump = setupHasPump(s);
+  const pumpWaves = normalizedPumps(s.pumps).map((wave, index) => ({
+    wave_ordinal:index + 1,
+    start_ms:Math.round(wave.start.ms), start_price:Number(wave.start.price),
+    culmination_ms:Math.round(wave.high.ms), culmination_price:Number(wave.high.price)
+  }));
+  const sideways = sidewaysSegments(s.pumps).map(segment => ({
+    after_wave_ordinal:segment.after_wave_ordinal,
+    start_ms:Math.round(segment.start_ms), end_ms:Math.round(segment.end_ms),
+    lower_price:Number(segment.lower_price), upper_price:Number(segment.upper_price)
+  }));
+  const firstWave = pumpWaves.length ? pumpWaves[0] : null;
   return {
     family: s.family, quality: s.quality, notes: s.notes || '',
     has_level: withLevel,
@@ -2935,10 +3047,12 @@ function serializeSetup(s) {
     level_touch_times_ms: withLevel && Array.isArray(lvl.touches)
       ? [...new Set(lvl.touches.map(Number).filter(Number.isFinite))].sort((a,b) => a - b)
       : null,
-    pump_start_ms: hasPump ? s.pump.start.ms : null,
-    pump_start_price: hasPump ? s.pump.start.price : null,
-    culmination_ms: hasPump ? s.pump.high.ms : null,
-    culmination_price: hasPump ? s.pump.high.price : null,
+    pump_waves: pumpWaves,
+    sideways_segments: sideways,
+    pump_start_ms: firstWave ? firstWave.start_ms : null,
+    pump_start_price: firstWave ? firstWave.start_price : null,
+    culmination_ms: firstWave ? firstWave.culmination_ms : null,
+    culmination_price: firstWave ? firstWave.culmination_price : null,
     structure_break_ms: structure ? structure.high.ms : null,
     structure_break_price: structure ? structure.high.price : null,
     structure_swing_low_ms: structure ? structure.low.ms : null,

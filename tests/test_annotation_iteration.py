@@ -694,7 +694,7 @@ def test_read_api_errors_do_not_poison_browser_state() -> None:
     assert "function clearChart()" in LABELER_HTML
     assert "clearChart();\n    toast(data.error, 4200);" in LABELER_HTML
     assert "if (payload.error) {\n    current = null;" in LABELER_HTML
-    assert "level = null; pump = null; entry = null; sl = null; zigzag = null; zzDraft = null; setups = [];" in LABELER_HTML
+    assert "level = null; pumps = []; pump = null; entry = null; sl = null; zigzag = null; zzDraft = null; setups = [];" in LABELER_HTML
     assert "clearChart();\n    toast(payload.error, 4200);" in LABELER_HTML
     assert "if (payload.error) {\n    selectedTf = previousTf;\n    toast(payload.error, 4200);\n    populateTfButtons(group);" in LABELER_HTML
     assert "document.getElementById('iterationStatus').innerHTML = `<b>error</b>" in LABELER_HTML
@@ -804,6 +804,50 @@ def test_multiple_setups_per_event_are_supported() -> None:
     assert "setups: serializedSetups" in LABELER_HTML
     for fn in ("function switchSetup(", "function addSetup(", "function deleteSetup(", "function commitActiveSetup("):
         assert fn in LABELER_HTML, fn
+
+
+def test_multiple_ordered_pump_waves_and_automatic_sideways_are_supported() -> None:
+    assert "let pumps = [];" in LABELER_HTML
+    assert "function normalizedPumps(" in LABELER_HTML
+    assert "function sidewaysSegments(" in LABELER_HTML
+    assert "function sleepSegment(" in LABELER_HTML
+    assert "text:'SLEEP'" in LABELER_HTML
+    assert "pumps = ordered;" in LABELER_HTML
+    assert "pump_waves: pumpWaves" in LABELER_HTML
+    assert "sideways_segments: sideways" in LABELER_HTML
+    assert "text:`W${index + 1}" in LABELER_HTML
+
+
+def test_multi_pump_schema_requires_ordered_non_overlapping_waves_and_exact_sideways() -> None:
+    setup = {
+        "family": "unknown",
+        "quality": "good",
+        "has_level": False,
+        "has_pump_transition": True,
+        "has_structure_break": False,
+        "pump_start_ms": 1_000,
+        "pump_start_price": 1.0,
+        "culmination_ms": 2_000,
+        "culmination_price": 1.2,
+        "pump_waves": [
+            {"wave_ordinal": 1, "start_ms": 1_000, "start_price": 1.0, "culmination_ms": 2_000, "culmination_price": 1.2},
+            {"wave_ordinal": 2, "start_ms": 3_000, "start_price": 1.1, "culmination_ms": 4_000, "culmination_price": 1.4},
+        ],
+        "sideways_segments": [
+            {"after_wave_ordinal": 1, "start_ms": 2_000, "end_ms": 3_000, "lower_price": 1.05, "upper_price": 1.22}
+        ],
+    }
+    payload = {"event_id": "waves", "symbol": "AAAUSDT", "tf": "3m", "setups": [setup]}
+    validate_label_payload(payload)
+
+    setup["pump_waves"][1]["start_ms"] = 2_000
+    with pytest.raises(ValueError, match="strictly separated"):
+        validate_label_payload(payload)
+
+    setup["pump_waves"][1]["start_ms"] = 3_000
+    setup["sideways_segments"][0]["end_ms"] = 3_001
+    with pytest.raises(ValueError, match="next pump start"):
+        validate_label_payload(payload)
 
 
 def test_structure_break_auto_sl_uses_last_zigzag_low() -> None:

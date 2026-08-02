@@ -306,6 +306,16 @@ def _seed_mark(candidate: SleepPumpCandidate) -> dict:
                 "pump_start_price": candidate.pump_low_price,
                 "culmination_ms": candidate.culmination_ms,
                 "culmination_price": candidate.culmination_price,
+                "pump_waves": [
+                    {
+                        "wave_ordinal": 1,
+                        "start_ms": candidate.pump_start_ms,
+                        "start_price": candidate.pump_low_price,
+                        "culmination_ms": candidate.culmination_ms,
+                        "culmination_price": candidate.culmination_price,
+                    }
+                ],
+                "sideways_segments": [],
                 "structure_break_ms": None,
                 "structure_break_price": None,
                 "structure_swing_low_ms": None,
