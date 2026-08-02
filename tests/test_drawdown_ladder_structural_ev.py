@@ -47,6 +47,7 @@ def _causal_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     features = pd.DataFrame(
         {
             "candidate_id": candidate_ids,
+            "stage1_feature_cutoff_time_ms": predictions["feature_cutoff_time_ms"],
             "snapshot_close_to_entry": [-0.02, -0.03, -0.04],
             "feature_schema_version": ["v1"] * 3,
         }
@@ -57,7 +58,7 @@ def _causal_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             "parent_event_id": parent_ids,
             "symbol": symbols,
             "snapshot_time_ms": predictions["snapshot_time_ms"],
-            "feature_cutoff_time_ms": predictions["feature_cutoff_time_ms"],
+            "stage0_trigger_cutoff_time_ms": [snapshot_ms - 3_600_000] * 3,
             "future_start_time_ms": predictions["future_start_time_ms"],
             "horizon_complete": [True] * 3,
             "break_even_25bps_reached": [True, False, True],
@@ -123,6 +124,32 @@ def test_structural_ev_rejects_future_start_at_snapshot() -> None:
         )
 
 
+def test_structural_ev_rejects_prediction_stage1_cutoff_mismatch() -> None:
+    predictions, features, outcomes = _causal_inputs()
+    features.loc[0, "stage1_feature_cutoff_time_ms"] -= 60_000
+
+    with pytest.raises(StructuralEVError, match="Stage-1 feature cutoff"):
+        assemble_structural_ev_rows(
+            predictions=predictions,
+            features=features,
+            outcomes=outcomes,
+        )
+
+
+def test_structural_ev_rejects_stage0_trigger_cutoff_after_snapshot() -> None:
+    predictions, features, outcomes = _causal_inputs()
+    outcomes.loc[0, "stage0_trigger_cutoff_time_ms"] = (
+        outcomes.loc[0, "snapshot_time_ms"] + 60_000
+    )
+
+    with pytest.raises(StructuralEVError, match="Stage-0 trigger cutoff"):
+        assemble_structural_ev_rows(
+            predictions=predictions,
+            features=features,
+            outcomes=outcomes,
+        )
+
+
 def test_structural_ev_rejects_horizon_that_reaches_untouched_2026() -> None:
     predictions, features, outcomes = _causal_inputs()
     late_snapshot = int(pd.Timestamp("2025-12-31T00:01:00Z").timestamp() * 1_000)
@@ -130,7 +157,7 @@ def test_structural_ev_rejects_horizon_that_reaches_untouched_2026() -> None:
     predictions.loc[0, "feature_cutoff_time_ms"] = late_snapshot
     predictions.loc[0, "future_start_time_ms"] = late_snapshot + 60_000
     outcomes.loc[0, "snapshot_time_ms"] = late_snapshot
-    outcomes.loc[0, "feature_cutoff_time_ms"] = late_snapshot
+    features.loc[0, "stage1_feature_cutoff_time_ms"] = late_snapshot
     outcomes.loc[0, "future_start_time_ms"] = late_snapshot + 60_000
 
     with pytest.raises(StructuralEVError, match="reaches untouched 2026"):

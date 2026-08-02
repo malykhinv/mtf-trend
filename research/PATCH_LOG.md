@@ -1972,3 +1972,13 @@ Changes:
 - Adds future-mutation, threshold-boundary, OOS-boundary, protocol, and CLI
   regressions. Build and analysis remain separate commands so the protocol can
   be committed before evidence is opened.
+
+Pre-result schema audit amendment:
+- The first build stopped before writing EV rows because Stage 0 and Stage 1
+  both used the generic name `feature_cutoff_time_ms` for different causal
+  boundaries. Stage 0 means session/order-activation cutoff; Stage 1 means the
+  fill-snapshot feature cutoff used by prediction.
+- The join now names and audits both meanings explicitly: the prediction cutoff
+  must equal the Stage-1 cutoff, while both the Stage-1 cutoff and Stage-0
+  trigger cutoff must be no later than the snapshot. No result, threshold,
+  state, endpoint, or gate was opened or changed.

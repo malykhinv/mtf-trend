@@ -199,12 +199,15 @@ def assemble_structural_ev_rows(
         ("parent_event_id", "parent_event_id_outcome"),
         ("symbol", "symbol_outcome"),
         ("snapshot_time_ms", "snapshot_time_ms_outcome"),
-        ("feature_cutoff_time_ms", "feature_cutoff_time_ms_outcome"),
         ("future_start_time_ms", "future_start_time_ms_outcome"),
     )
     for left, right in equality_checks:
         if not work[left].astype(str).eq(work[right].astype(str)).all():
             raise StructuralEVError(f"structural EV join mismatch: {left}")
+    if not work["feature_cutoff_time_ms"].eq(
+        work["stage1_feature_cutoff_time_ms"]
+    ).all():
+        raise StructuralEVError("prediction cutoff differs from Stage-1 feature cutoff")
     if not work["target"].astype(bool).eq(
         work["break_even_25bps_reached"].astype(bool)
     ).all():
@@ -217,6 +220,8 @@ def assemble_structural_ev_rows(
         raise StructuralEVError("structural EV input reports OOS access")
     if not work["feature_cutoff_time_ms"].le(work["snapshot_time_ms"]).all():
         raise StructuralEVError("structural EV feature cutoff exceeds snapshot")
+    if not work["stage0_trigger_cutoff_time_ms"].le(work["snapshot_time_ms"]).all():
+        raise StructuralEVError("Stage-0 trigger cutoff exceeds snapshot")
     if not work["future_start_time_ms"].gt(work["snapshot_time_ms"]).all():
         raise StructuralEVError("structural EV future starts at or before snapshot")
     if not work["weekly_model_freeze_time_ms"].le(work["snapshot_time_ms"]).all():
@@ -307,10 +312,11 @@ def build_structural_ev_dataset(
         feature_path,
         columns=[
             "candidate_id",
+            "feature_cutoff_time_ms",
             "snapshot_close_to_entry",
             "feature_schema_version",
         ],
-    )
+    ).rename(columns={"feature_cutoff_time_ms": "stage1_feature_cutoff_time_ms"})
     outcomes = pd.read_parquet(
         outcome_path,
         columns=[
@@ -328,7 +334,7 @@ def build_structural_ev_dataset(
             "future_min_return_2880m",
             "untouched_2026_row_used",
         ],
-    )
+    ).rename(columns={"feature_cutoff_time_ms": "stage0_trigger_cutoff_time_ms"})
     work = assemble_structural_ev_rows(
         predictions=predictions,
         features=features,
@@ -342,6 +348,7 @@ def build_structural_ev_dataset(
         "symbol",
         "snapshot_time_ms",
         "feature_cutoff_time_ms",
+        "stage0_trigger_cutoff_time_ms",
         "future_start_time_ms_outcome",
         "test_week",
         "weekly_model_freeze_time_ms",
