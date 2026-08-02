@@ -899,3 +899,58 @@ mirrored short experiment before feature selection or CatBoost. Subsequent
 inference must cluster dependent observations at least by symbol/time block and
 must preserve the untouched 2026 partition.
 ```
+
+## 2026-08-02 — blind ladder mirrored rally/short control
+
+Status: `IS_DIRECTIONAL_CONTROL_REJECTS_LONG_SPECIFIC_RECOVERY`.
+
+The mirror implementation and primary comparison were frozen in commit
+`1865c7d3` before the full result was opened. The only directional change was
+drawdown/long to rally/short; session anchors, activation delay, trade-through,
+depths, equal-notional grids, costs, censoring, horizon, universe, and IS
+boundary were identical.
+
+Build/audit result:
+
+```text
+source perpetual symbols: 796
+individual mirrored short-limit rows: 381,270
+equal-notional mirrored ladder states: 238,585
+unique mirrored parent symbol/session events: 96,956
+temporal audit: PASS
+OOS rows read: 0
+```
+
+Frozen primary long-minus-mirrored-short comparison at the 25 bps recovery
+threshold:
+
+```text
+3% grid through 6%:
+  recovery delta -4.09 pp; symbol-week cluster 95% CI -4.59 .. -3.58 pp
+  signed 48h return delta +0.63 pp; 95% CI -0.35 .. +1.67 pp
+
+5% grid through 10%:
+  recovery delta -5.96 pp; symbol-week cluster 95% CI -6.89 .. -5.05 pp
+  signed 48h return delta +1.29 pp; 95% CI -0.56 .. +3.30 pp
+
+10% grid through 20%:
+  recovery delta -4.95 pp; symbol-week cluster 95% CI -7.03 .. -2.90 pp
+  signed 48h return delta +5.10 pp; 95% CI +1.25 .. +9.55 pp
+```
+
+The short mirror reached a small cost-adjusted recovery more often and faster,
+but had a worse adverse tail. Mean 48-hour worst signed excursions for the
+three primary states were approximately -19.8%, -28.3%, and -45.7% for the
+short mirror versus -13.9%, -20.3%, and -35.3% for the long drawdown arm.
+Therefore the mirror does not establish a short edge; it exposes the exact
+high-win-rate/heavy-tail trap that a recovery-only statistic hides.
+
+Interpretation:
+
+```text
+The claim that large drawdowns have uniquely strong recovery is rejected by the
+frozen directional control. Symmetric rallies mean-reverted to a small short
+threshold even more often. Neither side has positive EV proof. Continue to the
+frozen prior non-drawdown matched control; do not select a side, TP, or filter
+from the mirror result.
+```
