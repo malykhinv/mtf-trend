@@ -243,6 +243,34 @@ The mirror code and tests must be frozen before its full-IS result is opened.
 After opening, only bug fixes that invalidate and rerun the entire mirror are
 allowed; neighboring thresholds or depths may not be added.
 
+#### Frozen Stage 0C prior non-drawdown matched-control contract
+
+Protocol freeze: `prior_non_drawdown_control_20260802_v1`.
+
+For every filled long ladder state, the control search is restricted to the
+same symbol, UTC session, and exact elapsed session minute. A control must:
+
+- precede the signal by at least the complete 48-hour response horizon;
+- lie within the prior 30 calendar days;
+- have no 3% drawdown/trade-through from its own frozen session anchor;
+- use an entry at the completed control bar close;
+- have a future path beginning only with the next complete minute.
+
+Nearest-neighbor selection uses only causal 60-minute realized volatility,
+60-minute quote volume, and absolute 60-minute return. Fixed calipers are a
+maximum 4x volatility ratio, 10x quote-volume ratio, and three percentage-point
+absolute-return difference. The fixed match score weights are 1.0, 0.5, and
+0.5 respectively. Ties resolve by the earlier control timestamp. Future return,
+high, low, recovery, or censoring never participates in membership or scoring.
+
+Controls that have no prior pool or fail a caliper remain unmatched; there is no
+fallback and coverage is reported by symbol and exact grid state. The primary
+paired strata remain 3→6%, 5→10%, and 10→20%. Paired recovery and signed-return
+differences are evaluated with symbol×ISO-week and symbol cluster resampling,
+Holm correction across the three frozen primary states, match-quality/reuse
+diagnostics, and calendar-month stability. A low-coverage primary stratum cannot
+support an edge claim.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

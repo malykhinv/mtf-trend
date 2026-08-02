@@ -79,6 +79,13 @@ from anomaly_science.strategy.drawdown_ladder.stage0 import (
 )
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
 from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
+from anomaly_science.strategy.drawdown_ladder.matched_control import (
+    MatchedControlBuildConfig,
+    build_prior_non_drawdown_controls,
+)
+from anomaly_science.strategy.drawdown_ladder.matched_analysis import (
+    build_matched_control_comparison,
+)
 from anomaly_science.validation import run_mvp1_holdout_governance
 
 
@@ -887,6 +894,34 @@ def build_parser() -> argparse.ArgumentParser:
     mirror_comparison.add_argument("--mirror", required=True)
     mirror_comparison.add_argument("--out", required=True)
 
+    prior_control = subparsers.add_parser(
+        "build-drawdown-prior-control",
+        help="Build frozen causal prior non-drawdown controls for long ladder states.",
+    )
+    prior_control.add_argument(
+        "--source-dir",
+        default=str(MatchedControlBuildConfig().source_dir),
+    )
+    prior_control.add_argument(
+        "--long-stage0",
+        default=str(MatchedControlBuildConfig().long_stage0_dir),
+    )
+    prior_control.add_argument(
+        "--out",
+        default=str(MatchedControlBuildConfig().output_dir),
+    )
+    prior_control.add_argument("--workers", type=int, default=4)
+    prior_control.add_argument("--max-inflight-symbols", type=int, default=None)
+    prior_control.add_argument("--limit-symbols", type=int, default=None)
+
+    prior_comparison = subparsers.add_parser(
+        "compare-drawdown-prior-control",
+        help="Run the frozen paired signal versus prior non-drawdown comparison.",
+    )
+    prior_comparison.add_argument("--long", required=True)
+    prior_comparison.add_argument("--control", required=True)
+    prior_comparison.add_argument("--out", required=True)
+
 
     return parser
 
@@ -936,6 +971,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress=lambda message: print(message, flush=True),
         )
         print(f"drawdown/mirror comparison written: {report}")
+        return 0
+
+    if args.command == "build-drawdown-prior-control":
+        result = build_prior_non_drawdown_controls(
+            MatchedControlBuildConfig(
+                source_dir=Path(args.source_dir),
+                long_stage0_dir=Path(args.long_stage0),
+                output_dir=Path(args.out),
+                workers=args.workers,
+                max_inflight_symbols=args.max_inflight_symbols,
+                max_symbols=args.limit_symbols,
+            ),
+            progress=lambda message: print(message, flush=True),
+        )
+        print(f"prior non-drawdown controls written: {result.output_dir}")
+        return 0
+
+    if args.command == "compare-drawdown-prior-control":
+        report = build_matched_control_comparison(
+            long_stage0_dir=Path(args.long),
+            control_dir=Path(args.control),
+            output_dir=Path(args.out),
+        )
+        print(f"drawdown/prior-control comparison written: {report}")
         return 0
 
     if args.command == "run-causal-regime-atlas":

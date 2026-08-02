@@ -229,3 +229,50 @@ def test_drawdown_mirror_comparison_cli_keeps_frozen_statistics() -> None:
     assert args.long == "long-stage0"
     assert args.mirror == "short-stage0"
     assert args.out == "comparison"
+
+
+def test_prior_non_drawdown_control_cli_is_bounded_and_is_only() -> None:
+    args = build_parser().parse_args(
+        [
+            "build-drawdown-prior-control",
+            "--source-dir",
+            "cache",
+            "--long-stage0",
+            "long",
+            "--out",
+            "controls",
+            "--workers",
+            "6",
+            "--max-inflight-symbols",
+            "12",
+            "--limit-symbols",
+            "10",
+        ]
+    )
+
+    assert args.command == "build-drawdown-prior-control"
+    assert args.source_dir == "cache"
+    assert args.long_stage0 == "long"
+    assert args.out == "controls"
+    assert args.workers == 6
+    assert args.max_inflight_symbols == 12
+    assert args.limit_symbols == 10
+
+
+def test_prior_control_comparison_cli_has_no_tunable_statistics() -> None:
+    args = build_parser().parse_args(
+        [
+            "compare-drawdown-prior-control",
+            "--long",
+            "long",
+            "--control",
+            "control",
+            "--out",
+            "result",
+        ]
+    )
+
+    assert args.command == "compare-drawdown-prior-control"
+    assert args.long == "long"
+    assert args.control == "control"
+    assert args.out == "result"

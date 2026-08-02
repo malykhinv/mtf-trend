@@ -18,6 +18,13 @@ from anomaly_science.strategy.drawdown_ladder.mirror_analysis import (
     MirrorComparisonSpec,
     build_mirror_comparison,
 )
+from anomaly_science.strategy.drawdown_ladder.matched_control import (
+    build_symbol_prior_non_drawdown_controls,
+)
+from anomaly_science.strategy.drawdown_ladder.matched_analysis import (
+    MatchedComparisonSpec,
+    build_matched_control_comparison,
+)
 
 
 def _paths(root: Path) -> SymbolStage0OutputPaths:
@@ -63,6 +70,35 @@ def _rally_fixture() -> pd.DataFrame:
     frame.loc[first_index + 1, ["open", "high", "low", "close"]] = [100.0, 105.10, 99.8, 105.0]
     frame.loc[first_index + 2, ["open", "high", "low", "close"]] = [105.0, 105.20, 104.8, 105.0]
     frame.loc[first_index + 3, ["open", "high", "low", "close"]] = [105.0, 105.10, 104.0, 104.2]
+    return frame
+
+
+def _matched_control_fixture() -> pd.DataFrame:
+    start = pd.Timestamp("2025-07-01T07:59:00Z")
+    periods = 45 * 24 * 60
+    timestamps = (
+        start.value // 1_000_000 + np.arange(periods, dtype=np.int64) * MS_PER_MINUTE
+    )
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": 100.0,
+            "high": 100.0,
+            "low": 100.0,
+            "close": 100.0,
+            "quote_volume": 1_000.0,
+        }
+    )
+    for day in pd.date_range("2025-07-02", "2025-08-07", freq="D", tz="UTC"):
+        bar_time = int((day + pd.Timedelta(hours=8, minutes=1)).value // 1_000_000)
+        index = int(np.searchsorted(timestamps, bar_time))
+        frame.loc[index, ["open", "high", "low", "close"]] = [100.0, 105.1, 100.0, 105.0]
+        frame.loc[index + 1, ["open", "high", "low", "close"]] = [105.0, 105.0, 100.0, 100.0]
+    signal_time = int(pd.Timestamp("2025-08-10T08:01:00Z").value // 1_000_000)
+    signal_index = int(np.searchsorted(timestamps, signal_time))
+    frame.loc[signal_index, ["open", "high", "low", "close"]] = [100.0, 100.0, 94.9, 95.0]
+    frame.loc[signal_index + 1, ["open", "high", "low", "close"]] = [95.0, 95.1, 94.8, 95.0]
+    frame.loc[signal_index + 2, ["open", "high", "low", "close"]] = [95.0, 96.0, 94.8, 96.0]
     return frame
 
 
@@ -364,3 +400,116 @@ def test_mirror_comparison_uses_frozen_strata_cluster_bootstrap_and_holm(
     assert row["recovery_25bps_cluster_ci_lower_95"] == 1.0
     assert row["long_minus_mirror_signed_return_48h"] == pytest.approx(0.2)
     assert row["primary_recovery_holm_p"] < 0.05
+
+
+def test_prior_non_drawdown_control_is_causal_resolved_and_outcome_blind(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "AAAUSDT.parquet"
+    original = _matched_control_fixture()
+    original.to_parquet(source, index=False)
+    signal_paths = _paths(tmp_path / "signal")
+    build_symbol_stage0(source, shard_paths=signal_paths)
+    control_candidates = tmp_path / "control" / "candidates.parquet"
+    control_outcomes = tmp_path / "control" / "outcomes.parquet"
+
+    stats = build_symbol_prior_non_drawdown_controls(
+        source_path=source,
+        signal_candidates_path=signal_paths.ladder_state_candidates,
+        output_candidates_path=control_candidates,
+        output_outcomes_path=control_outcomes,
+    )
+    candidates = pd.read_parquet(control_candidates)
+    outcomes = pd.read_parquet(control_outcomes)
+    five = candidates.loc[
+        candidates["grid_step_pct"].eq(5)
+        & candidates["deepest_filled_level_pct"].eq(5)
+    ].iloc[0]
+
+    assert stats.matched_rows > 0
+    assert bool(five["control_is_strictly_prior"])
+    assert bool(five["control_outcome_resolved_before_signal"])
+    assert bool(five["control_has_no_3pct_drawdown"])
+    assert five["control_snapshot_time_ms"] + 2880 * MS_PER_MINUTE <= five["signal_snapshot_time_ms"]
+    assert outcomes["future_start_time_ms"].gt(outcomes["control_snapshot_time_ms"]).all()
+    assert not candidates["untouched_2026_row_used"].any()
+
+    mutated = original.copy()
+    after_signal = int(pd.Timestamp("2025-08-10T08:03:00Z").value // 1_000_000)
+    mutated.loc[mutated["timestamp"].ge(after_signal), ["high", "close"]] = 1_000.0
+    mutated.to_parquet(source, index=False)
+    second_candidates = tmp_path / "control2" / "candidates.parquet"
+    second_outcomes = tmp_path / "control2" / "outcomes.parquet"
+    build_symbol_prior_non_drawdown_controls(
+        source_path=source,
+        signal_candidates_path=signal_paths.ladder_state_candidates,
+        output_candidates_path=second_candidates,
+        output_outcomes_path=second_outcomes,
+    )
+    pd.testing.assert_frame_equal(candidates, pd.read_parquet(second_candidates))
+    pd.testing.assert_frame_equal(outcomes, pd.read_parquet(second_outcomes))
+
+
+def test_matched_comparison_is_paired_clustered_and_multiplicity_adjusted(
+    tmp_path: Path,
+) -> None:
+    long_root = tmp_path / "long_pair"
+    _write_comparison_arm(
+        long_root,
+        prefix="signal",
+        recovered=[True] * 8,
+        returns=[0.10] * 8,
+    )
+    signal = pd.read_parquet(long_root / "ladder_state_candidates.parquet")
+    control_root = tmp_path / "control_pair"
+    control_root.mkdir()
+    controls = pd.DataFrame(
+        {
+            "pair_id": [f"pair-{index}" for index in range(8)],
+            "signal_candidate_id": signal["candidate_id"],
+            "symbol": signal["symbol"],
+            "grid_step_pct": 3,
+            "deepest_filled_level_pct": 6,
+            "signal_snapshot_time_ms": signal["snapshot_time_ms"],
+            "control_snapshot_time_ms": signal["snapshot_time_ms"] - 7 * 24 * 60 * MS_PER_MINUTE,
+            "match_score": 0.1,
+            "realized_vol_log_distance": 0.05,
+            "quote_volume_log_distance": 0.05,
+            "abs_return_distance": 0.001,
+        }
+    )
+    control_outcomes = pd.DataFrame(
+        {
+            "pair_id": controls["pair_id"],
+            "horizon_complete": True,
+            "break_even_25bps_reached": False,
+            "future_return_2880m": -0.10,
+        }
+    )
+    controls.to_parquet(control_root / "matched_candidates.parquet", index=False)
+    control_outcomes.to_parquet(control_root / "matched_outcomes.parquet", index=False)
+
+    report = build_matched_control_comparison(
+        long_stage0_dir=long_root,
+        control_dir=control_root,
+        output_dir=tmp_path / "paired_result",
+        spec=MatchedComparisonSpec(
+            primary_strata=((3, 6),),
+            bootstrap_iterations=100,
+            minimum_matched_rows=2,
+            minimum_coverage_fraction=0.5,
+            minimum_week_clusters=2,
+            minimum_symbol_clusters=2,
+            minimum_month_pairs=1,
+        ),
+    )
+    exact = pd.read_parquet(tmp_path / "paired_result" / "matched_exact_strata.parquet")
+    row = exact.iloc[0]
+
+    assert report.is_file()
+    assert bool(row["eligible_for_inference"])
+    assert row["matched_coverage"] == 1.0
+    assert row["paired_recovery_25bps_delta"] == 1.0
+    assert row["recovery_25bps_week_ci_lower_95"] == 1.0
+    assert row["recovery_25bps_symbol_ci_lower_95"] == 1.0
+    assert row["primary_recovery_conservative_holm_p"] < 0.05
