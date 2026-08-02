@@ -26,6 +26,7 @@ IS_END_EXCLUSIVE_MS = int(pd.Timestamp("2026-01-01T00:00:00Z").timestamp() * 1_0
 HOUR_MS = 3_600_000
 LIFECYCLE_CANDIDATE_SCHEMA_VERSION = "pump_lifecycle_candidate_v1"
 LIFECYCLE_PROTOCOL_FREEZE_ID = "pump_lifecycle_stage0_20250802_v1"
+SOURCE_POPULATION_SCOPE = "materialized_high_score_review_frame_max500_max3_per_symbol_tf"
 
 SOURCE_COLUMNS: tuple[str, ...] = (
     "event_id",
@@ -260,6 +261,8 @@ def build_lifecycle_review(
     report = {
         "protocol_freeze_id": LIFECYCLE_PROTOCOL_FREEZE_ID,
         "source_path": str(source_path),
+        "source_population_scope": SOURCE_POPULATION_SCOPE,
+        "representative_prevalence_allowed": False,
         "population_rows": int(len(population)),
         "pilot_rows": int(len(pilot)),
         "pilot_by_month": {str(k): int(v) for k, v in pilot.groupby("review_month").size().items()},

@@ -8,9 +8,14 @@ from anomaly_science.strategy.pump_wave_short.lifecycle_review import (
     IS_END_EXCLUSIVE_MS,
     LifecycleReviewConfig,
     SOURCE_COLUMNS,
+    SOURCE_POPULATION_SCOPE,
     build_lifecycle_population,
     sample_lifecycle_review_queue,
 )
+
+
+def test_source_scope_explicitly_forbids_prevalence_claims() -> None:
+    assert "high_score_review_frame" in SOURCE_POPULATION_SCOPE
 
 
 def _source_row(event_id: str, culmination_ms: int, *, symbol: str = "AAAUSDT") -> dict[str, object]:

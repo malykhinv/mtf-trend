@@ -36,6 +36,14 @@ That detector first requires a quiet pre-pump base, then proposes the pump start
 and a locally confirmed culmination. Its proposal time occurs after the four-bar
 culmination confirmation; no later lifecycle candle participates in membership.
 
+This source artifact is a bounded high-score review frame: at most 500 proposals
+and at most three proposals per `(symbol, timeframe)`. It is suitable for learning
+and validating the wave ontology efficiently, but it is not a representative
+sample of every detected anomaly. Stage 0 therefore cannot estimate market-wide
+wave prevalence, detector recall, or final strategy opportunity count. Those
+require a later frozen full-population rebuild after the wave definition passes
+visual feasibility.
+
 The new desk seed contains exactly one `pump` object, shown as wave 1. The expert
 may correct or delete it and may draw the same `pump` tool repeatedly. Pump
 objects are sorted and numbered W1, W2, W3, ... . They must not overlap.
@@ -52,8 +60,9 @@ a deterministic derivative saved with the label for auditability.
 
 The initial pilot is a frozen hash sample of at most ten candidates per 2025
 calendar month. Hash sampling uses only immutable source event identity. The
-full source population is retained separately. Cards show six hours before the
-proposed wave start and up to 72 hours after its first culmination, clipped
+complete 494-row eligible population inside this bounded source frame is
+retained separately. Cards show six hours before the proposed wave start and up
+to 72 hours after its first culmination, clipped
 strictly before 2026. At least 24 hours of IS tail must be available. The right
 tail is display-only and cannot alter candidate selection or causal fields.
 
