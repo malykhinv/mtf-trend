@@ -1860,3 +1860,18 @@ Full IS result:
   The eligible 3→6% state underperformed matched ordinary market time by 10.56
   percentage points in recovery and 2.48 percentage points in signed 48-hour
   return. Deeper primary states failed coverage and remain unidentified.
+
+## science: preregister full-context drawdown recovery prediction
+
+Status: APPLIED; IS feature build and weekly prediction still pending.
+
+Changes:
+- Adds a typed Stage 1 feature contract covering the complete causal picture:
+  geometry, path, EMA, activity/order flow, OI/liquidations, BTC/relative state,
+  market breadth, sessions, concurrency, and strictly resolved event memory.
+- Adds bounded IS-only feature and breadth builders, explicit missingness,
+  immutable output directories, and temporal/future-mutation audits.
+- Freezes paired weekly CatBoost arms: a structural geometry control and the
+  complete causal model, with absolute and incremental probability gates.
+- Keeps 2026 physically unread and explicitly forbids PnL work until calibrated
+  causal separation passes.

@@ -55,6 +55,11 @@ from anomaly_science.market_context.positioning import (
     build_reference_positioning_features,
     reference_positioning_feature_names,
 )
+from anomaly_science.market_context.minute_breadth import (
+    MinuteBreadthError,
+    MinuteBreadthSpec,
+    build_minute_breadth_from_paths,
+)
 from anomaly_science.market_context.sessions import (
     UTC_SESSION_BLOCKS,
     UTC_SESSION_CALENDAR_VERSION,
@@ -80,6 +85,9 @@ __all__ = [
     "REFERENCE_METRICS_SCHEMA_VERSION",
     "ReferenceMetricsArchiveConfig",
     "ReferencePositioningContextConfig",
+    "MinuteBreadthError",
+    "MinuteBreadthSpec",
+    "build_minute_breadth_from_paths",
     "attach_reference_positioning_context",
     "attach_event_positioning_context",
     "build_event_positioning_features",

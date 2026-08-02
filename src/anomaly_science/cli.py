@@ -77,6 +77,10 @@ from anomaly_science.strategy.drawdown_ladder.stage0 import (
     DrawdownLadderStage0BuildConfig,
     build_stage0_is as build_drawdown_ladder_stage0_is,
 )
+from anomaly_science.strategy.drawdown_ladder.stage1_build import (
+    Stage1BuildConfig,
+    build_stage1_is as build_drawdown_ladder_stage1_is,
+)
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
 from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
 from anomaly_science.strategy.drawdown_ladder.matched_control import (
@@ -922,6 +926,26 @@ def build_parser() -> argparse.ArgumentParser:
     prior_comparison.add_argument("--control", required=True)
     prior_comparison.add_argument("--out", required=True)
 
+    drawdown_ladder_stage1 = subparsers.add_parser(
+        "build-drawdown-ladder-stage1",
+        help="Build the frozen IS-only causal recovery-prediction feature matrix.",
+    )
+    drawdown_ladder_stage1.add_argument(
+        "--source-dir",
+        default=str(Stage1BuildConfig().source_dir),
+    )
+    drawdown_ladder_stage1.add_argument(
+        "--stage0",
+        default=str(Stage1BuildConfig().stage0_dir),
+    )
+    drawdown_ladder_stage1.add_argument(
+        "--out",
+        default=str(Stage1BuildConfig().output_dir),
+    )
+    drawdown_ladder_stage1.add_argument("--workers", type=int, default=4)
+    drawdown_ladder_stage1.add_argument("--max-inflight-symbols", type=int, default=None)
+    drawdown_ladder_stage1.add_argument("--limit-symbols", type=int, default=None)
+
 
     return parser
 
@@ -995,6 +1019,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=Path(args.out),
         )
         print(f"drawdown/prior-control comparison written: {report}")
+        return 0
+
+    if args.command == "build-drawdown-ladder-stage1":
+        result = build_drawdown_ladder_stage1_is(
+            Stage1BuildConfig(
+                source_dir=Path(args.source_dir),
+                stage0_dir=Path(args.stage0),
+                output_dir=Path(args.out),
+                workers=args.workers,
+                max_inflight_symbols=args.max_inflight_symbols,
+                max_symbols=args.limit_symbols,
+            ),
+            progress=lambda message: print(message, flush=True),
+        )
+        print(f"drawdown-ladder Stage-1 artifacts written: {result.output_dir}")
         return 0
 
     if args.command == "run-causal-regime-atlas":

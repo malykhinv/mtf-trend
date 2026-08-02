@@ -1013,3 +1013,23 @@ be matched with adequate coverage. Gate 0C does not authorize execution or PnL
 optimization. The only admissible continuation is to test whether success and
 tail failure inside the anomaly population are predictably separable online.
 ```
+
+## 2026-08-02 — drawdown ladder Stage 1 preregistration
+
+Status: `FROZEN_DESIGN_PENDING_IS_FEATURE_BUILD`.
+
+The naive unconditional long hypothesis was rejected at Gate 0C. Stage 1 does
+not optimize a bot. It tests whether the 25 bps / 48-hour recovery label can be
+predicted at the fill snapshot using the complete causal feature catalog.
+
+The full CatBoost arm is paired against a 20-field structural geometry baseline
+on identical weekly walk-forward rows. Parent symbol/session events are excluded
+across temporal splits and receive equal total weight. Only labels resolved
+strictly before a weekly freeze can train that week's models. The full arm must
+pass absolute AUC, proper-score, calibration, support, and within-week
+permutation gates and must improve AUC, log loss, and Brier score over the
+structural arm under ISO-week clustered inference. The complete protocol and
+numeric gates are recorded in `docs/strategies/drawdown_ladder_protocol.md`.
+
+No 2026 data, trading simulation, TP/SL selection, leverage, or portfolio sizing
+is admissible at this stage.

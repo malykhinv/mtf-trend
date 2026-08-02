@@ -287,6 +287,94 @@ unconditional ladder hypothesis. Further work may only ask whether causal
 features predict recovery and tail failure within the anomaly population; it
 may not optimize PnL or claim that raw mean reversion is an edge.
 
+## Frozen Stage 1 protocol: causal recovery prediction
+
+```text
+protocol freeze: drawdown_ladder_recovery_prediction_20260802_v1
+development history: 2025-06-03 through each weekly freeze
+internal walk-forward evaluation: 2025-08-04 through 2025-12-31
+pristine OOS: 2026, physically unread
+population: complete equal-notional long ladder states from frozen Stage 0
+positive class: 25 bps cost-adjusted recovery within 48 hours
+```
+
+The Stage 1 question is deliberately narrower than profitability:
+
+> At the moment a ladder state becomes observable, can its eventual recovery
+> versus non-recovery be predicted from information already available then?
+
+The null hypothesis is that the full causal context has no useful calibrated
+weekly walk-forward predictability beyond the state geometry and time of the
+fall. Rejecting this null does not establish positive EV.
+
+Every row obeys:
+
+```text
+feature_cutoff_time <= snapshot_time < future_start_time
+label_resolution_time > snapshot_time
+training label_resolution_time < weekly model freeze time
+```
+
+The full model uses the complete frozen causal catalog, not a post-hoc shortlist:
+ladder/fill geometry, multi-horizon price path and volatility, the complete EMA
+fan, quote and trade activity, taker flow, OI, liquidations, BTC state,
+coin/BTC correlation and residual return, cross-sectional market breadth,
+session context, contract age/data quality, concurrency, and only those prior
+coin/state outcomes that had strictly resolved before the current snapshot.
+Missing OI, liquidation, or activity data remains explicitly missing and is
+paired with availability information; it is never silently imputed as a market
+state.
+
+Two model arms are frozen before opening the Stage 1 result:
+
+- `structural_baseline`: 20 geometry, fill-bar, session/time, contract-age, and
+  history-quality fields;
+- `full_causal`: every admissible model feature in
+  `drawdown_ladder_causal_features_v1`.
+
+Both arms use identical rows, weekly freezes, parent-event-exclusive temporal
+splits, inverse-parent-event weights, CatBoost settings, and beta-shrunk
+isotonic calibration. A candidate row is the prediction key; all rows from the
+same symbol/session parent event remain together for splitting and weighting.
+The raw symbol identifier is used for diagnostics, not as a model feature;
+causal prior-reaction fields represent learnable coin history without arbitrary
+symbol memorization.
+
+Absolute full-model gates are frozen as follows:
+
+```text
+internal OOS rows >= 20,000
+skipped weekly fraction = 0
+AUC >= 0.60
+log-loss improvement over frozen weekly prevalence >= 0.005
+Brier improvement over frozen weekly prevalence >= 0.002
+ECE <= 0.05
+within-week label-permutation p <= 0.05 for AUC and log-loss gain
+probability >= 0.92 cohort: >= 1,000 rows, observed recovery >= 0.92,
+  Wilson lower 95% >= 0.90, absolute calibration gap <= 0.05
+```
+
+The primary anti-triviality test is the paired full-minus-structural comparison
+on exactly identical walk-forward predictions. Required incremental effects:
+
+```text
+AUC delta >= 0.01
+log-loss improvement >= 0.002
+Brier improvement >= 0.001
+ISO-week bootstrap 95% lower bound > 0 for every metric
+ISO-week sign-flip familywise p <= 0.05/3 for every metric
+```
+
+All gates must pass. Failure of any gate leaves the causal-separation hypothesis
+unproven and forbids PnL optimization. Results must additionally be broken down
+by exact grid state, month, session, symbol, and causal feature family. Coin and
+context win/loss traits are explanatory diagnostics only until reproduced in
+later frozen weeks; low-support coins may not be promoted as filters.
+
+Stage 1 writes the full feature catalog, missingness, temporal audit, both model
+configs, and the paired-comparison config before fitting. No threshold, feature,
+state, session, or probability cutoff may be retuned after the result is seen.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,
@@ -327,4 +415,11 @@ execution rules are frozen may 2026 be accessed once.
   --out .output/research/drawdown_ladder/stage0_is `
   --workers 6 `
   --max-inflight-symbols 12
+
+.venv\Scripts\python.exe main.py build-drawdown-ladder-stage1 `
+  --source-dir .output/market/binance_vision/um_futures/enriched_1m `
+  --stage0 .output/research/drawdown_ladder/stage0_is `
+  --out .output/research/drawdown_ladder/stage1_is `
+  --workers 4 `
+  --max-inflight-symbols 8
 ```
