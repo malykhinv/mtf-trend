@@ -9,7 +9,16 @@ from anomaly_science.strategy.residual_absorption.is_build import (
     build_cross_section_stage1,
     build_symbol_5m_is,
 )
-from anomaly_science.strategy.residual_absorption.spec import ResidualAbsorptionResearchSpec
+from anomaly_science.strategy.residual_absorption.market_impulse import MarketImpulseEvent
+from anomaly_science.strategy.residual_absorption.spec import (
+    ResidualAbsorptionResearchSpec,
+    ResidualResponseSpec,
+)
+from anomaly_science.strategy.residual_absorption.stage1_response_build import (
+    build_symbol_residual_profiles,
+    central_factor_order_statistics,
+    exact_leave_one_out_median,
+)
 from anomaly_science.universe.session_liquidity import SessionLiquidityUniverseConfig
 
 
@@ -125,3 +134,129 @@ def test_cross_section_build_ranks_core_and_writes_compact_factor(tmp_path: Path
     assert latest_factor["cross_section_symbol_count"] == 3
     assert latest_factor["feature_cutoff_time_ms"] <= latest_factor["snapshot_time_ms"]
     assert cross["candidate_eligible"].dtype == bool
+
+
+def test_exact_leave_one_out_median_matches_direct_removal() -> None:
+    for values in (
+        (1.0, 2.0, 3.0, 4.0, 5.0),
+        (1.0, 2.0, 3.0, 4.0),
+        (1.0, 2.0, 2.0, 2.0, 3.0),
+        (1.0, 2.0, 2.0, 3.0),
+    ):
+        stats = central_factor_order_statistics(values)
+        for index, value in enumerate(values):
+            expected = pd.Series(values[:index] + values[index + 1 :]).median()
+            actual = exact_leave_one_out_median(
+                symbol_return=value,
+                symbol_is_factor_member=True,
+                factor_symbol_count=int(stats["factor_symbol_count"]),
+                lower_center=float(stats["factor_lower_center_15m"]),
+                factor_median=float(stats["factor_median_15m"]),
+                upper_center=float(stats["factor_upper_center_15m"]),
+            )
+            assert actual == expected
+
+
+def test_scalable_symbol_fit_uses_only_prior_same_type_days() -> None:
+    rows: list[dict[str, object]] = []
+    for day, factors in (
+        ("2025-08-01", (-0.004, -0.002, 0.002)),
+        ("2025-08-02", (-0.003, 0.001, 0.004)),
+    ):
+        for minute, factor in zip((5, 10, 15), factors, strict=True):
+            snapshot = int(pd.Timestamp(f"{day}T08:{minute:02d}:00Z").timestamp() * 1_000)
+            rows.append(
+                {
+                    "symbol": "AAAUSDT",
+                    "snapshot_time_ms": snapshot,
+                    "feature_cutoff_time_ms": snapshot,
+                    "utc_day": snapshot // 86_400_000,
+                    "session_seq": 1,
+                    "return_15m": 0.5 * factor,
+                    "core_eligible": True,
+                    "candidate_eligible": False,
+                }
+            )
+    event_time = int(pd.Timestamp("2025-08-03T08:10:00Z").timestamp() * 1_000)
+    rows.append(
+        {
+            "symbol": "AAAUSDT",
+            "snapshot_time_ms": event_time,
+            "feature_cutoff_time_ms": event_time,
+            "utc_day": event_time // 86_400_000,
+            "session_seq": 1,
+            "return_15m": 0.002,
+            "core_eligible": True,
+            "candidate_eligible": True,
+        }
+    )
+    factor_stats = []
+    for row in rows:
+        factor_stats.append(
+            {
+                "snapshot_time_ms": row["snapshot_time_ms"],
+                "factor_symbol_count": 3,
+                "factor_lower_center_15m": 0.020 if row["snapshot_time_ms"] == event_time else 2 * row["return_15m"],
+                "factor_median_15m": 0.020 if row["snapshot_time_ms"] == event_time else 2 * row["return_15m"],
+                "factor_upper_center_15m": 0.020 if row["snapshot_time_ms"] == event_time else 2 * row["return_15m"],
+            }
+        )
+    event = MarketImpulseEvent(
+        event_id=f"market_impulse:{event_time}:+1",
+        schema_version="market_impulse_v1",
+        snapshot_time_ms=event_time,
+        feature_cutoff_time_ms=event_time,
+        utc_day=event_time // 86_400_000,
+        session_seq=1,
+        session_name="EU",
+        direction=1,
+        factor_return_15m=0.020,
+        factor_robust_z_15m=5.0,
+        directional_breadth_15m=1.0,
+        cross_section_symbol_count=3,
+        reference_support_count=1,
+        reference_confirmed=True,
+    )
+    profiles = build_symbol_residual_profiles(
+        pd.DataFrame(rows),
+        factor_order_stats=pd.DataFrame(factor_stats),
+        events=[event],
+        spec=ResidualResponseSpec(
+            beta_history_same_type_sessions=2,
+            beta_short_history_sessions=1,
+            minimum_beta_observations=4,
+            minimum_short_beta_observations=3,
+        ),
+    )
+
+    assert len(profiles) == 1
+    assert profiles[0].history_observation_count == 6
+    assert profiles[0].beta_15m == 0.5
+    assert profiles[0].direction_adjusted_underreaction_15m == 0.008
+
+    future = pd.DataFrame(rows).copy()
+    future["snapshot_time_ms"] += 10 * 86_400_000
+    future["feature_cutoff_time_ms"] = future["snapshot_time_ms"]
+    future["utc_day"] += 10
+    future["return_15m"] = 999.0
+    replay = build_symbol_residual_profiles(
+        pd.concat([pd.DataFrame(rows), future], ignore_index=True),
+        factor_order_stats=pd.concat(
+            [
+                pd.DataFrame(factor_stats),
+                pd.DataFrame(factor_stats).assign(
+                    snapshot_time_ms=lambda frame: frame["snapshot_time_ms"]
+                    + 10 * 86_400_000
+                ),
+            ],
+            ignore_index=True,
+        ),
+        events=[event],
+        spec=ResidualResponseSpec(
+            beta_history_same_type_sessions=2,
+            beta_short_history_sessions=1,
+            minimum_beta_observations=4,
+            minimum_short_beta_observations=3,
+        ),
+    )
+    assert replay == profiles
