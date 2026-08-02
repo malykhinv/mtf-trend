@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from anomaly_science.data.event_scoped import causal_event_enrichment_view
+
+__all__ = ["causal_event_enrichment_view"]
+
 from .audit_run import run_mvp1_data_audit
 from .normalized import (
     NormalizedMarketData,

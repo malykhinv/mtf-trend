@@ -55,6 +55,13 @@ from anomaly_science.market_context.positioning import (
     build_reference_positioning_features,
     reference_positioning_feature_names,
 )
+from anomaly_science.market_context.sessions import (
+    UTC_SESSION_BLOCKS,
+    UTC_SESSION_CALENDAR_VERSION,
+    UtcSessionBlock,
+    UtcSessionInstance,
+    session_instance_for_ms,
+)
 
 __all__ = [
     "ReferenceMarketContextConfig",
@@ -96,4 +103,9 @@ __all__ = [
     "attach_perp_crowding_context",
     "build_perp_crowding_features",
     "perp_crowding_feature_names",
+    "UTC_SESSION_BLOCKS",
+    "UTC_SESSION_CALENDAR_VERSION",
+    "UtcSessionBlock",
+    "UtcSessionInstance",
+    "session_instance_for_ms",
 ]

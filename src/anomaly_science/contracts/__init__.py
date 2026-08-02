@@ -5,6 +5,7 @@ from .atlas import AtlasContextSplitRow, AtlasMarketShockGroupRow, AtlasNatureRo
 from .audit import AuditStatus, DataQualityRow, ProtocolAuditRow, RunConfigRow
 from .decision import ExpectedValueMetricRow, ExpectedValueRow
 from .events import AnomalyEvent, StrategyEvent
+from .enrichment import CausalEventSelection, EventScopedEnrichmentRequest
 from .features import AnomalyFeatureMatrixRow, StrategyFeatureMatrixRow, FeatureCatalogRow, FeatureFamily, FeatureMissingPolicy, FeatureNormalization
 from .future import FuturePathRow
 from .labels import AnomalyOutcomeLabelRow, StrategyOutcomeLabelRow
@@ -29,9 +30,11 @@ __all__ = [
     "AuditStatus",
     "Candle1m",
     "Candle5m",
+    "CausalEventSelection",
     "DataQualityRow",
     "ExpectedValueMetricRow",
     "ExpectedValueRow",
+    "EventScopedEnrichmentRequest",
     "FeatureCatalogRow",
     "FeatureFamily",
     "FeatureMissingPolicy",
