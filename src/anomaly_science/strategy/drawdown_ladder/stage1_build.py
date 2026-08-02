@@ -183,8 +183,10 @@ def _iter_bounded_builds(
                 for future in done:
                     completed[pending.pop(future)] = future.result()
                 submit_until_capacity()
-            yield completed.pop(next_emit)
+            item = completed.pop(next_emit)
             next_emit += 1
+            submit_until_capacity()
+            yield item
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
 

@@ -821,26 +821,29 @@ def test_stage1_builder_writes_audited_is_only_matrix_and_refuses_mixing(
 ) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()
-    source = source_dir / "AAAUSDT.parquet"
     minute = _with_stage1_columns(_matched_control_fixture())
+    source = source_dir / "AAAUSDT.parquet"
+    second_source = source_dir / "BBBUSDT.parquet"
     minute.to_parquet(source, index=False)
+    minute.to_parquet(second_source, index=False)
     minute.to_parquet(source_dir / "BTCUSDT.parquet", index=False)
 
-    symbol_stage0 = _paths(tmp_path / "symbol_stage0")
-    build_symbol_stage0(source, shard_paths=symbol_stage0)
     stage0_dir = tmp_path / "stage0"
     candidate_dir = stage0_dir / "shards" / "ladder_state_candidates"
     outcome_dir = stage0_dir / "shards" / "ladder_state_outcomes"
     candidate_dir.mkdir(parents=True)
     outcome_dir.mkdir(parents=True)
-    pd.read_parquet(symbol_stage0.ladder_state_candidates).to_parquet(
-        candidate_dir / "AAAUSDT.parquet",
-        index=False,
-    )
-    pd.read_parquet(symbol_stage0.ladder_state_outcomes).to_parquet(
-        outcome_dir / "AAAUSDT.parquet",
-        index=False,
-    )
+    for symbol_source in (source, second_source):
+        symbol_stage0 = _paths(tmp_path / f"symbol_stage0_{symbol_source.stem}")
+        build_symbol_stage0(symbol_source, shard_paths=symbol_stage0)
+        pd.read_parquet(symbol_stage0.ladder_state_candidates).to_parquet(
+            candidate_dir / symbol_source.name,
+            index=False,
+        )
+        pd.read_parquet(symbol_stage0.ladder_state_outcomes).to_parquet(
+            outcome_dir / symbol_source.name,
+            index=False,
+        )
     (stage0_dir / "temporal_audit.json").write_text(
         json.dumps(
             {
@@ -859,8 +862,9 @@ def test_stage1_builder_writes_audited_is_only_matrix_and_refuses_mixing(
         source_dir=source_dir,
         stage0_dir=stage0_dir,
         output_dir=output_dir,
-        workers=1,
-        max_symbols=1,
+        workers=2,
+        max_inflight_symbols=2,
+        max_symbols=2,
     )
 
     result = build_stage1_is(config, progress=None)
@@ -871,6 +875,7 @@ def test_stage1_builder_writes_audited_is_only_matrix_and_refuses_mixing(
     assert audit["oos_rows_read"] == 0
     assert audit["model_feature_count"] >= 180
     assert len(matrix) > 0
-    assert matrix["market_symbol_count"].eq(1.0).all()
+    assert set(matrix["symbol"]) == {"AAAUSDT", "BBBUSDT"}
+    assert matrix["market_symbol_count"].eq(2.0).all()
     with pytest.raises(Stage1BuildError, match="refusing to mix"):
         build_stage1_is(config, progress=None)
