@@ -280,6 +280,48 @@ cluster-bootstrap 95% lower bound above zero and a week-level sign-flip
 p-value at most 0.05. Failure stops before EV/PnL and cannot be repaired by
 post-hoc direction, session, symbol, or feature-family selection.
 
+Observed after this freeze: the complete 156-numeric-feature and six-
+categorical-feature ranker produced 77,635 predictions for 647 events across
+22 frozen evaluation weeks. Every training label resolved before its weekly
+freeze and 2026 OOS remained physically untouched. The run completed in about
+205 seconds.
+
+The ranker passed the ordering and sign gates. Mean within-event Spearman was
+0.05205 (95% cluster-bootstrap interval 0.04308 to 0.06221; week sign-flip
+`p=0.001`), versus 0.02520 for the locked underreaction baseline. Its
+top-minus-bottom-quintile win-rate gap was 6.63 percentage points (95%
+interval 5.45 to 7.68 points; `p=0.001`), improving the baseline by 3.08
+points (95% interval 0.46 to 5.02 points; `p=0.006`).
+
+The mandatory raw-magnitude gate failed. Equal-event mean top-minus-bottom
+60-minute catch-up spread was only 0.000436, or 4.36 bps, below the registered
+10 bps minimum; its 95% interval crossed zero (-1.83 to 10.95 bps) and its
+week sign-flip `p` value was 0.154. Although its 5.96 bps point improvement
+over the baseline exceeded the registered 2 bps minimum, that improvement was
+also unstable (95% interval -6.19 to 16.83 bps; `p=0.165`). Therefore the
+full event-ranking hypothesis fails and does not progress to EV, execution,
+SL/TP, PnL, or 2026 OOS.
+
+Frozen post-failure diagnostics explain, but do not repair, the failure. The
+predicted top quintile had a +5.10 bps median catch-up and 53.97% win rate,
+while the bottom quintile had a -6.23 bps median and 47.38% win rate. However,
+the bottom quintile retained the larger positive tail (99th percentile 10.11%
+versus 8.51%), compressing the pooled mean spread to 3.98 bps. Predicted-top
+precision for the actual top quintile was 21.64% against a 20.36% unconditional
+rate, only 1.063x lift. Results were also heterogeneous by month, session, and
+impulse direction; those ex-post slices are not admissible rescue filters.
+
+The full feature picture was retained. Mean weekly importance was distributed
+across factor/residual/response features (49.12%), local activity (30.73%),
+causal symbol memory (14.72%), liquidity/activity (4.70%), and categorical
+context (0.73%). The strongest selection contrasts were causal underreaction,
+factor fit, lower historical catch-up dispersion, local taker imbalance, and
+lower local volatility/range. Selection was not confined to a few symbols:
+541 of 562 symbols entered a predicted top quintile at least once, although
+the most selected 10% consumed 54.22% of top slots. These are descriptive
+properties of a failed frozen model, not a basis for feature removal or a
+symbol whitelist.
+
 ### Registered symbol reliability and context attribution
 
 This post-primary analysis distinguishes ex-post diagnosis from online memory.
