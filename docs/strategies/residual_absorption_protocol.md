@@ -141,6 +141,34 @@ a physically separate label artifact. Win/loss trait stability uses the same
 forward-month rules above. High-resolution enrichment remains a later paired
 ablation and cannot change the coarse population.
 
+### Registered symbol reliability and context attribution
+
+This post-primary analysis distinguishes ex-post diagnosis from online memory.
+The ex-post table may explain the IS sample but can never become a static symbol
+whitelist or blacklist. Online rows may use only outcomes whose 120-minute
+resolution time is no later than the current snapshot.
+
+A symbol diagnosis requires at least 30 resolved responses. `Reliable` requires
+a positive median 60-minute catch-up and a 95% Wilson lower bound for win rate
+above 50%. `Poor` requires a negative median and a Wilson upper bound below 50%.
+`Context-dependent` requires neither label globally and at least two registered
+contexts with 15 or more observations and opposite median signs. All remaining
+eligible symbols are `noisy`; symbols below 30 observations are `insufficient`.
+Reports include the share of symbols, rows, wins, positive catch-up, absolute
+outcome mass, and event coverage in each diagnosis.
+
+Registered contexts are impulse direction, session, calendar month, core versus
+activity-expansion channel, BTC/ETH confirmation, underreaction quintile,
+factor-R-squared tercile, and current-activity-ratio tercile. Numeric bins depend
+only on causal feature distributions, not outcomes. Context contrasts describe
+association and must not be called causal effects.
+
+Online symbol/context memory uses the most recent 5/10/20 resolved responses,
+Jeffreys-prior posterior win probability, 10/90% posterior bounds, median and
+MAD catch-up, and direction/session/direction-session subsets. Missing history
+is retained explicitly. No current or unresolved outcome may enter these
+features.
+
 ## Stage order and gates
 
 1. Data, time, sessions, point-in-time universe, and enrichment provenance.
