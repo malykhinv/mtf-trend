@@ -1899,3 +1899,16 @@ Changes:
   and temporally audited before comparison.
 - Persists paired metrics, ISO-week bootstrap/sign-flip inference, frozen gates,
   input hashes, code revision, report, and artifact manifest.
+
+## performance: preserve exact paired inference with weekly sufficient statistics
+
+Status: APPLIED; comparison result remained unopened.
+
+Changes:
+- Replaces repeated 168k-row AUC sorting in every bootstrap draw with exact
+  precomputed week-by-week positive/negative concordance matrices.
+- Computes bootstrap log-loss and Brier deltas from exact weekly sums and
+  sign-flip AUC from all four baseline/augmented week-pair combinations.
+- Preserves the frozen random seed, 2,000 bootstrap draws, 999 sign flips,
+  metric definitions, and gates; synthetic old/new inference agrees to floating
+  precision while runtime falls by orders of magnitude.

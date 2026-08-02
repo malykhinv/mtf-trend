@@ -43,6 +43,18 @@ class PairedProbabilityComparisonResult:
     gates: pd.DataFrame
 
 
+@dataclass(frozen=True, slots=True)
+class _WeekMetricCache:
+    unique_weeks: np.ndarray
+    week_codes: np.ndarray
+    row_count: np.ndarray
+    positive_count: np.ndarray
+    negative_count: np.ndarray
+    log_loss_delta_sum: np.ndarray
+    brier_delta_sum: np.ndarray
+    concordance: np.ndarray
+
+
 def compare_paired_oos_probabilities(
     baseline: pd.DataFrame,
     augmented: pd.DataFrame,
@@ -52,25 +64,27 @@ def compare_paired_oos_probabilities(
     y = paired["target"].to_numpy(dtype=int)
     base = paired["baseline_probability"].to_numpy(dtype=float)
     aug = paired["augmented_probability"].to_numpy(dtype=float)
-    observed = _incremental_metrics(y, base, aug)
     rng = np.random.default_rng(config.random_seed)
     weeks = paired["test_week"].astype(str).to_numpy()
-    unique_weeks = np.unique(weeks)
+    cache = _build_week_metric_cache(y, base, aug, weeks)
+    unique_weeks = cache.unique_weeks
+    observed = _cached_incremental_metrics(
+        cache,
+        np.ones(len(unique_weeks), dtype=float),
+    )
     bootstrap = {name: [] for name in observed}
     for _ in range(config.bootstrap_iterations):
         sampled_weeks = rng.choice(unique_weeks, size=len(unique_weeks), replace=True)
-        indices = np.concatenate([np.flatnonzero(weeks == week) for week in sampled_weeks])
-        values = _incremental_metrics(y[indices], base[indices], aug[indices])
+        sampled_codes = np.searchsorted(unique_weeks, sampled_weeks)
+        weights = np.bincount(sampled_codes, minlength=len(unique_weeks)).astype(float)
+        values = _cached_incremental_metrics(cache, weights)
         for name, value in values.items():
             if math.isfinite(value):
                 bootstrap[name].append(value)
     null = {name: np.empty(config.sign_flip_iterations, dtype=float) for name in observed}
     for iteration in range(config.sign_flip_iterations):
-        swap_weeks = set(unique_weeks[rng.random(len(unique_weeks)) < 0.5])
-        swap = np.fromiter((week in swap_weeks for week in weeks), dtype=bool, count=len(weeks))
-        perm_base = np.where(swap, aug, base)
-        perm_aug = np.where(swap, base, aug)
-        values = _incremental_metrics(y, perm_base, perm_aug)
+        swap = rng.random(len(unique_weeks)) < 0.5
+        values = _cached_sign_flip_metrics(cache, swap)
         for name, value in values.items():
             null[name][iteration] = value
     inference_rows: list[dict[str, object]] = []
@@ -131,6 +145,140 @@ def compare_paired_oos_probabilities(
         inference=inference,
         gates=pd.DataFrame(gate_rows),
     )
+
+
+def _build_week_metric_cache(
+    y: np.ndarray,
+    baseline: np.ndarray,
+    augmented: np.ndarray,
+    weeks: np.ndarray,
+) -> _WeekMetricCache:
+    unique_weeks, week_codes = np.unique(weeks, return_inverse=True)
+    week_count = len(unique_weeks)
+    row_count = np.bincount(week_codes, minlength=week_count).astype(float)
+    positive_count = np.bincount(
+        week_codes,
+        weights=(y == 1).astype(float),
+        minlength=week_count,
+    )
+    negative_count = row_count - positive_count
+    epsilon = np.finfo(float).eps
+    base_clipped = np.clip(baseline, epsilon, 1.0 - epsilon)
+    aug_clipped = np.clip(augmented, epsilon, 1.0 - epsilon)
+    base_loss = -(y * np.log(base_clipped) + (1 - y) * np.log1p(-base_clipped))
+    aug_loss = -(y * np.log(aug_clipped) + (1 - y) * np.log1p(-aug_clipped))
+    log_loss_delta_sum = np.bincount(
+        week_codes,
+        weights=base_loss - aug_loss,
+        minlength=week_count,
+    )
+    brier_delta_sum = np.bincount(
+        week_codes,
+        weights=(baseline - y) ** 2 - (augmented - y) ** 2,
+        minlength=week_count,
+    )
+    probabilities = (baseline, augmented)
+    concordance = np.zeros((2, 2, week_count, week_count), dtype=float)
+    positive = y == 1
+    negative = ~positive
+    for positive_arm in range(2):
+        for negative_arm in range(2):
+            for positive_week in range(week_count):
+                positive_values = probabilities[positive_arm][
+                    positive & (week_codes == positive_week)
+                ]
+                for negative_week in range(week_count):
+                    negative_values = probabilities[negative_arm][
+                        negative & (week_codes == negative_week)
+                    ]
+                    concordance[
+                        positive_arm,
+                        negative_arm,
+                        positive_week,
+                        negative_week,
+                    ] = _concordant_pair_sum(positive_values, negative_values)
+    return _WeekMetricCache(
+        unique_weeks=unique_weeks,
+        week_codes=week_codes,
+        row_count=row_count,
+        positive_count=positive_count,
+        negative_count=negative_count,
+        log_loss_delta_sum=log_loss_delta_sum,
+        brier_delta_sum=brier_delta_sum,
+        concordance=concordance,
+    )
+
+
+def _concordant_pair_sum(positive: np.ndarray, negative: np.ndarray) -> float:
+    if not len(positive) or not len(negative):
+        return 0.0
+    ordered_negative = np.sort(negative)
+    lower = np.searchsorted(ordered_negative, positive, side="left")
+    upper = np.searchsorted(ordered_negative, positive, side="right")
+    return float(np.sum(lower + 0.5 * (upper - lower)))
+
+
+def _weighted_cached_auc(
+    cache: _WeekMetricCache,
+    *,
+    arm: int,
+    weights: np.ndarray,
+) -> float:
+    positive_total = float(weights @ cache.positive_count)
+    negative_total = float(weights @ cache.negative_count)
+    if positive_total <= 0.0 or negative_total <= 0.0:
+        return math.nan
+    numerator = float(weights @ cache.concordance[arm, arm] @ weights)
+    return numerator / (positive_total * negative_total)
+
+
+def _cached_incremental_metrics(
+    cache: _WeekMetricCache,
+    weights: np.ndarray,
+) -> dict[str, float]:
+    row_total = float(weights @ cache.row_count)
+    return {
+        "auc_delta": _weighted_cached_auc(cache, arm=1, weights=weights)
+        - _weighted_cached_auc(cache, arm=0, weights=weights),
+        "log_loss_improvement": float(weights @ cache.log_loss_delta_sum) / row_total,
+        "brier_improvement": float(weights @ cache.brier_delta_sum) / row_total,
+    }
+
+
+def _cached_sign_flip_metrics(
+    cache: _WeekMetricCache,
+    swap: np.ndarray,
+) -> dict[str, float]:
+    week_count = len(cache.unique_weeks)
+    row_index, column_index = np.indices((week_count, week_count))
+    base_arm = swap.astype(np.int8)
+    augmented_arm = 1 - base_arm
+    denominator = float(cache.positive_count.sum() * cache.negative_count.sum())
+    base_auc = float(
+        cache.concordance[
+            base_arm[row_index],
+            base_arm[column_index],
+            row_index,
+            column_index,
+        ].sum()
+        / denominator
+    )
+    augmented_auc = float(
+        cache.concordance[
+            augmented_arm[row_index],
+            augmented_arm[column_index],
+            row_index,
+            column_index,
+        ].sum()
+        / denominator
+    )
+    sign = np.where(swap, -1.0, 1.0)
+    row_total = float(cache.row_count.sum())
+    return {
+        "auc_delta": augmented_auc - base_auc,
+        "log_loss_improvement": float(sign @ cache.log_loss_delta_sum) / row_total,
+        "brier_improvement": float(sign @ cache.brier_delta_sum) / row_total,
+    }
 
 
 def _paired_frame(baseline: pd.DataFrame, augmented: pd.DataFrame) -> pd.DataFrame:
