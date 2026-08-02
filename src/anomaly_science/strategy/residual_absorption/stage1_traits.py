@@ -199,6 +199,31 @@ def build_stage1_trait_report(*, stage1_dir: str | Path) -> Path:
             index=False,
             compression="zstd",
         )
+    local_path = root / "stage2_local_activity_features_is.parquet"
+    local_features: tuple[str, ...] = ()
+    if local_path.is_file():
+        local = pd.read_parquet(local_path)
+        forbidden_local_columns = {
+            "schema_version",
+            "event_id",
+            "symbol",
+            "snapshot_time_ms",
+            "feature_cutoff_time_ms",
+            "impulse_direction",
+        }
+        local_features = tuple(
+            column for column in local.columns if column not in forbidden_local_columns
+        )
+        features = features.merge(
+            local[["event_id", "symbol", *local_features]],
+            on=["event_id", "symbol"],
+            validate="one_to_one",
+        )
+        features.to_parquet(
+            root / "stage2_model_features_with_local_activity_is.parquet",
+            index=False,
+            compression="zstd",
+        )
     frame = features.merge(
         labels[["event_id", "symbol", "response_win_60m"]],
         on=["event_id", "symbol"],
@@ -210,10 +235,18 @@ def build_stage1_trait_report(*, stage1_dir: str | Path) -> Path:
         *EVENT_FEATURES,
         *DERIVED_FEATURES,
         *memory_features,
+        *local_features,
     )
     rows = [_numeric_trait(frame, feature) for feature in numeric_features]
     _apply_benjamini_hochberg(rows)
     for row in rows:
+        if not row["analyzable"]:
+            row["monthly_effects"] = []
+            row["forward_checks"] = []
+            row["monthly_same_sign_count"] = 0
+            row["forward_sign_agreement_count"] = 0
+            row["stable_trait"] = False
+            continue
         overall_sign = int(np.sign(float(row["rank_biserial_effect"])))
         monthly = _monthly_effects(frame, str(row["feature"]))
         forward = _forward_sign_checks(frame, str(row["feature"]))
@@ -267,6 +300,7 @@ def build_stage1_trait_report(*, stage1_dir: str | Path) -> Path:
         "loss_count": int((~frame["response_win_60m"]).sum()),
         "stable_trait_count": len(stable),
         "causal_memory_feature_count": len(memory_features),
+        "local_activity_feature_count": len(local_features),
         "stable_traits": stable,
         "numeric_traits": rows,
         "categorical_traits": categorical,
@@ -285,7 +319,17 @@ def _numeric_trait(frame: pd.DataFrame, feature: str) -> dict[str, object]:
     wins = values.loc[valid & frame["response_win_60m"]].to_numpy(dtype=float)
     losses = values.loc[valid & ~frame["response_win_60m"]].to_numpy(dtype=float)
     if not len(wins) or not len(losses):
-        raise ValueError(f"trait {feature} lacks both label classes")
+        return {
+            "feature": feature,
+            "coverage": float(valid.mean()),
+            "win_count": len(wins),
+            "loss_count": len(losses),
+            "analyzable": False,
+            "win_median": None,
+            "loss_median": None,
+            "rank_biserial_effect": None,
+            "mann_whitney_p_value": None,
+        }
     test = mannwhitneyu(wins, losses, alternative="two-sided", method="asymptotic")
     effect = 2.0 * float(test.statistic) / (len(wins) * len(losses)) - 1.0
     return {
@@ -293,6 +337,7 @@ def _numeric_trait(frame: pd.DataFrame, feature: str) -> dict[str, object]:
         "coverage": float(valid.mean()),
         "win_count": len(wins),
         "loss_count": len(losses),
+        "analyzable": True,
         "win_median": float(np.median(wins)),
         "loss_median": float(np.median(losses)),
         "rank_biserial_effect": effect,
@@ -346,17 +391,22 @@ def _forward_sign_checks(frame: pd.DataFrame, feature: str) -> list[dict[str, ob
 
 
 def _apply_benjamini_hochberg(rows: list[dict[str, object]]) -> None:
-    p_values = np.asarray([float(row["mann_whitney_p_value"]) for row in rows])
+    analyzable_indices = [index for index, row in enumerate(rows) if row["analyzable"]]
+    p_values = np.asarray(
+        [float(rows[index]["mann_whitney_p_value"]) for index in analyzable_indices]
+    )
     order = np.argsort(p_values, kind="mergesort")
-    adjusted = np.empty(len(rows), dtype=float)
+    adjusted = np.empty(len(analyzable_indices), dtype=float)
     running = 1.0
-    for reverse_rank in range(len(rows) - 1, -1, -1):
+    for reverse_rank in range(len(analyzable_indices) - 1, -1, -1):
         original = order[reverse_rank]
         rank = reverse_rank + 1
-        running = min(running, p_values[original] * len(rows) / rank)
+        running = min(running, p_values[original] * len(analyzable_indices) / rank)
         adjusted[original] = min(running, 1.0)
-    for row, q_value in zip(rows, adjusted, strict=True):
-        row["bh_q_value"] = float(q_value)
+    for row in rows:
+        row["bh_q_value"] = None
+    for index, q_value in zip(analyzable_indices, adjusted, strict=True):
+        rows[index]["bh_q_value"] = float(q_value)
 
 
 def _categorical_trait(frame: pd.DataFrame, feature: str) -> dict[str, object]:

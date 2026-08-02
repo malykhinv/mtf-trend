@@ -147,52 +147,13 @@ def build_stage2_local_features(
             window_minutes=max(WINDOWS_MINUTES),
             columns=RAW_COLUMNS,
         )
-        for raw in group.itertuples(index=False):
-            snapshot = int(raw.snapshot_time_ms)
-            RESIDUAL_ABSORPTION_RESEARCH_SPLIT.require_is_timestamp_ms(snapshot)
-            row: dict[str, object] = {
-                "schema_version": LOCAL_ACTIVITY_SCHEMA_VERSION,
-                "event_id": str(raw.event_id),
-                "symbol": str(symbol),
-                "snapshot_time_ms": snapshot,
-                "feature_cutoff_time_ms": snapshot,
-                "impulse_direction": int(raw.impulse_direction),
-            }
-            for window_minutes in WINDOWS_MINUTES:
-                row.update(
-                    compute_local_window_features(
-                        minutes,
-                        snapshot_time_ms=snapshot,
-                        window_minutes=window_minutes,
-                    )
-                )
-            signed_flow = float(row.get("local_15m_signed_taker_quote_volume", np.nan))
-            price_return = float(row.get("local_15m_log_return", np.nan))
-            oi_change = float(row.get("local_15m_oi_change", np.nan))
-            flow_valid = np.isfinite(signed_flow) and abs(signed_flow) >= MIN_ABSOLUTE_SIGNED_QUOTE
-            return_valid = np.isfinite(price_return) and abs(price_return) >= MIN_ABSOLUTE_RETURN
-            row.update(
-                {
-                    "local_15m_price_flow_alignment": price_return * signed_flow,
-                    "local_15m_direction_adjusted_taker_imbalance": int(raw.impulse_direction)
-                    * float(row.get("local_15m_taker_imbalance", np.nan)),
-                    "local_15m_direction_adjusted_oi_change": int(raw.impulse_direction) * oi_change,
-                    "local_15m_oi_change_per_signed_million": (
-                        oi_change / (signed_flow / 1_000_000.0) if flow_valid else np.nan
-                    ),
-                    "local_15m_return_per_signed_million": (
-                        price_return / (signed_flow / 1_000_000.0) if flow_valid else np.nan
-                    ),
-                    "local_15m_aggressive_flow_per_return_floor": (
-                        abs(signed_flow) / max(abs(price_return), MIN_ABSOLUTE_RETURN)
-                        if np.isfinite(signed_flow) and np.isfinite(price_return)
-                        else np.nan
-                    ),
-                    "local_15m_signed_flow_denominator_valid": bool(flow_valid),
-                    "local_15m_return_denominator_valid": bool(return_valid),
-                }
-            )
-            rows.append(row)
+        rows.extend(
+            compute_symbol_local_features(
+                minutes,
+                events=group,
+                symbol=str(symbol),
+            ).to_dict(orient="records")
+        )
         if progress and (completed % 50 == 0 or completed == len(groups)):
             progress(f"stage2 local activity {completed}/{len(groups)}")
     output = root / "stage2_local_activity_features_is.parquet"
@@ -216,6 +177,192 @@ def build_stage2_local_features(
     return output
 
 
+def compute_symbol_local_features(
+    minutes: pd.DataFrame,
+    *,
+    events: pd.DataFrame,
+    symbol: str,
+) -> pd.DataFrame:
+    """Vectorized exact equivalent of all registered windows for one symbol."""
+
+    required_events = {"event_id", "snapshot_time_ms", "impulse_direction"}
+    missing = sorted(required_events.difference(events.columns))
+    if missing:
+        raise ValueError(f"local feature events missing columns: {missing}")
+    ordered = events.sort_values("snapshot_time_ms", kind="mergesort").reset_index(drop=True)
+    snapshots = ordered["snapshot_time_ms"].to_numpy(dtype=np.int64)
+    for snapshot in snapshots:
+        RESIDUAL_ABSORPTION_RESEARCH_SPLIT.require_is_timestamp_ms(int(snapshot))
+    event_count = len(ordered)
+    offsets = np.arange(max(WINDOWS_MINUTES), 0, -1, dtype=np.int16)
+    grid = pd.DataFrame(
+        {
+            "event_row": np.repeat(np.arange(event_count, dtype=np.int64), len(offsets)),
+            "minute_offset": np.tile(offsets, event_count),
+            "timestamp": np.repeat(snapshots, len(offsets))
+            - np.tile(offsets.astype(np.int64), event_count) * 60_000,
+        }
+    )
+    expanded = grid.merge(
+        minutes,
+        on="timestamp",
+        how="left",
+        validate="many_to_one",
+        sort=False,
+    ).sort_values(["event_row", "timestamp"], kind="mergesort")
+    result = pd.DataFrame(
+        {
+            "schema_version": LOCAL_ACTIVITY_SCHEMA_VERSION,
+            "event_id": ordered["event_id"].astype(str),
+            "symbol": symbol,
+            "snapshot_time_ms": snapshots,
+            "feature_cutoff_time_ms": snapshots,
+            "impulse_direction": ordered["impulse_direction"].to_numpy(dtype=np.int8),
+        }
+    )
+    for window_minutes in WINDOWS_MINUTES:
+        window = _aggregate_vectorized_window(
+            expanded,
+            window_minutes=window_minutes,
+            event_count=event_count,
+        )
+        result = pd.concat([result, window.reset_index(drop=True)], axis=1)
+    signed_flow = result["local_15m_signed_taker_quote_volume"].to_numpy(dtype=float)
+    price_return = result["local_15m_log_return"].to_numpy(dtype=float)
+    oi_change = result["local_15m_oi_change"].to_numpy(dtype=float)
+    direction = result["impulse_direction"].to_numpy(dtype=float)
+    flow_valid = np.isfinite(signed_flow) & (
+        np.abs(signed_flow) >= MIN_ABSOLUTE_SIGNED_QUOTE
+    )
+    return_valid = np.isfinite(price_return) & (
+        np.abs(price_return) >= MIN_ABSOLUTE_RETURN
+    )
+    result["local_15m_price_flow_alignment"] = price_return * signed_flow
+    result["local_15m_direction_adjusted_taker_imbalance"] = direction * result[
+        "local_15m_taker_imbalance"
+    ].to_numpy(dtype=float)
+    result["local_15m_direction_adjusted_oi_change"] = direction * oi_change
+    result["local_15m_oi_change_per_signed_million"] = np.divide(
+        oi_change,
+        signed_flow / 1_000_000.0,
+        out=np.full(event_count, np.nan),
+        where=flow_valid,
+    )
+    result["local_15m_return_per_signed_million"] = np.divide(
+        price_return,
+        signed_flow / 1_000_000.0,
+        out=np.full(event_count, np.nan),
+        where=flow_valid,
+    )
+    result["local_15m_aggressive_flow_per_return_floor"] = np.where(
+        np.isfinite(signed_flow) & np.isfinite(price_return),
+        np.abs(signed_flow) / np.maximum(np.abs(price_return), MIN_ABSOLUTE_RETURN),
+        np.nan,
+    )
+    result["local_15m_signed_flow_denominator_valid"] = flow_valid
+    result["local_15m_return_denominator_valid"] = return_valid
+    return result
+
+
+def _aggregate_vectorized_window(
+    expanded: pd.DataFrame,
+    *,
+    window_minutes: int,
+    event_count: int,
+) -> pd.DataFrame:
+    prefix = f"local_{window_minutes}m_"
+    work = expanded.loc[
+        expanded["minute_offset"].le(window_minutes) & expanded["open"].notna()
+    ].copy()
+    group = work.groupby("event_row", sort=False)
+    count = group.size().reindex(range(event_count), fill_value=0).astype(int)
+    first_open = group["open"].first().reindex(range(event_count))
+    last_close = group["close"].last().reindex(range(event_count))
+    log_return = np.log(last_close / first_open).where(
+        first_open.gt(0.0) & last_close.gt(0.0)
+    )
+    previous = group["close"].shift(1)
+    previous = previous.where(previous.notna(), work["open"])
+    valid_step = work["close"].gt(0.0) & previous.gt(0.0)
+    work["log_step"] = np.log(work["close"] / previous).where(valid_step)
+    work["absolute_log_step"] = work["log_step"].abs()
+    work["squared_log_step"] = work["log_step"] ** 2
+    group = work.groupby("event_row", sort=False)
+    quote = group["quote_volume"].sum().reindex(range(event_count))
+    trades = group["trade_count"].sum().reindex(range(event_count))
+    taker_buy = group["taker_buy_quote_volume"].sum().reindex(range(event_count))
+    signed_quote = 2.0 * taker_buy - quote
+    path_length = group["absolute_log_step"].sum().reindex(range(event_count))
+    realized = np.sqrt(group["squared_log_step"].sum().reindex(range(event_count)))
+    high = group["high"].max().reindex(range(event_count))
+    low = group["low"].min().reindex(range(event_count))
+    oi_valid = work["oi_available"].fillna(False).astype(bool) & work[
+        "open_interest"
+    ].notna()
+    work["valid_oi"] = work["open_interest"].where(oi_valid)
+    group = work.groupby("event_row", sort=False)
+    oi_start = group["valid_oi"].first().reindex(range(event_count))
+    oi_end = group["valid_oi"].last().reindex(range(event_count))
+    oi_count = group["valid_oi"].count().reindex(range(event_count), fill_value=0)
+    oi_change = (oi_end - oi_start).where(oi_count.ge(2))
+    long_liq = (
+        work["long_liquidations_vol"].fillna(0.0).groupby(work["event_row"]).sum()
+    ).reindex(range(event_count), fill_value=0.0)
+    short_liq = (
+        work["short_liquidations_vol"].fillna(0.0).groupby(work["event_row"]).sum()
+    ).reindex(range(event_count), fill_value=0.0)
+    liquidation_total = long_liq + short_liq
+    denominator = count.replace(0, np.nan)
+    frame = pd.DataFrame(index=range(event_count))
+    frame[f"{prefix}minute_count"] = count
+    frame[f"{prefix}coverage"] = count / window_minutes
+    frame[f"{prefix}missing"] = count.ne(window_minutes)
+    frame[f"{prefix}log_return"] = log_return
+    frame[f"{prefix}quote_volume"] = quote
+    frame[f"{prefix}trade_count"] = trades
+    frame[f"{prefix}signed_taker_quote_volume"] = signed_quote
+    frame[f"{prefix}taker_imbalance"] = (signed_quote / quote).where(quote.gt(0.0))
+    frame[f"{prefix}high_low_range"] = (high / low - 1.0).where(low.gt(0.0))
+    frame[f"{prefix}realized_volatility"] = realized
+    frame[f"{prefix}path_efficiency"] = (log_return.abs() / path_length).where(
+        path_length.gt(0.0) & log_return.notna()
+    )
+    frame[f"{prefix}return_per_million_quote"] = (
+        log_return / (quote / 1_000_000.0)
+    ).where(quote.gt(0.0) & log_return.notna())
+    frame[f"{prefix}oi_start"] = oi_start
+    frame[f"{prefix}oi_end"] = oi_end
+    frame[f"{prefix}oi_change"] = oi_change
+    frame[f"{prefix}oi_relative_change"] = (oi_change / oi_start).where(
+        oi_count.ge(2) & oi_start.ne(0.0)
+    )
+    frame[f"{prefix}oi_coverage"] = oi_count / denominator
+    frame[f"{prefix}oi_missing_flag_rate"] = (
+        work["missing_oi_flag"].fillna(False).astype(bool).groupby(work["event_row"]).mean()
+    ).reindex(range(event_count))
+    frame[f"{prefix}long_liquidation_volume"] = long_liq
+    frame[f"{prefix}short_liquidation_volume"] = short_liq
+    frame[f"{prefix}liquidation_imbalance"] = (
+        (short_liq - long_liq) / liquidation_total
+    ).where(liquidation_total.gt(0.0))
+    frame[f"{prefix}liquidation_observed"] = liquidation_total.gt(0.0)
+    frame[f"{prefix}liquidation_coverage"] = (
+        work["liquidation_available"]
+        .fillna(False)
+        .astype(bool)
+        .groupby(work["event_row"])
+        .mean()
+    ).reindex(range(event_count))
+    frame[f"{prefix}liquidation_missing_flag_rate"] = (
+        work["missing_liquidation_flag"]
+        .fillna(False)
+        .astype(bool)
+        .groupby(work["event_row"])
+        .mean()
+    ).reindex(range(event_count))
+    return frame
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build causal coarse stage-2 local features.")
     parser.add_argument("--stage1-dir", type=Path, default=Path(".output/research/residual_absorption/stage1_is_v1"))
@@ -228,6 +375,7 @@ __all__ = [
     "LOCAL_ACTIVITY_SCHEMA_VERSION",
     "build_stage2_local_features",
     "compute_local_window_features",
+    "compute_symbol_local_features",
 ]
 
 

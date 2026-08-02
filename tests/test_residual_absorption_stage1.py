@@ -40,6 +40,7 @@ from anomaly_science.strategy.residual_absorption.stage1_symbol_context import (
 )
 from anomaly_science.strategy.residual_absorption.stage2_local_features import (
     compute_local_window_features,
+    compute_symbol_local_features,
 )
 from anomaly_science.strategy.residual_absorption.spec import (
     MarketImpulseSpec,
@@ -633,6 +634,28 @@ def test_local_activity_window_is_invariant_to_future_tail() -> None:
     assert replay["local_15m_minute_count"] == 15
     assert replay["local_15m_quote_volume"] == 15_000.0
     assert replay["local_15m_taker_imbalance"] == pytest.approx(0.2)
+
+    vectorized = compute_symbol_local_features(
+        frame,
+        events=pd.DataFrame(
+            [
+                {
+                    "event_id": "event-1",
+                    "snapshot_time_ms": snapshot,
+                    "impulse_direction": 1,
+                }
+            ]
+        ),
+        symbol="AAAUSDT",
+    ).iloc[0]
+    for name, expected in replay.items():
+        actual = vectorized[name]
+        if isinstance(expected, float) and np.isnan(expected):
+            assert np.isnan(actual)
+        elif isinstance(expected, float):
+            assert actual == pytest.approx(expected)
+        else:
+            assert actual == expected
 
 
 def test_causal_symbol_memory_uses_only_resolved_prior_outcomes(tmp_path) -> None:
