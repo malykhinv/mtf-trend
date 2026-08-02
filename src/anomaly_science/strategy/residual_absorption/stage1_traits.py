@@ -174,12 +174,43 @@ def build_stage1_trait_report(*, stage1_dir: str | Path) -> Path:
     feature_path, label_path = build_stage1_trait_artifacts(stage1_dir=root)
     features = pd.read_parquet(feature_path)
     labels = pd.read_parquet(label_path)
+    memory_path = root / "causal_symbol_context_memory_is.parquet"
+    memory_features: tuple[str, ...] = ()
+    if memory_path.is_file():
+        memory = pd.read_parquet(memory_path)
+        forbidden_memory_columns = {
+            "schema_version",
+            "event_id",
+            "symbol",
+            "snapshot_time_ms",
+            "feature_cutoff_time_ms",
+            "maximum_resolution_time_used_ms",
+        }
+        memory_features = tuple(
+            column for column in memory.columns if column not in forbidden_memory_columns
+        )
+        features = features.merge(
+            memory[["event_id", "symbol", *memory_features]],
+            on=["event_id", "symbol"],
+            validate="one_to_one",
+        )
+        features.to_parquet(
+            root / "stage1_model_features_with_causal_memory_is.parquet",
+            index=False,
+            compression="zstd",
+        )
     frame = features.merge(
         labels[["event_id", "symbol", "response_win_60m"]],
         on=["event_id", "symbol"],
         validate="one_to_one",
     )
-    numeric_features = (*PROFILE_FEATURES, *CROSS_SECTION_FEATURES, *EVENT_FEATURES, *DERIVED_FEATURES)
+    numeric_features = (
+        *PROFILE_FEATURES,
+        *CROSS_SECTION_FEATURES,
+        *EVENT_FEATURES,
+        *DERIVED_FEATURES,
+        *memory_features,
+    )
     rows = [_numeric_trait(frame, feature) for feature in numeric_features]
     _apply_benjamini_hochberg(rows)
     for row in rows:
@@ -235,6 +266,7 @@ def build_stage1_trait_report(*, stage1_dir: str | Path) -> Path:
         "win_count": int(frame["response_win_60m"].sum()),
         "loss_count": int((~frame["response_win_60m"]).sum()),
         "stable_trait_count": len(stable),
+        "causal_memory_feature_count": len(memory_features),
         "stable_traits": stable,
         "numeric_traits": rows,
         "categorical_traits": categorical,
