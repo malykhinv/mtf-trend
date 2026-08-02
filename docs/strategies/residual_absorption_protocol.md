@@ -51,6 +51,35 @@ labels, never online features. A prior outcome enters memory only after its
 120-minute resolution time. Unresolved events may contribute counts but cannot
 expose catch-up, zero-cross, terminal-residual, or timing fields.
 
+### Registered stage-1 falsification report
+
+This report was locked after event-time profiles were built but before any
+future response path was materialized. The primary population is every causal
+candidate profile with a finite frozen beta and a fully observed 120-minute IS
+path. No outcome-dependent trimming, winsorization, symbol removal, or minimum
+underreaction threshold is permitted in the primary arm.
+
+The primary predictor is direction-adjusted underreaction at the event. The
+primary outcome is direction-adjusted residual catch-up after 60 minutes. The
+two co-primary estimands are (a) Spearman association between underreaction and
+60-minute catch-up and (b) median 60-minute catch-up among observations with
+strictly positive underreaction. Confidence intervals are obtained by UTC-day
+cluster bootstrap so coins observed in the same market event are never treated
+as independent evidence. Symbol-cluster intervals are a registered dependence
+sensitivity check.
+
+The stage-1 mechanism passes only if both co-primary point estimates have the
+predicted positive sign and both 95% UTC-day-cluster confidence intervals have
+strictly positive lower bounds. The 15/30/120-minute horizons, zero crossing,
+time to half catch-up, direction, session, BTC/ETH confirmation, calendar month,
+and underreaction deciles are secondary diagnostics. Horizon p-values, if
+reported, use Holm correction. Failure is retained as a valid negative result;
+subgroup success cannot rescue a failed primary arm.
+
+Passing this gate establishes conditional residual-response predictability,
+not tradable edge. It does not authorize a threshold, CatBoost, PnL simulation,
+or a claim that costs can be overcome.
+
 ## Stage order and gates
 
 1. Data, time, sessions, point-in-time universe, and enrichment provenance.
