@@ -206,6 +206,21 @@ def test_metrics_reliability_and_gates_are_explicit() -> None:
     assert set(gates["status"]) <= {"PASS", "FAIL"}
 
 
+def test_high_probability_gate_threshold_is_always_evaluated() -> None:
+    config = replace(
+        _config(),
+        reliability_thresholds=(0.5, 0.7),
+        gates=replace(_config().gates, high_probability_threshold=0.73),
+    )
+    result = build_binary_weekly_walk_forward(_rows(), config)
+    reliability = build_reliability_rows(result.predictions, config)
+    thresholds = reliability.loc[
+        reliability["kind"].eq("threshold"), "threshold"
+    ].to_numpy(float)
+
+    assert np.isclose(thresholds, 0.73).any()
+
+
 def test_binary_probability_rejects_temporal_leakage() -> None:
     frame = _rows()
     frame.loc[0, "feature_cutoff_time_ms"] = frame.loc[0, "snapshot_time_ms"] + 1

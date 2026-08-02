@@ -1912,3 +1912,21 @@ Changes:
 - Preserves the frozen random seed, 2,000 bootstrap draws, 999 sign flips,
   metric definitions, and gates; synthetic old/new inference agrees to floating
   precision while runtime falls by orders of magnitude.
+
+## audit fix: guarantee reliability coverage for every probability gate
+
+Status: APPLIED before reading Stage 1 gate results; predictions unchanged.
+
+Root cause:
+- The Stage 1 high-probability gate was frozen at 0.92, but the generic
+  reliability table's explicit display thresholds ended at 0.90. The original
+  gate lookup therefore had no 0.92 row and would fail mechanically regardless
+  of model quality.
+
+Changes:
+- Core reliability now always includes the configured gate threshold in
+  addition to display thresholds.
+- Adds a regression with a gate threshold absent from the display list.
+- Adds an immutable gate-amendment runner that reuses frozen predictions,
+  metrics, null tests, and weekly metadata, changes no model output, and records
+  all source hashes and the exact correction reason.

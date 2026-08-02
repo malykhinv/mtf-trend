@@ -441,7 +441,15 @@ def build_reliability_rows(
     for index in range(config.calibration_bins):
         mask = bin_index == index
         rows.append(_reliability_row("fixed_bin", mask, p, y, edges[index], edges[index + 1], math.nan))
-    for threshold in config.reliability_thresholds:
+    thresholds = tuple(
+        sorted(
+            {
+                *config.reliability_thresholds,
+                config.gates.high_probability_threshold,
+            }
+        )
+    )
+    for threshold in thresholds:
         rows.append(_reliability_row("threshold", p >= threshold, p, y, threshold, 1.0, threshold))
     return pd.DataFrame(rows, columns=columns)
 

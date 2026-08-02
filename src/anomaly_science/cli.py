@@ -82,6 +82,7 @@ from anomaly_science.strategy.drawdown_ladder.stage1_build import (
     build_stage1_is as build_drawdown_ladder_stage1_is,
 )
 from anomaly_science.strategy.drawdown_ladder.stage1_analysis import (
+    build_stage1_probability_gate_amendment,
     build_stage1_probability_comparison,
 )
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
@@ -964,6 +965,19 @@ def build_parser() -> argparse.ArgumentParser:
     drawdown_stage1_comparison.add_argument("--config", required=True)
     drawdown_stage1_comparison.add_argument("--out", required=True)
 
+    drawdown_stage1_gate_amendment = subparsers.add_parser(
+        "amend-drawdown-ladder-stage1-gates",
+        help="Re-evaluate frozen Stage-1 gates with guaranteed gate-threshold reliability.",
+    )
+    drawdown_stage1_gate_amendment.add_argument("--probability", required=True)
+    drawdown_stage1_gate_amendment.add_argument("--config", required=True)
+    drawdown_stage1_gate_amendment.add_argument(
+        "--arm",
+        choices=("structural_baseline", "full_causal"),
+        required=True,
+    )
+    drawdown_stage1_gate_amendment.add_argument("--out", required=True)
+
 
     return parser
 
@@ -1062,6 +1076,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=Path(args.out),
         )
         print(f"drawdown-ladder Stage-1 probability comparison written: {output_dir}")
+        return 0
+
+    if args.command == "amend-drawdown-ladder-stage1-gates":
+        output_dir = build_stage1_probability_gate_amendment(
+            probability_dir=Path(args.probability),
+            probability_config_path=Path(args.config),
+            arm=args.arm,
+            output_dir=Path(args.out),
+        )
+        print(f"drawdown-ladder Stage-1 gate amendment written: {output_dir}")
         return 0
 
     if args.command == "run-causal-regime-atlas":

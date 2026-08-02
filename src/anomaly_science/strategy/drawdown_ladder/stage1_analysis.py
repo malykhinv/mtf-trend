@@ -9,16 +9,21 @@ import os
 from pathlib import Path
 import subprocess
 
+import numpy as np
 import pandas as pd
 
 from anomaly_science.artifacts.manifest import build_manifest, sha256_file, write_manifest
 from anomaly_science.probability import (
     PairedProbabilityComparisonConfig,
+    build_gate_rows,
+    build_reliability_rows,
     compare_paired_oos_probabilities,
+    load_binary_weekly_walk_forward_config,
 )
 from anomaly_science.strategy.drawdown_ladder.stage1_spec import (
     DrawdownLadderStage1Spec,
     build_stage1_paired_comparison_config,
+    build_stage1_probability_config,
 )
 
 
@@ -176,4 +181,126 @@ def build_stage1_probability_comparison(
     return root
 
 
-__all__ = ["Stage1AnalysisError", "build_stage1_probability_comparison"]
+def build_stage1_probability_gate_amendment(
+    *,
+    probability_dir: str | Path,
+    probability_config_path: str | Path,
+    arm: str,
+    output_dir: str | Path,
+    spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+) -> Path:
+    """Re-evaluate gates after the reliability-threshold coverage bug fix."""
+
+    if arm not in {"structural_baseline", "full_causal"}:
+        raise Stage1AnalysisError("unknown Stage-1 probability arm")
+    root = Path(output_dir)
+    if root.exists() and any(root.iterdir()):
+        raise Stage1AnalysisError(f"gate-amendment output must be absent or empty: {root}")
+    revision, dirty = _repository_state()
+    if dirty:
+        raise Stage1AnalysisError("Stage-1 gate amendment requires a clean committed worktree")
+    source_dir = Path(probability_dir)
+    predictions, prediction_path = _read_frozen_predictions(
+        source_dir,
+        expected_protocol_freeze_id=f"{spec.protocol_freeze_id}:{arm}",
+    )
+    config_path = Path(probability_config_path)
+    config = load_binary_weekly_walk_forward_config(config_path)
+    if config != build_stage1_probability_config(arm=arm, spec=spec):
+        raise Stage1AnalysisError("probability config differs from frozen Stage-1 arm")
+    source_paths = {
+        "metrics": source_dir / "prediction_metrics.csv",
+        "null_tests": source_dir / "null_tests.csv",
+        "weekly_metadata": source_dir / "weekly_model_metadata.csv",
+        "original_reliability": source_dir / "reliability.csv",
+        "original_gates": source_dir / "gate_evaluation.csv",
+    }
+    for path in source_paths.values():
+        if not path.is_file():
+            raise Stage1AnalysisError(f"gate-amendment source is missing: {path}")
+    metrics = pd.read_csv(source_paths["metrics"])
+    null_tests = pd.read_csv(source_paths["null_tests"])
+    weekly_metadata = pd.read_csv(source_paths["weekly_metadata"])
+    reliability = build_reliability_rows(predictions, config)
+    high = reliability.loc[
+        reliability["kind"].eq("threshold")
+        & np.isclose(
+            reliability["threshold"],
+            config.gates.high_probability_threshold,
+            equal_nan=False,
+        )
+    ]
+    if len(high) != 1:
+        raise Stage1AnalysisError("corrected reliability did not produce exactly one gate threshold")
+    gates = build_gate_rows(
+        predictions,
+        metrics,
+        reliability,
+        null_tests,
+        weekly_metadata,
+        config,
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    paths = [
+        _write_csv(root / "corrected_reliability.csv", reliability),
+        _write_csv(root / "corrected_gate_evaluation.csv", gates),
+    ]
+    all_pass = bool(len(gates) and gates["status"].eq("PASS").all())
+    report_path = root / "gate_amendment_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "protocol_freeze_id": config.protocol_freeze_id,
+                "arm": arm,
+                "status": "PASS" if all_pass else "FAIL",
+                "all_pre_registered_absolute_gates_pass": all_pass,
+                "amendment_reason": (
+                    "the frozen 0.92 high-probability gate was absent from the explicit "
+                    "reliability threshold list; Core now always evaluates every gate threshold"
+                ),
+                "model_predictions_changed": False,
+                "metrics_changed": False,
+                "null_tests_changed": False,
+                "oos_2026_accessed": False,
+                "code_commit": revision,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    paths.append(report_path)
+    protocol_path = root / "gate_amendment_provenance.json"
+    protocol_path.write_text(
+        json.dumps(
+            {
+                "config": asdict(config),
+                "prediction_sha256": sha256_file(prediction_path),
+                "probability_config_sha256": sha256_file(config_path),
+                "source_artifact_sha256": {
+                    name: sha256_file(path) for name, path in source_paths.items()
+                },
+                "code_commit": revision,
+                "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    paths.append(protocol_path)
+    manifest = build_manifest(
+        run_id="drawdown-stage1-gate-amendment-"
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        artifact_paths=paths,
+        root=root,
+    )
+    write_manifest(root / "gate_amendment.manifest.json", manifest)
+    return root
+
+
+__all__ = [
+    "Stage1AnalysisError",
+    "build_stage1_probability_comparison",
+    "build_stage1_probability_gate_amendment",
+]
