@@ -430,6 +430,61 @@ entry. These are viewed-IS associations and may not be converted into filters.
 This result closes the broad-context rescue hypothesis. Gate 3 EV, execution,
 TP/SL, leverage, and portfolio simulation remain unauthorized for this version.
 
+### Frozen post-selection structural-protection EV experiment
+
+The structural arm passed absolute weekly prediction gates and beat the full
+causal arm. That observation motivates a new, separately versioned experiment;
+it does not retroactively turn Stage 1 into trading evidence. The experiment is
+explicitly post-selection IS evidence and requires forward confirmation even if
+all its gates pass.
+
+The decision is made only after a stressed ladder fill bar closes. On the
+already frozen weekly out-of-fold structural probability:
+
+```text
+probability >= 0.92: hold the blended inventory to the 48h terminal mark
+probability < 0.92: exit at the snapshot close
+baseline: hold every state to the same 48h terminal mark
+```
+
+No probability, return, state, cost, or exit threshold may be searched after
+the EV rows are opened. The 0.92 cutoff comes from the previously frozen Stage
+1 reliability gate. The exact states are the three previously frozen stressed
+states: 3% grid through 6% as primary, with 5% through 10% and 10% through 20%
+reported as secondary sensitivity states. The primary cost buffer is 25 bps
+round trip; 10 and 50 bps are sensitivity reports only.
+
+Primary endpoints are mean 25 bps-net policy return from blended entry and mean
+policy-minus-unconditional-hold return. Selection-adjusted one-sided alpha is
+`0.05 / 2 viewed model arms / 2 endpoints / 3 viewed states = 0.0041667`.
+Twenty thousand cluster bootstrap draws are run separately by ISO week and by
+symbol; both adjusted lower confidence bounds must exceed zero for both primary
+endpoints. Bootstrap tail mass is descriptive and is not called a p-value.
+
+All of the following gates must pass:
+
+```text
+primary rows >= 10,000; HOLD rows >= 1,000; EXIT rows >= 500
+absolute mean policy EV > 0 at 25 bps
+mean improvement over unconditional hold > 0
+week- and symbol-cluster adjusted lower bounds > 0 for both endpoints
+positive policy mean in at least four calendar months
+policy CVaR5 no worse than unconditional hold CVaR5
+removing the top 1% of rows still leaves positive aggregate return
+```
+
+Every joined row must retain `feature_cutoff <= snapshot < future_start`, use a
+weekly model frozen no later than the snapshot, have a complete 48-hour horizon
+strictly before 2026, and match the previously frozen recovery target exactly.
+The decision is derived before future-return columns are consulted; a mutation
+test proves that changing future returns cannot change HOLD versus EXIT.
+
+This gate is not an ex-ante entry strategy and contains no funding history,
+physical TP/SL, portfolio capital, concurrency, or liquidation simulation. A
+pass authorizes design of those mechanics under structural anchors; it does not
+establish a deployable edge or authorize access to 2026. A fail closes this
+structural-protection branch without retuning it on the same rows.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

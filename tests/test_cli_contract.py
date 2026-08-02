@@ -187,6 +187,31 @@ def test_drawdown_ladder_stage0_cli_exposes_bounded_is_build() -> None:
     assert args.limit_symbols == 30
 
 
+def test_drawdown_structural_ev_cli_separates_build_from_analysis() -> None:
+    parser = build_parser()
+    build = parser.parse_args(
+        [
+            "build-drawdown-structural-ev",
+            "--structural",
+            "probability",
+            "--stage1",
+            "stage1.parquet",
+            "--outcomes",
+            "outcomes.parquet",
+            "--out",
+            "ev",
+        ]
+    )
+    analyze = parser.parse_args(
+        ["analyze-drawdown-structural-ev", "--ev-dir", "ev"]
+    )
+
+    assert build.structural == "probability"
+    assert build.stage1 == "stage1.parquet"
+    assert build.outcomes == "outcomes.parquet"
+    assert analyze.ev_dir == "ev"
+
+
 def test_mirrored_rally_stage0_cli_exposes_same_bounded_is_contract() -> None:
     args = build_parser().parse_args(
         [

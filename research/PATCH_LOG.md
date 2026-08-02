@@ -1954,3 +1954,21 @@ Frozen IS result:
   `IS_CAUSAL_CONTEXT_INCREMENTAL_HYPOTHESIS_REJECTED`.
 - Post-gate diagnostics confirm broad symbol/time degradation rather than one
   removable bad coin. No execution or PnL stage was opened.
+
+## science: preregister post-selection structural protection EV
+
+Status: APPLIED; EV return result deliberately unopened.
+
+Changes:
+- Adds a typed causal join from frozen weekly structural OOF probabilities to
+  complete pre-2026 48-hour return paths.
+- Freezes HOLD-at-0.92 versus immediate protective EXIT and unconditional-hold
+  comparison on three already registered stressed states.
+- Applies a 12-hypothesis selection adjustment across viewed arms, endpoints,
+  and states, with 20,000 ISO-week and symbol cluster bootstrap draws.
+- Adds fail-closed checks for join identity, target identity, model freeze time,
+  feature/future timing, complete horizons, finite paths, duplicate decisions,
+  and any implied access to 2026.
+- Adds future-mutation, threshold-boundary, OOS-boundary, protocol, and CLI
+  regressions. Build and analysis remain separate commands so the protocol can
+  be committed before evidence is opened.

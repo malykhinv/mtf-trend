@@ -1068,3 +1068,26 @@ weeks. These diagnostics have no filter authority.
 
 No PnL, TP/SL, leverage, protection, or portfolio optimization is authorized.
 The pristine 2026 partition remains untouched.
+
+## 2026-08-03 — structural protection EV preregistration
+
+Status: `FROZEN_POST_SELECTION_DESIGN_PENDING_IS_EV_OPEN`.
+
+The absolute structural probability model passed, while the broader causal arm
+failed against it. A separately governed post-fill inventory decision is now
+frozen before opening 48-hour return evidence: hold at calibrated probability
+at least 0.92, otherwise exit at the snapshot close, versus unconditional 48h
+hold. The primary exact state is 3% grid through 6%; 5→10 and 10→20 are declared
+secondary states. Primary all-in cost is 25 bps with 10/50 bps sensitivities.
+
+Both absolute policy EV and improvement over hold must have positive adjusted
+one-sided lower bounds under separate ISO-week and symbol cluster bootstraps.
+The familywise alpha is 0.05/(2 viewed arms × 2 endpoints × 3 viewed states),
+with 20,000 draws. Support, 4-month stability, CVaR5, and top-1%-removal gates
+are also frozen. No physical TP/SL, funding, concurrency, sizing, leverage, or
+portfolio simulation is part of this experiment.
+
+This is explicitly post-selection IS evidence. Passing can authorize the next
+mechanics stage but cannot establish deployable edge without frozen forward
+confirmation. Failing closes the branch without same-sample retuning. The 2026
+partition remains physically untouched.

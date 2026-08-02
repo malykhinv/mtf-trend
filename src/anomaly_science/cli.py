@@ -88,6 +88,10 @@ from anomaly_science.strategy.drawdown_ladder.stage1_analysis import (
 from anomaly_science.strategy.drawdown_ladder.stage1_diagnostics import (
     build_stage1_post_gate_diagnostics,
 )
+from anomaly_science.strategy.drawdown_ladder.structural_ev import (
+    analyze_structural_ev,
+    build_structural_ev_dataset,
+)
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
 from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
 from anomaly_science.strategy.drawdown_ladder.matched_control import (
@@ -991,6 +995,21 @@ def build_parser() -> argparse.ArgumentParser:
     drawdown_stage1_diagnostics.add_argument("--full", required=True)
     drawdown_stage1_diagnostics.add_argument("--out", required=True)
 
+    drawdown_structural_ev_build = subparsers.add_parser(
+        "build-drawdown-structural-ev",
+        help="Join frozen structural OOF decisions to IS-only 48h outcomes.",
+    )
+    drawdown_structural_ev_build.add_argument("--structural", required=True)
+    drawdown_structural_ev_build.add_argument("--stage1", required=True)
+    drawdown_structural_ev_build.add_argument("--outcomes", required=True)
+    drawdown_structural_ev_build.add_argument("--out", required=True)
+
+    drawdown_structural_ev_analysis = subparsers.add_parser(
+        "analyze-drawdown-structural-ev",
+        help="Apply the frozen post-selection structural protection EV gates.",
+    )
+    drawdown_structural_ev_analysis.add_argument("--ev-dir", required=True)
+
 
     return parser
 
@@ -1110,6 +1129,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=Path(args.out),
         )
         print(f"drawdown-ladder Stage-1 diagnostics written: {output_dir}")
+        return 0
+
+    if args.command == "build-drawdown-structural-ev":
+        output_dir = build_structural_ev_dataset(
+            structural_probability_dir=Path(args.structural),
+            stage1_dataset_path=Path(args.stage1),
+            stage0_outcomes_path=Path(args.outcomes),
+            output_dir=Path(args.out),
+        )
+        print(f"drawdown structural EV rows written: {output_dir}")
+        return 0
+
+    if args.command == "analyze-drawdown-structural-ev":
+        report = analyze_structural_ev(ev_dir=Path(args.ev_dir))
+        print(f"drawdown structural EV report written: {report}")
         return 0
 
     if args.command == "run-causal-regime-atlas":
