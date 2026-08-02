@@ -80,6 +80,41 @@ Passing this gate establishes conditional residual-response predictability,
 not tradable edge. It does not authorize a threshold, CatBoost, PnL simulation,
 or a claim that costs can be overcome.
 
+### Registered post-primary robustness and win/loss trait analysis
+
+This extension was registered after the stage-1 primary result was known and
+before the robustness, placebo, or trait reports were run. It is therefore an
+IS strengthening exercise, not a second independent confirmation of the
+original hypothesis.
+
+The robustness report adds equal-event weighting, deterministic non-overlap of
+120-minute event windows, leave-one-month-out estimates, outcome concentration,
+and within-event outcome permutation. A robust result must retain the predicted
+sign under equal-event weighting and non-overlapping events, must not be made
+positive by one calendar month, and its observed association must exceed the
+95th percentile of the within-event permutation null. These checks cannot alter
+the registered primary population or replace a failed primary result.
+
+At this stage a `response win` means strictly positive direction-adjusted
+60-minute residual catch-up; a `response loss` means zero or negative catch-up.
+These are research labels, not executed trades and not net-of-cost wins/losses.
+
+Common win/loss traits are evaluated only from event-time causal features.
+Identifiers, future paths, outcome-memory fields unresolved at the snapshot,
+and every post-event value are forbidden as trait inputs. Numeric traits are
+reported by robust win/loss medians, rank-biserial effect, missingness, and
+calendar-month effects with Benjamini-Hochberg correction across the registered
+feature family.
+
+Temporal stability is assessed forward: for each month from August through
+December 2025, the expected feature direction is estimated from all prior IS
+months and checked only on the next month. A trait is called stable only when
+it has at least 80% causal coverage, its forward sign agrees in at least four of
+five checks, and its sign is non-zero in at least six of seven individual
+months. Continuous traits remain continuous. This report may prioritize
+feature-family ablations and monotonic constraints, but it may not manufacture
+an outcome-derived trading threshold or filter the training population.
+
 ## Stage order and gates
 
 1. Data, time, sessions, point-in-time universe, and enrichment provenance.
