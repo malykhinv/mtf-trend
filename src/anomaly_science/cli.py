@@ -77,6 +77,8 @@ from anomaly_science.strategy.drawdown_ladder.stage0 import (
     DrawdownLadderStage0BuildConfig,
     build_stage0_is as build_drawdown_ladder_stage0_is,
 )
+from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
+from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
 from anomaly_science.validation import run_mvp1_holdout_governance
 
 
@@ -854,6 +856,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Deterministic alphabetic smoke limit; omit for the full IS universe.",
     )
 
+    mirrored_rally_stage0 = subparsers.add_parser(
+        "build-mirrored-rally-stage0",
+        help="Build the frozen IS-only mechanically mirrored rally/short control.",
+    )
+    mirrored_rally_stage0.add_argument(
+        "--source-dir",
+        default=str(DrawdownLadderStage0BuildConfig().source_dir),
+        help="Directory containing enriched 1m perpetual parquet files.",
+    )
+    mirrored_rally_stage0.add_argument(
+        "--out",
+        default=".output/research/drawdown_ladder/stage0_mirror_short_is",
+        help="New mirrored Stage-0 output directory.",
+    )
+    mirrored_rally_stage0.add_argument("--workers", type=int, default=4)
+    mirrored_rally_stage0.add_argument("--max-inflight-symbols", type=int, default=None)
+    mirrored_rally_stage0.add_argument(
+        "--limit-symbols",
+        type=int,
+        default=None,
+        help="Deterministic alphabetic smoke limit; omit for the full IS universe.",
+    )
+
+    mirror_comparison = subparsers.add_parser(
+        "compare-drawdown-mirror-stage0",
+        help="Run the frozen cluster-aware long-drawdown versus short-rally comparison.",
+    )
+    mirror_comparison.add_argument("--long", required=True)
+    mirror_comparison.add_argument("--mirror", required=True)
+    mirror_comparison.add_argument("--out", required=True)
+
 
     return parser
 
@@ -878,6 +911,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress=lambda message: print(message, flush=True),
         )
         print(f"drawdown-ladder Stage-0 artifacts written: {result.output_dir}")
+        return 0
+
+    if args.command == "build-mirrored-rally-stage0":
+        result = build_drawdown_ladder_stage0_is(
+            DrawdownLadderStage0BuildConfig(
+                source_dir=Path(args.source_dir),
+                output_dir=Path(args.out),
+                workers=args.workers,
+                max_inflight_symbols=args.max_inflight_symbols,
+                max_symbols=args.limit_symbols,
+            ),
+            spec=MirroredRallyStage0Spec(),
+            progress=lambda message: print(message, flush=True),
+        )
+        print(f"mirrored-rally Stage-0 artifacts written: {result.output_dir}")
+        return 0
+
+    if args.command == "compare-drawdown-mirror-stage0":
+        report = build_mirror_comparison(
+            long_stage0_dir=Path(args.long),
+            mirror_stage0_dir=Path(args.mirror),
+            output_dir=Path(args.out),
+            progress=lambda message: print(message, flush=True),
+        )
+        print(f"drawdown/mirror comparison written: {report}")
         return 0
 
     if args.command == "run-causal-regime-atlas":

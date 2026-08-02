@@ -95,6 +95,15 @@ LADDER_STATE_CANDIDATE_COLUMNS: tuple[str, ...] = (
     "untouched_2026_row_used",
 )
 
+MIRRORED_RALLY_LEVEL_CANDIDATE_COLUMNS: tuple[str, ...] = tuple(
+    "same_bar_max_rally_pct" if column == "same_bar_max_drawdown_pct" else column
+    for column in LEVEL_CANDIDATE_COLUMNS
+)
+MIRRORED_RALLY_STATE_CANDIDATE_COLUMNS: tuple[str, ...] = tuple(
+    "same_bar_max_rally_pct" if column == "same_bar_max_drawdown_pct" else column
+    for column in LADDER_STATE_CANDIDATE_COLUMNS
+)
+
 _OUTCOME_BASE_COLUMNS: tuple[str, ...] = (
     "outcome_schema_version",
     "protocol_version",
@@ -136,6 +145,24 @@ def outcome_columns(spec: DrawdownLadderStage0Spec) -> tuple[str, ...]:
         )
     )
     return (*_OUTCOME_BASE_COLUMNS, *cost_columns, *horizon_columns, "untouched_2026_row_used")
+
+
+def level_candidate_columns(spec: DrawdownLadderStage0Spec) -> tuple[str, ...]:
+    return (
+        LEVEL_CANDIDATE_COLUMNS
+        if spec.study_side == "long"
+        else MIRRORED_RALLY_LEVEL_CANDIDATE_COLUMNS
+    )
+
+
+def ladder_state_candidate_columns(
+    spec: DrawdownLadderStage0Spec,
+) -> tuple[str, ...]:
+    return (
+        LADDER_STATE_CANDIDATE_COLUMNS
+        if spec.study_side == "long"
+        else MIRRORED_RALLY_STATE_CANDIDATE_COLUMNS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,7 +275,12 @@ def _frame(rows: list[dict[str, object]], columns: tuple[str, ...]) -> pd.DataFr
             or column.endswith("_ms")
         ):
             frame[column] = pd.array(frame[column], dtype="Int64")
-        elif column.endswith("_price") or "return_" in column or column.endswith("_drawdown_pct"):
+        elif (
+            column.endswith("_price")
+            or "return_" in column
+            or column.endswith("_drawdown_pct")
+            or column.endswith("_rally_pct")
+        ):
             frame[column] = pd.array(frame[column], dtype="Float64")
         else:
             frame[column] = frame[column].astype("string")
@@ -258,6 +290,10 @@ def _frame(rows: list[dict[str, object]], columns: tuple[str, ...]) -> pd.DataFr
 def _effective_trade_through_depth(depth_pct: int, trade_through_bps: int) -> float:
     remaining = 1.0 - depth_pct / 100.0
     return 1.0 - remaining * (1.0 - trade_through_bps / 10_000.0)
+
+
+def _effective_trade_through_rally(depth_pct: int, trade_through_bps: int) -> float:
+    return (1.0 + depth_pct / 100.0) * (1.0 + trade_through_bps / 10_000.0) - 1.0
 
 
 def _harmonic_equal_notional_entry(prices: np.ndarray) -> float:
@@ -350,10 +386,13 @@ def build_symbol_stage0(
     symbol = source.stem.upper()
     minute = read_is_symbol_minutes(source)
     if minute.empty:
-        _atomic_write_parquet(_frame([], LEVEL_CANDIDATE_COLUMNS), shard_paths.level_candidates)
+        _atomic_write_parquet(
+            _frame([], level_candidate_columns(spec)), shard_paths.level_candidates
+        )
         _atomic_write_parquet(_frame([], outcome_columns(spec)), shard_paths.level_outcomes)
         _atomic_write_parquet(
-            _frame([], LADDER_STATE_CANDIDATE_COLUMNS), shard_paths.ladder_state_candidates
+            _frame([], ladder_state_candidate_columns(spec)),
+            shard_paths.ladder_state_candidates,
         )
         _atomic_write_parquet(_frame([], outcome_columns(spec)), shard_paths.ladder_state_outcomes)
         return SymbolStage0Stats(symbol, 0, 0, 0, 0, 0, 0, None, None)
@@ -389,13 +428,24 @@ def build_symbol_stage0(
     incomplete_sessions = 0
     parent_ids: set[str] = set()
     levels = np.asarray(spec.measurement_levels_pct, dtype=np.int64)
-    fill_thresholds = np.asarray(
-        [
-            _effective_trade_through_depth(int(depth), spec.trade_through_bps)
-            for depth in levels
-        ],
-        dtype=float,
-    )
+    if spec.study_side == "long":
+        fill_thresholds = np.asarray(
+            [
+                _effective_trade_through_depth(int(depth), spec.trade_through_bps)
+                for depth in levels
+            ],
+            dtype=float,
+        )
+        same_bar_excursion_column = "same_bar_max_drawdown_pct"
+    else:
+        fill_thresholds = np.asarray(
+            [
+                _effective_trade_through_rally(int(depth), spec.trade_through_bps)
+                for depth in levels
+            ],
+            dtype=float,
+        )
+        same_bar_excursion_column = "same_bar_max_rally_pct"
 
     for start_index_raw in session_start_indices:
         start_index = int(start_index_raw)
@@ -427,19 +477,29 @@ def build_symbol_stage0(
         anchor_price = float(close[start_index - 1])
         if not np.isfinite(anchor_price) or anchor_price <= 0.0:
             raise DrawdownLadderBuildError(f"{symbol} has an invalid session anchor price")
-        observed_drawdown = 1.0 - low[active_index:observed_stop] / anchor_price
-        running_max_drawdown = np.maximum.accumulate(observed_drawdown)
-        fill_offsets = np.searchsorted(running_max_drawdown, fill_thresholds, side="left")
-        filled_mask = fill_offsets < len(running_max_drawdown)
+        if spec.study_side == "long":
+            observed_excursion = 1.0 - low[active_index:observed_stop] / anchor_price
+        else:
+            observed_excursion = high[active_index:observed_stop] / anchor_price - 1.0
+        running_max_excursion = np.maximum.accumulate(observed_excursion)
+        fill_offsets = np.searchsorted(running_max_excursion, fill_thresholds, side="left")
+        filled_mask = fill_offsets < len(running_max_excursion)
         if not bool(filled_mask.any()):
             continue
 
         utc_day = session_start_ms // (24 * 60 * MS_PER_MINUTE)
-        parent_event_id = _stable_id("ddlparent", symbol, session_start_ms)
+        parent_event_id = _stable_id(
+            "ddlparent" if spec.study_side == "long" else "mrlparent",
+            symbol,
+            session_start_ms,
+        )
         parent_ids.add(parent_event_id)
         filled_levels = levels[filled_mask]
         filled_indices = active_index + fill_offsets[filled_mask]
-        limit_prices = anchor_price * (1.0 - filled_levels.astype(float) / 100.0)
+        direction_sign = -1.0 if spec.study_side == "long" else 1.0
+        limit_prices = anchor_price * (
+            1.0 + direction_sign * filled_levels.astype(float) / 100.0
+        )
         fill_index_by_level = {
             int(depth): int(fill_index)
             for depth, fill_index in zip(filled_levels, filled_indices, strict=True)
@@ -458,7 +518,11 @@ def build_symbol_stage0(
             fill_index = int(fill_index)
             fill_open_ms = int(timestamps[fill_index])
             fill_observed_ms = fill_open_ms + MS_PER_MINUTE
-            candidate_id = _stable_id("ddllevel", parent_event_id, int(depth))
+            candidate_id = _stable_id(
+                "ddllevel" if spec.study_side == "long" else "mrllevel",
+                parent_event_id,
+                int(depth),
+            )
             level_rows.append(
                 {
                     "candidate_schema_version": spec.candidate_schema_version,
@@ -485,8 +549,13 @@ def build_symbol_stage0(
                     "minutes_from_order_activation": int(
                         (fill_observed_ms - active_time_ms) // MS_PER_MINUTE
                     ),
-                    "same_bar_max_drawdown_pct": float(
-                        100.0 * (1.0 - low[fill_index] / anchor_price)
+                    same_bar_excursion_column: float(
+                        100.0
+                        * (
+                            1.0 - low[fill_index] / anchor_price
+                            if spec.study_side == "long"
+                            else high[fill_index] / anchor_price - 1.0
+                        )
                     ),
                     "session_complete": session_complete,
                     "untouched_2026_row_used": False,
@@ -529,7 +598,7 @@ def build_symbol_stage0(
                 fill_open_ms = int(timestamps[fill_index])
                 fill_observed_ms = fill_open_ms + MS_PER_MINUTE
                 state_id = _stable_id(
-                    "ddlstate",
+                    "ddlstate" if spec.study_side == "long" else "mrlstate",
                     parent_event_id,
                     grid_step,
                     fill_observed_ms,
@@ -562,8 +631,13 @@ def build_symbol_stage0(
                         "minutes_from_order_activation": int(
                             (fill_observed_ms - active_time_ms) // MS_PER_MINUTE
                         ),
-                        "same_bar_max_drawdown_pct": float(
-                            100.0 * (1.0 - low[fill_index] / anchor_price)
+                        same_bar_excursion_column: float(
+                            100.0
+                            * (
+                                1.0 - low[fill_index] / anchor_price
+                                if spec.study_side == "long"
+                                else high[fill_index] / anchor_price - 1.0
+                            )
                         ),
                         "session_complete": session_complete,
                         "untouched_2026_row_used": False,
@@ -612,6 +686,7 @@ def build_symbol_stage0(
                 maximum_horizon_minutes=spec.maximum_horizon_minutes,
                 horizons_minutes=spec.response_horizons_minutes,
                 round_trip_cost_bps=spec.round_trip_cost_bps,
+                direction=spec.study_side,
             )
             if measurement.horizon_complete:
                 censor_reason = "none"
@@ -634,13 +709,13 @@ def build_symbol_stage0(
     level_outcomes = materialize_outcomes(level_requests)
     state_outcomes = materialize_outcomes(state_requests)
     _atomic_write_parquet(
-        _frame(level_rows, LEVEL_CANDIDATE_COLUMNS), shard_paths.level_candidates
+        _frame(level_rows, level_candidate_columns(spec)), shard_paths.level_candidates
     )
     _atomic_write_parquet(
         _frame(level_outcomes, outcome_columns(spec)), shard_paths.level_outcomes
     )
     _atomic_write_parquet(
-        _frame(state_rows, LADDER_STATE_CANDIDATE_COLUMNS),
+        _frame(state_rows, ladder_state_candidate_columns(spec)),
         shard_paths.ladder_state_candidates,
     )
     _atomic_write_parquet(
@@ -857,7 +932,7 @@ def build_stage0_is(
         stats.append(result)
         if progress and (completed % 25 == 0 or completed == len(paths)):
             progress(
-                f"drawdown ladder Stage 0 {completed}/{len(paths)}; "
+                f"{spec.event_family} Stage 0 {completed}/{len(paths)}; "
                 f"levels={sum(item.level_candidate_count for item in stats):,}; "
                 f"states={sum(item.ladder_state_candidate_count for item in stats):,}"
             )
@@ -887,7 +962,11 @@ def build_stage0_is(
         build_stage0_recovery_summaries(stage0_dir=config.output_dir, spec=spec)
     )
     manifest = {
-        "protocol": asdict(spec),
+        "protocol": {
+            **asdict(spec),
+            "study_side": spec.study_side,
+            "event_family": spec.event_family,
+        },
         "research_split": {
             "split_version": spec.research_split.split_version,
             "is_start_time_ms": spec.research_split.is_start_time_ms,
@@ -972,10 +1051,14 @@ __all__ = [
     "DrawdownLadderStage0BuildConfig",
     "LADDER_STATE_CANDIDATE_COLUMNS",
     "LEVEL_CANDIDATE_COLUMNS",
+    "MIRRORED_RALLY_LEVEL_CANDIDATE_COLUMNS",
+    "MIRRORED_RALLY_STATE_CANDIDATE_COLUMNS",
     "Stage0BuildResult",
     "SymbolStage0OutputPaths",
     "SymbolStage0Stats",
     "build_stage0_is",
     "build_symbol_stage0",
+    "ladder_state_candidate_columns",
+    "level_candidate_columns",
     "outcome_columns",
 ]

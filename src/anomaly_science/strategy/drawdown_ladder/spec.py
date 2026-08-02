@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import ClassVar, Literal
 
 from anomaly_science.market_context.sessions import UTC_SESSION_CALENDAR_VERSION
 from anomaly_science.validation.research_split import CalendarResearchSplit
@@ -19,6 +20,8 @@ DRAWDOWN_LADDER_RESEARCH_SPLIT = CalendarResearchSplit(
 
 @dataclass(frozen=True, slots=True)
 class DrawdownLadderStage0Spec:
+    study_side: ClassVar[Literal["long", "short"]] = "long"
+    event_family: ClassVar[str] = "session_drawdown"
     protocol_version: str = "drawdown_ladder_stage0_v1"
     protocol_freeze_id: str = "drawdown_ladder_stage0_20260802_v1"
     candidate_schema_version: str = "drawdown_ladder_candidate_v1"
@@ -78,4 +81,21 @@ class DrawdownLadderStage0Spec:
         return DRAWDOWN_LADDER_RESEARCH_SPLIT
 
 
-__all__ = ["DRAWDOWN_LADDER_RESEARCH_SPLIT", "DrawdownLadderStage0Spec"]
+@dataclass(frozen=True, slots=True)
+class MirroredRallyStage0Spec(DrawdownLadderStage0Spec):
+    """Mechanically mirrored short control; all non-directional rules are equal."""
+
+    study_side: ClassVar[Literal["long", "short"]] = "short"
+    event_family: ClassVar[str] = "session_rally_mirror"
+    protocol_version: str = "mirrored_rally_stage0_v1"
+    protocol_freeze_id: str = "mirrored_rally_stage0_20260802_v1"
+    candidate_schema_version: str = "mirrored_rally_candidate_v1"
+    ladder_state_schema_version: str = "mirrored_rally_state_candidate_v1"
+    outcome_schema_version: str = "mirrored_short_recovery_outcome_v1"
+
+
+__all__ = [
+    "DRAWDOWN_LADDER_RESEARCH_SPLIT",
+    "DrawdownLadderStage0Spec",
+    "MirroredRallyStage0Spec",
+]

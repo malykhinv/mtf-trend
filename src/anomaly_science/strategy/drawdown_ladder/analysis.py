@@ -242,6 +242,8 @@ def build_stage0_recovery_summaries(
     pd.DataFrame(state_rows).to_parquet(state_path, index=False, compression="zstd")
     report = {
         "protocol_freeze_id": spec.protocol_freeze_id,
+        "study_side": spec.study_side,
+        "event_family": spec.event_family,
         "stage": "raw_recovery_nature",
         "descriptive_only": True,
         "trade_simulation_performed": False,

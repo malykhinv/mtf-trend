@@ -13,6 +13,11 @@ from anomaly_science.strategy.drawdown_ladder.stage0 import (
     build_symbol_stage0,
 )
 from anomaly_science.strategy.drawdown_ladder.analysis import build_stage0_recovery_summaries
+from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
+from anomaly_science.strategy.drawdown_ladder.mirror_analysis import (
+    MirrorComparisonSpec,
+    build_mirror_comparison,
+)
 
 
 def _paths(root: Path) -> SymbolStage0OutputPaths:
@@ -49,6 +54,18 @@ def _minute_fixture(*, fill_after_activation: bool = True) -> pd.DataFrame:
     return frame
 
 
+def _rally_fixture() -> pd.DataFrame:
+    frame = _minute_fixture(fill_after_activation=False)
+    timestamps = frame["timestamp"].to_numpy(dtype=np.int64)
+    first_bar = int(pd.Timestamp("2025-08-01T08:00:00Z").value // 1_000_000)
+    first_index = int(np.searchsorted(timestamps, first_bar))
+    frame.loc[first_index, ["open", "high", "low", "close"]] = [100.0, 111.0, 99.0, 100.0]
+    frame.loc[first_index + 1, ["open", "high", "low", "close"]] = [100.0, 105.10, 99.8, 105.0]
+    frame.loc[first_index + 2, ["open", "high", "low", "close"]] = [105.0, 105.20, 104.8, 105.0]
+    frame.loc[first_index + 3, ["open", "high", "low", "close"]] = [105.0, 105.10, 104.0, 104.2]
+    return frame
+
+
 def test_recovery_path_starts_after_snapshot_and_reports_time_to_break_even() -> None:
     timestamps = np.arange(4, dtype=np.int64) * MS_PER_MINUTE
     index = RecoveryPathIndex(
@@ -72,6 +89,91 @@ def test_recovery_path_starts_after_snapshot_and_reports_time_to_break_even() ->
     assert measured.cost_break_even_times_minutes == (2, 3)
     assert measured.horizon_metrics[0].close_return == pytest.approx(-0.015)
     assert measured.horizon_complete
+
+
+def test_short_recovery_uses_future_lows_and_reports_signed_returns() -> None:
+    timestamps = np.arange(4, dtype=np.int64) * MS_PER_MINUTE
+    index = RecoveryPathIndex(
+        timestamps_ms=timestamps,
+        high=np.asarray([101.0, 102.0, 101.0, 100.5]),
+        low=np.asarray([100.0, 100.5, 99.8, 99.7]),
+        close=np.asarray([100.5, 101.5, 100.0, 99.5]),
+    )
+
+    measured = index.measure(
+        entry_price=100.0,
+        snapshot_time_ms=MS_PER_MINUTE,
+        first_future_bar_index=1,
+        maximum_horizon_minutes=3,
+        horizons_minutes=(1, 3),
+        round_trip_cost_bps=(10, 25),
+        direction="short",
+    )
+
+    assert measured.direction == "short"
+    assert measured.time_to_gross_break_even_minutes == 2
+    assert measured.cost_break_even_times_minutes == (2, 3)
+    assert measured.horizon_metrics[0].close_return == pytest.approx(-0.015)
+    assert measured.horizon_metrics[-1].maximum_return == pytest.approx(0.003)
+    assert measured.horizon_metrics[-1].minimum_return == pytest.approx(-0.02)
+
+
+def test_mirrored_rally_builds_causal_short_level_and_grid_states(tmp_path: Path) -> None:
+    source = tmp_path / "AAAUSDT.parquet"
+    _rally_fixture().to_parquet(source, index=False)
+    output = _paths(tmp_path / "mirror")
+
+    stats = build_symbol_stage0(
+        source,
+        shard_paths=output,
+        spec=MirroredRallyStage0Spec(),
+    )
+    candidates = pd.read_parquet(output.level_candidates)
+    outcomes = pd.read_parquet(output.level_outcomes)
+    states = pd.read_parquet(output.ladder_state_candidates)
+
+    five = candidates.loc[candidates["level_depth_pct"].eq(5)].iloc[0]
+    five_outcome = outcomes.loc[outcomes["candidate_id"].eq(five["candidate_id"])].iloc[0]
+    grid_five = states.loc[
+        states["grid_step_pct"].eq(5)
+        & states["deepest_filled_level_pct"].eq(5)
+    ].iloc[0]
+
+    assert stats.parent_event_count == 1
+    assert set(candidates.loc[candidates["level_depth_pct"].le(5), "level_depth_pct"]) == {3, 4, 5}
+    assert "same_bar_max_rally_pct" in candidates.columns
+    assert "same_bar_max_drawdown_pct" not in candidates.columns
+    assert five["limit_price"] == 105.0
+    assert five_outcome["time_to_gross_break_even_minutes"] == 1
+    assert five_outcome["time_to_break_even_25bps_minutes"] == 2
+    assert grid_five["equal_notional_average_entry_price"] == pytest.approx(105.0)
+    assert five_outcome["future_return_5m"] > 0.0
+
+
+def test_mirrored_candidates_do_not_change_when_only_future_tail_changes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "AAAUSDT.parquet"
+    original = _rally_fixture()
+    original.to_parquet(source, index=False)
+    first_output = _paths(tmp_path / "first_mirror")
+    spec = MirroredRallyStage0Spec()
+    build_symbol_stage0(source, shard_paths=first_output, spec=spec)
+
+    changed = original.copy()
+    mutation_time = int(pd.Timestamp("2025-08-01T08:02:00Z").value // 1_000_000)
+    changed.loc[changed["timestamp"].eq(mutation_time), "low"] = 1.0
+    changed.to_parquet(source, index=False)
+    second_output = _paths(tmp_path / "second_mirror")
+    build_symbol_stage0(source, shard_paths=second_output, spec=spec)
+
+    pd.testing.assert_frame_equal(
+        pd.read_parquet(first_output.level_candidates),
+        pd.read_parquet(second_output.level_candidates),
+    )
+    assert not pd.read_parquet(first_output.level_outcomes).equals(
+        pd.read_parquet(second_output.level_outcomes)
+    )
 
 
 def test_first_session_minute_is_not_eligible_for_fill(tmp_path: Path) -> None:
@@ -185,3 +287,80 @@ def test_recovery_summary_is_censor_aware_and_parent_clustered(tmp_path: Path) -
     assert five["km_gross_recovery_probability_60m"] == 1.0
     assert five["km_median_minutes_to_gross_recovery"] == 1.0
     assert set(states["summary_family"]) == {"equal_notional_ladder_state"}
+
+
+def _write_comparison_arm(
+    root: Path,
+    *,
+    prefix: str,
+    recovered: list[bool],
+    returns: list[float],
+) -> None:
+    root.mkdir(parents=True)
+    count = len(recovered)
+    candidates = pd.DataFrame(
+        {
+            "candidate_id": [f"{prefix}-{index}" for index in range(count)],
+            "parent_event_id": [f"parent-{prefix}-{index}" for index in range(count)],
+            "symbol": [f"S{index % 4}" for index in range(count)],
+            "snapshot_time_ms": [
+                int(pd.Timestamp("2025-08-04T08:00:00Z").value // 1_000_000)
+                + index * 7 * 24 * 60 * MS_PER_MINUTE
+                for index in range(count)
+            ],
+            "grid_step_pct": 3,
+            "deepest_filled_level_pct": 6,
+        }
+    )
+    outcomes = pd.DataFrame(
+        {
+            "candidate_id": candidates["candidate_id"],
+            "horizon_complete": True,
+            "break_even_25bps_reached": recovered,
+            "future_return_2880m": returns,
+        }
+    )
+    candidates.to_parquet(root / "ladder_state_candidates.parquet", index=False)
+    outcomes.to_parquet(root / "ladder_state_outcomes.parquet", index=False)
+
+
+def test_mirror_comparison_uses_frozen_strata_cluster_bootstrap_and_holm(
+    tmp_path: Path,
+) -> None:
+    long_root = tmp_path / "long"
+    short_root = tmp_path / "short"
+    _write_comparison_arm(
+        long_root,
+        prefix="long",
+        recovered=[True] * 8,
+        returns=[0.10] * 8,
+    )
+    _write_comparison_arm(
+        short_root,
+        prefix="short",
+        recovered=[False] * 8,
+        returns=[-0.10] * 8,
+    )
+
+    report = build_mirror_comparison(
+        long_stage0_dir=long_root,
+        mirror_stage0_dir=short_root,
+        output_dir=tmp_path / "comparison",
+        spec=MirrorComparisonSpec(
+            primary_strata=((3, 6),),
+            bootstrap_iterations=100,
+            minimum_rows_per_arm=2,
+            minimum_clusters_per_arm=2,
+            minimum_month_rows_per_arm=1,
+        ),
+    )
+    exact = pd.read_parquet(tmp_path / "comparison" / "mirror_exact_strata.parquet")
+    row = exact.iloc[0]
+
+    assert report.is_file()
+    assert bool(row["primary_stratum"])
+    assert bool(row["eligible_for_inference"])
+    assert row["long_minus_mirror_recovery_25bps"] == 1.0
+    assert row["recovery_25bps_cluster_ci_lower_95"] == 1.0
+    assert row["long_minus_mirror_signed_return_48h"] == pytest.approx(0.2)
+    assert row["primary_recovery_holm_p"] < 0.05

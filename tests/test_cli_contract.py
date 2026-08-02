@@ -185,3 +185,47 @@ def test_drawdown_ladder_stage0_cli_exposes_bounded_is_build() -> None:
     assert args.workers == 6
     assert args.max_inflight_symbols == 12
     assert args.limit_symbols == 30
+
+
+def test_mirrored_rally_stage0_cli_exposes_same_bounded_is_contract() -> None:
+    args = build_parser().parse_args(
+        [
+            "build-mirrored-rally-stage0",
+            "--source-dir",
+            "cache",
+            "--out",
+            "mirror",
+            "--workers",
+            "5",
+            "--max-inflight-symbols",
+            "10",
+            "--limit-symbols",
+            "20",
+        ]
+    )
+
+    assert args.command == "build-mirrored-rally-stage0"
+    assert args.source_dir == "cache"
+    assert args.out == "mirror"
+    assert args.workers == 5
+    assert args.max_inflight_symbols == 10
+    assert args.limit_symbols == 20
+
+
+def test_drawdown_mirror_comparison_cli_keeps_frozen_statistics() -> None:
+    args = build_parser().parse_args(
+        [
+            "compare-drawdown-mirror-stage0",
+            "--long",
+            "long-stage0",
+            "--mirror",
+            "short-stage0",
+            "--out",
+            "comparison",
+        ]
+    )
+
+    assert args.command == "compare-drawdown-mirror-stage0"
+    assert args.long == "long-stage0"
+    assert args.mirror == "short-stage0"
+    assert args.out == "comparison"

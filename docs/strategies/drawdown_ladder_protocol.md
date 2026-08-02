@@ -216,6 +216,33 @@ rather than ordinary volatility or a generic limit-order selection effect. All
 inference must account for dependence across levels and adjacent sessions using
 symbol/time-block clusters. Neither control may read or tune on 2026.
 
+#### Frozen Stage 0C mirrored-control contract
+
+Protocol freeze: `mirrored_rally_stage0_20260802_v1`.
+
+The mirror changes direction only. At every identical versioned session anchor:
+
+- short limits are placed at `anchor * (1 + depth)`;
+- the first session minute remains ineligible;
+- a fill requires the one-minute high to trade 5 bps beyond the limit;
+- registered depths, 3/5/10% grid families, equal-notional sizing, horizon,
+  cost buffers, censoring, symbol universe, and IS boundary are unchanged;
+- recovery occurs when a strictly future low reaches the short entry or the
+  cost-adjusted price below it;
+- future returns and extrema are signed from the short position's perspective.
+
+The primary mirror comparison is made separately for every exact registered
+`grid_step_pct x deepest_filled_level_pct` stratum. It reports the long-minus-
+mirror difference in conservative 25 bps recovery probability and mean signed
+48-hour return. Dependence is handled through symbol x ISO-week clusters;
+calendar-month and symbol stability are mandatory. Strata are not pooled and a
+single favorable depth cannot pass the gate. The mirror is a directional
+negative control, not a claim that long and short event populations are paired.
+
+The mirror code and tests must be frozen before its full-IS result is opened.
+After opening, only bug fixes that invalidate and rerun the entire mirror are
+allowed; neighboring thresholds or depths may not be added.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

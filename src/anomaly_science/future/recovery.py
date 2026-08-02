@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from typing import Literal
 
 import numpy as np
 
@@ -30,6 +31,7 @@ class HorizonRecoveryMetrics:
 
 @dataclass(frozen=True, slots=True)
 class RecoveryPathMeasurement:
+    direction: Literal["long", "short"]
     snapshot_time_ms: int
     future_start_time_ms: int
     available_future_minutes: int
@@ -85,6 +87,14 @@ class _RangeExtremaIndex:
         result = self._first_at_or_above(1, 0, self.size, start, stop, threshold)
         return None if result < 0 or result >= self.count else result
 
+    def first_at_or_below(self, start: int, stop: int, threshold: float) -> int | None:
+        if self.mode != "minimum":
+            raise RecoveryPathError("first_at_or_below requires a minimum index")
+        if not 0 <= start <= stop <= self.count:
+            raise RecoveryPathError("threshold query is outside the indexed path")
+        result = self._first_at_or_below(1, 0, self.size, start, stop, threshold)
+        return None if result < 0 or result >= self.count else result
+
     def _first_at_or_above(
         self,
         node: int,
@@ -110,6 +120,39 @@ class _RangeExtremaIndex:
         if first >= 0:
             return first
         return self._first_at_or_above(
+            node * 2 + 1,
+            middle,
+            right,
+            query_left,
+            query_right,
+            threshold,
+        )
+
+    def _first_at_or_below(
+        self,
+        node: int,
+        left: int,
+        right: int,
+        query_left: int,
+        query_right: int,
+        threshold: float,
+    ) -> int:
+        if right <= query_left or query_right <= left or self.tree[node] > threshold:
+            return -1
+        if right - left == 1:
+            return left
+        middle = (left + right) // 2
+        first = self._first_at_or_below(
+            node * 2,
+            left,
+            middle,
+            query_left,
+            query_right,
+            threshold,
+        )
+        if first >= 0:
+            return first
+        return self._first_at_or_below(
             node * 2 + 1,
             middle,
             right,
@@ -176,6 +219,7 @@ class RecoveryPathIndex:
         maximum_horizon_minutes: int,
         horizons_minutes: tuple[int, ...],
         round_trip_cost_bps: tuple[int, ...],
+        direction: Literal["long", "short"] = "long",
     ) -> RecoveryPathMeasurement:
         if not math.isfinite(entry_price) or entry_price <= 0.0:
             raise RecoveryPathError("entry_price must be finite and positive")
@@ -191,6 +235,8 @@ class RecoveryPathIndex:
             raise RecoveryPathError("round-trip cost buffers must be sorted and unique")
         if any(value <= 0 for value in round_trip_cost_bps):
             raise RecoveryPathError("round-trip cost buffers must be positive")
+        if direction not in {"long", "short"}:
+            raise RecoveryPathError(f"unknown recovery direction: {direction}")
         if not 0 <= first_future_bar_index < len(self.timestamps_ms):
             raise RecoveryPathError("first future bar is outside the indexed path")
         if int(self.timestamps_ms[first_future_bar_index]) != snapshot_time_ms:
@@ -208,11 +254,18 @@ class RecoveryPathIndex:
         ended_at_gap = contiguous_stop < requested_stop and contiguous_stop < len(self.timestamps_ms)
         future_start_time_ms = snapshot_time_ms + MS_PER_MINUTE
 
-        gross_index = self._high_index.first_at_or_above(
-            first_future_bar_index,
-            stop,
-            entry_price,
-        )
+        if direction == "long":
+            gross_index = self._high_index.first_at_or_above(
+                first_future_bar_index,
+                stop,
+                entry_price,
+            )
+        else:
+            gross_index = self._low_index.first_at_or_below(
+                first_future_bar_index,
+                stop,
+                entry_price,
+            )
         gross_time = (
             None
             if gross_index is None
@@ -220,12 +273,20 @@ class RecoveryPathIndex:
         )
         cost_times: list[int | None] = []
         for cost_bps in round_trip_cost_bps:
-            threshold = entry_price * (1.0 + cost_bps / 10_000.0)
-            crossing = self._high_index.first_at_or_above(
-                first_future_bar_index,
-                stop,
-                threshold,
-            )
+            if direction == "long":
+                threshold = entry_price * (1.0 + cost_bps / 10_000.0)
+                crossing = self._high_index.first_at_or_above(
+                    first_future_bar_index,
+                    stop,
+                    threshold,
+                )
+            else:
+                threshold = entry_price * (1.0 - cost_bps / 10_000.0)
+                crossing = self._low_index.first_at_or_below(
+                    first_future_bar_index,
+                    stop,
+                    threshold,
+                )
             cost_times.append(
                 None
                 if crossing is None
@@ -239,27 +300,41 @@ class RecoveryPathIndex:
                 horizon_rows.append(HorizonRecoveryMetrics(horizon, False, None, None, None))
                 continue
             horizon_stop = first_future_bar_index + horizon
+            close_ratio = self.close[horizon_stop - 1] / entry_price
+            if direction == "long":
+                maximum_return = (
+                    self._high_index.query(first_future_bar_index, horizon_stop)
+                    / entry_price
+                    - 1.0
+                )
+                minimum_return = (
+                    self._low_index.query(first_future_bar_index, horizon_stop)
+                    / entry_price
+                    - 1.0
+                )
+                close_return = close_ratio - 1.0
+            else:
+                maximum_return = 1.0 - (
+                    self._low_index.query(first_future_bar_index, horizon_stop)
+                    / entry_price
+                )
+                minimum_return = 1.0 - (
+                    self._high_index.query(first_future_bar_index, horizon_stop)
+                    / entry_price
+                )
+                close_return = 1.0 - close_ratio
             horizon_rows.append(
                 HorizonRecoveryMetrics(
                     horizon_minutes=horizon,
                     label_available=True,
-                    close_return=float(
-                        self.close[horizon_stop - 1] / entry_price - 1.0
-                    ),
-                    maximum_return=float(
-                        self._high_index.query(first_future_bar_index, horizon_stop)
-                        / entry_price
-                        - 1.0
-                    ),
-                    minimum_return=float(
-                        self._low_index.query(first_future_bar_index, horizon_stop)
-                        / entry_price
-                        - 1.0
-                    ),
+                    close_return=float(close_return),
+                    maximum_return=float(maximum_return),
+                    minimum_return=float(minimum_return),
                 )
             )
 
         return RecoveryPathMeasurement(
+            direction=direction,
             snapshot_time_ms=snapshot_time_ms,
             future_start_time_ms=future_start_time_ms,
             available_future_minutes=available,
