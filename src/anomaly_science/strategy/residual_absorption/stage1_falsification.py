@@ -60,6 +60,50 @@ def cluster_bootstrap_primary(
     }
 
 
+def weighted_spearman(
+    x: np.ndarray,
+    y: np.ndarray,
+    weights: np.ndarray,
+) -> float:
+    """Spearman association of an integer-frequency weighted expanded sample."""
+
+    x_values = np.asarray(x, dtype=float)
+    y_values = np.asarray(y, dtype=float)
+    weight_values = np.asarray(weights, dtype=float)
+    valid = np.isfinite(x_values) & np.isfinite(y_values) & (weight_values > 0.0)
+    if valid.sum() < 2:
+        return float("nan")
+    x_groups = np.unique(x_values[valid], return_inverse=True)[1]
+    y_groups = np.unique(y_values[valid], return_inverse=True)[1]
+    return _weighted_spearman(
+        x_groups=x_groups,
+        y_groups=y_groups,
+        weights=weight_values[valid],
+    )
+
+
+def weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    """Median for positive arbitrary weights, averaging an exact half boundary."""
+
+    value_array = np.asarray(values, dtype=float)
+    weight_array = np.asarray(weights, dtype=float)
+    valid = np.isfinite(value_array) & (weight_array > 0.0)
+    if not valid.any():
+        return float("nan")
+    order = np.argsort(value_array[valid], kind="mergesort")
+    ordered_values = value_array[valid][order]
+    ordered_weights = weight_array[valid][order]
+    cumulative = np.cumsum(ordered_weights)
+    threshold = 0.5 * cumulative[-1]
+    index = min(np.searchsorted(cumulative, threshold, side="left"), len(ordered_values) - 1)
+    if (
+        index + 1 < len(ordered_values)
+        and np.isclose(cumulative[index], threshold, rtol=1e-12, atol=1e-15)
+    ):
+        return float((ordered_values[index] + ordered_values[index + 1]) / 2.0)
+    return float(ordered_values[index])
+
+
 def build_stage1_falsification_report(
     *,
     stage1_dir: str | Path,
@@ -251,6 +295,8 @@ __all__ = [
     "REPORT_VERSION",
     "build_stage1_falsification_report",
     "cluster_bootstrap_primary",
+    "weighted_median",
+    "weighted_spearman",
 ]
 
 

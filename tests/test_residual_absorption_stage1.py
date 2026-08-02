@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -25,6 +26,11 @@ from anomaly_science.strategy.residual_absorption.stage1_outcome_build import (
 )
 from anomaly_science.strategy.residual_absorption.stage1_falsification import (
     cluster_bootstrap_primary,
+    weighted_median,
+    weighted_spearman,
+)
+from anomaly_science.strategy.residual_absorption.stage1_robustness import (
+    within_event_permutation_placebo,
 )
 from anomaly_science.strategy.residual_absorption.stage1_response_build import (
     central_factor_order_statistics,
@@ -549,3 +555,34 @@ def test_cluster_bootstrap_resamples_whole_clusters() -> None:
     assert result["cluster_count"] == 10
     assert result["spearman_95pct_percentile_ci"][0] > 0.99
     assert result["positive_underreaction_median_60m_95pct_percentile_ci"][0] > 0.0
+
+
+def test_weighted_estimands_match_expanded_sample() -> None:
+    values = np.asarray([1.0, 2.0, 3.0, 4.0])
+    weights = np.asarray([1.0, 2.0, 1.0, 2.0])
+    expanded = np.repeat(values, weights.astype(int))
+
+    assert weighted_median(values, weights) == np.median(expanded)
+    assert weighted_spearman(values, values[::-1], np.ones(4)) == pytest.approx(-1.0)
+
+
+def test_within_event_placebo_breaks_symbol_pairing() -> None:
+    rows = []
+    for event in range(20):
+        for rank in range(10):
+            rows.append(
+                {
+                    "event_id": f"event-{event}",
+                    "direction_adjusted_underreaction_15m": float(rank),
+                    "catchup_residual_change_60m": float(rank) / 10_000,
+                }
+            )
+    result = within_event_permutation_placebo(
+        pd.DataFrame(rows),
+        repetitions=200,
+        seed=11,
+    )
+
+    assert result["observed_spearman"] == pytest.approx(1.0)
+    assert result["observed_spearman"] > result["null_spearman_95th_percentile"]
+    assert result["spearman_one_sided_randomization_p"] < 0.01
