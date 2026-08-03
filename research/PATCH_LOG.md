@@ -2008,3 +2008,13 @@ Changes:
 - Adds fail-closed identity, cutoff, future-start, horizon, finite-label,
   duplicate, output immutability, clean-revision, and 2026-boundary checks.
 - Adds target-mutation, OOS-boundary, model-contract, protocol, and CLI tests.
+
+Frozen IS result:
+- 24,567 complete primary-state rows; 19,821 OOS predictions; 22/22 frozen
+  weeks per arm; every timing/OOS audit PASS.
+- Structural AUC 0.4816, log-loss gain -0.01336, Brier gain -0.00629, ECE
+  0.0849; full causal was worse on every overall metric.
+- Both arms had AUC below 0.5 in all five months, and high-probability cohorts
+  failed reliability/support gates.
+- Sparse symbol-level exceptions have no filter authority. Final status
+  `IS_CONTINUATION_NATURE_PREDICTION_REJECTED`; later EV stages forbidden.

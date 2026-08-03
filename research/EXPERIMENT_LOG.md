@@ -1134,3 +1134,28 @@ is adjusted for two viewed arms and two endpoints.
 This stage contains no EV threshold, PnL, funding, physical exit, leverage, or
 portfolio simulation. It can only authorize a later magnitude-aware EV test.
 No 2026 data may be read.
+
+## 2026-08-03 — HOLD-versus-EXIT continuation result
+
+Status: `IS_CONTINUATION_NATURE_PREDICTION_REJECTED`.
+
+The primary-state dataset had 24,567 complete rows. Both CatBoost arms scored
+19,821 internal OOS rows over 22/22 frozen weeks with all temporal audits PASS
+and no 2026 access. HOLD outperformed EXIT on 46.97% of rows.
+
+Structural-primary AUC was 0.4816, with log-loss improvement -0.01336, Brier
+improvement -0.00629, and ECE 0.0849. Its p≥0.60 cohort contained only 107 rows
+and succeeded 33.64% of the time. Full causal was worse: AUC 0.4753, log-loss
+improvement -0.03702, Brier improvement -0.01683, ECE 0.1190; its p≥0.60 cohort
+succeeded only 45.85% of the time.
+
+Both arms had AUC below 0.5 in all five months. Only 18 symbols had at least 100
+diagnostic rows, and proper-score improvements were isolated to one structural
+and two full-model symbols, which cannot become filters. Small permutation
+p-values merely show the models were less poor than within-week shuffled labels;
+they do not override failed absolute discrimination, proper scores, calibration,
+and support.
+
+The long continuation-selection branch is closed. Score inversion, threshold
+search, coin selection, magnitude EV, and execution simulation are forbidden on
+these rows. OOS 2026 remains untouched.

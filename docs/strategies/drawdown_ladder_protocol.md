@@ -574,6 +574,53 @@ registration of a magnitude-aware EV policy; failing closes the long
 continuation-selection branch. No result in this experiment authorizes 2026
 access, TP/SL selection, leverage, or portfolio simulation.
 
+### Frozen continuation-nature result
+
+Status: `IS_CONTINUATION_NATURE_PREDICTION_REJECTED`.
+
+The dataset contained 24,567 complete primary-state rows. Weekly walk-forward
+produced 19,821 internal OOS predictions across 22/22 frozen weeks for both
+arms. All feature, future, full-horizon resolution, weekly-freeze, and OOS
+audits passed; 2026 rows read remained zero.
+
+```text
+observed HOLD-outperforms-EXIT rate: 46.97%
+
+structural primary:
+  AUC 0.4816
+  log-loss improvement -0.01336
+  Brier improvement -0.00629
+  ECE 0.0849
+  p >= 0.60 cohort: 107 rows; observed positive rate 33.64%
+
+full causal challenger:
+  AUC 0.4753
+  log-loss improvement -0.03702
+  Brier improvement -0.01683
+  ECE 0.1190
+  p >= 0.60 cohort: 3,160 rows; observed positive rate 45.85%
+```
+
+Structural AUC was below 0.5 in every one of five months; its log-loss
+improvement was negative in every month. Full-model AUC was also below 0.5 in
+every month and only September showed a small proper-score improvement, without
+positive discrimination. Of 594 symbols with finite diagnostic AUC, only 18
+had at least 100 rows. Within that supported subset, structural improved log
+loss for one symbol and full for two; these sparse post-gate observations have
+no filter authority.
+
+Both within-week permutation p-values were 0.0005, but this does not rescue the
+models. The registered null preserves week prevalence, and the real scores were
+less poor than label-shuffled scores while still being worse than the frozen
+weekly prevalence baseline in absolute AUC and both proper scores. Statistical
+difference from a deliberately destroyed control is not useful prediction.
+
+The direct continuation sign is therefore not predictably separable using
+either geometry/time or the complete causal feature picture. No magnitude EV,
+threshold inversion, coin filter, execution, or portfolio stage is authorized.
+Inverting the below-0.5 score after observing it is forbidden. This closes the
+long 3→6 continuation-selection branch on IS; 2026 remains untouched.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,
