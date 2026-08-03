@@ -207,6 +207,14 @@ def validate_label_payload(payload: dict[str, Any]) -> None:
     missing = required - set(payload)
     if missing:
         raise ValueError(f"missing label fields: {sorted(missing)}")
+    review_answers = payload.get("review_answers")
+    if review_answers is not None:
+        if not isinstance(review_answers, dict):
+            raise ValueError("review_answers must be an object")
+        if any(not isinstance(key, str) or not isinstance(value, str) for key, value in review_answers.items()):
+            raise ValueError("review_answers keys and values must be strings")
+    if payload.get("review_notes") is not None and not isinstance(payload["review_notes"], str):
+        raise ValueError("review_notes must be a string")
     # Explicit "reviewed, no setup here" negative: a deliberate empty label that
     # carries no setups. It is a reliable negative for modeling and must not be
     # confused with a skipped/unlabeled event.

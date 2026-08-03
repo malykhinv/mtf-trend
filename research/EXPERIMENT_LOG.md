@@ -1200,3 +1200,24 @@ and support.
 The long continuation-selection branch is closed. Score inversion, threshold
 search, coin selection, magnitude EV, and execution simulation are forbidden on
 these rows. OOS 2026 remains untouched.
+# 2026-08-03 - Pump lifecycle Stage-0 annotation protocol frozen before labels
+
+Decision: continue the pump-lifecycle hypothesis as an ontology study, not as a
+PnL backtest. The frozen 70-card IS pilot still had 0 effective expert labels.
+Its canonical identity SHA-256 is
+`83392c169ce9a6ac966d7276d8be16d2368927d73b3cc1c7da3862c8c172f64f`.
+
+Added a generic typed categorical-question boundary to the annotation Desk and
+registered six outcome-free pump-lifecycle review dimensions: pre-W1 sleep,
+wave separation, elevated-base retention, visible activity driver, post-wave
+state, and boundary confidence. Every answer and a substantive free-text reason
+are mandatory for this strategy. The Stage-0 audit was executed immediately
+after the freeze and returned `ANNOTATION_INCOMPLETE`: 0/70 reviewed, pilot
+identity PASS, IS-only PASS, and 0 rows from 2026.
+
+No detector, CatBoost model, dump label, EV rule, or execution rule may be fit
+until the complete primary annotation pass and the preregistered blinded
+reliability pass succeed. The BULLA-2026 example motivated the hypothesis, so
+2026 is untouched by development but is not an honest final confirmation set
+for this strategy; confirmation must use genuinely forward data collected after
+the complete protocol/model freeze.

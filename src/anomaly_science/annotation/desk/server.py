@@ -25,6 +25,7 @@ from anomaly_science.annotation.desk.labels import LabelStore, label_for_group
 from anomaly_science.annotation.desk.result_annotations import ResultAnnotationStore
 from anomaly_science.annotation.desk.structural_trades import StructuralTradeRepository
 from anomaly_science.annotation.desk.ui import LABELER_HTML, LAUNCHER_HTML
+from anomaly_science.annotation.review_questions import ReviewQuestion, questions_payload, validate_review_answers
 from anomaly_science.annotation.schemas import ANNOTATION_CANDIDATE_SCHEMA_VERSION
 
 
@@ -48,6 +49,7 @@ class StrategyContext:
     allowed_event_ids: set
     label_store: LabelStore
     seed_marks: dict[str, dict[str, Any]]
+    review_questions: tuple[ReviewQuestion, ...]
     iteration_artifacts: IterationArtifactRepository
 
 
@@ -104,10 +106,16 @@ class LevelLabelerServer(ThreadingHTTPServer):
         self.strategies: dict[str, StrategyContext] = {}
         self.strategy_order: list[str] = []
         for app_spec in apps:
-            if len(app_spec) not in (4, 5):
-                raise ValueError("app must provide strategy id, title, candidates path, labels path, and optional marks path")
+            if len(app_spec) not in (4, 5, 6):
+                raise ValueError(
+                    "app must provide strategy id, title, candidates path, labels path, "
+                    "optional marks path, and optional review questions"
+                )
             strategy_id, title, candidates_path, labels_path = app_spec[:4]
-            marks_path = app_spec[4] if len(app_spec) == 5 else None
+            marks_path = app_spec[4] if len(app_spec) >= 5 else None
+            review_questions = tuple(app_spec[5]) if len(app_spec) == 6 else ()
+            if not all(isinstance(question, ReviewQuestion) for question in review_questions):
+                raise ValueError("review questions must contain ReviewQuestion values")
             candidates = pd.read_parquet(candidates_path)
             validate_candidates(candidates)
             if "candidate_schema_version" not in candidates.columns:
@@ -126,6 +134,7 @@ class LevelLabelerServer(ThreadingHTTPServer):
                 allowed_event_ids=set(str(x) for x in by_event.index) | set(group_by_id),
                 label_store=LabelStore(labels_path),
                 seed_marks=seed_marks,
+                review_questions=review_questions,
                 iteration_artifacts=IterationArtifactRepository(self.project_root, strategy_id),
             )
             self.strategy_order.append(strategy_id)
@@ -154,6 +163,7 @@ class LevelLabelerServer(ThreadingHTTPServer):
             "available_tfs": self.available_tfs(),
             "labels_path": str(ctx.label_store.path),
             "seed_marks": len(ctx.seed_marks),
+            "review_questions": questions_payload(ctx.review_questions),
             "inputs": [
                 {"id": "level_price", "label": "horizontal level price", "required_for_level": True},
                 {"id": "level_start_ms", "label": "level start time", "required_for_level": True},
@@ -499,6 +509,7 @@ class LevelLabelerHandler(BaseHTTPRequestHandler):
     def _save_label(self) -> None:
         try:
             payload = self._read_payload()
+            validate_review_answers(payload, self.ctx.review_questions)
             with self.server.labels_lock:
                 row = self.ctx.label_store.append_label(payload, allowed_event_ids=self.ctx.allowed_event_ids)
         except ValueError as exc:
@@ -625,7 +636,7 @@ def serve_level_labeler(
     """Serve one or more annotation strategies from a single desk.
 
     Pass ``apps`` (list of ``(strategy_id, title, candidates_path, labels_path,
-    optional_marks_path)``) for a multi-strategy desk switchable in the UI; or the single
+    optional_marks_path, optional_review_questions)``) for a multi-strategy desk switchable in the UI; or the single
     ``candidates_path``/``labels_path`` form for a one-strategy desk.
     """
     if apps is None:

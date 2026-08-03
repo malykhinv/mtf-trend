@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anomaly_science.annotation.desk.server import serve_level_labeler
+from anomaly_science.annotation.review_questions import ReviewQuestion
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +19,7 @@ class AnnotationStrategyApp:
     labels_path: Path
     cache_dir: Path
     marks_path: Path | None = None
+    review_questions: tuple[ReviewQuestion, ...] = ()
 
 
 def default_annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
@@ -60,7 +62,10 @@ def main() -> None:
     if not args.no_open:
         webbrowser.open(url)
     serve_level_labeler(
-        apps=[(a.strategy_id, a.title, a.candidates_path, a.labels_path, a.marks_path) for a in apps],
+        apps=[
+            (a.strategy_id, a.title, a.candidates_path, a.labels_path, a.marks_path, a.review_questions)
+            for a in apps
+        ],
         default_strategy_id=default.strategy_id,
         cache_dir=default.cache_dir,
         host=args.host,

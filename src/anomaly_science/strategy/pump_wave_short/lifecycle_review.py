@@ -17,6 +17,7 @@ from typing import Any
 import pandas as pd
 
 from anomaly_science.annotation.desk.labels import LabelStore
+from anomaly_science.annotation.review_questions import ReviewOption, ReviewQuestion
 from anomaly_science.annotation.schemas import LEVEL_LABEL_SCHEMA_VERSION
 
 
@@ -27,6 +28,67 @@ HOUR_MS = 3_600_000
 LIFECYCLE_CANDIDATE_SCHEMA_VERSION = "pump_lifecycle_candidate_v1"
 LIFECYCLE_PROTOCOL_FREEZE_ID = "pump_lifecycle_stage0_20250802_v1"
 SOURCE_POPULATION_SCOPE = "materialized_high_score_review_frame_max500_max3_per_symbol_tf"
+
+
+def _options(*values: tuple[str, str]) -> tuple[ReviewOption, ...]:
+    return tuple(ReviewOption(value=value, label=label) for value, label in values)
+
+
+PUMP_LIFECYCLE_REVIEW_QUESTIONS: tuple[ReviewQuestion, ...] = (
+    ReviewQuestion(
+        "sleep_before_w1",
+        "Sleep before W1",
+        _options(("clear", "clear"), ("weak", "weak"), ("absent", "absent"), ("uncertain", "uncertain")),
+    ),
+    ReviewQuestion(
+        "wave_separation",
+        "Later-wave separation",
+        _options(
+            ("distinct_restart", "distinct restart"),
+            ("continuous_extension", "one continuous wave"),
+            ("mixed", "mixed"),
+            ("not_applicable", "no later wave"),
+            ("uncertain", "uncertain"),
+        ),
+    ),
+    ReviewQuestion(
+        "elevated_base",
+        "Elevated base after W1",
+        _options(
+            ("retained", "retained"),
+            ("partly_retained", "partly retained"),
+            ("lost", "lost"),
+            ("not_applicable", "not applicable"),
+            ("uncertain", "uncertain"),
+        ),
+    ),
+    ReviewQuestion(
+        "activity_driver",
+        "Visible activity driver",
+        _options(
+            ("coin_specific", "coin-specific"),
+            ("broad_market", "broad market"),
+            ("mixed", "mixed"),
+            ("uncertain", "uncertain"),
+        ),
+    ),
+    ReviewQuestion(
+        "post_wave_state",
+        "State after the waves",
+        _options(
+            ("distribution_dump", "distribution / dump"),
+            ("sideways", "sideways"),
+            ("continued_markup", "continued markup"),
+            ("not_applicable", "not applicable"),
+            ("uncertain", "uncertain"),
+        ),
+    ),
+    ReviewQuestion(
+        "boundary_confidence",
+        "Boundary confidence",
+        _options(("high", "high"), ("medium", "medium"), ("low", "low")),
+    ),
+)
 
 SOURCE_COLUMNS: tuple[str, ...] = (
     "event_id",

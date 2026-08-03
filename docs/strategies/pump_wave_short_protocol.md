@@ -95,6 +95,69 @@ we compare causal separators, including EMA-fan expansion during waves and
 compression/crossing during sideways. EMA behavior is a tested feature family,
 not a definition chosen after seeing winners.
 
+## Frozen annotation codebook and quality gates
+
+The annotation-quality protocol was frozen on 2026-08-03 while the expert-label
+file still contained zero rows. Its identifier and frozen pilot identity are:
+
+```text
+label_audit_freeze_id = pump_lifecycle_stage0_label_audit_20260803_v1
+pilot_rows = 70
+pilot_identity_sha256 = 83392c169ce9a6ac966d7276d8be16d2368927d73b3cc1c7da3862c8c172f64f
+effective_expert_labels_at_freeze = 0
+```
+
+Every card requires explicit categorical answers chosen before any outcome or
+PnL study:
+
+```text
+sleep before W1: clear / weak / absent / uncertain
+later-wave separation: distinct restart / one continuous wave / mixed /
+                       no later wave / uncertain
+elevated base after W1: retained / partly retained / lost / not applicable /
+                        uncertain
+visible activity driver: coin-specific / broad market / mixed / uncertain
+state after the waves: distribution-dump / sideways / continued markup /
+                       not applicable / uncertain
+boundary confidence: high / medium / low
+```
+
+`no later wave` is valid only when fewer than two pump waves are drawn; it is
+invalid for a W2+ label. Conversely, every zero/one-wave label must use
+`no later wave`. This cross-field rule is audited automatically.
+
+These answers describe morphology and review context. They are labels, not
+causal model features, and must never be joined into a feature row at or before
+the prediction snapshot. Free notes must contain at least 20 non-template
+characters explaining why the episode is clean or noisy.
+
+The primary pass is usable only when all 70 frozen cards are manually saved,
+all schemas and codebook fields pass, all notes are substantive, the pilot hash
+is unchanged, and no review candle crosses into 2026. For ontology development
+the pilot must contain at least 20 examples with two or more waves and at least
+20 reviewed non-multiwave examples. These are class-support requirements, not a
+prevalence claim. If either class is short, the only allowed response is a
+predeclared outcome-free expansion from the retained population; changing the
+definition or sampling by dump, return, win/loss, or later trade result is
+forbidden.
+
+After the primary pass, reliability is checked before building a detector. A
+deterministic 20% subset (14 cards) is annotated again without showing the
+first-pass label, preferably by a second expert. If only one expert is
+available, the repeat occurs after a minimum seven-day washout. Frozen gates:
+
+```text
+multiwave/non-multiwave agreement >= 12 of 14 cards
+exact wave-count agreement >= 11 of 14 cards
+for ordinals present in both passes:
+  median absolute boundary difference <= 2 chart bars
+  90th-percentile absolute boundary difference <= 5 chart bars
+```
+
+Failure means the wave ontology is not reproducible. We then revise the
+codebook and start a newly versioned annotation study; we do not tune thresholds
+until the same labels appear to agree.
+
 ## Scientific sequence after Stage 0
 
 1. Audit manual consistency and identify common traits of clean versus noisy

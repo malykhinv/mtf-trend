@@ -2046,3 +2046,12 @@ Frozen IS result:
   exceptions are diagnostic only.
 - Final status `IS_MIRRORED_SHORT_CONTINUATION_PREDICTION_REJECTED`; the entire
   long/short grid family is closed without execution optimization.
+# 2026-08-03 - Pump-lifecycle scientific annotation boundary
+
+- Added typed, generic strategy-declared categorical review questions to Desk.
+- Added the six-field pump-lifecycle morphology codebook and required expert
+  notes without adding strategy-specific conditionals to Core.
+- Added an outcome-free Stage-0 label audit with frozen pilot identity,
+  completion, schema, manual-source, note, class-support, and IS-only gates.
+- Preregistered a 20% blinded annotation-repeat protocol before the first expert
+  label. No 2026 candle, return, dump outcome, win/loss, or PnL was read.

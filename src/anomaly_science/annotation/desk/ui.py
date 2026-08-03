@@ -364,6 +364,10 @@ LABELER_HTML = r"""<!doctype html>
             <div class="field"><label>quality</label><select id="quality" onchange="onSetupFieldChange()"><option value="good">good</option><option value="ok">ok</option><option value="bad" selected>bad</option></select></div>
           </div>
         </div>
+        <div class="field-group" id="reviewQuestionsGroup" style="display:none">
+          <div class="field-group-label">research codebook</div>
+          <div class="grid" id="reviewQuestionsGrid"></div>
+        </div>
         <div class="field-group">
           <div class="field-group-label">chart</div>
           <div class="grid">
@@ -473,6 +477,8 @@ let zones = [];         // Seiden base rectangles of the active setup
 let zzDraft = null;     // in-progress zigzag being drawn (before RMB finishes)
 let setups = [];        // per-event list of independent setups (see emptySetup)
 let activeSetup = 0;    // index of the setup currently shown in the workspace
+let reviewQuestions = [];
+let reviewAnswers = {};
 let selectedObj = null;
 let showDefaultLines = true;
 let relayoutGuard = false;
@@ -1602,6 +1608,43 @@ function setupsFromSavedLabel(saved) {
   return [emptySetup()];
 }
 
+function reviewAnswersFromSaved(saved) {
+  if (!saved || !saved.review_answers || typeof saved.review_answers !== 'object') return {};
+  return Object.fromEntries(Object.entries(saved.review_answers).map(([key, value]) => [String(key), String(value)]));
+}
+function reviewAnswersComplete() {
+  return reviewQuestions.every(question => !question.required || String(reviewAnswers[question.id] || '') !== '');
+}
+function renderReviewQuestions() {
+  const group = document.getElementById('reviewQuestionsGroup');
+  const grid = document.getElementById('reviewQuestionsGrid');
+  if (!group || !grid) return;
+  group.style.display = reviewQuestions.length ? '' : 'none';
+  grid.innerHTML = reviewQuestions.map(question => {
+    const options = (question.options || []).map(option =>
+      `<option value="${esc(option.value)}">${esc(option.label)}</option>`
+    ).join('');
+    const required = question.required ? ' *' : '';
+    return `<div class="field"><label>${esc(question.label)}${required}</label>` +
+      `<select data-review-question="${esc(question.id)}" onchange="onReviewAnswerChange('${question.id}')">` +
+      `<option value="">choose</option>${options}</select></div>`;
+  }).join('');
+  for (const question of reviewQuestions) {
+    const select = grid.querySelector(`select[data-review-question="${question.id}"]`);
+    if (!select) continue;
+    select.value = reviewAnswers[question.id] || '';
+    refreshSelect(select);
+  }
+}
+function onReviewAnswerChange(questionId) {
+  const grid = document.getElementById('reviewQuestionsGrid');
+  const select = grid ? grid.querySelector(`select[data-review-question="${questionId}"]`) : null;
+  if (!select) return;
+  if (select.value) reviewAnswers[questionId] = select.value;
+  else delete reviewAnswers[questionId];
+  scheduleAutosave();
+}
+
 /* ---------- workbench: run + result review ---------- */
 function setWorkspaceMode(mode) {
   for (const name of ['labeling', 'results', 'futures']) {
@@ -2012,6 +2055,8 @@ async function loadEvent(i) {
   // Build the per-event setups from the saved label (or one empty setup) and show
   // the first one. Each setup carries its own family/quality/level/pump waves/exit/SL/zigzag.
   const displayedMark = group.label || group.seed_label;
+  reviewAnswers = reviewAnswersFromSaved(group.label);
+  renderReviewQuestions();
   setups = setupsFromSavedLabel(displayedMark);
   applySetup(0);
   const seededUnreviewed = !group.label && !!group.seed_label;
@@ -3080,6 +3125,8 @@ function baseLabel(serializedSetups) {
     selected_tf: e.tf,
     has_level: serializedSetups.some(s => s.has_level),
     has_pump_transition: serializedSetups.some(s => s.has_pump_transition),
+    review_answers: {...reviewAnswers},
+    review_notes: document.getElementById('notes').value.trim(),
     setups: serializedSetups,
     source: 'browser_level_labeler',
   };
@@ -3119,6 +3166,7 @@ async function sendLabelPayload(payload, {quiet=false}={}) {
   return {ok:true, label:j.label};
 }
 function queueLabelSave(payload, {advance=false, force=false, quiet=false, advanceSerial=null}={}) {
+  if (!reviewAnswersComplete()) return Promise.resolve(false);
   const eventId = payload.event_id;
   const sig = labelSignature(payload);
   if (!force && (savedSignatures.get(eventId) === sig || seedSignatures.get(eventId) === sig)) {
@@ -3209,6 +3257,7 @@ async function unlabelEvent() {
   if (pos >= 0) loadEvent(pos);
 }
 function saveLabel() {
+  if (!reviewAnswersComplete()) { toast('complete every required research-codebook field', 4200); return; }
   const payload = currentLabelPayload({finishDraft:true});
   if (!payload) { toast('nothing to save'); return; }
   if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
@@ -3224,6 +3273,8 @@ function noSetupLabel() {
     selected_tf: e.tf,
     no_setup: true,
     has_level: false, has_pump_transition: false,
+    review_answers: {...reviewAnswers},
+    review_notes: document.getElementById('notes').value.trim(),
     setups: [],
     source: 'browser_level_labeler',
   };
@@ -3233,6 +3284,7 @@ function noSetupLabel() {
 function saveNoSetup() {
   if (resultMode) { toast('result review mode'); return; }
   if (!current) { toast('nothing to mark'); return; }
+  if (!reviewAnswersComplete()) { toast('complete every required research-codebook field', 4200); return; }
   if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
   queueLabelSave(noSetupLabel(), {advance:true, force:true, quiet:false, advanceSerial:navigationSerial});
 }
@@ -3318,7 +3370,13 @@ async function loadStrategies() {
     const r = await fetch('/api/strategies');
     const j = await r.json();
     const sel = document.getElementById('strategySelect');
-    if (!sel || !j.strategies) return;
+    if (!j.strategies) return;
+    const activeId = STRATEGY || (j.strategies[0] && j.strategies[0].strategy_id) || '';
+    const activeStrategy = j.strategies.find(strategy => strategy.strategy_id === activeId) || j.strategies[0];
+    reviewQuestions = activeStrategy && Array.isArray(activeStrategy.review_questions)
+      ? activeStrategy.review_questions : [];
+    renderReviewQuestions();
+    if (!sel) return;
     const hideWidget = () => { sel.style.display = 'none'; const w = sel.nextElementSibling; if (w && w.classList.contains('select-ui')) w.style.display = 'none'; };
     if (j.strategies.length < 2) { hideWidget(); return; }
     sel.innerHTML = j.strategies.map(s => `<option value="${esc(s.strategy_id)}">${esc(s.title)}</option>`).join('');

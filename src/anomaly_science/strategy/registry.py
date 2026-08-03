@@ -221,6 +221,7 @@ def annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
     """Declare strategy-owned annotation artifacts without coupling Core to strategies."""
 
     from anomaly_science.annotation.app import AnnotationStrategyApp
+    from anomaly_science.strategy.pump_wave_short.lifecycle_review import PUMP_LIFECYCLE_REVIEW_QUESTIONS
 
     cache_dir = project_root / ".output" / "market" / "binance_vision" / "um_futures" / "enriched_1m"
     session_root = project_root / ".output" / "results" / "session_break"
@@ -295,6 +296,7 @@ def annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
             labels_path=pump_wave_root / "review_labels.jsonl",
             cache_dir=cache_dir,
             marks_path=pump_wave_root / "marks.jsonl",
+            review_questions=PUMP_LIFECYCLE_REVIEW_QUESTIONS,
         ),
     )
     return tuple(app for app in apps if app.candidates_path.exists() and app.cache_dir.exists())
