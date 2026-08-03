@@ -659,6 +659,54 @@ not validate the grid, authorize score inversion, or permit physical TP/SL,
 leverage, concurrency, or portfolio optimization. Failure closes the mirrored
 grid branch without threshold/state/coin retuning on the same rows.
 
+### Frozen mirrored-rally continuation result
+
+Status: `IS_MIRRORED_SHORT_CONTINUATION_PREDICTION_REJECTED`.
+
+Direction-explicit Stage 1 built 238,585 rows across 796 perpetual symbols with
+263 causal model features. The primary continuation dataset contained 27,795
+complete 3→6 rows. Both model arms produced 21,951 internal OOS predictions
+over 22/22 frozen weeks. All source, schema, feature-time, full-label-resolution,
+weekly-freeze, and 2026 audits passed.
+
+```text
+observed short HOLD-outperforms-EXIT rate: 60.55%
+
+structural primary:
+  AUC 0.4636
+  log-loss improvement -0.00905
+  Brier improvement -0.00426
+  ECE 0.0765
+  p >= 0.60 cohort: 14,066 rows; observed positive rate 57.64%
+
+full causal challenger:
+  AUC 0.4907
+  log-loss improvement -0.00750
+  Brier improvement -0.00353
+  ECE 0.0594
+  p >= 0.60 cohort: 12,779 rows; observed positive rate 59.74%
+```
+
+The high unconditional HOLD-over-EXIT rate is not an edge: unconditional
+terminal short return is negative, and neither model identifies which holds are
+economically preferable. Structural proper-score improvement was negative in
+all five months and AUC exceeded 0.5 only in December. Full proper-score
+improvement was also negative in all five months; AUC was only 0.508 in October
+and 0.544 in December, below the frozen 0.56 gate.
+
+Of 591 symbols with finite diagnostic AUC, only 34 had at least 100 rows. Within
+that supported subset, structural improved log loss for six and full for ten;
+these scattered post-gate pockets are neither a stable population nor licensed
+coin filters. Contract age, weekday/session timing, BTC correlation/returns,
+and market breadth received substantial training importance but did not survive
+frozen weekly scoring.
+
+The mirrored short grid therefore fails at both unconditional terminal EV and
+causal outcome separation. No magnitude EV, score inversion, coin/session
+filter, execution, leverage, or portfolio optimization is authorized. Together
+with the rejected long branch, this closes the drawdown/rally grid hypothesis
+family on current IS. OOS 2026 remains untouched.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

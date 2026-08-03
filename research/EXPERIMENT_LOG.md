@@ -1134,6 +1134,27 @@ frozen weekly parent-exclusive CatBoost, calibration, permutation, and paired
 gates from continuation nature. No EV, score inversion, coin filter, execution,
 or 2026 access is authorized.
 
+## 2026-08-03 — mirrored-rally short continuation result
+
+Status: `IS_MIRRORED_SHORT_CONTINUATION_PREDICTION_REJECTED`.
+
+Direction-explicit mirror Stage 1 built 238,585 rows and 263 features across all
+796 source perpetuals. The complete primary-state dataset contained 27,795
+rows; both arms scored 21,951 internal OOS rows over 22/22 weeks. Every temporal
+and OOS audit passed, with no 2026 access.
+
+Short HOLD beat immediate snapshot EXIT on 60.55% of rows, but this high base
+rate was not separable. Structural AUC was 0.4636, log-loss gain -0.00905,
+Brier gain -0.00426, and ECE 0.0765. Full causal AUC was 0.4907, log-loss gain
+-0.00750, Brier gain -0.00353, and ECE 0.0594. Both high-probability cohorts
+failed the registered observed-rate/calibration contract.
+
+Proper-score improvement was negative in all five months for both arms. Only
+34 symbols had at least 100 diagnostic rows, and isolated symbol improvements
+have no filter authority. The mirror therefore fails both naive terminal EV
+and causal selection. No magnitude EV, score inversion, filters, or execution
+stage is authorized; OOS 2026 remains untouched.
+
 ## 2026-08-03 — HOLD-versus-EXIT continuation preregistration
 
 Status: `FROZEN_POST_SELECTION_PREDICTION_DESIGN_PENDING_BUILD`.

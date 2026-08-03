@@ -2035,3 +2035,14 @@ Changes:
   short snapshot-exit arithmetic and full-horizon resolution.
 - Adds future-mutation, schema, signed-target, CLI, and long-default regression
   coverage. No legacy runtime dependency is introduced.
+
+Frozen IS result:
+- Mirror Stage 1: 238,585 rows, 263 causal features, 796 sources; audit PASS.
+- Primary short continuation: 27,795 complete rows, 21,951 internal OOS
+  predictions, 22/22 frozen weeks per arm, 2026 access zero.
+- Structural AUC 0.4636 and full AUC 0.4907; both had negative log-loss and
+  Brier improvements and failed calibration/reliability gates.
+- Proper-score gains were negative in every month for both arms. Sparse symbol
+  exceptions are diagnostic only.
+- Final status `IS_MIRRORED_SHORT_CONTINUATION_PREDICTION_REJECTED`; the entire
+  long/short grid family is closed without execution optimization.
