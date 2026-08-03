@@ -1113,3 +1113,24 @@ This is a clean rejection, not a tuning invitation. The fixed policy has no
 validated EV, the execution/portfolio stage is forbidden, and neither the 0.92
 cutoff nor the exact states may be retuned on these rows. OOS 2026 remains
 untouched.
+
+## 2026-08-03 — HOLD-versus-EXIT continuation preregistration
+
+Status: `FROZEN_POST_SELECTION_PREDICTION_DESIGN_PENDING_BUILD`.
+
+The rejected 0.92 recovery policy is not retuned. A new target asks whether the
+48-hour terminal mark improves upon the already observable snapshot-close exit
+from the same blended entry. Its binary nature label is
+`future_return_2880m - snapshot_close_to_entry > 0`, with resolution fixed at
+the full 48-hour endpoint.
+
+The exact 3→6 state is the sole primary population. Weekly parent-exclusive
+CatBoost uses the structural arm as the pre-registered primary model and the
+complete causal catalog as a challenger. Absolute AUC, proper-score,
+calibration, high-probability support, within-week permutation, and paired
+incremental gates are frozen in the strategy protocol. The primary null alpha
+is adjusted for two viewed arms and two endpoints.
+
+This stage contains no EV threshold, PnL, funding, physical exit, leverage, or
+portfolio simulation. It can only authorize a later magnitude-aware EV test.
+No 2026 data may be read.

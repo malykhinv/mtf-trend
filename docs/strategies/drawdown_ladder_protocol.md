@@ -519,6 +519,61 @@ month stability, and concentration gates failed, no TP/SL, execution, leverage,
 or portfolio stage is authorized for this policy. The 0.92 cutoff and exact
 states may not be retuned on these rows. The 2026 partition remains untouched.
 
+### Frozen continuation-nature prediction experiment
+
+The failed recovery-probability policy exposed a target mismatch: touching
+break-even at any moment within 48 hours is not the same question as whether
+holding from the decision snapshot adds value versus exiting immediately. A
+new post-selection experiment therefore predicts the directly aligned nature:
+
+```text
+hold_minus_exit_48h = terminal 48h return from blended entry
+                       - snapshot-close return from blended entry
+positive class = hold_minus_exit_48h > 0
+```
+
+Costs common to both eventual exits cancel in this comparison. Funding is not
+available and is deferred to the later EV gate. This stage predicts only the
+sign of continuation advantage; it does not choose a position, simulate PnL,
+or claim that positive classification implies positive absolute trade EV.
+
+The population is frozen to the primary 3% grid through 6% state. This avoids
+searching across the three viewed states after the failed EV result. Training,
+validation, calibration, and internal OOS scoring use only complete 48-hour
+labels whose resolution time is strictly before each weekly model freeze. The
+label resolution time is the full `snapshot + 2880m`, never the earlier time at
+which the old recovery label happened to resolve.
+
+The pre-registered primary arm is the structural feature model. The complete
+263-field causal model is a challenger and may replace it only if every paired
+incremental AUC, log-loss, and Brier gate passes. Both are CatBoost models
+frozen once per ISO week with parent-event-exclusive chronological 60/20/20
+fit/validation/calibration splits and inverse-parent-event weights.
+
+Structural absolute gates are:
+
+```text
+internal OOS rows >= 15,000; skipped weeks = 0
+AUC >= 0.56
+log-loss improvement over frozen weekly prevalence >= 0.003
+Brier improvement >= 0.001
+ECE <= 0.05
+within-week AUC and log-loss permutation p <= 0.0125
+probability >= 0.60 cohort: >= 500 rows, observed rate >= 0.58,
+  Wilson lower 95% >= 0.55, absolute calibration gap <= 0.05
+```
+
+The 0.0125 threshold adjusts `0.05 / 2 viewed model arms / 2 primary null
+endpoints`. The full-minus-structural challenger separately requires minimum
+improvements of 0.01 AUC, 0.002 log loss, and 0.001 Brier, positive ISO-week
+bootstrap lower bounds, and familywise sign-flip p-values at `0.05/3`.
+
+All configurations and numeric gates must be committed before the new label
+distribution or model result is opened. Passing structural prediction permits
+registration of a magnitude-aware EV policy; failing closes the long
+continuation-selection branch. No result in this experiment authorizes 2026
+access, TP/SL selection, leverage, or portfolio simulation.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

@@ -212,6 +212,24 @@ def test_drawdown_structural_ev_cli_separates_build_from_analysis() -> None:
     assert analyze.ev_dir == "ev"
 
 
+def test_drawdown_continuation_cli_builds_new_label_dataset() -> None:
+    args = build_parser().parse_args(
+        [
+            "build-drawdown-continuation-dataset",
+            "--stage1",
+            "stage1.parquet",
+            "--outcomes",
+            "outcomes.parquet",
+            "--out",
+            "continuation",
+        ]
+    )
+
+    assert args.stage1 == "stage1.parquet"
+    assert args.outcomes == "outcomes.parquet"
+    assert args.out == "continuation"
+
+
 def test_mirrored_rally_stage0_cli_exposes_same_bounded_is_contract() -> None:
     args = build_parser().parse_args(
         [

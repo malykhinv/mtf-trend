@@ -1992,3 +1992,19 @@ Frozen IS result:
 - CVaR5 improved, but mean EV, stability, and concentration gates failed.
 - Final status `IS_STRUCTURAL_PROTECTION_EV_GATES_FAIL`; no execution or
   portfolio simulation authorized and same-sample retuning forbidden.
+
+## science: preregister directly aligned continuation nature
+
+Status: APPLIED; continuation label distribution and model results unopened.
+
+Changes:
+- Adds a causal primary-state dataset whose target is whether terminal 48-hour
+  HOLD outperforms EXIT at the already observed snapshot close.
+- Uses full-horizon resolution timestamps rather than the old early recovery
+  resolution, preserving strict weekly training eligibility.
+- Freezes a structural-primary and complete-causal-challenger CatBoost design,
+  all probability/calibration/null gates, paired comparison, and selection
+  adjustment before opening the target distribution.
+- Adds fail-closed identity, cutoff, future-start, horizon, finite-label,
+  duplicate, output immutability, clean-revision, and 2026-boundary checks.
+- Adds target-mutation, OOS-boundary, model-contract, protocol, and CLI tests.

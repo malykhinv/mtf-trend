@@ -92,6 +92,9 @@ from anomaly_science.strategy.drawdown_ladder.structural_ev import (
     analyze_structural_ev,
     build_structural_ev_dataset,
 )
+from anomaly_science.strategy.drawdown_ladder.continuation import (
+    build_continuation_dataset,
+)
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
 from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
 from anomaly_science.strategy.drawdown_ladder.matched_control import (
@@ -1010,6 +1013,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     drawdown_structural_ev_analysis.add_argument("--ev-dir", required=True)
 
+    drawdown_continuation = subparsers.add_parser(
+        "build-drawdown-continuation-dataset",
+        help="Build the frozen causal HOLD-versus-EXIT nature dataset and configs.",
+    )
+    drawdown_continuation.add_argument("--stage1", required=True)
+    drawdown_continuation.add_argument("--outcomes", required=True)
+    drawdown_continuation.add_argument("--out", required=True)
+
 
     return parser
 
@@ -1144,6 +1155,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "analyze-drawdown-structural-ev":
         report = analyze_structural_ev(ev_dir=Path(args.ev_dir))
         print(f"drawdown structural EV report written: {report}")
+        return 0
+
+    if args.command == "build-drawdown-continuation-dataset":
+        output_dir = build_continuation_dataset(
+            stage1_dataset_path=Path(args.stage1),
+            stage0_outcomes_path=Path(args.outcomes),
+            output_dir=Path(args.out),
+        )
+        print(f"drawdown continuation dataset written: {output_dir}")
         return 0
 
     if args.command == "run-causal-regime-atlas":
