@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Literal
 
 import numpy as np
 import pandas as pd
@@ -48,6 +48,7 @@ class Stage1BuildConfig:
     workers: int = 4
     max_inflight_symbols: int | None = None
     max_symbols: int | None = None
+    direction: Literal["long", "short"] = "long"
 
     def __post_init__(self) -> None:
         if not 1 <= self.workers <= 8:
@@ -56,6 +57,8 @@ class Stage1BuildConfig:
             raise ValueError("Stage-1 max inflight cannot be lower than workers")
         if self.max_symbols is not None and self.max_symbols <= 0:
             raise ValueError("Stage-1 max symbols must be positive")
+        if self.direction not in {"long", "short"}:
+            raise ValueError("Stage-1 direction must be long or short")
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,8 +91,10 @@ def _worker_init(btc_path: Path, spec: DrawdownLadderStage1Spec) -> None:
 def _typed_feature_frame(
     frame: pd.DataFrame,
     spec: DrawdownLadderStage1Spec,
+    *,
+    direction: Literal["long", "short"] = "long",
 ) -> pd.DataFrame:
-    catalog = build_stage1_feature_catalog(spec)
+    catalog = build_stage1_feature_catalog(spec, direction=direction)
     expected = [definition.name for definition in catalog]
     missing = sorted(set(expected) - set(frame.columns))
     extra = sorted(set(frame.columns) - set(expected))
@@ -121,6 +126,7 @@ def _build_symbol_task(
     outcome_path: Path,
     output_path: Path,
     spec: DrawdownLadderStage1Spec,
+    direction: Literal["long", "short"],
 ) -> SymbolStage1Stats:
     if _WORKER_BTC is None:
         raise Stage1BuildError("Stage-1 worker BTC context is not initialized")
@@ -130,8 +136,9 @@ def _build_symbol_task(
         outcome_path=outcome_path,
         btc_frame=_WORKER_BTC,
         spec=spec,
+        direction=direction,
     )
-    typed = _typed_feature_frame(frame, spec)
+    typed = _typed_feature_frame(frame, spec, direction=direction)
     _atomic_parquet(typed, output_path)
     complete = typed["label_available"].astype(bool)
     positive = complete & typed["recovery_25bps_48h"].astype(bool)
@@ -148,13 +155,14 @@ def _iter_bounded_builds(
     *,
     btc_path: Path,
     spec: DrawdownLadderStage1Spec,
+    direction: Literal["long", "short"],
     workers: int,
     max_inflight: int,
 ) -> Iterator[SymbolStage1Stats]:
     if workers == 1:
         _worker_init(btc_path, spec)
         for task in tasks:
-            yield _build_symbol_task(*task, spec)
+            yield _build_symbol_task(*task, spec, direction)
         return
     executor = ProcessPoolExecutor(
         max_workers=workers,
@@ -169,7 +177,9 @@ def _iter_bounded_builds(
     def submit_until_capacity() -> None:
         nonlocal next_submit
         while next_submit < len(tasks) and len(pending) + len(completed) < max_inflight:
-            future = executor.submit(_build_symbol_task, *tasks[next_submit], spec)
+            future = executor.submit(
+                _build_symbol_task, *tasks[next_submit], spec, direction
+            )
             pending[future] = next_submit
             next_submit += 1
 
@@ -191,15 +201,24 @@ def _iter_bounded_builds(
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def _validate_stage0(stage0_dir: Path) -> None:
+def _validate_stage0(
+    stage0_dir: Path,
+    *,
+    direction: Literal["long", "short"],
+) -> None:
     audit_path = stage0_dir / "temporal_audit.json"
     if not audit_path.is_file():
         raise Stage1BuildError("Stage-0 temporal audit is missing")
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     if audit.get("status") != "PASS":
         raise Stage1BuildError("Stage-0 temporal audit is not PASS")
-    if audit.get("protocol_freeze_id") != "drawdown_ladder_stage0_20260802_v1":
-        raise Stage1BuildError("Stage-0 protocol is not the frozen long input")
+    expected_protocol = (
+        "drawdown_ladder_stage0_20260802_v1"
+        if direction == "long"
+        else "mirrored_rally_stage0_20260802_v1"
+    )
+    if audit.get("protocol_freeze_id") != expected_protocol:
+        raise Stage1BuildError(f"Stage-0 protocol is not the frozen {direction} input")
     for check in audit.get("checks", {}).values():
         if int(check.get("untouched_2026_rows_used", -1)) != 0:
             raise Stage1BuildError("Stage-0 audit reports OOS access")
@@ -209,6 +228,7 @@ def _audit_dataset(
     frame: pd.DataFrame,
     *,
     spec: DrawdownLadderStage1Spec,
+    direction: Literal["long", "short"] = "long",
 ) -> dict[str, object]:
     if frame["candidate_id"].nunique() != len(frame):
         raise Stage1BuildError("Stage-1 candidate_id is not unique")
@@ -225,7 +245,7 @@ def _audit_dataset(
         raise Stage1BuildError("Stage-1 label resolves at or before snapshot")
     if len(frame) and int(frame["snapshot_time_ms"].max()) >= spec.internal_wfa_end_ms:
         raise Stage1BuildError("Stage-1 dataset crossed into user OOS")
-    catalog = build_stage1_feature_catalog(spec)
+    catalog = build_stage1_feature_catalog(spec, direction=direction)
     model_names = {row.name for row in catalog if row.model_feature}
     forbidden = sorted(
         name
@@ -238,6 +258,7 @@ def _audit_dataset(
         raise Stage1BuildError(f"label/future fields entered model catalog: {forbidden}")
     return {
         "protocol_freeze_id": spec.protocol_freeze_id,
+        "study_direction": direction,
         "status": "PASS",
         "row_count": len(frame),
         "unique_candidate_ids": len(frame),
@@ -260,7 +281,7 @@ def build_stage1_is(
 ) -> Stage1BuildResult:
     if not config.source_dir.is_dir():
         raise FileNotFoundError(config.source_dir)
-    _validate_stage0(config.stage0_dir)
+    _validate_stage0(config.stage0_dir, direction=config.direction)
     manifest_path = config.output_dir / "manifest.json"
     if config.output_dir.exists() and any(config.output_dir.iterdir()):
         raise Stage1BuildError(f"refusing to mix Stage-1 runs: {config.output_dir}")
@@ -300,6 +321,7 @@ def build_stage1_is(
             tasks,
             btc_path=btc_path,
             spec=spec,
+            direction=config.direction,
             workers=config.workers,
             max_inflight=max_inflight,
         ),
@@ -330,12 +352,16 @@ def build_stage1_is(
         spec=MinuteBreadthSpec(return_lags_minutes=spec.breadth_return_lags_minutes),
     )
     breadth.to_parquet(breadth_path, index=False, compression="zstd")
-    enriched = attach_stage1_breadth_and_concurrency(raw, breadth, spec=spec)
-    enriched = attach_stage1_prior_reactions(enriched, spec=spec)
-    enriched = _typed_feature_frame(enriched, spec)
+    enriched = attach_stage1_breadth_and_concurrency(
+        raw, breadth, spec=spec, direction=config.direction
+    )
+    enriched = attach_stage1_prior_reactions(
+        enriched, spec=spec, direction=config.direction
+    )
+    enriched = _typed_feature_frame(enriched, spec, direction=config.direction)
     dataset_path = config.output_dir / "stage1_recovery_dataset.parquet"
     _atomic_parquet(enriched, dataset_path)
-    catalog = build_stage1_feature_catalog(spec)
+    catalog = build_stage1_feature_catalog(spec, direction=config.direction)
     feature_catalog_path = config.output_dir / "feature_catalog.parquet"
     pd.DataFrame([asdict(row) for row in catalog]).to_parquet(
         feature_catalog_path,
@@ -359,17 +385,23 @@ def build_stage1_is(
         index=False,
         compression="zstd",
     )
-    protocol_path = write_stage1_protocol(config.output_dir / "frozen_stage1_protocol.json", spec)
+    protocol_path = write_stage1_protocol(
+        config.output_dir / "frozen_stage1_protocol.json",
+        spec,
+        direction=config.direction,
+    )
     probability_config_paths = write_stage1_probability_configs(
         config.output_dir / "probability_configs",
         spec,
+        direction=config.direction,
     )
-    audit = _audit_dataset(enriched, spec=spec)
+    audit = _audit_dataset(enriched, spec=spec, direction=config.direction)
     audit_path = config.output_dir / "temporal_audit.json"
     audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True), encoding="utf-8")
     manifest = {
         "protocol": asdict(spec),
         "research_partition": "is",
+        "study_direction": config.direction,
         "oos_rows_read": 0,
         "source_dir": str(config.source_dir),
         "stage0_dir": str(config.stage0_dir),

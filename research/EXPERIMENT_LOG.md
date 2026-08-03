@@ -1114,6 +1114,26 @@ validated EV, the execution/portfolio stage is forbidden, and neither the 0.92
 cutoff nor the exact states may be retuned on these rows. OOS 2026 remains
 untouched.
 
+## 2026-08-03 — mirrored-rally short continuation preregistration
+
+Status: `FROZEN_POST_SELECTION_MIRROR_DESIGN_PENDING_STAGE1_BUILD`.
+
+Naive mirrored short hold is already negative in terminal-return terms: the
+3→6 state averages -1.46% signed return before costs and has a severe adverse
+tail, despite frequent small recovery touches. A separate mirror continuation
+hypothesis is now frozen rather than inverting the rejected long model.
+
+Core Stage 1 is made direction-explicit. Short source validation requires the
+frozen mirrored-rally Stage 0; rally geometry has its own field and schema; the
+short HOLD-minus-EXIT target subtracts `-(snapshot_close/entry-1)` from the
+signed short 48-hour return. Raw causal price, flow, BTC, and breadth fields
+retain their documented market direction.
+
+The exact 3→6 state is primary. Structural and full challenger arms inherit the
+frozen weekly parent-exclusive CatBoost, calibration, permutation, and paired
+gates from continuation nature. No EV, score inversion, coin filter, execution,
+or 2026 access is authorized.
+
 ## 2026-08-03 — HOLD-versus-EXIT continuation preregistration
 
 Status: `FROZEN_POST_SELECTION_PREDICTION_DESIGN_PENDING_BUILD`.

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 import heapq
 import math
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,7 @@ def attach_stage1_breadth_and_concurrency(
     breadth: pd.DataFrame,
     *,
     spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+    direction: Literal["long", "short"] = "long",
 ) -> pd.DataFrame:
     required_breadth = {
         "snapshot_time_ms",
@@ -90,7 +92,7 @@ def attach_stage1_breadth_and_concurrency(
         errors="ignore",
     ).merge(counts, on="snapshot_time_ms", how="left", validate="many_to_one")
     joined = joined.drop(columns=["breadth_feature_cutoff_time_ms"])
-    return _ordered(joined, spec)
+    return _ordered(joined, spec, direction=direction)
 
 
 def _history_values(
@@ -109,6 +111,7 @@ def attach_stage1_prior_reactions(
     frame: pd.DataFrame,
     *,
     spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+    direction: Literal["long", "short"] = "long",
 ) -> pd.DataFrame:
     result_parts: list[pd.DataFrame] = []
     max_history = max(spec.prior_reaction_windows)
@@ -203,11 +206,19 @@ def attach_stage1_prior_reactions(
     result = pd.concat(result_parts, ignore_index=True)
     if result["candidate_id"].nunique() != len(frame):
         raise Stage1EnrichmentError("event-memory enrichment changed candidate keys")
-    return _ordered(result, spec)
+    return _ordered(result, spec, direction=direction)
 
 
-def _ordered(frame: pd.DataFrame, spec: DrawdownLadderStage1Spec) -> pd.DataFrame:
-    columns = [definition.name for definition in build_stage1_feature_catalog(spec)]
+def _ordered(
+    frame: pd.DataFrame,
+    spec: DrawdownLadderStage1Spec,
+    *,
+    direction: Literal["long", "short"] = "long",
+) -> pd.DataFrame:
+    columns = [
+        definition.name
+        for definition in build_stage1_feature_catalog(spec, direction=direction)
+    ]
     missing = sorted(set(columns) - set(frame.columns))
     extra = sorted(set(frame.columns) - set(columns))
     if missing or extra:

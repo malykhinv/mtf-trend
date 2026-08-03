@@ -33,6 +33,7 @@ from anomaly_science.strategy.drawdown_ladder.stage1_spec import (
     build_stage1_probability_config,
     build_stage1_feature_catalog,
     write_stage1_protocol,
+    build_mirrored_rally_stage1_spec,
 )
 from anomaly_science.strategy.drawdown_ladder.stage1_features import (
     build_symbol_stage1_features,
@@ -673,6 +674,65 @@ def test_stage1_symbol_features_use_only_completed_snapshot_information(
     pd.testing.assert_series_equal(
         target[model_names],
         second_target[model_names],
+        check_names=False,
+    )
+
+
+def test_mirrored_stage1_uses_explicit_rally_geometry_and_is_future_invariant(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "AAAUSDT.parquet"
+    rally = _rally_fixture()
+    rally["quote_volume"] = 1_000.0
+    original = _with_stage1_columns(rally)
+    original.to_parquet(source, index=False)
+    stage0 = _paths(tmp_path / "mirror_stage0_features")
+    build_symbol_stage0(source, shard_paths=stage0, spec=MirroredRallyStage0Spec())
+    spec = build_mirrored_rally_stage1_spec()
+
+    first = build_symbol_stage1_features(
+        source_path=source,
+        candidate_path=stage0.ladder_state_candidates,
+        outcome_path=stage0.ladder_state_outcomes,
+        btc_frame=prepare_btc_frame(source, spec=spec),
+        spec=spec,
+        direction="short",
+    )
+    target = first.loc[
+        first["grid_step_pct"].eq(5)
+        & first["deepest_filled_level_pct"].eq(5)
+    ].iloc[0]
+    model_names = {
+        row.name
+        for row in build_stage1_feature_catalog(spec, direction="short")
+        if row.model_feature
+    }
+
+    assert "same_bar_max_rally_pct" in model_names
+    assert "same_bar_max_drawdown_pct" not in model_names
+    assert target["same_bar_max_rally_pct"] >= 5.0
+    assert target["feature_cutoff_time_ms"] == target["snapshot_time_ms"]
+
+    mutated = original.copy()
+    mutation_time = int(target["snapshot_time_ms"]) + MS_PER_MINUTE
+    mutated.loc[mutated["timestamp"].ge(mutation_time), ["high", "low", "close"]] = [
+        1_000.0,
+        1.0,
+        500.0,
+    ]
+    mutated.to_parquet(source, index=False)
+    second = build_symbol_stage1_features(
+        source_path=source,
+        candidate_path=stage0.ladder_state_candidates,
+        outcome_path=stage0.ladder_state_outcomes,
+        btc_frame=prepare_btc_frame(source, spec=spec),
+        spec=spec,
+        direction="short",
+    )
+    second_target = second.loc[second["candidate_id"].eq(target["candidate_id"])].iloc[0]
+    pd.testing.assert_series_equal(
+        target[list(sorted(model_names))],
+        second_target[list(sorted(model_names))],
         check_names=False,
     )
 

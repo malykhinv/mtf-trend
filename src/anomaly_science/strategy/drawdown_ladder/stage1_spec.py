@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from typing import Literal
 
 from anomaly_science.probability import (
     BinaryProbabilityGates,
@@ -89,6 +90,15 @@ class DrawdownLadderStage1Spec:
             raise ValueError("Stage-1 CatBoost threads are intentionally bounded")
 
 
+def build_mirrored_rally_stage1_spec() -> DrawdownLadderStage1Spec:
+    return DrawdownLadderStage1Spec(
+        protocol_version="mirrored_rally_recovery_prediction_v1",
+        protocol_freeze_id="mirrored_rally_recovery_prediction_20260803_v1",
+        feature_schema_version="mirrored_rally_causal_features_v1",
+        label_schema_version="mirrored_rally_recovery_25bps_48h_v1",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DrawdownLadderFeatureDefinition:
     name: str
@@ -101,7 +111,11 @@ class DrawdownLadderFeatureDefinition:
 
 def build_stage1_feature_catalog(
     spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+    *,
+    direction: Literal["long", "short"] = "long",
 ) -> tuple[DrawdownLadderFeatureDefinition, ...]:
+    if direction not in {"long", "short"}:
+        raise ValueError("Stage-1 direction must be long or short")
     rows: list[DrawdownLadderFeatureDefinition] = [
         DrawdownLadderFeatureDefinition("feature_schema_version", "identity", "string", False, False),
         DrawdownLadderFeatureDefinition("label_schema_version", "identity", "string", False, False),
@@ -127,7 +141,13 @@ def build_stage1_feature_catalog(
         ("snapshot_close_to_anchor", "ladder_geometry", "float64"),
         ("snapshot_close_to_entry", "ladder_geometry", "float64"),
         ("fill_overshoot_pct", "ladder_geometry", "float64"),
-        ("same_bar_max_drawdown_pct", "ladder_geometry", "float64"),
+        (
+            "same_bar_max_drawdown_pct"
+            if direction == "long"
+            else "same_bar_max_rally_pct",
+            "ladder_geometry",
+            "float64",
+        ),
         ("fill_bar_range_pct", "ladder_geometry", "float64"),
         ("fill_bar_body_return", "ladder_geometry", "float64"),
         ("fill_bar_close_location", "ladder_geometry", "float64"),
@@ -280,16 +300,19 @@ def build_stage1_feature_catalog(
 def write_stage1_protocol(
     path: str | Path,
     spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+    *,
+    direction: Literal["long", "short"] = "long",
 ) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    catalog = build_stage1_feature_catalog(spec)
+    catalog = build_stage1_feature_catalog(spec, direction=direction)
     payload = {
         "spec": asdict(spec),
+        "study_direction": direction,
         "feature_count": sum(row.model_feature for row in catalog),
         "feature_catalog": [asdict(row) for row in catalog],
         "target": {
-            "population": "all complete equal-notional long ladder states",
+            "population": f"all complete equal-notional {direction} ladder states",
             "positive_class": "25bps cost-adjusted recovery within 48h",
             "group_exclusion": "parent_event_id",
             "sample_weight": "inverse states per parent event",
@@ -303,10 +326,14 @@ def write_stage1_protocol(
                 "gates versus the structural baseline"
             ),
             "full_causal_config": asdict(
-                build_stage1_probability_config(arm="full_causal", spec=spec)
+                build_stage1_probability_config(
+                    arm="full_causal", spec=spec, direction=direction
+                )
             ),
             "structural_baseline_config": asdict(
-                build_stage1_probability_config(arm="structural_baseline", spec=spec)
+                build_stage1_probability_config(
+                    arm="structural_baseline", spec=spec, direction=direction
+                )
             ),
             "paired_config": asdict(build_stage1_paired_comparison_config(spec)),
         },
@@ -346,15 +373,26 @@ def build_stage1_probability_config(
     *,
     arm: str,
     spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+    direction: Literal["long", "short"] = "long",
 ) -> BinaryWeeklyWalkForwardConfig:
     """Freeze either the structural baseline or the full causal feature arm."""
 
     if arm not in {"structural_baseline", "full_causal"}:
         raise ValueError("Stage-1 probability arm must be structural_baseline or full_causal")
-    catalog = build_stage1_feature_catalog(spec)
+    catalog = build_stage1_feature_catalog(spec, direction=direction)
     catalog_by_name = {row.name: row for row in catalog}
+    structural_features = (
+        tuple(
+            "same_bar_max_rally_pct"
+            if name == "same_bar_max_drawdown_pct"
+            else name
+            for name in _STRUCTURAL_BASELINE_FEATURES
+        )
+        if direction == "short"
+        else _STRUCTURAL_BASELINE_FEATURES
+    )
     selected = (
-        _STRUCTURAL_BASELINE_FEATURES
+        structural_features
         if arm == "structural_baseline"
         else tuple(row.name for row in catalog if row.model_feature)
     )
@@ -365,7 +403,7 @@ def build_stage1_probability_config(
     label_only = tuple(row.name for row in catalog if row.family == "label_only")
     return BinaryWeeklyWalkForwardConfig(
         protocol_freeze_id=f"{spec.protocol_freeze_id}:{arm}",
-        strategy_name=f"drawdown_ladder_recovery:{arm}",
+        strategy_name=f"{direction}_ladder_recovery:{arm}",
         target_name="recovery_25bps_48h",
         development_start_ms=spec.development_start_ms,
         oos_start_ms=spec.internal_wfa_start_ms,
@@ -443,6 +481,8 @@ def build_stage1_paired_comparison_config(
 def write_stage1_probability_configs(
     directory: str | Path,
     spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+    *,
+    direction: Literal["long", "short"] = "long",
 ) -> tuple[Path, Path, Path]:
     """Persist both model arms and their frozen paired-inference contract."""
 
@@ -451,11 +491,19 @@ def write_stage1_probability_configs(
     payloads = (
         (
             root / "structural_baseline_probability_config.json",
-            asdict(build_stage1_probability_config(arm="structural_baseline", spec=spec)),
+            asdict(
+                build_stage1_probability_config(
+                    arm="structural_baseline", spec=spec, direction=direction
+                )
+            ),
         ),
         (
             root / "full_causal_probability_config.json",
-            asdict(build_stage1_probability_config(arm="full_causal", spec=spec)),
+            asdict(
+                build_stage1_probability_config(
+                    arm="full_causal", spec=spec, direction=direction
+                )
+            ),
         ),
         (
             root / "full_minus_structural_comparison_config.json",
@@ -474,6 +522,7 @@ def write_stage1_probability_configs(
 __all__ = [
     "DrawdownLadderFeatureDefinition",
     "DrawdownLadderStage1Spec",
+    "build_mirrored_rally_stage1_spec",
     "build_stage1_paired_comparison_config",
     "build_stage1_probability_config",
     "build_stage1_feature_catalog",

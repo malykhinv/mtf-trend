@@ -2018,3 +2018,20 @@ Frozen IS result:
   failed reliability/support gates.
 - Sparse symbol-level exceptions have no filter authority. Final status
   `IS_CONTINUATION_NATURE_PREDICTION_REJECTED`; later EV stages forbidden.
+
+## science: add direction-explicit mirrored-rally Stage 1 contract
+
+Status: APPLIED; mirror Stage-1 and continuation results unopened.
+
+Changes:
+- Generalizes the clean Stage-1 core with an explicit long/short direction while
+  preserving identical default long artifacts and behavior.
+- Requires the frozen mirror Stage-0 protocol for short builds and gives rally
+  geometry its truthful `same_bar_max_rally_pct` schema field.
+- Propagates direction through typed catalogs, symbol workers, bounded process
+  scheduling, breadth/concurrency, prior resolved history, probability configs,
+  temporal audits, manifests, protocol artifacts, and CLI.
+- Adds a separately versioned mirrored continuation target with correct signed
+  short snapshot-exit arithmetic and full-horizon resolution.
+- Adds future-mutation, schema, signed-target, CLI, and long-default regression
+  coverage. No legacy runtime dependency is introduced.

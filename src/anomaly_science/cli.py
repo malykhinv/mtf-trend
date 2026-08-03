@@ -81,6 +81,9 @@ from anomaly_science.strategy.drawdown_ladder.stage1_build import (
     Stage1BuildConfig,
     build_stage1_is as build_drawdown_ladder_stage1_is,
 )
+from anomaly_science.strategy.drawdown_ladder.stage1_spec import (
+    build_mirrored_rally_stage1_spec,
+)
 from anomaly_science.strategy.drawdown_ladder.stage1_analysis import (
     build_stage1_probability_gate_amendment,
     build_stage1_probability_comparison,
@@ -94,6 +97,7 @@ from anomaly_science.strategy.drawdown_ladder.structural_ev import (
 )
 from anomaly_science.strategy.drawdown_ladder.continuation import (
     build_continuation_dataset,
+    build_mirrored_continuation_spec,
 )
 from anomaly_science.strategy.drawdown_ladder.spec import MirroredRallyStage0Spec
 from anomaly_science.strategy.drawdown_ladder.mirror_analysis import build_mirror_comparison
@@ -966,6 +970,19 @@ def build_parser() -> argparse.ArgumentParser:
     drawdown_ladder_stage1.add_argument("--max-inflight-symbols", type=int, default=None)
     drawdown_ladder_stage1.add_argument("--limit-symbols", type=int, default=None)
 
+    mirrored_rally_stage1 = subparsers.add_parser(
+        "build-mirrored-rally-stage1",
+        help="Build direction-explicit IS-only causal features for mirrored short rallies.",
+    )
+    mirrored_rally_stage1.add_argument(
+        "--source-dir", default=str(Stage1BuildConfig().source_dir)
+    )
+    mirrored_rally_stage1.add_argument("--stage0", required=True)
+    mirrored_rally_stage1.add_argument("--out", required=True)
+    mirrored_rally_stage1.add_argument("--workers", type=int, default=4)
+    mirrored_rally_stage1.add_argument("--max-inflight-symbols", type=int, default=None)
+    mirrored_rally_stage1.add_argument("--limit-symbols", type=int, default=None)
+
     drawdown_stage1_comparison = subparsers.add_parser(
         "compare-drawdown-ladder-stage1-probability",
         help="Compare frozen full-causal and structural Stage-1 probability arms.",
@@ -1020,6 +1037,14 @@ def build_parser() -> argparse.ArgumentParser:
     drawdown_continuation.add_argument("--stage1", required=True)
     drawdown_continuation.add_argument("--outcomes", required=True)
     drawdown_continuation.add_argument("--out", required=True)
+
+    mirrored_continuation = subparsers.add_parser(
+        "build-mirrored-rally-continuation-dataset",
+        help="Build the frozen short HOLD-versus-EXIT nature dataset and configs.",
+    )
+    mirrored_continuation.add_argument("--stage1", required=True)
+    mirrored_continuation.add_argument("--outcomes", required=True)
+    mirrored_continuation.add_argument("--out", required=True)
 
 
     return parser
@@ -1111,6 +1136,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"drawdown-ladder Stage-1 artifacts written: {result.output_dir}")
         return 0
 
+    if args.command == "build-mirrored-rally-stage1":
+        result = build_drawdown_ladder_stage1_is(
+            Stage1BuildConfig(
+                source_dir=Path(args.source_dir),
+                stage0_dir=Path(args.stage0),
+                output_dir=Path(args.out),
+                workers=args.workers,
+                max_inflight_symbols=args.max_inflight_symbols,
+                max_symbols=args.limit_symbols,
+                direction="short",
+            ),
+            spec=build_mirrored_rally_stage1_spec(),
+            progress=lambda message: print(message, flush=True),
+        )
+        print(f"mirrored-rally Stage-1 artifacts written: {result.output_dir}")
+        return 0
+
     if args.command == "compare-drawdown-ladder-stage1-probability":
         output_dir = build_stage1_probability_comparison(
             structural_dir=Path(args.structural),
@@ -1164,6 +1206,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=Path(args.out),
         )
         print(f"drawdown continuation dataset written: {output_dir}")
+        return 0
+
+    if args.command == "build-mirrored-rally-continuation-dataset":
+        output_dir = build_continuation_dataset(
+            stage1_dataset_path=Path(args.stage1),
+            stage0_outcomes_path=Path(args.outcomes),
+            output_dir=Path(args.out),
+            spec=build_mirrored_continuation_spec(),
+            stage1_spec=build_mirrored_rally_stage1_spec(),
+        )
+        print(f"mirrored-rally continuation dataset written: {output_dir}")
         return 0
 
     if args.command == "run-causal-regime-atlas":

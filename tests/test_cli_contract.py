@@ -230,6 +230,43 @@ def test_drawdown_continuation_cli_builds_new_label_dataset() -> None:
     assert args.out == "continuation"
 
 
+def test_mirrored_rally_stage1_cli_is_direction_explicit() -> None:
+    args = build_parser().parse_args(
+        [
+            "build-mirrored-rally-stage1",
+            "--source-dir",
+            "cache",
+            "--stage0",
+            "mirror-stage0",
+            "--out",
+            "mirror-stage1",
+            "--workers",
+            "6",
+        ]
+    )
+
+    assert args.command == "build-mirrored-rally-stage1"
+    assert args.stage0 == "mirror-stage0"
+    assert args.workers == 6
+
+
+def test_mirrored_continuation_cli_is_separate_from_long() -> None:
+    args = build_parser().parse_args(
+        [
+            "build-mirrored-rally-continuation-dataset",
+            "--stage1",
+            "mirror-stage1.parquet",
+            "--outcomes",
+            "mirror-outcomes.parquet",
+            "--out",
+            "mirror-continuation",
+        ]
+    )
+
+    assert args.command == "build-mirrored-rally-continuation-dataset"
+    assert args.stage1 == "mirror-stage1.parquet"
+
+
 def test_mirrored_rally_stage0_cli_exposes_same_bounded_is_contract() -> None:
     args = build_parser().parse_args(
         [

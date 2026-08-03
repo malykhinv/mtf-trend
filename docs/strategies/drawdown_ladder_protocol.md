@@ -621,6 +621,44 @@ threshold inversion, coin filter, execution, or portfolio stage is authorized.
 Inverting the below-0.5 score after observing it is forbidden. This closes the
 long 3→6 continuation-selection branch on IS; 2026 remains untouched.
 
+### Frozen mirrored-rally short continuation experiment
+
+The user's original mirror hypothesis remains a distinct directional branch:
+place equal-notional short limits into an abnormal rally and test whether later
+mean reversion can be selected causally. Stage 0 already shows that naive short
+holding is not an edge: the primary 3→6 state had mean signed 48-hour return
+-1.46% before costs and a mean adverse excursion near -19.8%, despite a 91.88%
+chance of touching the small 25 bps recovery threshold.
+
+The only admissible rescue is therefore a separately frozen short
+HOLD-versus-EXIT nature test, not reuse or inversion of the failed long score.
+The feature contract is direction-explicit:
+
+- the source must be the frozen mirrored-rally Stage-0 protocol;
+- rally geometry is named `same_bar_max_rally_pct`, never silently stored as
+  drawdown geometry;
+- all price/EMA/BTC/breadth fields retain documented raw market direction;
+- the short snapshot exit return is `-(snapshot_close / entry - 1)`;
+- the target is signed short 48-hour return minus signed short snapshot exit.
+
+The full Stage-1 builder, breadth, concurrency, and strictly resolved prior
+reaction memory are reused through the same typed core with `study_direction =
+short`. The mirror has its own feature schema, label schema, protocol freeze ID,
+artifacts, and CatBoost models. No mirror code may import or depend on legacy
+implementations.
+
+The sole primary population remains exact 3→6. Structural-primary and
+full-causal-challenger weekly CatBoost arms use the same already registered
+absolute and paired gates as the long continuation experiment, including the
+0.0125 post-selection null threshold. The full 48-hour short label must resolve
+strictly before training freeze; 2026 is physically forbidden.
+
+This experiment asks only whether short continuation nature is predictable.
+Passing prediction would permit a new magnitude EV preregistration; it would
+not validate the grid, authorize score inversion, or permit physical TP/SL,
+leverage, concurrency, or portfolio optimization. Failure closes the mirrored
+grid branch without threshold/state/coin retuning on the same rows.
+
 ### Gate 1 — causal context and protection mechanisms
 
 Attach only as-of features, including market panic/breadth, BTC support,

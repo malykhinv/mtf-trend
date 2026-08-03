@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from anomaly_science.probability import (
 )
 from anomaly_science.strategy.drawdown_ladder.stage1_spec import (
     DrawdownLadderStage1Spec,
+    build_mirrored_rally_stage1_spec,
     build_stage1_probability_config,
 )
 
@@ -34,6 +36,7 @@ class ContinuationExperimentSpec:
     protocol_freeze_id: str = "drawdown_ladder_continuation_nature_20260803_v1"
     label_schema_version: str = "drawdown_ladder_hold_outperforms_exit_48h_v1"
     feature_schema_version: str = "drawdown_ladder_causal_features_v1"
+    study_direction: Literal["long", "short"] = "long"
     primary_grid_step_pct: int = 3
     primary_deepest_level_pct: int = 6
     horizon_minutes: int = 2_880
@@ -62,6 +65,18 @@ class ContinuationExperimentSpec:
             raise ValueError("alpha must adjust two viewed arms and two null endpoints")
         if self.null_permutations < 1_999:
             raise ValueError("continuation null requires at least 1999 permutations")
+        if self.study_direction not in {"long", "short"}:
+            raise ValueError("continuation direction must be long or short")
+
+
+def build_mirrored_continuation_spec() -> ContinuationExperimentSpec:
+    return ContinuationExperimentSpec(
+        protocol_version="mirrored_rally_continuation_nature_v1",
+        protocol_freeze_id="mirrored_rally_continuation_nature_20260803_v1",
+        label_schema_version="mirrored_rally_hold_outperforms_exit_48h_v1",
+        feature_schema_version="mirrored_rally_causal_features_v1",
+        study_direction="short",
+    )
 
 
 def build_continuation_probability_config(
@@ -72,10 +87,14 @@ def build_continuation_probability_config(
 ) -> BinaryWeeklyWalkForwardConfig:
     """Freeze structural-primary or full-causal challenger probability arms."""
 
-    source = build_stage1_probability_config(arm=arm, spec=stage1_spec)
+    source = build_stage1_probability_config(
+        arm=arm,
+        spec=stage1_spec,
+        direction=spec.study_direction,
+    )
     return BinaryWeeklyWalkForwardConfig(
         protocol_freeze_id=f"{spec.protocol_freeze_id}:{arm}",
-        strategy_name=f"drawdown_ladder_continuation:{arm}",
+        strategy_name=f"{spec.study_direction}_ladder_continuation:{arm}",
         target_name="hold_outperforms_exit_48h",
         development_start_ms=stage1_spec.development_start_ms,
         oos_start_ms=stage1_spec.internal_wfa_start_ms,
@@ -159,11 +178,16 @@ def build_continuation_paired_config(
 def write_continuation_protocol(
     directory: str | Path,
     spec: ContinuationExperimentSpec = ContinuationExperimentSpec(),
+    stage1_spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
 ) -> tuple[Path, Path, Path, Path]:
     root = Path(directory)
     root.mkdir(parents=True, exist_ok=True)
-    structural = build_continuation_probability_config(arm="structural_baseline", spec=spec)
-    full = build_continuation_probability_config(arm="full_causal", spec=spec)
+    structural = build_continuation_probability_config(
+        arm="structural_baseline", spec=spec, stage1_spec=stage1_spec
+    )
+    full = build_continuation_probability_config(
+        arm="full_causal", spec=spec, stage1_spec=stage1_spec
+    )
     paired = build_continuation_paired_config(spec)
     payloads: tuple[tuple[Path, object], ...] = (
         (root / "structural_probability_config.json", asdict(structural)),
@@ -173,10 +197,11 @@ def write_continuation_protocol(
             root / "frozen_continuation_protocol.json",
             {
                 "spec": asdict(spec),
+                "stage1_spec": asdict(stage1_spec),
                 "status": "FROZEN_POST_SELECTION_PREDICTION_DESIGN",
                 "economic_target": (
-                    "future_return_2880m_from_blended_entry minus "
-                    "snapshot_close_return_from_blended_entry"
+                    f"signed_{spec.study_direction}_future_return_2880m minus "
+                    f"signed_{spec.study_direction}_snapshot_exit_return"
                 ),
                 "primary_population": "exact 3% grid through 6% state",
                 "primary_arm": "structural_baseline",
@@ -248,16 +273,18 @@ def assemble_continuation_dataset(
     oos_start = int(pd.Timestamp("2026-01-01T00:00:00Z").timestamp() * 1_000)
     if continuation_resolution.ge(oos_start).any():
         raise ContinuationExperimentError("continuation label reaches untouched 2026 OOS")
-    advantage = (
-        work["future_return_2880m"].astype(float)
-        - work["snapshot_close_to_entry"].astype(float)
+    direction_sign = 1.0 if spec.study_direction == "long" else -1.0
+    snapshot_exit_return = (
+        direction_sign * work["snapshot_close_to_entry"].astype(float)
     )
+    advantage = work["future_return_2880m"].astype(float) - snapshot_exit_return
     if not np.isfinite(advantage).all():
         raise ContinuationExperimentError("continuation advantage contains non-finite values")
     work["continuation_label_schema_version"] = spec.label_schema_version
     work["is_primary_continuation_state"] = True
     work["continuation_resolution_time_ms"] = continuation_resolution
     work["hold_minus_exit_48h"] = advantage
+    work["signed_snapshot_exit_return"] = snapshot_exit_return
     work["hold_outperforms_exit_48h"] = advantage.gt(0.0)
     work["continuation_label_available"] = True
     drop = [
@@ -284,6 +311,7 @@ def build_continuation_dataset(
     stage0_outcomes_path: str | Path,
     output_dir: str | Path,
     spec: ContinuationExperimentSpec = ContinuationExperimentSpec(),
+    stage1_spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
 ) -> Path:
     root = Path(output_dir)
     if root.exists() and any(root.iterdir()):
@@ -317,7 +345,9 @@ def build_continuation_dataset(
     temporary = dataset_path.with_suffix(dataset_path.suffix + ".tmp")
     dataset.to_parquet(temporary, index=False, compression="zstd")
     os.replace(temporary, dataset_path)
-    protocol_paths = write_continuation_protocol(root / "probability_configs", spec)
+    protocol_paths = write_continuation_protocol(
+        root / "probability_configs", spec, stage1_spec
+    )
     audit_path = root / "temporal_audit.json"
     audit_path.write_text(
         json.dumps(
@@ -376,6 +406,7 @@ __all__ = [
     "ContinuationExperimentSpec",
     "assemble_continuation_dataset",
     "build_continuation_dataset",
+    "build_mirrored_continuation_spec",
     "build_continuation_paired_config",
     "build_continuation_probability_config",
     "write_continuation_protocol",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -505,7 +506,10 @@ def build_symbol_stage1_features(
     outcome_path: str | Path,
     btc_frame: PreparedBTCFrame,
     spec: DrawdownLadderStage1Spec = DrawdownLadderStage1Spec(),
+    direction: Literal["long", "short"] = "long",
 ) -> pd.DataFrame:
+    if direction not in {"long", "short"}:
+        raise ValueError("Stage-1 direction must be long or short")
     source = Path(source_path)
     symbol = source.stem.upper()
     candidates = pd.read_parquet(candidate_path)
@@ -528,7 +532,12 @@ def build_symbol_stage1_features(
     if len(joined) != len(candidates) or bool(joined["future_start_time_ms"].isna().any()):
         raise Stage1FeatureError("Stage-1 candidate/outcome join is incomplete")
     if joined.empty:
-        return pd.DataFrame(columns=[row.name for row in build_stage1_feature_catalog(spec)])
+        return pd.DataFrame(
+            columns=[
+                row.name
+                for row in build_stage1_feature_catalog(spec, direction=direction)
+            ]
+        )
     if set(joined["symbol"].astype(str).str.upper()) != {symbol}:
         raise Stage1FeatureError("Stage-1 shard symbol mismatch")
     minute = read_is_symbol_minutes(source, columns=_RAW_COLUMNS)
@@ -582,6 +591,12 @@ def build_symbol_stage1_features(
             + int(candidate.available_future_minutes) * MS_PER_MINUTE
         )
         fill_range = high[index] - low[index]
+        extreme_column = (
+            "same_bar_max_drawdown_pct"
+            if direction == "long"
+            else "same_bar_max_rally_pct"
+        )
+        extreme_value = float(getattr(candidate, extreme_column))
         row: dict[str, object] = {
             "feature_schema_version": spec.feature_schema_version,
             "label_schema_version": spec.label_schema_version,
@@ -606,9 +621,9 @@ def build_symbol_stage1_features(
             "average_entry_to_anchor": entry / anchor - 1.0,
             "snapshot_close_to_anchor": close[index] / anchor - 1.0,
             "snapshot_close_to_entry": close[index] / entry - 1.0,
-            "fill_overshoot_pct": float(candidate.same_bar_max_drawdown_pct)
+            "fill_overshoot_pct": extreme_value
             - float(candidate.deepest_filled_level_pct),
-            "same_bar_max_drawdown_pct": float(candidate.same_bar_max_drawdown_pct),
+            extreme_column: extreme_value,
             "fill_bar_range_pct": fill_range / close[index],
             "fill_bar_body_return": close[index] / open_[index] - 1.0,
             "fill_bar_close_location": (
@@ -733,7 +748,10 @@ def build_symbol_stage1_features(
             row[f"prior_symbol_median_recovery_minutes_{window}"] = math.nan
         rows.append(row)
     frame = pd.DataFrame(rows)
-    expected = [definition.name for definition in build_stage1_feature_catalog(spec)]
+    expected = [
+        definition.name
+        for definition in build_stage1_feature_catalog(spec, direction=direction)
+    ]
     missing = sorted(set(expected) - set(frame.columns))
     extra = sorted(set(frame.columns) - set(expected))
     if missing or extra:

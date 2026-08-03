@@ -11,6 +11,7 @@ from anomaly_science.strategy.drawdown_ladder.continuation import (
     ContinuationExperimentSpec,
     assemble_continuation_dataset,
     build_continuation_probability_config,
+    build_mirrored_continuation_spec,
     write_continuation_protocol,
 )
 
@@ -108,3 +109,20 @@ def test_continuation_protocol_forbids_ev_and_oos(tmp_path: Path) -> None:
     assert payload["physical_exits_or_pnl_simulated"] is False
     assert payload["oos_2026_accessed"] is False
     assert payload["primary_arm"] == "structural_baseline"
+
+
+def test_mirrored_continuation_uses_signed_short_snapshot_exit() -> None:
+    features, outcomes = _inputs()
+    features.loc[0, "snapshot_close_to_entry"] = 0.02
+    outcomes.loc[0, "future_return_2880m"] = 0.01
+    spec = build_mirrored_continuation_spec()
+
+    result = assemble_continuation_dataset(
+        features=features,
+        outcomes=outcomes,
+        spec=spec,
+    )
+
+    assert result.loc[0, "signed_snapshot_exit_return"] == pytest.approx(-0.02)
+    assert result.loc[0, "hold_minus_exit_48h"] == pytest.approx(0.03)
+    assert bool(result.loc[0, "hold_outperforms_exit_48h"])
