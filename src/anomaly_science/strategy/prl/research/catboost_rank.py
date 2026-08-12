@@ -98,9 +98,15 @@ def _run_cv(df, feats, tag):
 
 
 def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--universe", type=int, default=P.universe_n)
+    args = ap.parse_args()
+    p = P if args.universe == P.universe_n else replace(P, universe_n=args.universe)
+    tag = "" if args.universe == P.universe_n else f"_u{args.universe}"
     OUT.mkdir(parents=True, exist_ok=True)
-    print("building wide residual feature pool (IS only, OOS reserved) ...")
-    df, feats = _load_pool(P)
+    print(f"building wide residual feature pool (universe={p.universe_n}, IS only, OOS reserved) ...")
+    df, feats = _load_pool(p)
 
     # univariate leak-sniff: any single causal feature with implausible IC
     print("\n=== univariate feature rank-IC (top 15 by |IC|) ===")
@@ -125,8 +131,12 @@ def main() -> None:
     cb = pd.concat(oof["catboost"], ignore_index=True).rename(
         columns={"pred": "score_catboost"})[["date", "symbol", "score_catboost"]]
     oof_df = lin.merge(cb, on=["date", "symbol"], how="inner")
-    oof_df.to_parquet(OUT / "oof_scores_prl.parquet")
-    print(f"  wrote {OUT}/oof_scores_prl.parquet  ({len(oof_df):,} rows)")
+    oof_df.to_parquet(OUT / f"oof_scores_prl{tag}.parquet")
+    print(f"  wrote {OUT}/oof_scores_prl{tag}.parquet  ({len(oof_df):,} rows)")
+
+    if args.universe != P.universe_n:
+        print("\n(non-default universe: skipping delay control; OOF saved for downstream)")
+        return
 
     # +1-day execution-delay control (§5.1, §87): rebuild the pool with skip+1.
     print("\nbuilding +1d-delay pool ...")
