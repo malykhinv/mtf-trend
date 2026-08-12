@@ -98,7 +98,7 @@ def residual_momentum_score(eps: pd.DataFrame, umask: pd.DataFrame, p: PRLCoarse
     for H in p.mom_lbs:
         cum = eps.rolling(H, min_periods=max(3, H // 2)).sum().shift(p.skip)
         parts.append(cum.where(umask).rank(axis=1, pct=True))
-    score = pd.concat([x.stack(dropna=False) for x in parts], axis=1).mean(axis=1).unstack()
+    score = pd.concat([x.stack(future_stack=True) for x in parts], axis=1).mean(axis=1).unstack()
     return score.reindex(index=eps.index, columns=eps.columns).where(umask)
 
 

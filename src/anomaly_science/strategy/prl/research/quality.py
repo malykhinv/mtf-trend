@@ -51,7 +51,7 @@ def quality_composite(feats: dict[str, pd.DataFrame], umask: pd.DataFrame) -> pd
     def r(m):
         return m.where(umask).rank(axis=1, pct=True)
     comps = [r(feats["path_eff"]), r(feats["frac_pos"]), r(-feats["burst"])]
-    stack = pd.concat([c.stack(dropna=False) for c in comps], axis=1).mean(axis=1)
+    stack = pd.concat([c.stack(future_stack=True) for c in comps], axis=1).mean(axis=1)
     return stack.unstack().reindex(index=umask.index, columns=umask.columns).where(umask)
 
 
