@@ -61,23 +61,38 @@ portfolio Sharpe 0.74 (delay1) / 0.98 (delay2), CAGR +7..20% at 2-5% risk/name,
 
 **Failure modes found (honest):**
 - **Long-only** top-decile is NOT tradeable: winrate 0.45, negative median, loses in sideways,
-  ~0.3% of trades carry all profit. The rank-IC only monetizes as a market-neutral long-short.
-- **Horizon-locked:** at 10d/20d holds the long-short goes negative (bear −3.5%). The edge lives
-  at the 5d label horizon it was fit on.
-- Aggregate edge is thin (remove top ~0.7% of trades → total net ≤ 0).
+  ~0.3% of trades carry all profit. The rank only monetizes as a market-neutral long-short.
+- **Horizon-locked:** at 10d/20d holds the long-short goes negative. The book lives at the 5d
+  label horizon it was fit on.
+- **$ P&L is year-concentrated + cost-fragile** (the decisive check): the naive decile long-short
+  makes **all** its money in **2025** and LOSES in 2023 (−5%) and 2024 (−13%); at 3× costs the
+  median trade is already negative.
+
+**Signal vs monetization — the key nuance:** the per-year OOF **rank-IC is positive and
+significant every year** (2023 +0.045 t3.4, 2024 +0.060 t8.3, 2025 +0.131 t14.0). So the
+predictive relationship is real and year-robust; what is NOT robust is the naive decile book's
+**monetization** (§32.3 IC ≠ R). The likely culprit is the dominant low-vol tilt: low-vol wins
+in chop/bear (2025) and loses in the momentum bull (2024). This is a portfolio-construction
+problem (§45), not a fake signal.
 
 ## 6. Verdict
 
-**IS-POSITIVE, leak-clean, modest, market-neutral.** The wide residual pool yields a real,
-additive, regime-stable, diversified long-short edge at the 5d horizon (Sharpe ~0.9 IS), driven
-by low-vol + persistence + taker-flow-persistence + avg-trade-size + anti-burst. It survives the
-strict leak battery. It is modest and horizon-specific, and does NOT work long-only. This is IS
-development (§95: robust + regime + placebo + leak-audit + beats baselines); NOT yet OOS/holdout.
+**IS: predictive signal REAL & year-robust; naive tradeable book NOT robust (2025-concentrated,
+cost-fragile).** The wide residual pool has a genuine additive rank-IC (~0.09, positive every
+year, leak-clean), driven by low-vol + persistence + taker-flow-persistence + avg-trade-size +
+anti-burst. But the naive decile long-short does not convert it to robust P&L: profit is
+concentrated in 2025, negative in 2023-2024, cost-fragile, long-only-dead, horizon-locked. This
+is a §32.3 predictive-vs-tradeable gap. NOT a candidate for OOS until the monetization is made
+year-robust. OOS remains reserved.
 
 ## 7. Next (each a pre-registered trial; OOS still reserved)
 
-1. **PRL-PEER-000** — does peer-residualization (Epps-aware clustering) add incremental IC?
-2. Consolidate a **frozen simple transparent score** (the additive blend the linear model found)
-   to minimize researcher DOF before freezing, per the project's low-DOF preference.
-3. Turnover/hysteresis + capacity/participation stress on the 5d long-short.
-4. Only after the full spec is frozen: single OOS 2026-H1 validation, then locked holdout.
+1. **Fix monetization first (§45 portfolio construction)** — the signal is real; the naive decile
+   book is not. Try: volatility-neutralize the score (remove the low-vol tilt so it is not just a
+   low-vol bet), rank-weighted vs decile long-short, per-cluster/sector-neutral construction,
+   IC-consistent sizing. Target: positive $ in each of 2023/2024/2025, not only 2025.
+2. Consolidate a **frozen transparent additive score** (low researcher DOF) reproducing the linear
+   blend, once a year-robust book exists.
+3. **PRL-PEER-000** — does peer-residualization (Epps-aware clustering) add incremental IC?
+4. Turnover/hysteresis + capacity/participation stress; cost-stress must keep the median positive.
+5. Only after a year-robust, cost-robust book is frozen: single OOS 2026-H1, then locked holdout.
