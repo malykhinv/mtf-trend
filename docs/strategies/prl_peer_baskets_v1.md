@@ -25,10 +25,27 @@ Robust across K = 8 / 12 / 20 (peer-residual IC ≈ −0.008 every time, cluster
 singleton rate 1-14%). **Peer-residualization does NOT add value — it is slightly worse than the
 already-null market-residual momentum.**
 
-## Why
+## Doing it "by the book" — the real scientific uses of baskets (peer_rv.py + cluster-neutral)
 
-Momentum — market-residual OR peer-residual — is null in this data (PRL-COARSE-000). Residualizing a
-null signal against its correlation basket cannot manufacture predictability; it only adds noise.
-The peer machinery is sound and PIT-clean, but H5 (peer info adds value) is not supported for the
-momentum signal. Correlation baskets remain useful for cluster-neutral construction / effective-bet
-counting (§45-§46), not as a new alpha source here.
+The momentum residualization was the wrong use (momentum is null). The genuine uses of correlation
+baskets were then tested:
+
+**1. Relative-value / convergence (stat-arb)** — recent within-basket divergence -> future
+peer-residual. IC is tiny and sign-UNSTABLE across years (lb5/fwd5 −0.007 but 2023/24 converge,
+2025 diverges; lb10 flips to +0.011). The cluster-neutral convergence book (short over-diverged /
+long under-diverged within each basket) LOSES in every config (CAGR −10..−18%, Sharpe −0.5..−1.0).
+
+**2. Cluster-neutral construction of the WORKING signal** (rank the OOF score within each basket):
+```text
+plain rank-weight   CAGR +22%  Sharpe 1.56  +weeks 58%
+CLUSTER-NEUTRAL     CAGR  +9%  Sharpe 1.01  +weeks 55%   <- worse
+```
+Forcing within-basket neutrality HURTS -- the working signal's edge is partly CROSS-basket (which
+clusters are strong), and neutralizing it throws that information away.
+
+## Verdict
+
+Correlation baskets add nothing here in ANY standard use: not peer-residual momentum, not
+relative-value convergence, not cluster-neutral construction. On daily crypto the baskets are noisy
+and unstable (everything co-moves in risk-on/off, the §8.7.1 concern), and the real edge is
+genuinely cross-sectional ACROSS the whole market, not within baskets. Basket line closed.
