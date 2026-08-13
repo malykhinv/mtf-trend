@@ -48,12 +48,34 @@ fill at the breakeven level. Combined with the asymmetric payoff (cap losers at 
 this favorable-fill assumption creates positive skew out of any volatile series — the classic
 intrabar-stop-fill trap. It has nothing to do with the PRL signal.
 
+## Doing it "properly" — gap-aware, slippage-charged fills
+
+The idealized "exit exactly at entry" was the main culprit, so we redid it properly: gap-aware fill
+(if the bar opened through entry, fill at the open, else at entry) plus spread+slippage against us.
+Re-running with the shuffle control (top-100 decile book):
+
+```text
+fill    signal     exit    Sharpe
+ideal   real       two      3.15       ideal   shuffled  two   2.50   <- big artifact
+real    real       none     0.83       real    shuffled  none  0.01
+real    real       two      1.32       real    shuffled  two   0.55
+```
+
+Proper fills **shrink the artifact** (shuffle 2.50 → 0.55) — the user was right that the exact-level
+fill was cheating. **But it is not eliminated, and it is not signal-specific:** breakeven adds
+~+0.5 Sharpe to the real book (0.83→1.32) *and about the same to a pure-noise book* (0.01→0.55). So
+the remaining lift is a **generic stop-overlay** (favorable asymmetry on non-martingale daily
+prices + residual daily-bar fill optimism), not PRL alpha. At the most realistic execution tested
+(1h intrabar breakeven, `be_only.py --tf`/`stop_be.py`), the benefit is ~nil (+1.1% vs +1.0%).
+
 ## Verdict & lesson
 
-**Breakeven-only is not a real edge; it is a fill-assumption artifact.** The daily book conclusion
-is unchanged: ~Sharpe 1.4-1.5, ~20% CAGR, ~62% positive weeks, market-neutral, 2025-concentrated.
+**Breakeven is not a real, signal-attributable edge for this strategy.** The more realistically it
+is executed, the more the benefit vanishes: ideal daily fill = huge artifact; gap-aware daily fill =
+smaller artifact that helps noise as much as signal; 1h intrabar = ~nothing. Daily book conclusion
+unchanged: ~Sharpe 1.4-1.5, ~20% CAGR, ~62% positive weeks, market-neutral, 2025-concentrated.
 
-Lesson (worth keeping): any exit/stop rule that looks like it triples Sharpe must be shuffle-tested
-before it is believed. Here the discipline worked — the mirage was caught on IS, before we trusted
-it or spent the OOS holdout on it. Realistic (pessimistic) fills, not exact-level fills, are
-mandatory for any stop-based exit study.
+Lesson (worth keeping): (1) any exit/stop rule that looks like it triples Sharpe must be
+shuffle-tested before it is believed; (2) even after realistic fills, subtract the shuffle
+(no-signal) result — an overlay that helps noise as much as signal is not alpha. The discipline
+worked: the mirage was caught on IS, before we trusted it or spent the OOS holdout.

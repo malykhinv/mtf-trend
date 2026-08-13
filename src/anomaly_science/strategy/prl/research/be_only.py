@@ -63,10 +63,15 @@ def be_only_exit(h, l, c, op, side, trigger, be_mult, atr_win):
     return sgn * (c[-1] / o - 1.0), n - 1
 
 
-def real_book(close, open_, dH, dL, dC, um, score, p, trigger, hold, cost_mult=1.0):
+def real_book(close, open_, dH, dL, dC, um, score, p, trigger, hold, cost_mult=1.0, fill="ideal"):
     """REAL daily-marked dollar-neutral decile long-short book with per-name
     breakeven-only exits (no per-name market-beta adjustment; market P&L is real).
-    trigger='none' -> never arms = pure fixed hold (baseline in the same engine)."""
+    trigger='none' -> never arms = pure fixed hold (baseline in the same engine).
+
+    fill='ideal' : exit at exactly `entry` when the daily range touches it (optimistic).
+    fill='real'  : gap-aware pessimistic fill -- if the day opened through entry, fill at
+                   the open; else at entry; then charge spread+slippage against us."""
+    slip = (p.half_spread_bps + p.base_slippage_bps) * cost_mult / 1e4
     idx = close.index
     daily = pd.Series(0.0, index=idx)
     side_bps = (p.fee_bps + p.half_spread_bps + p.base_slippage_bps) * cost_mult / 1e4
@@ -100,9 +105,18 @@ def real_book(close, open_, dH, dL, dC, um, score, p, trigger, hold, cost_mult=1
                     continue
                 base = z["entry"] if t == ri + 1 else z["pc"]
                 if z["armed"]:
-                    h_t = dH[sym].iloc[t]; l_t = dL[sym].iloc[t]
+                    h_t = dH[sym].iloc[t]; l_t = dL[sym].iloc[t]; o_t = open_[sym].iloc[t]
                     if (z["side"] < 0 and h_t >= z["entry"]) or (z["side"] > 0 and l_t <= z["entry"]):
-                        dr += z["side"] * wgt * (z["entry"] / base - 1.0)  # exit at entry
+                        if fill == "real":
+                            # gap-aware fill: if the bar opened through entry, fill at open,
+                            # else at entry; then pay spread+slippage against us.
+                            if z["side"] < 0:
+                                px = max(o_t, z["entry"]) * (1.0 + slip)
+                            else:
+                                px = min(o_t, z["entry"]) * (1.0 - slip)
+                        else:
+                            px = z["entry"]
+                        dr += z["side"] * wgt * (px / base - 1.0)
                         z["alive"] = False
                         continue
                 dr += z["side"] * wgt * (c_t / base - 1.0)
@@ -230,19 +244,21 @@ def main() -> None:
             a[i][fin] = rng.permutation(a[i][fin])
     sh_score = pd.DataFrame(a, index=score.index, columns=score.columns)
 
-    print("\n  REAL daily-marked dollar-neutral book (true market P&L) + SHUFFLE control:")
-    print(f"    {'signal':9s} {'exit':6s} {'CAGR':>7} {'Sharpe':>7} {'+weeks':>7} {'maxDD':>7}")
-    for sig_name, sc in (("real", score), ("shuffled", sh_score)):
-        for trig in ("none", "two"):
-            d = real_book(close, dO, dH, dL, dC, um, sc, p, trig, args.hold)
-            if not len(d):
-                continue
-            wk = d.resample("W").sum(); eq = (1 + d).cumprod()
-            dd = (eq / eq.cummax() - 1).min(); cagr = eq.iloc[-1] ** (252 / len(d)) - 1
-            s2 = d.mean() / d.std() * np.sqrt(252)
-            print(f"    {sig_name:9s} {trig:6s} {cagr*100:+6.0f}% {s2:7.2f} "
-                  f"{float((wk>0).mean())*100:6.0f}% {dd*100:6.0f}%")
-    print("    -> breakeven shines on SHUFFLED (no) signal too => ARTIFACT, not alpha.")
+    print("\n  REAL daily-marked dollar-neutral book + SHUFFLE control, IDEAL vs REAL fill:")
+    print(f"    {'fill':6s} {'signal':9s} {'exit':6s} {'CAGR':>7} {'Sharpe':>7} {'+weeks':>7}")
+    for fill in ("ideal", "real"):
+        for sig_name, sc in (("real", score), ("shuffled", sh_score)):
+            for trig in ("none", "two"):
+                d = real_book(close, dO, dH, dL, dC, um, sc, p, trig, args.hold, fill=fill)
+                if not len(d):
+                    continue
+                wk = d.resample("W").sum(); eq = (1 + d).cumprod()
+                cagr = eq.iloc[-1] ** (252 / len(d)) - 1; s2 = d.mean() / d.std() * np.sqrt(252)
+                print(f"    {fill:6s} {sig_name:9s} {trig:6s} {cagr*100:+6.0f}% {s2:7.2f} "
+                      f"{float((wk>0).mean())*100:6.0f}%")
+    print("    IDEAL fill: breakeven shines on SHUFFLED signal too => intrabar-fill ARTIFACT.")
+    print("    REAL fill:  artifact shrinks, but breakeven adds ~equal Sharpe to real AND")
+    print("                shuffled => a generic stop-overlay, NOT PRL-signal alpha.")
 
 
 if __name__ == "__main__":
