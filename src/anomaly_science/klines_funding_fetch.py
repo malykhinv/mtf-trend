@@ -73,8 +73,10 @@ def list_symbols(quotes=("USDT",)):
     return sorted(s for s in syms if any(s.endswith(q) for q in quotes))
 
 
-def build(symbol, start_label):
+def build(symbol, start_label, resume=True):
     out_path = OUT / f"{symbol}.parquet"
+    if resume and out_path.exists():
+        return symbol, -1
     keys = _s3_list(f"{PREFIX}{symbol}/")
     labels = sorted({m.group(1) for k in keys
                      if (m := re.search(rf"{symbol}-fundingRate-(\d{{4}}-\d{{2}})\.zip$", k))
@@ -110,17 +112,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2023-01")
     ap.add_argument("--limit", type=int, default=200)
+    ap.add_argument("--workers", type=int, default=12)
     args = ap.parse_args()
     syms = list_symbols()
     if args.limit:
         syms = syms[: args.limit]
     print(f"funding fetch: {len(syms)} symbols from {args.start}")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    OUT.mkdir(parents=True, exist_ok=True)
     t0 = time.time(); done = rows = 0
-    for s in syms:
-        _, n = build(s, args.start)
-        done += 1; rows += max(n, 0)
-        if done % 25 == 0:
-            print(f"  {done}/{len(syms)}  rows={rows:,}  {time.time()-t0:.0f}s")
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futs = {ex.submit(build, s, args.start): s for s in syms}
+        for fut in as_completed(futs):
+            _, n = fut.result()
+            done += 1; rows += max(n, 0)
+            if done % 25 == 0:
+                print(f"  {done}/{len(syms)}  rows={rows:,}  {time.time()-t0:.0f}s")
     print(f"DONE {done} symbols, {rows:,} rows -> {OUT}")
 
 
