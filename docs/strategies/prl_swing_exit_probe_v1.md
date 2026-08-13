@@ -32,6 +32,24 @@ exits — fatal to the short leg (our best). The fixed-horizon hold is correct h
 must be held to term. (Useful asymmetry noted: longs like a loss-cut, shorts do not — but the gain
 is marginal in a dollar-neutral book and not worth the added DOF.)
 
+## Initial stop + move-to-breakeven on the daily book (`stop_be.py`)
+
+Gentler than trailing: add a per-position initial ATR stop, optionally move it to breakeven once
+in profit (init stop 1.5 ATR, BE trigger 0.75 ATR, market-relative, 1h detection):
+
+```text
+            LONG                     SHORT                     BOTH (per-trade avg)
+fixed    win .325  mean -0.90%   win .689  mean +3.51% med +7.74%   win .507  mean +1.30%
+stop     win .447  mean -2.16%   win .503  mean +3.04% med +0.19%   win .475  mean +0.43%
+stop_be  win .465  mean -1.92%   win .500  mean +2.16% med +0.00%   win .482  mean +0.12%
+```
+
+**Stops and breakeven HURT the daily book, breakeven worst.** The stop *raises win-rate* (cuts
+losers) but *lowers the mean*: stopped-out longs then revert up (the reversal effect locks a loss
+right before recovery), and shorts get knocked out of their big winners (median +7.74% → +0.19%) by
+intraday up-pops before the laggard's multi-day decline. Breakeven caps winners at zero, worse
+still. A clean win-rate≠profitability lesson: **hold to term, no stop / trail / breakeven.**
+
 ## Amplification levers — full tally (all IS, OOS reserved)
 
 Everything proposed to amplify the **daily** book has now been tested and is exhausted:
