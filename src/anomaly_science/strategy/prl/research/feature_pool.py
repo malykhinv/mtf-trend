@@ -88,6 +88,9 @@ def build_descriptors(panel: pd.DataFrame, umask: pd.DataFrame, p: PRLCoarsePoli
     d["signed_flow_selfz_20"] = _selfz(signed, 20).shift(sk)
     d["flow_persist_28"] = _roll((signed > 0).astype(float), 28, "mean").shift(sk)
     d["cum_signed_flow_28"] = (_roll(signed, 28, "sum") / (_roll(qv, 28, "sum") + _TINY)).shift(sk)
+    # NB: ATH/ATL, EMA-position and candle/ATR context were tested (context_features.py)
+    # and REJECTED for the pool -- +0.023 short-leg AUC did not convert; adding them to
+    # the ranker lowered the book (Sharpe 1.56->1.23). See prl_context_features_v1.md.
 
     return {"descriptors": d, "label": label, "umask": umask, "close": close}
 

@@ -50,9 +50,26 @@ remain causally unpredictable, as in the loser-filter study). Context adds real 
    long-leg OOS value.
 6. **Spike dynamics (fast/smooth)** — smoothness helps longs modestly; weak overall.
 
-## Next
+## Conversion test — retrained ranker with context in the pool (48 features)
 
-The only genuine lead is the **short leg**: EMA-position + ATH/ATL context add +0.023 causal AUC.
-Retrain the ranker with these context features in the pool and measure the REAL book (rank-IC,
-per-year, weekly%, cost, shuffle) — because AUC gains have repeatedly failed to convert to P&L
-(win-rate≠profitability). If it does not lift the book, context is descriptive only.
+Added EMA20/50/100/200, dist_ath_all/atl_all/ath_250, entry/last-candle-vs-ATR to the pool and
+retrained. It did NOT help:
+
+```text
+ranker linear OOF rank-IC:  0.089 -> 0.085 (slightly worse); catboost 0.074 -> 0.080
+real book (rank-weight top-100, 15d, hyst 0.5):
+  baseline  CAGR +22%  Sharpe 1.56  +weeks 58%   2023 -1% 2024 +18% 2025 +63%
+  +context  CAGR +19%  Sharpe 1.23  +weeks 58%   2023 -4% 2024 +12% 2025 +63%
+```
+
+The +0.023 short-leg AUC did NOT convert — adding the context lowered the book (Sharpe 1.56→1.23,
+2024 +18→+12%). Same lesson again: **win/lose separation ≠ book P&L.** Per the incremental-value
+rule (§27.1) the context features are REJECTED for the pool (kept at 39). They are descriptively
+true (winning shorts sit below EMAs, far from ATH) but add no tradeable value; the extra features
+just gave the ranker more to overfit.
+
+## Verdict
+
+The user's ATH/ATL and EMA-position hypotheses are real *descriptively* (especially for the short
+leg) but do not improve the tradeable book. Recurrence and candle/ATR add nothing. Pool stays at
+39 features; daily book unchanged (~Sharpe 1.5, ~20% CAGR, ~62% weeks).
