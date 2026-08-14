@@ -158,10 +158,31 @@ suggestive, not proven; the 7.7x is tuned so the worst IS year hits +150% = in-s
 real. (3) leverage COSTS (funding/borrow on the levered notional, overlay scaling turnover) are NOT
 yet modeled and will eat returns at 7-8x. (4) the overlay's Calmar gain must survive OOS.
 
+## Robustness + leverage cost stress (calmar_robust.py, 2026-08-14)
+
+**Overlay is robust, NOT a single-param artifact.** vol-target Calmar across a 16-config grid (lookback
+10/20/40/60 x cap 2/3/5, dd-thresh/cut variants): min 1.17, median 1.66, max 2.22 -- ALL > base 1.12.
+lb=20 is the sweet spot (1.95); lb=60 barely helps (1.17).
+
+**Leverage cost is the SWING factor (corrected model: costs applied once, not re-levered).**
+```text
+canonical vol-target+dd overlay, net = L*ov - (L-1)*borrow_daily - |dscale|*L*2bps
+L=5.5x (-38% DD):  borrow 0 -> +102% worst-yr (+113/+115/+102)   1bps/day -> +71% (+103/+82/+71)
+                   2bps/day -> +45% worst      5bps/day -> -11% (costs eat it)
+L=7.8x (-50% DD):  borrow 0 -> +142% worst (+182/+160/+142)      1bps/day -> +89% (+162/+103/+89)
+                   2bps/day -> +47%            5bps/day -> -30%
+```
+Perps have no explicit borrow (leverage is embedded; margin = 1/L of notional); the real leverage cost
+is FUNDING on the positions, and a dollar-neutral book's NET funding ~ 0 +/- small -> realistic drag
+~0-1bps/day, where the levered overlay holds at **+74-100%/yr uniform** (-38..-50% DD). But the result
+is SENSITIVE: 5bps/day kills it -> at high leverage FUNDING-NEUTRALITY is a first-order requirement.
+This turns the earlier tiny funding-carry into a leverage COST control: tilt the book funding-POSITIVE
+(short high-funding) so leverage cost becomes a credit.
+
 ## Next expansions (toward profit)
 
-1. **Cost/borrow stress at leverage** + overlay parameter-robustness (vol lookback, cap, dd threshold)
-   -- confirm the Calmar gain is not a single-parameter artifact.
-2. Cross-sectional breadth (top-300 universe -> more independent bets -> higher Sharpe/Calmar).
-3. Freeze the combined spec (50/50 + vol-target overlay, chosen leverage) -> the single reserved OOS
-   2026-H1 test -- the real verdict.
+1. **Funding-aware leverage**: tilt the combined book funding-neutral/positive so the leverage cost is
+   ~0 or a credit -- directly hardens the sensitivity that threatens the levered book.
+2. Cross-sectional breadth (top-300 universe -> more independent bets -> higher base Calmar).
+3. Freeze the combined spec (50/50 + vol-target overlay, funding-aware, chosen leverage) -> the single
+   reserved OOS 2026-H1 test -- the real verdict. (Caveat that leverage is tuned in-sample.)
