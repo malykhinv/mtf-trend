@@ -25,10 +25,17 @@ KFAIL, RETEST_WIN, MAXH, LIVE = 4, 12, 48, 240      # sweep-fail window, retest 
 def zigzag_highs(H, L, atr, thr):
     """Causal ATR-zigzag -> list of swing highs (pivot_idx, price, prior_low, impulse_atr, confirm_idx)."""
     n = len(H); out = []
+    s = 0
+    while s < n and not (np.isfinite(H[s]) and np.isfinite(L[s])):   # skip leading NaN (late-launch coins)
+        s += 1
+    if s >= n - 1:
+        return out
     direction = 1                       # +1 seeking high, -1 seeking low
-    ext_i, ext_p = 0, H[0]              # running extreme
-    last_low_p = L[0]                   # most recent confirmed swing low price (for impulse)
-    for i in range(1, n):
+    ext_i, ext_p = s, H[s]              # running extreme
+    last_low_p = L[s]                   # most recent confirmed swing low price (for impulse)
+    for i in range(s + 1, n):
+        if not (np.isfinite(H[i]) and np.isfinite(L[i])):
+            continue
         if direction == 1:
             if H[i] > ext_p:
                 ext_i, ext_p = i, H[i]

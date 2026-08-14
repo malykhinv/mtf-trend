@@ -23,8 +23,15 @@ MAXH = 48
 
 def zigzag(H, L, atr, thr):
     n = len(H); sh = np.full(n, np.nan); sl = np.full(n, np.nan)
-    direction = 1; ext_i, ext_p = 0, H[0]
-    for i in range(1, n):
+    s = 0
+    while s < n and not (np.isfinite(H[s]) and np.isfinite(L[s])):
+        s += 1
+    if s >= n - 1:
+        return sh, sl
+    direction = 1; ext_i, ext_p = s, H[s]
+    for i in range(s + 1, n):
+        if not (np.isfinite(H[i]) and np.isfinite(L[i])):
+            continue
         if direction == 1:
             if H[i] > ext_p:
                 ext_i, ext_p = i, H[i]
