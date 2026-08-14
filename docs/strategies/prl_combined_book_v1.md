@@ -102,9 +102,37 @@ needs a HIGH-WEEKLY uncorrelated THIRD sleeve. (2) the standalone breakout sleev
 (concentrated long-beta) -- safe ONLY inside vol-parity where PRL dominates the risk weight (combo
 maxDD stays -10..-12%); never trade the sleeve alone. Still IS; OOS reserved.
 
+## Third-sleeve hunt (NULL) + year-uniformity frontier (third_sleeve.py, uniform_book.py, 2026-08-14)
+
+**Third sleeve NULL.** Funding-carry (short high-funding / long low-funding, dollar-neutral, marked on
+price-funding) is REAL (shuffle collapses +2%->-5%, Sh 0.2->-0.77) but tiny (+2%/yr) and +0.28 corr
+with PRL -> adding it HURTS the combo (Sh 1.80->1.33). XS mean-reversion LOSES every lookback
+(-13..-19%, Sh -1.2..-1.4: momentum, not reversion, works cross-sectionally here). No high-weekly
+uncorrelated third sleeve exists on free data.
+
+**Year-uniformity reframing (user: no 10x year jumps; +150-200% EVERY year = the goal).** Selection
+becomes MAXIMIN (maximize the worst year), not Sharpe. Runner-sizing lifted Sharpe but RE-concentrated
+2025 -> worse on this criterion. Maximin picks **PRL+BO 50/50: +17/+18/+17 (ratio 1.1x), Sh 1.27,
+maxDD -14%** -- the uniformity champion. Leverage LADDER on it (uniformity preserved, all years scale
+together):
+
+```text
+PRL+BO 50/50   L=1x +18%/yr (+17/+18/+17) maxDD -14%   L=2x +36% (+37/+36/+35) -27%
+               L=3x +55% (+59/+53/+53)     maxDD -38%   L=4x +73% (+83/+66/+71) -49%   L=6x +107% -65%
+PRL+BO vol-par L=6x ~+177% but +78/+124/+329 (2025-driven, ratio 4.2x) maxDD -40%   <- high but NOT uniform
+```
+
+**BINDING CONSTRAINT (leverage arithmetic).** return/maxDD ~ Calmar; leverage scales BOTH -> Calmar
+invariant (~1.3 uniform 50/50, ~2.6 vol-parity). So **+150%/yr implies maxDD -58..-115%** -- levering
+50/50 to +150% worst-year needs ~12x (maxDD -92%, vol-drag turns 2024 negative = uniformity destroyed).
+"+150-200% EVERY year at survivable drawdown" needs Calmar ~4+, which free-data edges (Sharpe topped
+~1.8) do NOT provide; leverage cannot manufacture it. **Honest reachable point: 50/50 at ~3x =
++55%/yr uniformly (all years +53-59%) at maxDD -38%.** To push the frontier, raise UNLEVERED Calmar.
+
 ## Next expansions (toward profit)
 
-1. **Find/build a high-weekly uncorrelated THIRD sleeve** (the direct lever to 80% weekly) -- a
-   mean-reverting or market-neutral intraday source that wins often-and-small, uncorrelated with both
-   PRL and the long-beta breakout sleeve.
-2. Cost-stress + beta-hedge the runner/regime combined book; then freeze the combined spec -> single OOS.
+1. **Calmar-raising risk overlay** (vol-targeting / drawdown-control): scale gross down when trailing
+   vol or drawdown rises -> cuts the -14% maxDD with little return loss -> raises Calmar (the binding
+   constraint) -> lifts the whole leverage frontier. The one untried lever that can move the target.
+2. Cross-sectional breadth (top-300 universe -> more independent bets -> higher Sharpe/Calmar).
+3. Cost-stress the chosen leverage point; then freeze the combined spec -> single OOS.

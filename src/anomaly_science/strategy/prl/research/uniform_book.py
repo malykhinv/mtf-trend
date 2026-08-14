@@ -141,6 +141,18 @@ def main():
         print(f"  {nm:22s} L={L:4.1f}x -> Sh={s['sh']:+.2f} minYr={s['minyr']*100:+.0f}% "
               f"maxDD={s['dd']*100:+.0f}% worstMo={s['worst_mo']*100:+.0f}%  [{ys}]")
 
+    # the ACTUAL frontier: leverage LADDER on the uniform + the high-Sharpe books
+    print("\n=== leverage LADDER (uniformity preserved? drawdown cost?) ===")
+    for nm in ("PRL+BO 50/50", "PRL+BO vol-parity"):
+        d = cand[nm]
+        print(f"  -- {nm} --")
+        for L in (1, 2, 3, 4, 5, 6):
+            s = summ(L * d)
+            ys = " ".join(f"{v*100:+.0f}%" for v in s["yr"].values())
+            ratio = (s["maxyr"] / s["minyr"]) if s["minyr"] > 0 else float("inf")
+            print(f"     L={L}x  CAGR~{np.mean(list(s['yr'].values()))*100:+4.0f}% minYr={s['minyr']*100:+4.0f}% "
+                  f"ratio={ratio:>4.1f}x maxDD={s['dd']*100:+4.0f}% worstMo={s['worst_mo']*100:+4.0f}%  [{ys}]")
+
 
 if __name__ == "__main__":
     main()
