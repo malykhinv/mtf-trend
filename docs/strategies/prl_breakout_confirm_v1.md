@@ -67,4 +67,31 @@ median -> no clean fixed-horizon long edge; the runner-rich buckets only feed a 
 
 Does reading the confirmation-window behavior (retest depth, consolidation tightness, close position,
 hold/volume persistence, taker flow, post drift) predict direction where pre-event features could
-not? [results appended after the run]
+not?
+
+```text
+HELD  AUC[win] PRE 0.508 -> PRE+POST 0.507 (gain -0.000)   AUC[runner] 0.599 -> 0.612 (+0.012)
+FAILED AUC[win] PRE 0.521 -> PRE+POST 0.526 (+0.005)        AUC[runner] 0.586 -> 0.604 (+0.018)
+```
+Post-event dynamics add ~nothing to DIRECTION (win ~0.51 = shuffle), a hair to runner. Entry timing
+via the confirmation window does not crack direction.
+
+## Expansions (breakout_convex.py, breakout_residual.py)
+
+- **Convex execution** (small ATR stop + chandelier trail, long window so runners run): mean R
+  NEGATIVE at every stop/trail/window (win 22-24%, trail whipsawed on the 76% non-runners), even
+  on runner-selected (high-vsurge) and even on broad-breadth breakouts (2023 -0.11, 2024 -0.39).
+  The predictable runner-size does NOT convert to R via trailing exits (reproduces pump-long convex null).
+- **Residual breakout** (break of the RELATIVE 20d high): win 0.42, median -1.0% -- no better.
+- **Regime / breadth**: the useful lead. ABSOLUTE breakouts in a HIGH-breadth (risk-on/trending)
+  market win MORE (0.484, mean +0.84%, 2023 0.51 / 2024 0.50) than isolated ones (0.440); breakouts
+  need a supportive market. Still median-negative (fat-tail), but the mean lean is real and
+  regime-conditioned.
+
+## Key synthesis (toward profit)
+
+Broad/trending-regime breakouts make money in RISK-ON markets (2023/24), exactly where the daily PRL
+market-neutral book (net-short-beta) is weak; PRL makes its money in the 2025 bear/dispersion. The
+two are **regime-complementary** -- a breakout-long sleeve + the PRL market-neutral book could smooth
+the regime dependence and lift uniformity. That is the expansion to pursue next, not another
+breakout-only variant.
