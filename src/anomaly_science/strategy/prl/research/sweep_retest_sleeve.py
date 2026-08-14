@@ -59,8 +59,8 @@ def build(n):
             stop = ext + FBUF * datrp * entry; tp = entry * (1 - KTP * datrp)
             out, exitpx, xb = "time", C[min(start + MAXH, len(idx) - 1), si], min(start + MAXH, len(idx) - 1)
             for t in range(start, min(start + MAXH, len(idx))):
-                if Hh[t, si] >= stop:
-                    out, exitpx, xb = "stop", stop, t; break
+                if C[t, si] >= stop:                          # CLOSE-based stop (slippage-robust)
+                    out, exitpx, xb = "stop", C[t, si], t; break
                 if L[t, si] <= tp:
                     out, exitpx, xb = "tp", tp, t; break
             mrel = (entry - exitpx) / entry + (btc[xb] / btc[j] - 1.0)
