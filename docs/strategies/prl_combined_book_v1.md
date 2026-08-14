@@ -129,10 +129,39 @@ invariant (~1.3 uniform 50/50, ~2.6 vol-parity). So **+150%/yr implies maxDD -58
 ~1.8) do NOT provide; leverage cannot manufacture it. **Honest reachable point: 50/50 at ~3x =
 +55%/yr uniformly (all years +53-59%) at maxDD -38%.** To push the frontier, raise UNLEVERED Calmar.
 
+## Calmar overlay -- the frontier lift (calmar_overlay.py, 2026-08-14) -- SESSION PEAK
+
+A causal VOL-TARGET overlay (scale_t = c/trailing_vol_{t-1}, avg exposure = 1 so it is pure TIMING,
+not de-risking) roughly DOUBLES the book's Calmar, and it is shuffle-validated (permuting the scale
+timing returns Calmar to base):
+
+```text
+50/50 book       base Calmar 1.12 (maxDD -14%)  ->  vol-target 1.98 (-9%)  vt+dd 1.95  |  SHUFFLED 1.14
+vol-parity book  base Calmar 2.49 (maxDD  -7%)  ->  vol-target 3.26 (Sh 2.26!)          |  SHUFFLED 2.33
+
+frontier levered to maxDD -38%:   50/50 base 3.0x +48%/yr (+59/+53/+53)
+                                  50/50 vt+dd 5.5x +99%/yr, UNIFORM (+114/+120/+109, ratio 1.1x)
+the +150%-EVERY-year dream:       50/50 base   -> 20x = RUIN (-119% DD, blows up)
+                                  50/50 vt+dd  -> 7.7x = +181/+168/+152 (ratio 1.2x, UNIFORM) maxDD -50% worstMo -39%
+                                  vol-parity vt+dd 7.4x +152/+218/+720 (non-uniform, 2025 blows out)
+```
+
+**The vol-target overlay is the lever that moves the target.** It raises unlevered Calmar (the binding
+constraint) ~2x, and UNIQUELY on the uniform 50/50 book it keeps uniformity under leverage. That brings
+the user's "+150-200% EVERY year" goal into reach ON IS: **50/50 + vol-target + dd-control, ~7.7x ->
+all three years +152..+181% (uniform), maxDD -50%, worst month -39%.** More conservative: 5.5x ->
++109..+120%/yr uniform at -38% DD.
+
+**Honest caveats (do NOT skip before OOS):** (1) IS ONLY, 3 years -- "every year +150%" on n=3 is
+suggestive, not proven; the 7.7x is tuned so the worst IS year hits +150% = in-sample leverage fit.
+(2) -50% maxDD / -39% worst month at 7.7x is brutal; liquidation risk at that leverage on crypto is
+real. (3) leverage COSTS (funding/borrow on the levered notional, overlay scaling turnover) are NOT
+yet modeled and will eat returns at 7-8x. (4) the overlay's Calmar gain must survive OOS.
+
 ## Next expansions (toward profit)
 
-1. **Calmar-raising risk overlay** (vol-targeting / drawdown-control): scale gross down when trailing
-   vol or drawdown rises -> cuts the -14% maxDD with little return loss -> raises Calmar (the binding
-   constraint) -> lifts the whole leverage frontier. The one untried lever that can move the target.
+1. **Cost/borrow stress at leverage** + overlay parameter-robustness (vol lookback, cap, dd threshold)
+   -- confirm the Calmar gain is not a single-parameter artifact.
 2. Cross-sectional breadth (top-300 universe -> more independent bets -> higher Sharpe/Calmar).
-3. Cost-stress the chosen leverage point; then freeze the combined spec -> single OOS.
+3. Freeze the combined spec (50/50 + vol-target overlay, chosen leverage) -> the single reserved OOS
+   2026-H1 test -- the real verdict.
