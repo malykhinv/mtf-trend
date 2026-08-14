@@ -107,6 +107,39 @@ def main():
     report(trades(stop_close=True), "stop-on-close 6bps")
     report(trades(stop_close=True, fill_mode="close", entry_delay=1, cost=10 / 1e4), "stop-on-close ALL-cons")
 
+    # PLACEBO: same short mechanic (0.25ATR close-stop, 1ATR target, mkt hedge, 48h) at RANDOM
+    # up-pops instead of actual sweeps -> if it earns the same, the "edge" is the payoff structure,
+    # not the закол signal.
+    print("\n=== SIGNAL PLACEBO (same mechanic, random up-pop entries, not sweeps) ===")
+    rng = np.random.default_rng(1)
+    prows = []
+    ncols = len(cols)
+    n_place = len(base)
+    tries = 0
+    while len(prows) < n_place and tries < n_place * 20:
+        tries += 1
+        si = int(rng.integers(ncols)); t = int(rng.integers(200, len(idx) - MAXH - 2))
+        if not (datr_pct[t, si] > 0) or not (C[t, si] > 0):
+            continue
+        if not (Hh[t, si] > Hh[t - 3, si]):        # require a recent up-pop (mimic selling strength)
+            continue
+        entry = C[t, si]; datrp = datr_pct[t, si]
+        stop = Hh[t, si] * (1 + 0.25 * datrp); tp = entry * (1 - 1.0 * datrp)
+        out, exitpx, xb = "time", C[t + MAXH, si], t + MAXH
+        for u in range(t + 1, t + MAXH + 1):
+            if C[u, si] >= stop:
+                out, exitpx, xb = "stop", C[u, si], u; break
+            if L[u, si] <= tp:
+                out, exitpx, xb = "tp", tp, u; break
+        mrel = (entry - exitpx) / entry + (btc[xb] / btc[t] - 1.0) - 6 / 1e4
+        prows.append((mrel, idx[t]))
+    pr_all = np.array([x[0] for x in prows]); dts = pd.to_datetime([x[1] for x in prows])
+    fin = np.isfinite(pr_all); pr = pr_all[fin]
+    yr = pd.Series(pr, index=dts[fin].year).groupby(level=0).mean() * 100
+    print(f"  placebo random up-pop   n={len(pr):5d} exp={pr.mean()*100:+.3f}%  [" + " ".join(f"{y}:{v:+.2f}" for y, v in yr.items()) + "]")
+    rb = np.array([x[0] for x in base]); rb = rb[np.isfinite(rb)]
+    print(f"  real sweep-fade         n={len(rb):5d} exp={rb.mean()*100:+.3f}%  (edge over placebo = {(rb.mean()-pr.mean())*100:+.3f}%)")
+
     # shuffle control: permute per-trade PnL across trades -> sleeve Sharpe must collapse
     rows = base
     hpos = {t: k for k, t in enumerate(idx)}
