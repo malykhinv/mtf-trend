@@ -181,7 +181,13 @@ def _validate_setup(setup: dict[str, Any], where: str) -> None:
         return
     if not isinstance(zones, list):
         raise ValueError(f"{where}: zones must be a list")
-    expected_kind = {"rbr": "demand", "dbr": "demand", "rbd": "supply", "dbd": "supply", "unknown": "unknown"}
+    # Seiden supply/demand zones tie pattern->kind; the top-congestion desk adds a
+    # standalone "congestion" rectangle (проторговка) that snaps to bodies AND wicks
+    # (boundary_mode 'ohlc') and ends exactly at its base (no auto-extension).
+    expected_kind = {
+        "rbr": "demand", "dbr": "demand", "rbd": "supply", "dbd": "supply",
+        "unknown": "unknown", "congestion": "congestion",
+    }
     for index, zone in enumerate(zones):
         if not isinstance(zone, dict):
             raise ValueError(f"{where}: zone {index} must be an object")
@@ -192,14 +198,20 @@ def _validate_setup(setup: dict[str, Any], where: str) -> None:
         pattern = str(zone["pattern"]).lower()
         if pattern not in expected_kind or str(zone["kind"]).lower() != expected_kind[pattern]:
             raise ValueError(f"{where}: zone {index} pattern/kind conflict")
-        if str(zone["boundary_mode"]) not in {"wicks", "bodies", "extrema"}:
-            raise ValueError(f"{where}: zone {index} boundary_mode must be wicks, bodies or extrema")
+        if str(zone["boundary_mode"]) not in {"wicks", "bodies", "extrema", "ohlc"}:
+            raise ValueError(f"{where}: zone {index} boundary_mode must be wicks, bodies, extrema or ohlc")
         if int(zone["base_start_ms"]) >= int(zone["base_end_ms"]):
             raise ValueError(f"{where}: zone {index} base must run forward in time")
         if float(zone["lower_price"]) <= 0 or float(zone["upper_price"]) <= float(zone["lower_price"]):
             raise ValueError(f"{where}: zone {index} has invalid price bounds")
-        if zone.get("end_ms") is not None and int(zone["end_ms"]) <= int(zone["base_end_ms"]):
-            raise ValueError(f"{where}: zone {index} end_ms must be after the base")
+        if zone.get("end_ms") is not None:
+            floor = int(zone["base_end_ms"])
+            # A congestion box terminates at its base; supply/demand zones extend past it.
+            if pattern == "congestion":
+                if int(zone["end_ms"]) < floor:
+                    raise ValueError(f"{where}: zone {index} end_ms cannot precede the base")
+            elif int(zone["end_ms"]) <= floor:
+                raise ValueError(f"{where}: zone {index} end_ms must be after the base")
 
 
 def validate_label_payload(payload: dict[str, Any]) -> None:

@@ -198,6 +198,23 @@ LABELER_HTML = r"""<!doctype html>
     .metricbar { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:8px; }
     .metric { border-radius: 6px; padding: 4px 8px; color: var(--muted); font-size: 11px; background:var(--surface-2); }
     .metric b { color: var(--text); }
+    .trade-passport { display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+    .trade-passport.visible { display:block; }
+    .variant-tabs { display:flex; gap:4px; overflow-x:auto; padding-bottom:6px; margin-bottom:8px; }
+    .variant-tab { flex:0 0 auto; height:26px; padding:0 8px; font-size:10px; color:var(--muted); background:var(--surface-2); }
+    .variant-tab.active { color:var(--accent); background:var(--accent-soft); box-shadow:inset 0 0 0 1px rgba(138,160,216,.48); }
+    .passport-head { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:8px; }
+    .passport-status { font-size:11px; font-weight:760; letter-spacing:.03em; text-transform:uppercase; }
+    .passport-status.good { color:var(--green); }
+    .passport-status.bad { color:var(--red); }
+    .passport-status.warn { color:var(--orange); }
+    .passport-grid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:5px; }
+    .passport-cell { min-width:0; padding:6px 7px; border-radius:6px; background:var(--surface-2); }
+    .passport-cell .k { display:block; color:var(--faint); font-size:9px; text-transform:uppercase; letter-spacing:.045em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .passport-cell .v { display:block; color:var(--text); font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .passport-section { margin:9px 0 5px; color:var(--faint); font-size:9px; font-weight:760; text-transform:uppercase; letter-spacing:.07em; }
+    .fill-tape { display:flex; flex-direction:column; gap:3px; }
+    .fill-row { display:grid; grid-template-columns:78px 1fr auto; gap:6px; padding:4px 6px; border-radius:5px; background:var(--surface-2); color:var(--muted); font-size:10px; }
     .row {
       padding: 10px 11px; margin-bottom: 6px; border-radius: 7px;
       background: var(--surface);
@@ -208,6 +225,8 @@ LABELER_HTML = r"""<!doctype html>
     .row-badges { display:flex; gap:8px; margin-top:5px; flex-wrap:wrap; }
     .badge { font-size:10px; color:var(--faint); }
     .badge.good { color:var(--green); }
+    .badge.bad { color:var(--red); }
+    .badge.warn { color:var(--orange); }
     .badge.hot { color: var(--orange); }
     .small { font-size: 12px; color: var(--muted); }
     .quiet-help { font-size:10px; color:var(--faint); line-height:1.35; }
@@ -327,6 +346,7 @@ LABELER_HTML = r"""<!doctype html>
           <div id="defaultLinesHover" class="hover-zone">auto lines</div>
         </div>
         <div id="metricbar" class="metricbar"></div>
+        <div id="tradePassport" class="trade-passport"></div>
         <div class="quiet-help">
           Wheel = zoom X at cursor · Shift = Y · Ctrl = both · LMB-drag an axis to scale it · double-click axis to auto-fit.
         </div>
@@ -347,6 +367,9 @@ LABELER_HTML = r"""<!doctype html>
           </button>
           <button class="ghost icon tool" id="toolZone" onclick="toggleTool('zone')" title="Zone: click two price extremes. Each click snaps to the nearest high or low.  O">
             <svg viewBox="0 0 20 20"><rect x="3" y="5" width="14" height="10" rx="1"/><path d="M3 8h14M3 12h14"/><path d="M6 3v14M14 3v14"/></svg>
+          </button>
+          <button class="ghost icon tool" id="toolCongestion" onclick="toggleTool('congestion')" title="Congestion (проторговка): click one corner, then the opposite. Snaps to the nearest body OR wick. Marks a consolidation start→end.  C">
+            <svg viewBox="0 0 20 20"><rect x="3" y="6" width="14" height="8" rx="1" stroke-dasharray="2.5 2"/><path d="M7 3v14"/><rect x="6" y="7.5" width="2" height="5" fill="currentColor" stroke="none"/><path d="M13 3v14"/><rect x="12" y="8.5" width="2" height="3" fill="currentColor" stroke="none"/></svg>
           </button>
           <button class="text-action" id="slBtn" onclick="setOptimalSl()" disabled title="Set stop-loss at the structural anchor.  X">SL</button>
           <span class="tool-spacer"></span>
@@ -430,6 +453,7 @@ LABELER_HTML = r"""<!doctype html>
             <div class="k-row"><span class="k">L</span><span>level, then touch candles (RMB ends)</span></div>
             <div class="k-row"><span class="k">P</span><span>add pump wave (2 clicks); repeat for W2/W3</span></div>
             <div class="k-row"><span class="k">G</span><span>swing zigzag (RMB ends)</span></div>
+            <div class="k-row"><span class="k">C</span><span>congestion box (body+wick snap)</span></div>
             <div class="k-row"><span class="k">E</span><span>exit point</span></div>
             <div class="k-row"><span class="k">X</span><span>auto stop-loss</span></div>
             <div class="k-row"><span class="k">Del</span><span>remove selected</span></div>
@@ -479,6 +503,7 @@ let setups = [];        // per-event list of independent setups (see emptySetup)
 let activeSetup = 0;    // index of the setup currently shown in the workspace
 let reviewQuestions = [];
 let reviewAnswers = {};
+let activeTradeVariantId = null;
 let selectedObj = null;
 let showDefaultLines = true;
 let relayoutGuard = false;
@@ -542,6 +567,76 @@ function pms(v) {
   if (v instanceof Date) return v.getTime();
   const s = String(v).replace(' ', 'T');
   return Date.parse(s);
+}
+function parsedTradeReviewVariants(event) {
+  if (!event || !event.trade_review_variants_json) return [];
+  try {
+    const parsed = typeof event.trade_review_variants_json === 'string'
+      ? JSON.parse(event.trade_review_variants_json) : event.trade_review_variants_json;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) { return []; }
+}
+function selectedTradeReviewVariant(event) {
+  const variants = parsedTradeReviewVariants(event);
+  if (!variants.length) return null;
+  const preferred = activeTradeVariantId || event.primary_variant_id;
+  return variants.find(v => v.variant_id === preferred) || variants[0];
+}
+function tradeVariantClass(variant) {
+  if (!variant) return 'warn';
+  if (variant.status === 'resolved') return Number(variant.gross_bps) > 0 ? 'good' : 'bad';
+  return variant.status === 'ambiguous' || variant.status === 'censored' ? 'warn' : 'bad';
+}
+function compactVariantLabel(id) {
+  return String(id || '').replace('market_', 'mkt · ').replace('maker_', 'maker · ')
+    .replace('retest_', 'retest · ').replaceAll('_', ' ');
+}
+function fmtSignedBps(value) {
+  const n = Number(value); return Number.isFinite(n) ? (n >= 0 ? '+' : '') + n.toFixed(1) + ' bp' : '—';
+}
+function fmtTime(value) { return Number.isFinite(Number(value)) ? iso(Number(value)) : '—'; }
+function fmtMinutes(value) {
+  const n = Number(value); if (!Number.isFinite(n)) return '—';
+  if (n >= 1440) return (n / 1440).toFixed(1) + 'd';
+  if (n >= 60) return (n / 60).toFixed(1) + 'h';
+  return n.toFixed(0) + 'm';
+}
+function renderTradePassport() {
+  const root = document.getElementById('tradePassport');
+  if (!root || !current) return;
+  const event = current.event;
+  const variants = parsedTradeReviewVariants(event);
+  if (!variants.length) { root.classList.remove('visible'); root.innerHTML = ''; return; }
+  const variant = selectedTradeReviewVariant(event);
+  activeTradeVariantId = variant.variant_id;
+  let fills = [];
+  try { fills = variant.fills_json ? JSON.parse(variant.fills_json) : []; } catch (_) { fills = []; }
+  const cell = (key, value, title='') => `<div class="passport-cell"${title ? ` title="${esc(title)}"` : ''}><span class="k">${esc(key)}</span><span class="v">${esc(value == null || value === '' ? '—' : value)}</span></div>`;
+  const tabs = variants.map(v => `<button class="variant-tab ${v.variant_id === variant.variant_id ? 'active' : ''}" onclick="selectTradeVariant('${esc(v.variant_id)}')" title="${esc(v.entry_policy + ' / ' + v.invalidation_policy + ' / ' + v.profit_policy)}">${esc(compactVariantLabel(v.variant_id))}</button>`).join('');
+  const warning = variant.same_minute_ambiguous ? ' · SAME-MINUTE AMBIGUOUS' : (variant.status === 'censored' ? ' · INCOMPLETE IS PATH' : '');
+  const context = [
+    cell('prior high', fmtPrice(event.suggested_level)), cell('range mid / low', `${fmtPrice(event.range_mid)} / ${fmtPrice(event.range_low)}`), cell('poke / upper', `${fmtPrice(event.poke_high)} / ${fmtPrice(event.upper_structure_price)}`),
+    cell('swing rise / fall', `${Number(event.reference_swing_rise_atr).toFixed(1)} / ${Number(event.reference_swing_fall_atr).toFixed(1)} ATR`), cell('poke depth', Number(event.poke_depth_fraction_of_range).toFixed(2) + ' range'), cell('reclaim close', fmtPrice(event.signal_close)),
+  ].join('');
+  const execution = [
+    cell('entry policy', variant.entry_policy), cell('entry status', variant.entry_status), cell('liquidity', variant.entry_liquidity),
+    cell('entry time', fmtTime(variant.entry_time_ms)), cell('entry price', fmtPrice(variant.entry_price)), cell('entry delay', fmtMinutes(variant.entry_latency_minutes)),
+    cell('invalidation', variant.invalidation_policy), cell('hard stop', fmtPrice(variant.hard_stop_price)), cell('hard risk', Number.isFinite(Number(variant.hard_risk_fraction)) ? fmtPct(Number(variant.hard_risk_fraction)) : '—'),
+    cell('profit policy', variant.profit_policy), cell('mid / low hit', `${variant.target_mid_hit === true ? 'yes' : 'no'} / ${variant.target_low_hit === true ? 'yes' : 'no'}`), cell('path continuous', variant.path_continuous === true ? 'yes' : (variant.path_continuous === false ? 'NO' : '—')),
+  ].join('');
+  const outcome = [
+    cell('exit reason', variant.exit_reason), cell('exit time', fmtTime(variant.exit_time_ms)), cell('duration', fmtMinutes(variant.duration_minutes)),
+    cell('exit price', fmtPrice(variant.exit_price)), cell('gross', fmtSignedBps(variant.gross_bps)), cell('gross R', Number.isFinite(Number(variant.gross_r)) ? Number(variant.gross_r).toFixed(2) + 'R' : '—'),
+    cell('net @4bp', fmtSignedBps(variant.net_4bps)), cell('net @10bp', fmtSignedBps(variant.net_10bps)), cell('net @20bp', fmtSignedBps(variant.net_20bps)),
+    cell('MFE', fmtSignedBps(variant.mfe_bps)), cell('MAE', fmtSignedBps(variant.mae_bps)), cell('audit', variant.same_minute_ambiguous ? 'ambiguous' : (variant.status === 'censored' ? 'censored' : 'usable')),
+  ].join('');
+  const fillRows = fills.length ? fills.map(fill => `<div class="fill-row"><span>${esc(fmtTime(fill.time_ms).slice(5))}</span><span>${esc(String(fill.kind || '').replaceAll('_',' '))} · ${esc(fmtPrice(fill.price))}</span><span>${esc(Number(fill.size || 0).toFixed(2))}</span></div>`).join('') : '<div class="quiet-help">No executions. This signal remains in the denominator.</div>';
+  root.innerHTML = `<div class="variant-tabs">${tabs}</div><div class="passport-head"><span class="passport-status ${tradeVariantClass(variant)}">${esc(variant.status + warning)}</span><span class="quiet-help">complete 48h lifecycle</span></div><div class="passport-section">causal context at signal</div><div class="passport-grid">${context}</div><div class="passport-section">order · stop · target</div><div class="passport-grid">${execution}</div><div class="passport-section">realized path and costs</div><div class="passport-grid">${outcome}</div><div class="passport-section">fill tape</div><div class="fill-tape">${fillRows}</div>`;
+  root.classList.add('visible');
+}
+function selectTradeVariant(variantId) {
+  activeTradeVariantId = variantId;
+  renderTradePassport(); updateMetrics(); draw();
 }
 
 /* ---------- custom selects ---------- */
@@ -738,6 +833,26 @@ function zoneDraft(first, second) {
     lowerPrice:Math.min(first.price, second.price), upperPrice:Math.max(first.price, second.price),
     first, second, boundary_mode:'extrema',
     ...inferZonePattern(baseStartMs, baseEndMs)
+  };
+}
+// Congestion (проторговка) magnet: snap to the nearest of body OR wick
+// (open/high/low/close) of the candle under the cursor, so the box hugs the
+// real consolidation structure - not just the wick extremes like zones do.
+function congestionExtreme(ms, y) {
+  const c = current.candles, idx = nearestCandle(ms);
+  const parts = [['open', c.open[idx]], ['high', c.high[idx]], ['low', c.low[idx]], ['close', c.close[idx]]];
+  let best = parts[0];
+  for (const p of parts) if (Math.abs(y - p[1]) < Math.abs(y - best[1])) best = p;
+  return {idx, ms:c.timestamp[idx], price:best[1], kind:best[0]};
+}
+function congestionDraft(first, second) {
+  const c = current.candles;
+  const startIdx = Math.min(first.idx, second.idx), endIdx = Math.max(first.idx, second.idx);
+  return {
+    startIdx, endIdx,
+    baseStartMs:c.timestamp[startIdx], baseEndMs:c.timestamp[endIdx],
+    lowerPrice:Math.min(first.price, second.price), upperPrice:Math.max(first.price, second.price),
+    first, second, boundary_mode:'ohlc'
   };
 }
 function pumpPreviewState(toIdx) {
@@ -947,6 +1062,7 @@ function toggleTool(name) {
   if (tool === 'pump') toast(`pump wave ${pumps.length + 1}: click the start candle, then the culmination`);
   if (tool === 'zigzag') toast('zigzag: left-click swing points, right-click to finish');
   if (tool === 'zone') toast('zone: click the first price extreme, then the opposite extreme');
+  if (tool === 'congestion') toast('congestion: click one corner, then the opposite (snaps to body OR wick)');
   if (tool === 'correct_sl') toast('correct SL: click the pre-entry swing-low candle');
 }
 function cancelTool() {
@@ -959,7 +1075,7 @@ function cancelTool() {
   redrawStable(true);
 }
 function syncToolButtons() {
-  const map = {level:'toolLevel', pump:'toolPump', zigzag:'toolZigzag', zone:'toolZone', correct_sl:'correctSlBtn'};
+  const map = {level:'toolLevel', pump:'toolPump', zigzag:'toolZigzag', zone:'toolZone', congestion:'toolCongestion', correct_sl:'correctSlBtn'};
   for (const [name, id] of Object.entries(map)) {
     const btn = document.getElementById(id);
     if (!btn) continue;
@@ -1207,6 +1323,24 @@ function renderGhost(pt) {
       }
     }
   }
+  if (tool === 'congestion') {
+    const extreme = congestionExtreme(pt.ms, pt.price);
+    const gx = xToPx(extreme.ms), gy = yToPx(extreme.price);
+    const col = '#a597d6';
+    html += `<line x1="${gx}" y1="${y0}" x2="${gx}" y2="${y1}" stroke="rgba(165,151,214,.38)" stroke-width="1" stroke-dasharray="3 3"/>`;
+    if (drawStep === 0) {
+      html += ghostDot(gx, gy, col);
+      html += `<text x="${gx+8}" y="${gy-6}" fill="${col}" font-size="11">congestion ${extreme.kind} · ${fmtPrice(extreme.price)}</text>`;
+    } else {
+      const firstX = xToPx(pending.ms), firstY = yToPx(pending.price);
+      const draft = congestionDraft(pending, extreme);
+      const rx0 = Math.min(firstX, gx), rx1 = Math.max(firstX, gx);
+      const ry0 = yToPx(draft.upperPrice), ry1 = yToPx(draft.lowerPrice);
+      html += `<rect x="${rx0}" y="${ry0}" width="${Math.max(1, rx1-rx0)}" height="${Math.max(1, ry1-ry0)}" fill="rgba(165,151,214,.12)" stroke="${col}" stroke-width="1.4" stroke-dasharray="5 3"/>`;
+      html += ghostDot(firstX, firstY, col) + ghostDot(gx, gy, col);
+      html += `<text x="${rx1+6}" y="${ry0-6}" fill="${col}" font-size="11">congestion · ${fmtPrice(draft.lowerPrice)}–${fmtPrice(draft.upperPrice)} · click to place</text>`;
+    }
+  }
   document.getElementById('ovl').innerHTML = html;
 }
 
@@ -1293,6 +1427,28 @@ function handleToolClick(pt) {
       lower_price:draft.lowerPrice, upper_price:draft.upperPrice,
       end_ms:zoneAutoEndMs(draft.baseEndMs, draft.lowerPrice, draft.upperPrice, draft.kind),
       boundary_mode:draft.boundary_mode
+    });
+    selectedObj = `zone:${zones.length - 1}`;
+    finishTool();
+  } else if (tool === 'congestion') {
+    const extreme = congestionExtreme(pt.ms, pt.price);
+    if (drawStep === 0) {
+      pending = extreme;
+      drawStep = 1;
+      syncToolButtons();
+      toast(`congestion: ${extreme.kind} ${fmtPrice(extreme.price)} snapped; click the opposite corner`);
+      renderGhost(pt);
+      return;
+    }
+    const draft = congestionDraft(pending, extreme);
+    if (draft.lowerPrice === draft.upperPrice) { toast('congestion needs two different prices'); return; }
+    if (draft.baseStartMs === draft.baseEndMs) { toast('mark the end on another candle'); return; }
+    zones.push({
+      pattern:'congestion', kind:'congestion',
+      base_start_ms:draft.baseStartMs, base_end_ms:draft.baseEndMs,
+      lower_price:draft.lowerPrice, upper_price:draft.upperPrice,
+      end_ms:draft.baseEndMs,
+      boundary_mode:'ohlc'
     });
     selectedObj = `zone:${zones.length - 1}`;
     finishTool();
@@ -2010,12 +2166,15 @@ function renderList() {
     const outcomeClass = c.outcome_label === 'new_range' ? 'good' : (c.outcome_label === 'fade' ? 'bad' : '');
     const outcomeBadge = c.outcome_label ? `<span class="badge ${outcomeClass}">${esc(String(c.outcome_label).replace('_', ' '))}</span>` : '';
     const discoveryBadge = c.discovery_quality_tier ? `<span class="badge ${c.discovery_quality_tier === 'A' ? 'good' : 'hot'}">tier ${esc(c.discovery_quality_tier)}</span>` : '';
+    const tradeVariants = parsedTradeReviewVariants(c);
+    const primaryTrade = tradeVariants.find(v => v.variant_id === c.primary_variant_id) || tradeVariants[0];
+    const tradeBadge = primaryTrade ? `<span class="badge ${tradeVariantClass(primaryTrade)}">${esc(primaryTrade.entry_status || primaryTrade.status)} · ${esc(fmtSignedBps(primaryTrade.net_10bps))}</span>` : '';
     const tfs = variants.map(v => esc(v.tf)).join('/');
     const noteText = labelNoteText(c.label || c.seed_label);
     const note = noteText ? `<div class="small">note: ${esc(noteText.slice(0,90))}</div>` : '';
     const multi = variants.length > 1 ? tfs : variants[0].tf;
     d.innerHTML = `<div class="row-head"><span>${i+1}. ${esc(displaySymbol(c.symbol))}</span><span class="small">${esc(multi)}</span></div>
-      <div class="row-badges">${pumpBadge}${holdBadge}${outcomeBadge}${discoveryBadge}<span class="badge">${iso(c.review_start_ms)}</span></div>${note}`;
+      <div class="row-badges">${pumpBadge}${holdBadge}${outcomeBadge}${discoveryBadge}${tradeBadge}<span class="badge">${iso(c.review_start_ms)}</span></div>${note}`;
     el.appendChild(d);
   });
   document.getElementById('progress').innerText = `${candidates.filter(c=>c.labeled).length}/${candidates.length} labeled`;
@@ -2033,6 +2192,7 @@ async function loadEvent(i) {
   document.getElementById('side').scrollTop = 0;
   const group = visible[idx];
   if (!group) return;
+  activeTradeVariantId = null;
   selectedTf = group.default_tf || (group.variants && group.variants[0] && group.variants[0].tf) || group.tf;
   populateTfButtons(group);
   xRange = null; yRange = null; yAuto = true;
@@ -2070,6 +2230,7 @@ async function loadEvent(i) {
   updateUiButtons();
   renderObjects();
   updateMetrics();
+  renderTradePassport();
   draw();
   const baseline = currentLabelPayload({finishDraft:false});
   // A seed is a visible hypothesis, not an expert label. It must be explicitly
@@ -2136,6 +2297,7 @@ async function changeTf(nextTf = null) {
   if (keepSl != null && entry) { sl = {price: keepSl}; recomputeSlRay(); }
   commitActiveSetup();
   updateMetrics();
+  renderTradePassport();
   populateTfButtons(group);
   if (yAuto) { draw(); fitY(); } else draw();
   renderObjects();
@@ -2209,6 +2371,14 @@ function updateMetrics() {
     items.push(['closePos', Number(e.p_close_pos || 0).toFixed(2)]);
     items.push(['idio', (Number(e.idio_ret || 0) * 100).toFixed(1) + '%']);
     items.push(['out', Number(e.outcome_win) === 1 ? 'WIN✓' : 'loss✗']);
+  }
+  const reviewedVariant = selectedTradeReviewVariant(e);
+  if (reviewedVariant) {
+    items.push(['variant', compactVariantLabel(reviewedVariant.variant_id)]);
+    items.push(['status', reviewedVariant.status || '—']);
+    items.push(['entry', reviewedVariant.entry_status || '—']);
+    items.push(['gross', fmtSignedBps(reviewedVariant.gross_bps)]);
+    items.push(['net 10', fmtSignedBps(reviewedVariant.net_10bps)]);
   }
   document.getElementById('metricbar').innerHTML = items.map(([k,v]) => `<span class="metric">${esc(k)} <b>${esc(v)}</b></span>`).join('');
 }
@@ -2293,6 +2463,27 @@ function shapes() {
       if (Number.isFinite(xTs) && Number.isFinite(xPx) && xPx > 0) {
         add({type:'line', layer:'above', editable:false, x0:new Date(eTs), x1:new Date(xTs), y0:ePx, y1:xPx, line:{color: win?'#2e7d32':'#c62828', width:2}});
         add({type:'line', layer:'above', editable:false, x0:new Date(xTs), x1:new Date(xTs), yref:'paper', y0:0, y1:1, line:{color: win?'rgba(46,125,50,.35)':'rgba(198,40,40,.35)', width:1, dash:'dot'}});
+      }
+    }
+    // Generic complete-trade overlay. Strategies opt in by supplying a frozen
+    // array of mechanics variants; Core Desk does not know strategy ids.
+    const reviewed = selectedTradeReviewVariant(e);
+    if (reviewed) {
+      const rt0 = Number(reviewed.entry_time_ms), rp0 = Number(reviewed.entry_price);
+      const rt1 = Number(reviewed.exit_time_ms), rp1 = Number(reviewed.exit_price);
+      const rs = Number(reviewed.hard_stop_price);
+      const rend = Number.isFinite(rt1) ? rt1 : rightMs;
+      if (Number.isFinite(rs) && rs > 0) {
+        const stopStart = Number.isFinite(rt0) ? rt0 : Number(e.order_activation_time_ms || leftMs);
+        add({type:'line', layer:'above', editable:false, x0:new Date(stopStart), x1:new Date(rend), y0:rs, y1:rs, line:{color:'#d18495', width:1.5, dash:'dash'}});
+      }
+      if (Number.isFinite(rt0) && Number.isFinite(rp0) && rp0 > 0) {
+        add({type:'line', layer:'above', editable:false, x0:new Date(rt0), x1:new Date(rt0), yref:'paper', y0:0, y1:1, line:{color:'rgba(125,187,145,.55)', width:1}});
+        if (Number.isFinite(rt1) && Number.isFinite(rp1) && rp1 > 0) {
+          const good = Number(reviewed.gross_bps) > 0;
+          add({type:'line', layer:'above', editable:false, x0:new Date(rt0), x1:new Date(rt1), y0:rp0, y1:rp1, line:{color:good?'#7dbb91':'#d18495', width:2}});
+          add({type:'line', layer:'above', editable:false, x0:new Date(rt1), x1:new Date(rt1), yref:'paper', y0:0, y1:1, line:{color:good?'rgba(125,187,145,.45)':'rgba(209,132,149,.45)', width:1, dash:'dot'}});
+        }
       }
     }
   }
@@ -2392,13 +2583,16 @@ function shapes() {
       line:{color:'#7dbb91', width:1}, fillcolor:'rgba(125,187,145,.08)'});
   }
   zones.forEach((zone, index) => {
+    const congestion = zone.pattern === 'congestion';
     const supply = zone.kind === 'supply';
     const selected = selectedObj === `zone:${index}`;
+    const color = congestion ? '#a597d6' : (supply ? '#d18495' : '#7dbb91');
+    const fill = congestion ? 'rgba(165,151,214,.12)' : (supply ? 'rgba(209,132,149,.10)' : 'rgba(125,187,145,.10)');
     add({type:'rect', layer:'below', editable:false,
       x0:new Date(zone.base_start_ms), x1:new Date(zone.end_ms || zoneAutoEndMs(zone.base_end_ms, zone.lower_price, zone.upper_price, zone.kind)),
       y0:zone.lower_price, y1:zone.upper_price,
-      line:{color:supply ? '#d18495' : '#7dbb91', width:selected ? 2 : 1, dash:'dot'},
-      fillcolor:supply ? 'rgba(209,132,149,.10)' : 'rgba(125,187,145,.10)'});
+      line:{color, width:selected ? 2 : 1, dash:'dot'},
+      fillcolor:fill});
   });
   const sbAnchor = (!level && document.getElementById('family').value === 'structure_break') ? structureBreakAnchorFrom(zigzag) : null;
   if (sbAnchor) {
@@ -2611,6 +2805,28 @@ function annotations() {
       const win = (e.exit_reason === 'low' || e.exit_reason === 'mid');
       out.push({x:new Date(Number(e.exit_ts)), y:Number(e.exit_px), text:'EXIT · ' + (e.exit_reason || ''), showarrow:false,
         xanchor:'left', xshift:3, yanchor:'top', yshift:-3, font:{size:9, color: win?'#2e7d32':'#c62828'}, bgcolor:'rgba(17,19,24,.72)', borderpad:1});
+    }
+    const reviewed = selectedTradeReviewVariant(e);
+    if (reviewed) {
+      const entryTime = Number(reviewed.entry_time_ms), entryPrice = Number(reviewed.entry_price);
+      const exitTime = Number(reviewed.exit_time_ms), exitPrice = Number(reviewed.exit_price);
+      const stopPrice = Number(reviewed.hard_stop_price);
+      if (Number.isFinite(entryTime) && Number.isFinite(entryPrice)) {
+        out.push({x:new Date(entryTime), y:entryPrice, text:`SHORT · ${fmtPrice(entryPrice)} · ${reviewed.entry_liquidity || ''}`,
+          showarrow:true, arrowhead:2, arrowcolor:'#7dbb91', ax:0, ay:-26,
+          font:{size:9,color:'#a9d8b9'}, bgcolor:'rgba(17,19,24,.82)', borderpad:2});
+      }
+      if (Number.isFinite(stopPrice)) {
+        const anchor = Number.isFinite(entryTime) ? entryTime : Number(e.order_activation_time_ms);
+        out.push({x:new Date(anchor), y:stopPrice, text:`STOP · ${fmtPrice(stopPrice)} · ${reviewed.invalidation_policy}`,
+          showarrow:false, xanchor:'right', xshift:-5, font:{size:9,color:'#e7a9b6'}, bgcolor:'rgba(17,19,24,.82)', borderpad:2});
+      }
+      if (Number.isFinite(exitTime) && Number.isFinite(exitPrice)) {
+        const good = Number(reviewed.gross_bps) > 0;
+        out.push({x:new Date(exitTime), y:exitPrice, text:`EXIT · ${reviewed.exit_reason} · ${fmtSignedBps(reviewed.gross_bps)}`,
+          showarrow:true, arrowhead:2, arrowcolor:good?'#7dbb91':'#d18495', ax:0, ay:28,
+          font:{size:9,color:good?'#a9d8b9':'#e7a9b6'}, bgcolor:'rgba(17,19,24,.82)', borderpad:2});
+      }
     }
   }
   if (resultTrade) {
@@ -3350,6 +3566,7 @@ document.addEventListener('keydown', e => {
   if (k === 'l') toggleTool('level');
   if (k === 'p') toggleTool('pump');
   if (k === 'o') toggleTool('zone');
+  if (k === 'c') toggleTool('congestion');
   if (k === 'g') { if (tool === 'zigzag' && zzDraft && zzDraft.points.length) finishZigzag(); else toggleTool('zigzag'); }
   if (k === 'x') setOptimalSl();
   if (k === 'z') resetAnnotations();

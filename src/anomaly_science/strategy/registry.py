@@ -222,14 +222,25 @@ def annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
 
     from anomaly_science.annotation.app import AnnotationStrategyApp
     from anomaly_science.strategy.pump_wave_short.lifecycle_review import PUMP_LIFECYCLE_REVIEW_QUESTIONS
+    from anomaly_science.strategy.session_reclaim.desk_review import SESSION_RECLAIM_REVIEW_QUESTIONS
 
     cache_dir = project_root / ".output" / "market" / "binance_vision" / "um_futures" / "enriched_1m"
     session_root = project_root / ".output" / "results" / "session_break"
     knife_root = project_root / ".output" / "results" / "knife_catch"
     triple_root = project_root / ".output" / "results" / "triple_tap_v1" / "manual_pump_review"
     pump_wave_root = project_root / ".output" / "results" / "pump_wave_short_v1" / "lifecycle_review"
+    session_reclaim_root = project_root / ".output" / "research" / "session_reclaim_short" / "desk_review_is"
+    top_congestion_root = project_root / ".output" / "research" / "top_congestion" / "universe_is"
 
     apps = (
+        AnnotationStrategyApp(
+            strategy_id="s8_top_congestion_break",
+            title="S8 - Pump-top congestion breakout (LONG)",
+            candidates_path=top_congestion_root / "events.parquet",
+            labels_path=top_congestion_root / "review_labels.jsonl",
+            cache_dir=cache_dir,
+            marks_path=top_congestion_root / "marks.jsonl",
+        ),
         AnnotationStrategyApp(
             strategy_id="triple_tap_manual_pump_review",
             title="Triple-tap pump review",
@@ -297,6 +308,14 @@ def annotation_apps(project_root: Path) -> tuple[AnnotationStrategyApp, ...]:
             cache_dir=cache_dir,
             marks_path=pump_wave_root / "marks.jsonl",
             review_questions=PUMP_LIFECYCLE_REVIEW_QUESTIONS,
+        ),
+        AnnotationStrategyApp(
+            strategy_id="session_reclaim_mechanics_review",
+            title="Session failed-break reclaim short · complete mechanics",
+            candidates_path=session_reclaim_root / "candidates.parquet",
+            labels_path=session_reclaim_root / "review_labels.jsonl",
+            cache_dir=cache_dir,
+            review_questions=SESSION_RECLAIM_REVIEW_QUESTIONS,
         ),
     )
     return tuple(app for app in apps if app.candidates_path.exists() and app.cache_dir.exists())

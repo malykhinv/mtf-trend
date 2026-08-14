@@ -88,6 +88,31 @@ via the confirmation window does not crack direction.
   need a supportive market. Still median-negative (fat-tail), but the mean lean is real and
   regime-conditioned.
 
+## WIDE grid — the exhaustive settle (breakout_wide.py)
+
+The user asked for a WIDE research grid, not a modest one. `breakout_wide.py` builds ~51 causal
+features at each event across EVERY family (momentum ret 1/3/6/12/24/72/168h, EMA position ×5,
+ATR/candle, level extension/age, ATH/ATL, volume/trade/taker/signed-flow surge, funding
+level/pre/change, own prior-breakout track record, market breadth/dispersion/mkt-vol/BTC×3/ETH,
+correlation-basket confirmation, and the post-event confirmation-window dynamics) and runs
+walk-forward CatBoost with shuffle, separately for win & runner, HELD & FAILED.
+
+```text
+events 14,520 (held 8,812 / failed 5,708)
+HELD  (long):  AUC[win] 0.504 (shuffle 0.494)   AUC[runner] 0.606 (shuffle 0.481)
+FAILED(short): AUC[win] 0.519 (shuffle 0.495)   AUC[runner] 0.578 (shuffle 0.497)
+top runner features: ema480, btc168, eth24, btc24, basket, mvol, ret168, avg_trade
+```
+
+**Definitive: with the widest possible causal arsenal, DIRECTION (win) stays at AUC ~0.50-0.52 = the
+shuffle floor -- unpredictable. RUNNER SIZE is real and predictable (0.606 vs 0.48 shuffle).** And
+the runner-size signal is dominated by MARKET/REGIME features (btc168/eth24/btc24/mvol/breadth) plus
+long-trend position (ema480, ret168), correlation-basket confirmation, and retail texture
+(avg_trade small = retail frenzy). This is the SAME runner-portrait found in every prior strategy
+([[runner-vs-fizzle-portrait]], [[session-break-discovery]]): the market state decides how big the
+winners run; the coin's own setup barely moves direction. The lever is regime timing + runner-sizing,
+not a better breakout filter.
+
 ## Key synthesis (toward profit)
 
 Broad/trending-regime breakouts make money in RISK-ON markets (2023/24), exactly where the daily PRL
