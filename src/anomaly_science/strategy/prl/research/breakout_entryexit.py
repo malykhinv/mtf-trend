@@ -178,6 +178,27 @@ def main():
         rb, _ = trade_R(en, ex, blind=True)
         print(f"    {en:8s} {ex:10s} meanR={mR:+.2f} win={(rs>0).mean():.2f} n={n}  blind={rb.mean():+.2f}  by-year[{yr}]")
 
+    # STATE-CONDITIONING: does the best EXIT differ by setup? (entry=HOLD4)
+    print("\n=== state-conditioned mean R (entry=HOLD4): does the best exit differ by setup? ===")
+    def collect_state(ex):
+        rr, brd, vss = [], [], []
+        for (dt, si, c, h, l, v, s, em, atr_i, lv, vs0, br) in events:
+            e = entry_bar("HOLD4", c, lv, vs0, em)
+            if e < 1 or e >= len(c) - 1 or not (c[e] > 0):
+                continue
+            xp = exit_px(ex, c, h, l, v, s, em, e, atr_i, lv)
+            rr.append((xp / c[e] - 1 - 2 * COST) / (RISK_ATR * atr_i / c[e])); brd.append(br); vss.append(vs0)
+        return np.array(rr), np.array(brd), np.array(vss)
+    base_rr, brd, vss = collect_state("TIME48")
+    bmed, vmed = np.nanmedian(brd), np.nanmedian(vss)
+    states = {"breadth-HI": brd > bmed, "breadth-LO": brd <= bmed,
+              "vsurge-HI": vss > vmed, "vsurge-LO": vss <= vmed}
+    print(f"  {'exit':10s} " + " ".join(f"{k:>11s}" for k in states))
+    for ex in EXITS:
+        rr, _, _ = collect_state(ex)
+        print(f"  {ex:10s} " + " ".join(f"{rr[mask].mean():>+11.2f}" for mask in states.values()))
+    print("  (if a different exit wins in different states -> heterogeneous execution pays)")
+
 
 if __name__ == "__main__":
     main()
