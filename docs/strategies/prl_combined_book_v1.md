@@ -59,9 +59,52 @@ sleeve is only 41% weekly (directional trend), so it TRADES weekly for year-unif
 the combined weekly is ~51-56%. To get BOTH high weekly and uniform years, the second sleeve must
 be uncorrelated AND high-weekly (the breakout gives uniformity, not weekly).
 
+## Runner-SIZED + regime-scaled sleeve — regime_runner_book.py (2026-08-14)
+
+Applying the wide-grid conclusion (direction unpredictable, runner-size real & regime-driven): we
+STOP filtering breakout direction and instead SIZE each confirmed-hold breakout by its walk-forward
+runner-score (OOF AUC 0.596), and scale the sleeve's GROSS exposure by a causal breadth-rank regime
+factor. Hold-to-time HH=48h, no stops (never cut the fat-tail runners). 8,812 confirmed-hold events,
+runner-rate 0.159. Standalone (long-beta) and vol-parity with the daily PRL sleeve:
+
+```text
+breakout sleeve standalone     Sharpe +wk  maxDD  by-year
+equal/flat                      0.73   57%  -86%  +181/+20/-25
+runner/flat                     0.81   58%  -90%  +242/+26/-18
+equal/regime                    0.64   52%  -81%   +89/+33/-12
+runner/regime                   0.72   53%  -87%  +115/+39/ -3
+SHUF-runner/flat (control)      0.64    -     -    +145/ -4/-32   <- runner-sizing beats shuffle
+equal/SHUF-regime (control)    -0.09   49%  -94%   -15/-57/-58   <- regime beats shuffle (badly)
+
+combined vol-parity (PRL + variant)   Sharpe +wk +mo  maxDD  by-year
+PRL alone                              1.51  58% 68%  -10%   -1/+17/+62
+PRL + equal/flat                       1.79  61% 79%  -10%   +9/+23/+73
+PRL + runner/flat                      1.86  62% 75%  -11%  +11/+24/+78   <- best Sharpe
+PRL + equal/regime                     1.71  64% 79%  -11%   +6/+23/+71   <- best weekly
+PRL + runner/regime                    1.77  64% 75%  -12%   +7/+23/+76   <- best weekly + uniform
+PRL + SHUF-runner (control)            1.70  61%  -     -     +8/+21/+72
+PRL + SHUF-regime  (control)           1.19  59% 64%   -     +5/ +7/+52
+corr(PRL, breakout variants) = -0.19..-0.21
+```
+
+**Both levers are REAL (shuffle-validated) and monetizable:**
+- **Runner-sizing** (size by predicted runner) beats its shuffle: standalone Sh 0.81 vs 0.64, CAGR
+  +34% vs +12%; combined 1.86 vs 1.70. First time the runner-predictor converts to portfolio value.
+- **Regime scaling** (breadth-rank gross) is critical: shuffling it collapses the sleeve
+  (+20%->-35%, Sh 0.64->-0.09) and the combo (1.71->1.19). It lifts combined WEEKLY to **64%** (from
+  57%) and evens the years, at a small Sharpe cost vs flat.
+- **New best combined book:** runner/flat = Sharpe **1.86** (max), runner/regime = **64% weekly** +
+  uniform years (+7/+23/+76). Beats the v1 combined (Sh 1.80, +wk 57%).
+
+**Caveats:** (1) weekly is now 64% -- real progress but still short of the 80% goal; the breakout
+sleeve itself is only ~53-58% weekly (directional), which caps the combined weekly. Breaking 80%
+needs a HIGH-WEEKLY uncorrelated THIRD sleeve. (2) the standalone breakout sleeve has maxDD -86..-90%
+(concentrated long-beta) -- safe ONLY inside vol-parity where PRL dominates the risk weight (combo
+maxDD stays -10..-12%); never trade the sleeve alone. Still IS; OOS reserved.
+
 ## Next expansions (toward profit)
 
-1. Regime-adaptive rolling window (different H by circumstance).
-2. Size the breakout sleeve by the **runner-predictor** (AUC 0.62); find a high-weekly uncorrelated
-   third sleeve to lift combined weekly.
-3. Optimize sleeve weights / beta-hedge / cost-stress; then freeze the combined spec -> single OOS.
+1. **Find/build a high-weekly uncorrelated THIRD sleeve** (the direct lever to 80% weekly) -- a
+   mean-reverting or market-neutral intraday source that wins often-and-small, uncorrelated with both
+   PRL and the long-beta breakout sleeve.
+2. Cost-stress + beta-hedge the runner/regime combined book; then freeze the combined spec -> single OOS.
