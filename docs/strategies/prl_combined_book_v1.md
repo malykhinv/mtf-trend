@@ -42,8 +42,26 @@ market-neutral sleeve).
 unbroken -- uniformity gain is at the year/month scale); the breakout sleeve is weak standalone
 (Sharpe 0.41) and valuable only as a diversifier.
 
+## Rolling window (no calendar statics) — combined_v2.py / combined_v3.py
+
+The v1 PRL sleeve rebalanced every 15 CALENDAR days (single phase, lumpy: ~6.6 name-trades/day but
+all batched on 68 rebalance days). Making PRL fully ROLLING (overlapping daily tranches, rebalance
+1/H of the book daily) and sweeping the window H:
+
+```text
+rolling-PRL sleeve:  H=5 Sh1.43 +wk 63%  |  H=10 +wk 60%  |  H=15 +wk 59%  |  H=20 Sh1.45 +wk 57%  |  H=30 +wk 56%
+combined (roll-PRL H + BO, vol-parity):  H=5 Sh1.73 +wk56 +mo75  |  H=15 Sh1.73 +wk54  |  H=20 Sh1.75 +wk51 +uniform yrs +10/+23/+23
+```
+
+**Rolling window matters for WEEKLY consistency**: short H=5 lifts the PRL sleeve to **63% positive
+weeks** (breaks the 58% single-phase ceiling), long H raises Sharpe/uniformity. But the breakout
+sleeve is only 41% weekly (directional trend), so it TRADES weekly for year-uniformity+Sharpe --
+the combined weekly is ~51-56%. To get BOTH high weekly and uniform years, the second sleeve must
+be uncorrelated AND high-weekly (the breakout gives uniformity, not weekly).
+
 ## Next expansions (toward profit)
 
-1. Size the breakout sleeve by the **runner-predictor** (AUC 0.62) instead of equal-weight.
-2. Optimize sleeve weights / add the beta-hedge to the combined; test cost-stress.
-3. Add further complementary sleeves; then freeze the combined spec and spend the single OOS.
+1. Regime-adaptive rolling window (different H by circumstance).
+2. Size the breakout sleeve by the **runner-predictor** (AUC 0.62); find a high-weekly uncorrelated
+   third sleeve to lift combined weekly.
+3. Optimize sleeve weights / beta-hedge / cost-stress; then freeze the combined spec -> single OOS.
