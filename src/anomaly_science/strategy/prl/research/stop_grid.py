@@ -53,18 +53,25 @@ def main():
     print(f"confirmed-hold events: {len(evs)}\n")
 
     def sim(stop_frac_getter=None, be_to=None, closeloss_to=None):
-        """Return array of market-relative realized returns under a stop rule."""
+        """Return market-relative realized returns. BE is causal: a stop placed at entry only
+        AFTER be_to protects gains; if the trade is already underwater when BE activates, it
+        realizes the CURRENT loss (no teleport to breakeven)."""
         out = []
         for si, dj, p0, s1d, s1h, sw, dt in evs:
             stop = stop_frac_getter(p0, s1d, s1h, sw) if stop_frac_getter else None
             exitbar = dj + MAXH; exitpx = C[dj + MAXH, si]
+            armed_be = False
             for t in range(dj + 1, dj + MAXH + 1):
                 k = t - dj
-                cur_stop = stop
+                if stop is not None and L[t, si] <= stop:               # fixed stop below entry
+                    exitbar, exitpx = t, stop; break
                 if be_to is not None and k >= be_to:
-                    cur_stop = p0 if cur_stop is None else max(cur_stop, p0)     # move to BE once matured
-                if cur_stop is not None and L[t, si] <= cur_stop:
-                    exitbar, exitpx = t, cur_stop; break
+                    if not armed_be:                                    # activation bar
+                        if C[t, si] <= p0:                              # already underwater -> realize now
+                            exitbar, exitpx = t, C[t, si]; break
+                        armed_be = True                                 # else arm BE stop for next bars
+                    elif L[t, si] <= p0:
+                        exitbar, exitpx = t, p0; break
                 if closeloss_to is not None and k == closeloss_to and C[t, si] < p0:
                     exitbar, exitpx = t, C[t, si]; break
             rel = (exitpx / p0 - 1.0) - (btc[exitbar] / btc[dj] - 1.0)
