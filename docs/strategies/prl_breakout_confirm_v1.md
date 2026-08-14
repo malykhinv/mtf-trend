@@ -35,4 +35,36 @@ breakout_features.py computes, at each event, the entire metric set (volume/trad
 level age & prior-breakout recurrence, extension, EMA positions, ATR candle, ATH distance, recent
 momentum, coin-minus-BTC, market breadth/dispersion/BTC-trend, correlation-basket confirmation, and
 funding) and runs a causal walk-forward classifier (OOF AUC for win & runner) + shuffle, separately
-for HELD (long) and FAILED (short). [results appended after the run]
+for HELD (long) and FAILED (short).
+
+```text
+HELD (long):  AUC[win] 0.519 (shuffle 0.505)   AUC[runner] 0.624 (shuffle 0.506)
+FAILED(short):AUC[win] 0.521 (shuffle 0.496)   AUC[runner] 0.584 (shuffle 0.509)
+top HELD win separators (year-stable*): basket -0.12* (isolated breakout > broad), breadth -0.05*,
+  taker_ratio +0.04*  -- winning breakouts are isolated strength in a flat/weak market.
+```
+
+**Decisive: RUNNER (big move) is predictable (AUC 0.58-0.62 >> shuffle), DIRECTION (win) is NOT
+(0.52 ~ shuffle).** With the full arsenal + correlation baskets we can identify the lottery tickets
+with bigger jackpots but not whether they win. This is the fundamental reason breakouts don't
+convert to R (matches session-break / runner-vs-fizzle).
+
+## Cap & relative volume (breakout_capvol.py)
+
+```text
+HELD by CAP:        low-cap win 0.441 runner 0.162  >  high-cap win 0.417 runner 0.152  (small)
+HELD by BAR SURGE:  high-surge runner 0.198 vs low 0.134, but win ~0.43 both (volume -> size, not win)
+HELD by 24h RVOL:   low-vol win 0.457 med -0.39% runner 0.121  |  high-vol win 0.413 med -1.40% runner 0.207
+```
+
+**Cap and volume move the SIZE/variance axis (runner), not the DIRECTION axis (win).** High relative
+volume makes the outcome BIMODAL -- more runners AND more failures (lower win, worse median): a
+loud breakout is a bigger lottery ticket, not a more reliable one. Low-vol/low-cap breakouts are
+more reliable (higher win, better median) but smaller. No bucket reaches win > 0.46 or a positive
+median -> no clean fixed-horizon long edge; the runner-rich buckets only feed a convex execution.
+
+## Post-event dynamics (breakout_postdynamics.py)
+
+Does reading the confirmation-window behavior (retest depth, consolidation tightness, close position,
+hold/volume persistence, taker flow, post drift) predict direction where pre-event features could
+not? [results appended after the run]
