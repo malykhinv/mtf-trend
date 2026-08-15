@@ -248,6 +248,47 @@ def main():
         s = dstats(g)
         print(f"  {rg:6s} days={s['n']:5d} annRet={g.mean()*252*100:+4.0f}% +day={s['pday']*100:.0f}% +wk={s['pwk']*100:.0f}% maxDD={s['dd']*100:+.0f}%")
 
+    # ===== DOWNSIDE / LIQUIDATION / EQUITY (with-PRL final book) =====
+    d = with_prl.dropna()
+    eq = (1 + d).cumprod(); dollars = 1000 * eq / eq.iloc[0]
+    ddser = eq / eq.cummax() - 1
+    # drawdown duration
+    underwater = (ddser < 0).astype(int); seg = (underwater != underwater.shift(1)).cumsum()
+    maxdur = max([len(g) for k, g in underwater.groupby(seg) if g.iloc[0] == 1], default=0)
+    print("\n=== DOWNSIDE / LIQUIDATION (final with-PRL book, unlevered) ===")
+    print(f"  $1000 -> ${dollars.iloc[-1]:,.0f} over {len(d)} days ({len(d)/252:.1f}y)")
+    print(f"  worst DAY {d.min()*100:+.2f}%   worst WEEK {d.resample('W').sum().min()*100:+.2f}%   "
+          f"worst MONTH {d.resample('ME').sum().min()*100:+.1f}%")
+    print(f"  maxDD {ddser.min()*100:+.1f}%   longest underwater {maxdur} days   worst 1% of days avg {np.percentile(d,1)*100:+.2f}%")
+    # is the profit concentrated in time? (the "what if the winners are at the end" test)
+    half = len(d) // 2
+    h1 = (1 + d.iloc[:half]).prod() - 1; h2 = (1 + d.iloc[half:]).prod() - 1
+    mo = d.resample("ME").sum(); best_mo = mo.idxmax()
+    no_best_mo = (1 + d[d.index.to_period("M") != best_mo.to_period("M")]).prod() - 1
+    print(f"  first half {h1*100:+.0f}%  second half {h2*100:+.0f}%  (both>0 => not an end-spike)")
+    print(f"  best month {mo.max()*100:+.0f}% ({best_mo.date()}); WHOLE book minus best month = {no_best_mo*100:+.0f}%")
+    print(f"  positive years: {int(sum((1+g).prod()>1 for _,g in d.groupby(d.index.year)))}/6")
+    # liquidation headroom: leverage where maxDD hits -50% / -90%
+    for tgt in (-0.50, -0.90):
+        L = None
+        for LL in np.arange(1, 20.1, 0.5):
+            e = (1 + LL * d).cumprod()
+            if (e / e.cummax() - 1).min() <= tgt:
+                L = LL; break
+        print(f"  leverage to reach maxDD {tgt*100:.0f}%: {('%.1fx' % L) if L else '>20x'}  (unlevered maxDD {ddser.min()*100:.0f}% -> huge liquidation headroom)")
+    try:
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6.5), gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
+        ax1.plot(dollars.index, dollars.values, color="#1f77b4", lw=1.4); ax1.set_yscale("log")
+        ax1.set_ylabel("Equity $ (log)"); ax1.set_title("Final regime-gated book (with PRL, tamed) — $1000, unlevered, IS 2020-2025")
+        ax1.grid(True, alpha=0.3, which="both")
+        ax2.fill_between(ddser.index, ddser.values * 100, 0, color="#d62728", alpha=0.5)
+        ax2.set_ylabel("Drawdown %"); ax2.grid(True, alpha=0.3)
+        out = ".output/results/prl_coarse/final_equity.png"; fig.tight_layout(); fig.savefig(out, dpi=110)
+        print(f"  chart -> {out}")
+    except Exception as e:
+        print("chart skipped:", e)
+
 
 if __name__ == "__main__":
     main()
